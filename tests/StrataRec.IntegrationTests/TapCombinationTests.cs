@@ -81,8 +81,8 @@ public sealed class TapCombinationTests
                 "\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } }",
                 "\"queries\": { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\", \"region\": \"ctx.region.boost\" } }");
             ReplayTests.Edit(root, Pipeline,
-                "\"context\": { \"user_id\": \"ctx.request.user_id\", \"surface\": \"ctx.request.surface\" }",
-                "\"context\": { \"user_id\": \"ctx.request.user_id\", \"surface\": \"ctx.request.surface\", \"region\": \"ctx.country.region\" }");
+                "\"surface\": \"ctx.request.surface\" }",
+                "\"surface\": \"ctx.request.surface\", \"region\": \"ctx.country.region\" }");
         });
 
         var plan = host.Plan();

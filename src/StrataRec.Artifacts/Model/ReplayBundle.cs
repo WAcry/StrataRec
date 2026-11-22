@@ -57,11 +57,13 @@ public sealed class ReplayBundle
     /// same item in a batch of one another. 2026-11-21.12 adds what an item saw of each input to its digest as a digest of
     /// its own, so a shared input is hashed once for a call, not once for every item; 2026-11-21.13 only when it is more
     /// than a few values, and a few inline; 2026-11-21.14 only when it is more than four numbers or bools, and strings
-    /// always so; 2026-11-21.15 when it is more than sixteen numbers or bools, or strings.
+    /// always so; 2026-11-21.15 when it is more than sixteen numbers or bools, or strings. 2026-11-22.1 records the result's
+    /// request-level values (<c>values</c>, <c>value_types</c>): a bundle before has none, and its replay would differ by
+    /// every value the output returns.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-21.15";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-22.1";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-21.15\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-22.1\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -402,6 +404,12 @@ public sealed class ReplayResultRecord
     public Dictionary<string, string> ColumnTypes { get; init; } = new();
 
     public List<ReplayItem> Items { get; init; } = new();
+
+    [Description("Output value (output.values) → type, to decode values.")]
+    public Dictionary<string, string> ValueTypes { get; init; } = new();
+
+    [Description("Output value → value, in the encoding of request inputs (non-finite floats as \"NaN\", \"Infinity\", \"-Infinity\"); none for a failed result.")]
+    public Dictionary<string, JsonElement?> Values { get; init; } = new();
 
     public List<string> TriggeredExperiments { get; init; } = new();
 

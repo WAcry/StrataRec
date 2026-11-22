@@ -120,6 +120,9 @@ internal sealed class PipelineResult
     /// <summary>The returned items column by column (<see cref="ResultColumns"/>): the form to read many rows in.</summary>
     public required ResultColumns Columns { get; init; }
 
+    /// <summary>The output's request-level values (<c>output.values</c>); empty for a failed run.</summary>
+    public ResultValues Values { get; init; } = ResultValues.Empty;
+
     /// <summary>The returned items as rows, a dictionary of output columns each, made from <see cref="Columns"/> when first read.</summary>
     public IReadOnlyList<RankedItem> Items => Columns.Rows;
 
@@ -697,6 +700,11 @@ internal sealed class PipelineExecutor
             }
         }
 
+        if (MissingRequestColumn(state, node.RequestReads.AsSpan()) is { } unwritten)
+        {
+            return new Attempt(AttemptKind.Skipped, $"input request column '{unwritten}' was not written");
+        }
+
         // What the node reads but waits for itself (a recall source's query, design 5.4) is not filled here.
         var fill = await state.Features.EnsureAsync(node.FilledFeatures.AsSpan(), cancellationToken).ConfigureAwait(false);
         if (fill.Failed)
@@ -743,7 +751,7 @@ internal sealed class PipelineExecutor
                 ? Stopwatch.GetTimestamp() + (long)(Math.Min(budgetMs, AttemptBudget.MaxWaitMs) * Stopwatch.Frequency / 1000)
                 : long.MaxValue;
             var budget = new AttemptBudget(cancellationToken, deadline, state.Events, state.RequestId);
-            var context = new OperatorContext(state, node.NodeId, node.Effects, budget);
+            var context = new OperatorContext(state, node.NodeId, node.Effects, budget, node.RequestOutputs);
             string? failure;
             var timedOut = false;
             try
@@ -764,7 +772,7 @@ internal sealed class PipelineExecutor
                     // An explained request sees the attempt as the operator left it, before its outputs are committed: the
                     // operator explains itself reading the versions it read (CandidateExplainer.Observe).
                     state.Explainer?.Observe(state, node);
-                    failure = Commit(state, node);
+                    failure = Commit(state, node, context);
                 }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -813,7 +821,12 @@ internal sealed class PipelineExecutor
     /// them: it replaces only values that cannot be stored (non-finite, out of int32 range), which the writer and the
     /// sanitizing above already did, so a missing producer never turns into the default (design 4.6).
     /// </remarks>
-    private static string? Commit(RequestState state, CompiledNode node)
+    /// <remarks>
+    /// A request column the node writes is published the same way, as one value (<see cref="CommitRequestColumns"/>): every
+    /// check comes before anything is published, so a node that fails here leaves the table and the request columns as
+    /// they were.
+    /// </remarks>
+    private static string? Commit(RequestState state, CompiledNode node, OperatorContext context)
     {
         var table = state.Table;
         var live = table.Rows.Order;
@@ -841,12 +854,105 @@ internal sealed class PipelineExecutor
             }
         }
 
+        if (node.RequestOutputs.Length > 0 && CommitRequestColumns(state, node, context) is { } failure)
+        {
+            return failure;
+        }
+
         foreach (var output in node.Outputs)
         {
             // A row source that wrote into another node's version leaves that version current (OutputSlot).
             if (state.OutputSlot(node.Effects, output) == output.Slot)
             {
                 state.Bindings.Commit(output.LogicalId, output.Slot, node.Index);
+            }
+        }
+
+        // Published last, with nothing left to fail: a later node, tap and the output read them from here.
+        for (var p = 0; p < node.RequestOutputs.Length; p++)
+        {
+            state.Context[node.RequestOutputs[p].ContextId] = context.StagedRequestValue(p);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Settles what the attempt staged for each request column it writes, as a column's commit settles its rows (design
+    /// 4.3): stored as the column's type holds it (<see cref="ColumnValues.Store"/>), NaN/±∞ and a value outside int32
+    /// storage replaced by the column's default or missing, and counted; then a non-nullable column must have a value.
+    /// A column the node wrote nothing to is missing, as a column whose slot it never asked for is: the node's write is
+    /// the new value, so a nullable flow column written before is missing after it.
+    /// </summary>
+    private static string? CommitRequestColumns(RequestState state, CompiledNode node, OperatorContext context)
+    {
+        for (var p = 0; p < node.RequestOutputs.Length; p++)
+        {
+            var output = node.RequestOutputs[p];
+            var field = state.Plan.Schema.ContextFields[output.ContextId];
+            var value = context.StagedRequestValue(p);
+            switch (ColumnValues.Store(ref value, output.Type))
+            {
+                case StorageFit.NonFinite:
+                    state.NonFinite++;
+                    if (state.Replay is null)
+                    {
+                        StrataRecMetrics.ColumnNonFinite.Add(1, state.Plan.Telemetry.Nodes[node.Index].RequestOutputs[p]);
+                    }
+
+                    value = field.HasDefault ? field.Default : ScalarValue.Missing;
+                    break;
+                case StorageFit.OutOfRange:
+                    state.Counters.AddOutOfRange(1);
+                    value = field.HasDefault ? field.Default : ScalarValue.Missing;
+                    break;
+            }
+
+            if (value.IsMissing && !output.Type.Nullable)
+            {
+                return $"left non-nullable request column '{output.Name}' without a value";
+            }
+
+            context.RestageRequestValue(p, value);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The first non-nullable request column among <paramref name="reads"/> (context ids) that no node has written in this
+    /// request, or null: what a node, condition or output value reading it cannot be evaluated without. The data-flow
+    /// checks rule it out for every arm combination. A trigger site evaluates another arm's condition in a request of
+    /// this arm, which they do not check, but there too the column has been written: when the arms differ in its
+    /// producer (one adds, deletes or moves it), the producer's position is an earlier site of the experiment, which
+    /// triggered it already, and a triggered experiment's conditions are not evaluated (design 12.6). Like the skip of a
+    /// node whose input column was not produced (design 11.5 step 4), this is the runtime's own protection: a defect skips
+    /// a node rather than aborting the request. A tap reading such a column logs it missing.
+    /// </summary>
+    internal static string? MissingRequestColumn(RequestState state, ReadOnlySpan<int> reads)
+    {
+        foreach (var id in reads)
+        {
+            var field = state.Plan.Schema.ContextFields[id];
+            if (field.Kind == ContextFieldKind.RequestColumn && !field.Type.Nullable && state.Context[id].IsMissing)
+            {
+                return field.Name;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary><see cref="MissingRequestColumn(RequestState, ReadOnlySpan{int})"/> over the symbols an expression reads.</summary>
+    internal static string? MissingRequestColumn(RequestState state, IReadOnlyList<Symbol> reads)
+    {
+        for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
+        {
+            var symbol = reads[i];
+            if (symbol.Kind == SymbolKind.Context && !symbol.Type.Nullable && state.Context[symbol.Id].IsMissing
+                && state.Plan.Schema.ContextFields[symbol.Id] is { Kind: ContextFieldKind.RequestColumn } field)
+            {
+                return field.Name;
             }
         }
 
@@ -874,7 +980,8 @@ internal sealed class PipelineExecutor
 
     /// <summary>
     /// After a fetch barrier, starts fetches for every node up to and including the next barrier, plus their fallbacks
-    /// (design 5.4, 6.8). Nodes already known to be skipped by <c>when</c> are left out.
+    /// (design 5.4, 6.8). Nodes already known to be skipped by <c>when</c> are left out; a <c>when</c> that reads a request
+    /// column is not known yet (the nodes before its own may still write it), so its node's features are prefetched.
     /// </summary>
     private static async ValueTask PrefetchSegmentAsync(RequestState state, int position, CancellationToken cancellationToken)
     {
@@ -887,7 +994,7 @@ internal sealed class PipelineExecutor
                 continue;
             }
 
-            if (next.When is not null && !await EvaluateWhenAsync(state, i, next, cancellationToken).ConfigureAwait(false))
+            if (next.When is not null && !next.WhenReadsRequest && !await EvaluateWhenAsync(state, i, next, cancellationToken).ConfigureAwait(false))
             {
                 continue;
             }
@@ -923,13 +1030,27 @@ internal sealed class PipelineExecutor
         }
 
         await EnsureContextAsync(state, node.When, cancellationToken).ConfigureAwait(false);
-        var value = node.When.EvaluateScalar(state.Eval);
-        var result = !value.IsMissing && value.AsBool();
+        var result = Holds(state, node.When);
         state.WhenResults[position] = result;
         return result;
     }
 
-    /// <summary>`when` and site conditions read only ctx.*; make sure the context features they read are present (design 5.5).</summary>
+    /// <summary>
+    /// Whether a <c>when</c> holds: not when its value is missing, nor when it reads a non-nullable request column no node
+    /// has written in this request (<see cref="MissingRequestColumn(RequestState, IReadOnlyList{Symbol})"/>), which it cannot be evaluated without.
+    /// </summary>
+    private static bool Holds(RequestState state, CompiledExpression when)
+    {
+        if (MissingRequestColumn(state, when.Reads) is not null)
+        {
+            return false;
+        }
+
+        var value = when.EvaluateScalar(state.Eval);
+        return !value.IsMissing && value.AsBool();
+    }
+
+    /// <summary>`when` and site conditions read request-level values only; make sure the context features they read are present (design 5.5).</summary>
     private static ValueTask EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)
     {
         List<int>? contextFeatures = null;
@@ -987,8 +1108,7 @@ internal sealed class PipelineExecutor
                 }
 
                 await EnsureContextAsync(state, when, cancellationToken).ConfigureAwait(false);
-                var value = when.EvaluateScalar(state.Eval);
-                if (!value.IsMissing && value.AsBool())
+                if (Holds(state, when))
                 {
                     state.Triggered[experiment] = true;
                     break;
@@ -1229,6 +1349,19 @@ internal sealed class PipelineExecutor
             }
         }
 
+        var results = ResultValues.Empty;
+        if (output.Values.Length > 0)
+        {
+            var (computed, failure) = await ValuesAsync(state, output, cancellationToken).ConfigureAwait(false);
+            if (failure is not null)
+            {
+                return Failed(plan, request, failure, start, state.Outcomes, state.Triggered, state.NonFinite + state.Features.NonFiniteReplaced,
+                    state.Counters.OutOfRange);
+            }
+
+            results = computed!;
+        }
+
         if (state.Batches is not null)
         {
             await TapCapture.OutputAsync(state, rows, cancellationToken).ConfigureAwait(false);
@@ -1244,6 +1377,7 @@ internal sealed class PipelineExecutor
         {
             Succeeded = true,
             Columns = new ResultColumns(ids, names, types, values),
+            Values = results,
             Outcomes = state.Outcomes,
             AssignedArms = plan.ArmIds(state.Arms),
             TriggeredExperiments = TriggeredIds(plan, state.Triggered),
@@ -1253,6 +1387,51 @@ internal sealed class PipelineExecutor
             OutOfRangeValues = state.Counters.OutOfRange,
             Degraded = state.Degraded,
         };
+    }
+
+    /// <summary>
+    /// The output's request-level values, evaluated once after every node: with the context features they read, a failed
+    /// one failing the result as a failed feature an output column reads does; a request column as the nodes left it.
+    /// </summary>
+    private static async ValueTask<(ResultValues? Values, string? Failure)> ValuesAsync(RequestState state, OutputPlan output, CancellationToken cancellationToken)
+    {
+        var plan = state.Plan;
+        List<int>? features = null;
+        foreach (var (_, expression) in output.Values)
+        {
+            var reads = expression.Reads;
+            for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
+            {
+                if (FeatureOf(plan, reads[i]) is >= 0 and var f)
+                {
+                    (features ??= new List<int>()).Add(f);
+                }
+            }
+        }
+
+        if (features is not null)
+        {
+            var fill = await state.Features.EnsureAsync(CollectionsMarshal.AsSpan(features), cancellationToken).ConfigureAwait(false);
+            if (fill.Failed)
+            {
+                return (null, "output reads a feature that failed: " + fill.Error);
+            }
+        }
+
+        var values = new ResultValue[output.Values.Length];
+        for (var v = 0; v < values.Length; v++)
+        {
+            var (name, expression) = output.Values[v];
+            if (MissingRequestColumn(state, expression.Reads) is { } unwritten)
+            {
+                // The data-flow checks rule it out (a non-nullable one read here has a producer that cannot be skipped).
+                return (null, $"output value '{name}' reads request column '{unwritten}', which no node wrote");
+            }
+
+            values[v] = new ResultValue(name, plan.Schema.DeclaredType(expression), expression.EvaluateScalar(state.Eval));
+        }
+
+        return (new ResultValues(values), null);
     }
 
     /// <summary>

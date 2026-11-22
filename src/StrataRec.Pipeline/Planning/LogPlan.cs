@@ -74,6 +74,12 @@ public sealed class CompiledTap
     /// <summary>Output columns (logical ids) the tap reads through bindings; must be produced before the attach point.</summary>
     public required ImmutableArray<int> ReadOutputs { get; init; }
 
+    /// <summary>
+    /// The request columns the tap reads (<c>req.*</c>), by <see cref="ContextField.Id"/>: as of its point, so a node before it
+    /// must write each; one no node has written in the request is logged missing.
+    /// </summary>
+    public ImmutableArray<int> RequestReads { get; init; } = [];
+
     /// <summary>Every name the tap's expressions bind (<see cref="CompiledNode.Requires"/>): a tap compiles after every node.</summary>
     public ImmutableArray<NameRef> Requires { get; init; } = [];
 

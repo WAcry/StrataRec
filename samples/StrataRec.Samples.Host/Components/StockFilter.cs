@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Services;
+using StrataRec.Core.Values;
 using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.Samples.Host.Components;
@@ -14,6 +15,10 @@ public sealed class StockFilterConfig
 
     [Description("The service's output that keeps a row when true, e.g. in_stock.")]
     public required string KeepOutput { get; init; }
+
+    [Description("Request column (declared under request_columns, an integer) the filter writes how many candidates the " +
+        "service said no to, e.g. stock.dropped; omitted, it writes none.")]
+    public string? DroppedColumn { get; init; }
 }
 
 /// <summary>
@@ -42,10 +47,16 @@ public sealed class StockFilterConfig
 /// <item>The answer is read while the call's memory is the request's: the keep flags are the response's own buffer, by
 /// rank position, handed to <see cref="OperatorContext.Retain"/>. Nothing is allocated per row.</item>
 /// </list>
+/// <para>How an operator tells the request something (a request column, <c>req.*</c>): it declares
+/// <see cref="Effects.RequestWriter"/>, resolves the column when it compiles
+/// (<see cref="OperatorCompileContext.TryWriteRequestColumn"/>: it must be declared under <c>request_columns</c>), and
+/// stages the value while it runs (<see cref="OperatorContext.SetRequestValue"/>). The value is published when the node
+/// commits, so a later node, a tap and the caller (<c>output.values</c>) read it; when the node fails, nothing it staged
+/// is. Here, how many candidates were out of stock: the pipeline returns it with the result.</para>
 /// </remarks>
 public sealed class StockFilterFactory : IOperatorFactory
 {
-    public OperatorDescriptor Descriptor { get; } = new("StockFilter", 1, Effects.RowFilter, typeof(StockFilterConfig),
+    public OperatorDescriptor Descriptor { get; } = new("StockFilter", 1, Effects.RowFilter | Effects.RequestWriter, typeof(StockFilterConfig),
         "Drops the rows an external service says no to: it is sent the candidates and answers a bool per item.");
 
     public Operator? Compile(OperatorCompileContext context)
@@ -62,11 +73,29 @@ public sealed class StockFilterFactory : IOperatorFactory
             return null;
         }
 
+        RequestOutput? dropped = null;
+        if (config.DroppedColumn is { } name)
+        {
+            if (!context.TryWriteRequestColumn(name, "/dropped_column", out var column))
+            {
+                return null;
+            }
+
+            if (!column.Type.IsInteger)
+            {
+                context.Error("/dropped_column", "COLUMN_TYPE_MISMATCH", $"Request column '{name}' is {column.Type}; the filter writes a count.",
+                    "declare it as int64? (missing when the filter did not run to the end)");
+                return null;
+            }
+
+            dropped = column;
+        }
+
         var service = context.Service(config.Service, "/service", "filter");
-        return service is null ? null : new StockFilter(service, [config.KeepOutput]);
+        return service is null ? null : new StockFilter(service, [config.KeepOutput], dropped);
     }
 
-    private sealed class StockFilter(BoundService service, string[] outputs) : Operator
+    private sealed class StockFilter(BoundService service, string[] outputs, RequestOutput? dropped) : Operator
     {
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
@@ -74,6 +103,7 @@ public sealed class StockFilterFactory : IOperatorFactory
             var count = rows.Length;
             if (count == 0)
             {
+                SetDropped(context, 0);
                 return;
             }
 
@@ -100,7 +130,23 @@ public sealed class StockFilterFactory : IOperatorFactory
                 return;
             }
 
-            context.Retain(values.Bool.Span);
+            var keepFlags = values.Bool.Span;
+            var kept = 0;
+            foreach (var flag in keepFlags)
+            {
+                kept += flag ? 1 : 0;
+            }
+
+            context.Retain(keepFlags);
+            SetDropped(context, count - kept);
+        }
+
+        private void SetDropped(OperatorContext context, long count)
+        {
+            if (dropped is { } column)
+            {
+                context.SetRequestValue(column, ScalarValue.FromInt64(count));
+            }
         }
     }
 }

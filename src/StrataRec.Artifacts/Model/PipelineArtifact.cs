@@ -19,7 +19,16 @@ public sealed class PipelineArtifact
 
     public Dictionary<string, RequestFieldSpec> RequestSchema { get; init; } = new();
 
+    /// <summary>Candidate columns nodes write, one value per candidate, read as <c>col.&lt;name&gt;</c> (design 4.6).</summary>
     public Dictionary<string, ColumnSpec> Columns { get; init; } = new();
+
+    /// <summary>
+    /// Request columns nodes write, one value per request, read as <c>req.&lt;name&gt;</c> wherever a request-level value is
+    /// read: in a later node's expressions and <c>when</c>, a log tap's <c>context</c>, the output's <c>values</c>. A count
+    /// or a threshold over the candidates (<c>GroupAggregate@1</c>'s <c>request_outputs</c>), or what a custom operator
+    /// decided for the request. Declared as candidate columns are; a value a node did not write is missing.
+    /// </summary>
+    public Dictionary<string, ColumnSpec> RequestColumns { get; init; } = new();
 
     public Dictionary<string, ParamSpec> ParamSchema { get; init; } = new();
 
@@ -46,7 +55,7 @@ public sealed class RequestFieldSpec
     public string? Description { get; init; }
 }
 
-/// <summary>Declaration of a node-produced column (design 4.6).</summary>
+/// <summary>Declaration of a node-produced column (design 4.6): a candidate column, or a request column.</summary>
 public sealed class ColumnSpec
 {
     public required string Type { get; init; }
@@ -182,4 +191,10 @@ public sealed class OutputSpec
 
     /// <summary>Output name → column expression (usually a plain <c>col.*</c> reference).</summary>
     public Dictionary<string, string> Columns { get; init; } = new();
+
+    /// <summary>
+    /// Output name → request-level expression (<c>req.*</c>, <c>ctx.*</c>, <c>param.*</c>; usually a plain <c>req.*</c>
+    /// reference), returned once with the result, beside its items: what the request's nodes computed for the caller.
+    /// </summary>
+    public Dictionary<string, string> Values { get; init; } = new();
 }

@@ -150,6 +150,8 @@ public sealed class VersionReferenceTests
         pipeline.Columns.Clear();
         pipeline.LogTaps.Clear();
         pipeline.Output.Columns.Clear();
+        pipeline.Output.Values.Clear();
+        pipeline.RequestColumns.Clear();
         pipeline.Columns["x"] = new ColumnSpec { Type = "float64?" };
         pipeline.Columns["z"] = new ColumnSpec { Type = "float64?" };
         pipeline.Nodes["seed"] = new NodeSpec { Order = 100, Op = "Append@1", Config = new JsonObject() };

@@ -34,7 +34,7 @@ public enum NodeOutcomeKind : byte
     /// <summary>Less than <c>min_remaining_ms</c> was left.</summary>
     SkippedDeadline,
 
-    /// <summary>A column the node reads was not produced.</summary>
+    /// <summary>A column the node reads was not produced, or a non-nullable request column it reads not written.</summary>
     SkippedInput,
 
     /// <summary>The node failed, and was skipped (<c>on_failure: skip</c>) or failed the request.</summary>

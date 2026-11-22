@@ -21,7 +21,8 @@ public sealed class RecResultJsonOptions
 /// <para>The document: <c>request_id</c>, <c>succeeded</c>, for a failure <c>error_kind</c> (<see cref="Name"/>),
 /// <c>error</c> and <c>error_pointer</c> when there are, <c>served_by</c>, <c>manifest</c>, <c>experiments</c>
 /// (<c>assigned</c>, <c>triggered</c>, <c>ignored</c> with <c>id</c> and <c>reason</c>), <c>items</c> (<c>rank</c>,
-/// <c>id</c>, <c>columns</c>) and <c>elapsed_ms</c>; then <c>column_producers</c> when asked for, and <c>trace</c>,
+/// <c>id</c>, <c>columns</c>), <c>values</c> (the output's request-level values, name → value) when the pipeline returns
+/// any, and <c>elapsed_ms</c>; then <c>column_producers</c> when asked for, and <c>trace</c>,
 /// <c>logs</c> and <c>explanation</c> (<see cref="WriteExplanation"/>) when the request asked for them
 /// (<see cref="DebugOptions"/>).</para>
 /// <para>An item's output columns are an object of their own, so no column name (<c>id</c>, <c>rank</c>) can collide with
@@ -60,6 +61,12 @@ public static class RecResultJson
         WriteExperiments(json, result.Experiments);
         json.WritePropertyName("items");
         WriteItems(json, result.Columns);
+        if (result.Values.Count > 0)
+        {
+            json.WritePropertyName("values");
+            WriteValues(json, result.Values);
+        }
+
         json.WriteNumber("elapsed_ms", Math.Round(result.ElapsedMs, 3));
         if (options?.IncludeColumnProducers == true && result.ColumnProducers is { } producers)
         {
@@ -258,6 +265,24 @@ public static class RecResultJson
         }
 
         json.WriteEndArray();
+    }
+
+    /// <summary>
+    /// A result's request-level values as one JSON object, name → value, encoded as the items' columns are: a missing or
+    /// non-finite value is <c>null</c>, and a <c>float32</c> value's floats print as floats.
+    /// </summary>
+    public static void WriteValues(Utf8JsonWriter json, ResultValues values)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        ArgumentNullException.ThrowIfNull(values);
+        json.WriteStartObject();
+        foreach (var value in values.All)
+        {
+            json.WritePropertyName(value.Name);
+            WriteValue(json, value.Value, float32: value.Type.ValueKind == StorageKind.Float32);
+        }
+
+        json.WriteEndObject();
     }
 
     private static void WriteId(Utf8JsonWriter json, Core.Keys.EntityKey id)

@@ -1540,7 +1540,7 @@ internal sealed partial class UnifiedCompilation
         if (output is not null)
         {
             var reads = new List<int> { output.Limit.Id };
-            foreach (var (_, expression) in output.Columns)
+            foreach (var expression in output.Expressions())
             {
                 foreach (var symbol in expression.Reads)
                 {

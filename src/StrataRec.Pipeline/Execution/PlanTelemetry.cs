@@ -43,12 +43,14 @@ internal sealed class PlanTelemetry
             string subject,
             KeyValuePair<string, object?>[] tags,
             KeyValuePair<string, object?>[][] outcomes,
-            KeyValuePair<string, object?>[][] outputs)
+            KeyValuePair<string, object?>[][] outputs,
+            KeyValuePair<string, object?>[][] requestOutputs)
         {
             Subject = subject;
             Tags = tags;
             Outcomes = outcomes;
             Outputs = outputs;
+            RequestOutputs = requestOutputs;
         }
 
         /// <summary><c>pipeline/node</c>, the subject of windowed failure summaries.</summary>
@@ -63,6 +65,9 @@ internal sealed class PlanTelemetry
         /// <summary>Per entry of <see cref="CompiledNode.Outputs"/>: the node tags plus <c>stratarec.column</c>.</summary>
         public KeyValuePair<string, object?>[][] Outputs { get; }
 
+        /// <summary>Per entry of <see cref="CompiledNode.RequestOutputs"/>: the node tags plus <c>stratarec.column</c>, <c>req.&lt;name&gt;</c>.</summary>
+        public KeyValuePair<string, object?>[][] RequestOutputs { get; }
+
         public static NodeTelemetry Create(string pipeline, CompiledNode node)
         {
             KeyValuePair<string, object?>[] tags = [new(StrataRecTags.Pipeline, pipeline), new(StrataRecTags.Node, node.NodeId)];
@@ -72,11 +77,22 @@ internal sealed class PlanTelemetry
                 outcomes[i] = [tags[0], tags[1], new(StrataRecTags.Outcome, NodeOutcomeNames.Name((NodeOutcomeKind)i))];
             }
 
-            return new NodeTelemetry(pipeline + "/" + node.NodeId, tags, outcomes, OutputTags(tags, node));
+            return new NodeTelemetry(pipeline + "/" + node.NodeId, tags, outcomes, OutputTags(tags, node), RequestOutputTags(tags, node));
         }
 
         public NodeTelemetry WithOutputs(CompiledNode node) =>
-            new(Subject, Tags, Outcomes, OutputTags(Tags, node));
+            new(Subject, Tags, Outcomes, OutputTags(Tags, node), RequestOutputTags(Tags, node));
+
+        private static KeyValuePair<string, object?>[][] RequestOutputTags(KeyValuePair<string, object?>[] tags, CompiledNode node)
+        {
+            var outputs = new KeyValuePair<string, object?>[node.RequestOutputs.Length][];
+            for (var i = 0; i < outputs.Length; i++)
+            {
+                outputs[i] = [tags[0], tags[1], new(StrataRecTags.Column, "req." + node.RequestOutputs[i].Name)];
+            }
+
+            return outputs;
+        }
 
         private static KeyValuePair<string, object?>[][] OutputTags(KeyValuePair<string, object?>[] tags, CompiledNode node)
         {

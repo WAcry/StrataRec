@@ -284,7 +284,8 @@ internal static class TapCapture
         var context = new (string, ScalarValue)[tap.Context.Length];
         for (var i = 0; i < context.Length; i++)
         {
-            context[i] = (tap.Context[i].Name, Sanitize(tap.Context[i].Expression.EvaluateScalar(eval)));
+            var expression = tap.Context[i].Expression;
+            context[i] = (tap.Context[i].Name, LacksData(state, expression) ? ScalarValue.Missing : Sanitize(expression.EvaluateScalar(eval)));
         }
 
         state.Batches!.Add(new LogBatch
@@ -332,14 +333,11 @@ internal static class TapCapture
         table.KeyType == EntityKeyType.Int64 ? table.Int64Ids![row] : Core.Hashing.StableHash.SeedFromSalt(table.StringIds!.Get(row));
 
     /// <summary>
-    /// True when <paramref name="expression"/> reads a feature that failed in this request. Its storage may hold rows that
-    /// are invalid under a non-nullable type, which the expression would read without checking validity (review 6). A
-    /// tap never fails the request, so such a column is logged as missing.
-    /// </summary>
-    /// <summary>
-    /// True when the expression reads what this request has no value of: a feature whose fetch failed, or a non-nullable
-    /// column no node produced (evaluated, the read would throw; a nullable one reads as missing, which an expression may
-    /// handle). A tap logs such a column missing; it never fails the request.
+    /// True when the expression reads what this request has no value of: a feature whose fetch failed (its storage may hold
+    /// rows invalid under a non-nullable type, which the expression would read without checking validity, review 6), or a
+    /// non-nullable column or request column no node produced (evaluated, the read would throw; a nullable one reads as
+    /// missing, which an expression may handle). A tap logs such a column or context field missing; it never fails the
+    /// request.
     /// </summary>
     private static bool LacksData(RequestState state, CompiledExpression expression)
     {
@@ -354,7 +352,8 @@ internal static class TapCapture
             }
         }
 
-        return false;
+        // A request column no node wrote before the tap's point (its producer was skipped) has no value to log.
+        return PipelineExecutor.MissingRequestColumn(state, reads) is not null;
     }
 
     /// <summary>

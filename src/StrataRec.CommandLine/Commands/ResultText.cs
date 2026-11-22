@@ -7,7 +7,7 @@ namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// A result as lines for people (<c>stratarec run --format text</c>), laid out as <c>replay</c>'s report: how the request
-/// ended, the arms, one line per item with its output columns, and what the request asked for (the trace, the column
+/// ended, the arms, one line per item with its output columns, the output's request-level values, and what the request asked for (the trace, the column
 /// producers, the explained candidates). The JSON document (<see cref="RecResultJson"/>) stays the default output: it is
 /// what a service answers, exactly.
 /// </summary>
@@ -47,6 +47,17 @@ internal static class ResultText
         }
 
         WriteItems(output, result);
+        if (result.Values.Count > 0)
+        {
+            var values = new List<string>(result.Values.Count);
+            foreach (var value in result.Values.All)
+            {
+                values.Add($"{value.Name} {value.Value}");
+            }
+
+            output.WriteLine($"  values    {string.Join(", ", values)}");
+        }
+
         if (result.Trace is { } trace)
         {
             for (var i = 0; i < trace.Count; i++)

@@ -7,6 +7,18 @@ using StrataRec.Core.Types;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
+/// <summary>The mean of values taken one at a time, in row order (<c>GroupAggregate@1</c>, <c>RequestAggregate@1</c>).</summary>
+internal static class RunningMean
+{
+    /// <summary>
+    /// The mean after its <paramref name="k"/>-th value <paramref name="x"/>: equal values leave it exactly the value (a mean
+    /// from the sum is off by its rounding, and the deviations from it made a std of equal values > 0, a z-score of ±1). The
+    /// step is x/k − mean/k, not (x − mean)/k: neither a sum nor the difference of two large values of opposite signs
+    /// overflows (review 45).
+    /// </summary>
+    public static double Step(double mean, double x, long k) => mean + ((x / k) - (mean / k));
+}
+
 /// <summary>Config of <c>GroupAggregate@1</c>.</summary>
 public sealed class GroupAggregateConfig
 {
@@ -326,12 +338,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                         totals[g] = k == 1 ? x : totals[g] + x;
                         break;
                     default:
-                        // The running mean, in row order: equal values leave it exactly the value (a mean from the sum is
-                        // off by its rounding, and the deviations from it made a std of equal values > 0, a z-score of ±1).
-                        // The step is x/k − mean/k, not (x − mean)/k: neither a sum nor the difference of two large values
-                        // of opposite signs overflows (review 45).
-                        var mean = totals[g];
-                        totals[g] = mean + ((x / k) - (mean / k));
+                        totals[g] = RunningMean.Step(totals[g], x, k);
                         if (peaks is not null)
                         {
                             peaks[g] = Math.Max(peaks[g], Math.Abs(x));

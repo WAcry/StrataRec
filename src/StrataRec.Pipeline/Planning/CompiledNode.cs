@@ -131,6 +131,22 @@ public sealed class CompiledNode
 
     public required ImmutableArray<OutputColumn> Outputs { get; init; }
 
+    /// <summary>The request columns the node writes (<see cref="Effects.RequestWriter"/>), published when it commits.</summary>
+    public ImmutableArray<RequestOutput> RequestOutputs { get; init; } = [];
+
+    /// <summary>
+    /// The request columns the node reads (<c>req.*</c>), by <see cref="ContextField.Id"/>, in its config and its
+    /// <c>when</c>: each has its value as of the position (a later node's write is not yet there), and a non-nullable one
+    /// must have a producer that cannot be skipped before it (design 11.5).
+    /// </summary>
+    public ImmutableArray<int> RequestReads { get; init; } = [];
+
+    /// <summary>
+    /// The node's <c>when</c> reads a request column: it is evaluated at the node's position, when what the nodes before it
+    /// wrote is there, not ahead of it with the other conditions of its segment (which decide what to prefetch).
+    /// </summary>
+    public bool WhenReadsRequest { get; init; }
+
     /// <summary>
     /// The names the node binds that it has not declared itself before binding them: every column, parameter and context
     /// field it resolves (in a branch the optimizer drops too, and a column it writes but cannot declare), but not a

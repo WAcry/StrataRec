@@ -299,6 +299,11 @@ internal static class ExplainPlanCommand
         o.WriteLine("output:");
         o.WriteLine($"  {"limit_param",-28} {selected.Output.Limit.Name}");
         o.WriteLine($"  {"columns",-28} {Expressions(selected.Output.Columns)}");
+        if (selected.Output.Values.Length > 0)
+        {
+            o.WriteLine($"  {"values",-28} {Expressions(selected.Output.Values)}");
+        }
+
         foreach (var warning in plan.Warnings)
         {
             o.WriteLine(Output.Text(warning, locator?.Locate(warning)));
@@ -319,7 +324,8 @@ internal static class ExplainPlanCommand
     /// <summary>
     /// The columns a node reads (but the entity id, which every row has), in name order, and those it writes, as the
     /// compiled node declares them: what the executor fetches before it, and versions after it. Reads are sorted by name,
-    /// not listed by column id: a feature's id is the order the plan first read it in (design 6.3), which says nothing.
+    /// not listed by column id: a feature's id is the order the plan first read it in (design 6.3), which says nothing. The
+    /// request columns it reads and writes follow, as <c>req.&lt;name&gt;</c>.
     /// </summary>
     private static (List<string> Reads, List<string> Writes) Flow(ExecutionPlan plan, CompiledNode node)
     {
@@ -334,11 +340,24 @@ internal static class ExplainPlanCommand
         }
 
         reads.Sort(StringComparer.Ordinal);
+        var requestReads = new List<string>(node.RequestReads.Length);
+        foreach (var id in node.RequestReads)
+        {
+            requestReads.Add(plan.Schema.ContextFields[id].QualifiedName);
+        }
 
-        var writes = new List<string>(node.Outputs.Length);
+        requestReads.Sort(StringComparer.Ordinal);
+        reads.AddRange(requestReads);
+
+        var writes = new List<string>(node.Outputs.Length + node.RequestOutputs.Length);
         foreach (var output in node.Outputs)
         {
             writes.Add(output.Name);
+        }
+
+        foreach (var output in node.RequestOutputs)
+        {
+            writes.Add("req." + output.Name);
         }
 
         return (reads, writes);

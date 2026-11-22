@@ -134,7 +134,7 @@ public sealed class EffectivePlan
     ///                                "rows": {"scope", "rate", "max_rows"?, "filter"?}, "context": {...}, "columns": {...},
     ///                                "features": [...] } },
     ///   "funnel_groups": { "&lt;group&gt;": { "key": [...], "rate": r } },
-    ///   "output":        { "limit_param": "&lt;leaf&gt;", "columns": { "&lt;name&gt;": "&lt;expr&gt;" } }
+    ///   "output":        { "limit_param": "&lt;leaf&gt;", "columns": { "&lt;name&gt;": "&lt;expr&gt;" }, "values"?: { "&lt;name&gt;": "&lt;expr&gt;" } }
     /// }
     /// </code>
     /// A tap's columns are the compiled ones (<c>columns_from</c> expanded) and its features those its expressions read.
@@ -235,11 +235,20 @@ public sealed class EffectivePlan
         return Sorted(document, "funnel_groups");
     }
 
-    public JsonObject OutputDocument() => Sorted(new JsonObject
+    public JsonObject OutputDocument()
     {
-        ["limit_param"] = Output.Limit.Name,
-        ["columns"] = Expressions(Output.Columns),
-    }, "output");
+        var document = new JsonObject
+        {
+            ["limit_param"] = Output.Limit.Name,
+            ["columns"] = Expressions(Output.Columns),
+        };
+        if (Output.Values.Length > 0)
+        {
+            document["values"] = Expressions(Output.Values); // only where there are: a plan without stays the document it was
+        }
+
+        return Sorted(document, "output");
+    }
 
     /// <summary>
     /// The RFC 8785 form of a document: members in ordinal order at every level, numbers in their canonical spelling. A

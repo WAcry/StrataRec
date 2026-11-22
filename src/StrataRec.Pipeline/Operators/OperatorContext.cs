@@ -7,6 +7,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Tables;
+using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Expressions;
 using StrataRec.Features.Runtime;
@@ -41,13 +42,18 @@ public sealed class OperatorContext : IServiceCallScope
 {
     private readonly RequestState _state;
     private readonly Effects _effects;
+    private readonly ImmutableArray<RequestOutput> _requestOutputs;
 
-    internal OperatorContext(RequestState state, string nodeId, Effects effects, AttemptBudget budget)
+    /// <summary>The attempt's staged request values, by position in <see cref="_requestOutputs"/>; made on the first write.</summary>
+    private (bool Written, ScalarValue Value)[]? _staged;
+
+    internal OperatorContext(RequestState state, string nodeId, Effects effects, AttemptBudget budget, ImmutableArray<RequestOutput> requestOutputs = default)
     {
         _state = state;
         NodeId = nodeId;
         _effects = effects;
         Budget = budget;
+        _requestOutputs = requestOutputs.IsDefault ? [] : requestOutputs;
     }
 
     public string NodeId { get; }
@@ -117,7 +123,74 @@ public sealed class OperatorContext : IServiceCallScope
 
     public ScalarValue Param(in ParamRef parameter) => _state.Params[parameter.Id];
 
+    /// <summary>
+    /// A request-level value by id: a <c>ctx.*</c> field, or a request column (<c>req.*</c>) as the nodes before this one
+    /// left it. A value this node stages with <see cref="SetRequestValue"/> is not there until the node commits.
+    /// </summary>
     public ScalarValue ContextValue(int contextId) => _state.Context[contextId];
+
+    /// <summary>
+    /// Stages the value of a request column the node writes (<see cref="OperatorCompileContext.TryWriteRequestColumn"/>);
+    /// the last value staged is the one written. When the node commits, the value is stored as the column's type holds it,
+    /// as a column's are: a float32 column's rounded, NaN/±∞ and an integer outside an int32 column's range replaced by the
+    /// column's default or missing (and counted); a non-nullable column left missing fails the node. When the attempt
+    /// fails, nothing it staged is written. Requires <see cref="Effects.RequestWriter"/>.
+    /// </summary>
+    /// <param name="value">A value of the column's type, held promoted as every <see cref="ScalarValue"/> is (an integer for a
+    /// float column is a float); missing to leave the column missing.</param>
+    /// <exception cref="InvalidOperationException">The node did not resolve <paramref name="output"/> when it compiled.</exception>
+    /// <exception cref="ArgumentException">The value is of another kind than the column (a string for an int64 column).</exception>
+    public void SetRequestValue(in RequestOutput output, in ScalarValue value)
+    {
+        Require(Effects.RequestWriter, nameof(SetRequestValue));
+        var position = -1;
+        for (var i = 0; i < _requestOutputs.Length; i++)
+        {
+            if (_requestOutputs[i].ContextId == output.ContextId)
+            {
+                position = i;
+                break;
+            }
+        }
+
+        if (position < 0)
+        {
+            throw new InvalidOperationException(
+                $"Node '{NodeId}' set request column '{output.Name}', which it did not resolve with TryWriteRequestColumn when it compiled.");
+        }
+
+        if (!value.IsMissing && !OfKind(value, output.Type.Promoted()))
+        {
+            throw new ArgumentException(
+                $"Request column '{output.Name}' is {output.Type}, and node '{NodeId}' set it to a {Kind(value)} value ({value}).", nameof(value));
+        }
+
+        (_staged ??= new (bool, ScalarValue)[_requestOutputs.Length])[position] = (true, value);
+    }
+
+    /// <summary>Replaces a staged value with what the commit stores (<see cref="PipelineExecutor"/>); missing needs no storage.</summary>
+    internal void RestageRequestValue(int position, in ScalarValue value)
+    {
+        if (_staged is not null)
+        {
+            _staged[position] = (true, value);
+        }
+    }
+
+    /// <summary>The value staged for the node's <paramref name="position"/>-th request output; missing when none was.</summary>
+    internal ScalarValue StagedRequestValue(int position) => _staged is { } staged && staged[position].Written ? staged[position].Value : ScalarValue.Missing;
+
+    /// <summary>Whether a present value is of <paramref name="promoted"/>'s kind; an integer is a float's (it converts exactly as stored).</summary>
+    private static bool OfKind(in ScalarValue value, ColumnType promoted)
+    {
+        var (want, have) = promoted.IsList
+            ? (value.Kind == StorageKind.List ? (promoted.Element, value.ListElement) : (StorageKind.List, value.Kind))
+            : (promoted.Kind, value.Kind);
+        return have == want || (want == StorageKind.Float64 && have == StorageKind.Int64);
+    }
+
+    private static string Kind(in ScalarValue value) =>
+        value.Kind == StorageKind.List ? $"list<{value.ListElement.ToString().ToLowerInvariant()}>" : value.Kind.ToString().ToLowerInvariant();
 
     /// <summary>
     /// Waits until the context features of each of <paramref name="reads"/> are settled, and calls

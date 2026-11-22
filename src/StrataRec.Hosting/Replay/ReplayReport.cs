@@ -120,8 +120,8 @@ public sealed record ItemChange(EntityKey Id, int? RecordedRank, int? ReplayedRa
 public sealed class ResultDiff
 {
     /// <summary>
-    /// The same success, the same items in the same order, the same output columns of the same types, and every column
-    /// value equal. False when nothing was replayed (<see cref="ReplayOutcome.NotReplayed"/>).
+    /// The same success, the same items in the same order, the same output columns of the same types, every column value
+    /// equal, and the same request-level values of the same types. False when nothing was replayed (<see cref="ReplayOutcome.NotReplayed"/>).
     /// </summary>
     public required bool Identical { get; init; }
 
@@ -156,7 +156,13 @@ public sealed class ResultDiff
     /// result in its order, then those only the replayed one has, in its order.
     /// </summary>
     public required IReadOnlyList<ItemChange> Changes { get; init; }
+
+    /// <summary>The request-level values (<c>output.values</c>) that differ, by name: in value or type, or in one result only.</summary>
+    public IReadOnlyList<ResultValueChange> ValueChanges { get; init; } = [];
 }
+
+/// <summary>A request-level value of the results that differs: null on the side whose result does not have it.</summary>
+public sealed record ResultValueChange(string Name, ResultValue? Recorded, ResultValue? Replayed);
 
 /// <summary>A result reduced to what comparisons need: ids in rank order and decoded column values.</summary>
 public sealed class ComparableResult
@@ -169,6 +175,9 @@ public sealed class ComparableResult
 
     /// <summary>The output columns' declared types (<c>ResultColumns.Types</c>, a bundle's <c>column_types</c>).</summary>
     public IReadOnlyDictionary<string, ColumnType> Types { get; init; } = new Dictionary<string, ColumnType>();
+
+    /// <summary>The request-level values the result returned (<c>RecResult.Values</c>, a bundle's <c>values</c>), by name.</summary>
+    public IReadOnlyDictionary<string, ResultValue> Values { get; init; } = new Dictionary<string, ResultValue>();
 
     public static ComparableResult From(RecResult result)
     {
@@ -186,7 +195,13 @@ public sealed class ComparableResult
             types[result.Columns.Names[c]] = result.Columns.Types[c];
         }
 
-        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns, Types = types };
+        var values = new Dictionary<string, ResultValue>(StringComparer.Ordinal);
+        foreach (var value in result.Values.All)
+        {
+            values[value.Name] = value;
+        }
+
+        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns, Types = types, Values = values };
     }
 
     /// <summary>Decodes a recorded result with its recorded column types.</summary>
@@ -221,7 +236,20 @@ public sealed class ComparableResult
             columns.Add(values);
         }
 
-        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns, Types = types };
+        var returned = new Dictionary<string, ResultValue>(StringComparer.Ordinal);
+        foreach (var (name, json) in result.Values)
+        {
+            var at = pointer + "/values/" + Artifacts.Json.JsonPointer.Escape(name);
+            if (!result.ValueTypes.TryGetValue(name, out var spelled))
+            {
+                throw new ReplayBundleException(at, $"value '{name}' has no entry in value_types", "record the type of every output value");
+            }
+
+            var type = ReplayJson.Type(spelled, pointer + "/value_types/" + Artifacts.Json.JsonPointer.Escape(name));
+            returned[name] = new ResultValue(name, type, ReplayJson.Value(json, type, at));
+        }
+
+        return new ComparableResult { Succeeded = result.Succeeded, Ids = ids, Columns = columns, Types = types, Values = returned };
     }
 }
 
@@ -302,9 +330,24 @@ public static class ResultComparison
 
         retyped.Sort((a, b) => string.CompareOrdinal(a.Column, b.Column));
 
+        // The request-level values: each name either result returned, compared with its type, as a host reads it.
+        var valueNames = new SortedSet<string>(left.Values.Keys, StringComparer.Ordinal);
+        valueNames.UnionWith(right.Values.Keys);
+        var valueChanges = new List<ResultValueChange>();
+        foreach (var name in valueNames)
+        {
+            ResultValue? recorded = left.Values.TryGetValue(name, out var a) ? a : null;
+            ResultValue? replayed = right.Values.TryGetValue(name, out var b) ? b : null;
+            if (recorded is not { } x || replayed is not { } y || !x.Type.Equals(y.Type) || !x.Value.Equals(y.Value))
+            {
+                valueChanges.Add(new ResultValueChange(name, recorded, replayed));
+            }
+        }
+
         return new ResultDiff
         {
-            Identical = left.Succeeded == right.Succeeded && changes.Count == 0 && added.Count == 0 && removed.Count == 0 && retyped.Count == 0,
+            Identical = left.Succeeded == right.Succeeded && changes.Count == 0 && added.Count == 0 && removed.Count == 0 && retyped.Count == 0
+                && valueChanges.Count == 0,
             LeftSucceeded = left.Succeeded,
             RightSucceeded = right.Succeeded,
             LeftCount = left.Ids.Count,
@@ -316,6 +359,7 @@ public static class ResultComparison
             RemovedColumns = removed,
             RetypedColumns = retyped,
             Changes = changes,
+            ValueChanges = valueChanges,
         };
     }
 

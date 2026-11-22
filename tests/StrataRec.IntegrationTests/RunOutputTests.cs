@@ -24,7 +24,7 @@ public sealed class RunOutputTests : IDisposable
         Assert.True(code == 0, error);
         var root = json.RootElement;
         Assert.Equal(
-            new[] { "request_id", "succeeded", "served_by", "manifest", "experiments", "items", "elapsed_ms", "column_producers", "trace" },
+            new[] { "request_id", "succeeded", "served_by", "manifest", "experiments", "items", "values", "elapsed_ms", "column_producers", "trace" },
             root.EnumerateObject().Select(m => m.Name));
         Assert.Equal(("req-out", true, "home_feed"), (root.GetProperty("request_id").GetString(), root.GetProperty("succeeded").GetBoolean(), root.GetProperty("served_by").GetString()));
         Assert.Equal(new[] { "assigned", "triggered", "ignored" }, root.GetProperty("experiments").EnumerateObject().Select(m => m.Name));
@@ -38,6 +38,11 @@ public sealed class RunOutputTests : IDisposable
             Assert.Equal(JsonValueKind.Number, item.GetProperty("id").ValueKind); // an int64 entity id, written exactly
             Assert.Equal(new[] { "category", "primary_source", "score" }, item.GetProperty("columns").EnumerateObject().Select(m => m.Name).Order(StringComparer.Ordinal));
         });
+        // The request-level values beside the items, at their declared types: the recall's count, the best final score.
+        var values = root.GetProperty("values");
+        Assert.Equal(new[] { "best_score", "popular", "recalled" }, values.EnumerateObject().Select(m => m.Name));
+        Assert.True(values.GetProperty("recalled").GetInt64() >= items.Count);
+        Assert.Equal(items.Max(i => i.GetProperty("columns").GetProperty("score").GetSingle()), values.GetProperty("best_score").GetSingle());
         Assert.Equal("succeeded", root.GetProperty("trace")[0].GetProperty("outcome").GetString());
         Assert.True(root.GetProperty("column_producers").TryGetProperty("score", out _));
     }

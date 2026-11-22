@@ -637,10 +637,8 @@ public sealed partial class FeatureFetcher
     private void StoreContext(FeatureRuntimeInfo info, ScalarValue value)
     {
         var definition = info.Definition;
-        value = ColumnValues.AsStored(value, info.Type);
-        // A list of the wrong length is out of range whatever its elements are, as the column writers count it.
-        var wrongLength = value.Kind == StorageKind.List && !ColumnValues.FitsLength(value.ListLength, info.Type);
-        if (!wrongLength && ColumnValues.IsNonFinite(value))
+        var fit = ColumnValues.Store(ref value, info.Type);
+        if (fit == StorageFit.NonFinite)
         {
             AddNonFinite(info, 1);
             value = ScalarValue.Missing;
@@ -650,12 +648,12 @@ public sealed partial class FeatureFetcher
                 _errors[info.Index] = $"feature '{definition.Name}' produced a non-finite value but is non-nullable and declares no default";
             }
         }
-        else if (!value.IsMissing && !ColumnValues.FitsStorage(value, info.Type))
+        else if (fit == StorageFit.OutOfRange)
         {
             _counters.AddOutOfRange(1);
             if (!definition.HasDefault && !info.Type.Nullable)
             {
-                var produced = wrongLength ? "a list" : value.ToString();
+                var produced = value.Kind == StorageKind.List && !ColumnValues.FitsLength(value.ListLength, info.Type) ? "a list" : value.ToString();
                 _state[info.Index] = FeatureState.Failed;
                 _errors[info.Index] = $"feature '{definition.Name}' produced {produced} its {info.Type} type cannot hold ({ColumnValues.Misfit(value, info.Type)}) "
                     + "but is non-nullable and declares no default";

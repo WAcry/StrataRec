@@ -2,6 +2,7 @@ using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
 using StrataRec.Hosting.Replay;
+using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.UnitTests.Hosting;
 
@@ -101,6 +102,39 @@ public sealed class ResultComparisonTests
         Assert.False(retyped.Identical);
         Assert.Empty(retyped.Changes);
         Assert.Equal(new RetypedColumn("score", ColumnType.Float32, ColumnType.Float64), Assert.Single(retyped.RetypedColumns));
+    }
+
+    /// <summary>
+    /// The request-level values are part of the result: one that differs, by value or by declared type, or that only one
+    /// side returns, is a change, reported by name; equal values of the same types leave the results identical.
+    /// </summary>
+    [Fact]
+    public void Diff_ComparesTheRequestLevelValues_ByValueAndType()
+    {
+        static ComparableResult With(params ResultValue[] values)
+        {
+            var byName = new Dictionary<string, ResultValue>(StringComparer.Ordinal);
+            foreach (var value in values)
+            {
+                byName[value.Name] = value;
+            }
+
+            return new ComparableResult { Succeeded = true, Ids = [], Columns = [], Values = byName };
+        }
+
+        var count = new ResultValue("count", ColumnType.Int64, ScalarValue.FromInt64(47));
+        var best = new ResultValue("best", ColumnType.Parse("float32?"), ScalarValue.FromFloat32(0.5f));
+
+        Assert.True(ResultComparison.Diff(With(count, best), With(count, best)).Identical);
+
+        var diff = ResultComparison.Diff(With(count, best), With(count with { Value = ScalarValue.FromInt64(46) }, best with { Type = ColumnType.Parse("float64?") },
+            new ResultValue("added", ColumnType.String, ScalarValue.Missing)));
+        Assert.False(diff.Identical);
+        Assert.Equal(["added", "best", "count"], diff.ValueChanges.Select(c => c.Name));
+        Assert.Null(diff.ValueChanges[0].Recorded);
+        Assert.Equal(ColumnType.Parse("float64?"), diff.ValueChanges[1].Replayed!.Value.Type);
+        Assert.Equal(46, diff.ValueChanges[2].Replayed!.Value.Value.AsInt64());
+        Assert.Empty(diff.Changes);
     }
 
     /// <summary>A result of no rows still has its output's columns: a column renamed between them is a change.</summary>

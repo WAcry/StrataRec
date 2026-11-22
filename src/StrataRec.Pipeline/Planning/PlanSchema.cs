@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Tables;
 using StrataRec.Core.Types;
@@ -54,15 +55,27 @@ public enum ContextFieldKind : byte
     RequestInput = 1,
     Builtin,
     Feature,
+
+    /// <summary>A request column nodes write (<c>req.&lt;name&gt;</c>), declared under <c>request_columns</c>.</summary>
+    RequestColumn,
 }
 
-/// <summary>A request-level value addressable as <c>ctx.&lt;name&gt;</c> (design 7.2).</summary>
+/// <summary>
+/// A request-level value: one addressable as <c>ctx.&lt;name&gt;</c> (design 7.2), or a request column, <c>req.&lt;name&gt;</c>.
+/// Expressions read both alike (<see cref="SymbolKind.Context"/>), from the request's one array of request-level values.
+/// </summary>
 public sealed class ContextField
 {
     public required int Id { get; init; }
 
-    /// <summary>Name without the <c>ctx.</c> prefix, e.g. <c>request.user_id</c>, <c>user.tenure_days</c>.</summary>
+    /// <summary>
+    /// Name without the prefix: <c>ctx.</c>'s (<c>request.user_id</c>, <c>user.tenure_days</c>), or for a request column
+    /// <c>req.</c>'s (<c>candidates.count</c>). <see cref="QualifiedName"/> has the prefix.
+    /// </summary>
     public required string Name { get; init; }
+
+    /// <summary>The name as expressions write it: <c>ctx.request.user_id</c>, <c>req.candidates.count</c>.</summary>
+    public string QualifiedName => (Kind == ContextFieldKind.RequestColumn ? "req." : "ctx.") + Name;
 
     public required ColumnType Type { get; init; }
 
@@ -85,6 +98,20 @@ public sealed class ContextField
     public required ContextFieldKind Kind { get; init; }
 
     public int FeatureIndex { get; init; } = -1;
+
+    /// <summary>A request column's index among the plan's (<see cref="PlanSchema.RequestColumns"/>); -1 for every other field.</summary>
+    public int RequestIndex { get; init; } = -1;
+
+    /// <summary>A request column later nodes may write again (<c>"flow": true</c>).</summary>
+    public bool Flow { get; init; }
+
+    /// <summary>A request column's replacement for a value its type cannot hold (non-finite, out of int32 range).</summary>
+    public bool HasDefault { get; init; }
+
+    public ScalarValue Default { get; init; }
+
+    /// <summary>Where a request column is declared, e.g. <c>/request_columns/candidates.count</c>; null for other fields.</summary>
+    public string? Pointer { get; init; }
 }
 
 /// <summary>A flattened parameter leaf (design 11.8), e.g. <c>w_click</c> or <c>recall_quotas.cf</c>.</summary>
@@ -207,6 +234,8 @@ public sealed class PlanSchema
     private readonly Dictionary<int, int> _rowSourceSlots = new();
     private readonly Dictionary<string, ContextField> _context = new(StringComparer.Ordinal);
     private readonly List<ContextField> _contextList = new();
+    private readonly Dictionary<string, ContextField> _requestColumns = new(StringComparer.Ordinal);
+    private readonly List<ContextField> _requestColumnList = new();
     private readonly Dictionary<string, ParamLeaf> _params = new(StringComparer.Ordinal);
     private readonly List<ParamLeaf> _paramList = new();
     private readonly Dictionary<string, ILookupTable> _tables = new(StringComparer.Ordinal);
@@ -240,7 +269,11 @@ public sealed class PlanSchema
 
     public IReadOnlyList<LogicalColumn> Columns => _columnList;
 
+    /// <summary>Every request-level value by id: the request's <c>ctx.*</c> fields and its request columns (<c>req.*</c>).</summary>
     public IReadOnlyList<ContextField> ContextFields => _contextList;
+
+    /// <summary>The request columns (<c>req.*</c>) by <see cref="ContextField.RequestIndex"/>.</summary>
+    public IReadOnlyList<ContextField> RequestColumns => _requestColumnList;
 
     public IReadOnlyList<ParamLeaf> Params => _paramList;
 
@@ -306,6 +339,9 @@ public sealed class PlanSchema
         return true;
     }
 
+    /// <summary>The request column named <paramref name="name"/> (without <c>req.</c>).</summary>
+    public bool TryGetRequestColumn(string name, [NotNullWhen(true)] out ContextField? field) => _requestColumns.TryGetValue(name, out field);
+
     public bool TryGetParam(string name, [NotNullWhen(true)] out ParamLeaf? leaf) => _params.TryGetValue(name, out leaf);
 
     /// <summary>
@@ -350,6 +386,18 @@ public sealed class PlanSchema
         }
 
         _features?.AddUnregisteredNames(names, candidateColumnsOnly: true);
+        return names;
+    }
+
+    /// <summary>The request column names (without <c>req.</c>), for suggestions.</summary>
+    internal List<string> KnownRequestColumnNames()
+    {
+        var names = new List<string>(_requestColumnList.Count);
+        foreach (var c in _requestColumnList)
+        {
+            names.Add(c.Name);
+        }
+
         return names;
     }
 
@@ -436,6 +484,28 @@ public sealed class PlanSchema
             Pointer = pointer,
             Implicit = isImplicit,
         });
+
+    /// <summary>Declares a request column (<c>req.&lt;name&gt;</c>); expressions see its type promoted, as a request input's.</summary>
+    internal ContextField DeclareRequestColumn(string name, ColumnType type, bool flow, bool hasDefault, ScalarValue defaultValue, string pointer)
+    {
+        var field = new ContextField
+        {
+            Id = _contextList.Count,
+            Name = name,
+            Type = type.Promoted(),
+            DeclaredType = type,
+            Kind = ContextFieldKind.RequestColumn,
+            RequestIndex = _requestColumnList.Count,
+            Flow = flow,
+            HasDefault = hasDefault,
+            Default = hasDefault ? ColumnValues.AsStored(defaultValue, type) : defaultValue, // as a written value is held
+            Pointer = pointer,
+        };
+        _requestColumns.Add(name, field);
+        _requestColumnList.Add(field);
+        _contextList.Add(field);
+        return field;
+    }
 
     internal ParamLeaf AddParamLeaf(string name, ColumnType type, double? min, double? max, IReadOnlyList<ScalarValue>? enumValues, ScalarValue baseline, string pointer, string? mapName = null)
     {
@@ -525,7 +595,7 @@ public sealed class PlanSchema
 
                 foreach (var c in schema._contextList)
                 {
-                    names.Add("ctx." + c.Name);
+                    names.Add(c.QualifiedName);
                 }
 
                 foreach (var p in schema._paramList)
@@ -571,6 +641,12 @@ public sealed class PlanSchema
             if (name.StartsWith("ctx.", StringComparison.Ordinal) && schema.TryGetContext(name[4..], out var ctx))
             {
                 symbol = new Symbol(SymbolKind.Context, name, ctx.Type, ctx.Id);
+                return true;
+            }
+
+            if (name.StartsWith("req.", StringComparison.Ordinal) && schema._requestColumns.TryGetValue(name[4..], out var req))
+            {
+                symbol = new Symbol(SymbolKind.Context, name, req.Type, req.Id);
                 return true;
             }
 

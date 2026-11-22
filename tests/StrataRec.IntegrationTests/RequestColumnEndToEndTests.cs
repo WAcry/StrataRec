@@ -1,0 +1,111 @@
+using StrataRec.Artifacts.Model;
+using StrataRec.Hosting;
+using StrataRec.Hosting.Replay;
+using StrataRec.Pipeline.Execution;
+
+namespace StrataRec.IntegrationTests;
+
+/// <summary>
+/// Request columns (<c>req.*</c>) in the home feed: the recall's statistics (<c>recall_stats</c>) a later node's
+/// <c>when</c> reads and the result returns (<c>output.values</c>), recorded and replayed like the items.
+/// </summary>
+public sealed class RequestColumnEndToEndTests
+{
+    /// <summary>
+    /// The values are part of the recorded result: a replay of the same configuration is identical, and one after a
+    /// value's definition changed reports that value, by name, with the items unchanged.
+    /// </summary>
+    [Fact]
+    public async Task TheValues_AreRecorded_AndAReplayAfterOneChanges_ReportsIt()
+    {
+        var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
+        var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-values", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
+        Assert.True(recorded.Succeeded, recorded.Error);
+        Assert.Equal(["best_score", "popular", "recalled"], recorded.Values.All.ToArray().Select(v => v.Name));
+        Assert.True(recorded.Values.TryGetEntry("popular", out var popular));
+        Assert.True(recorded.Values["recalled"].AsInt64() > popular.Value.AsInt64());
+
+        var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
+        Assert.Equal("int64", bundle.Result.ValueTypes["popular"]);
+        var same = await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(same.Report.Diff.Identical, ReplayTests.Describe(same.Report));
+
+        var modified = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
+            "(col.recall.primary_source ?? '') == 'popular'", "(col.recall.primary_source ?? '') == 'two_tower'"));
+        var (candidate, _) = MetricsTests.LoadEngine(modified);
+        var outcome = await candidate.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
+
+        var diff = outcome.Report.Diff;
+        Assert.False(diff.Identical);
+        Assert.Empty(diff.Changes);
+        var change = Assert.Single(diff.ValueChanges);
+        Assert.Equal("popular", change.Name);
+        Assert.Equal(popular, change.Recorded);
+        Assert.True(outcome.Result.Values.TryGetEntry("popular", out var replayed));
+        Assert.Equal(replayed, change.Replayed);
+        Assert.NotEqual(popular.Value.AsInt64(), change.Replayed!.Value.Value.AsInt64());
+    }
+
+    /// <summary>
+    /// A trigger site's condition may read a request column (design 12.6): evaluated in a request of any arm, it decides
+    /// the same, because an experiment not yet triggered has changed nothing before its site, so the column holds what it
+    /// would in every arm. t changes author_cap's <c>when</c> to read the recall's count (47 on explore); the control's
+    /// author_cap does not run on explore.
+    /// </summary>
+    [Theory]
+    [InlineData(10, true)]
+    [InlineData(1000, false)]
+    public async Task ASiteConditionReadingARequestColumn_TriggersBothArmsAlike(int threshold, bool triggered)
+    {
+        var host = WithExperiment($$"""{ "author_cap": { "when": "req.candidates.recalled >= {{threshold}}" } }""");
+        var plan = host.Plan();
+
+        foreach (var arm in new[] { "exp_req_when/control", "exp_req_when/t" })
+        {
+            var result = await new PipelineExecutor().ExecuteAsync(plan,
+                HomeFeedTestHost.NewRequest(surface: "explore", arms: plan.ArmsFromIds([arm])), TestContext.Current.CancellationToken);
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.Equal(triggered, result.TriggeredExperiments.Contains("exp_req_when"));
+            var ran = arm.EndsWith("/t", StringComparison.Ordinal) && triggered;
+            Assert.Equal(ran ? NodeOutcomeKind.Succeeded : NodeOutcomeKind.SkippedWhen, result.Outcomes.Single(o => o.NodeId == "author_cap").Kind);
+        }
+    }
+
+    /// <summary>
+    /// A condition may read a request column only its own arm writes: the node writing it is a site of the experiment
+    /// too, and an earlier one, so a request of the other arm is triggered there, before the condition, and both arms are
+    /// triggered alike.
+    /// </summary>
+    [Fact]
+    public async Task ASiteConditionReadingARequestColumnOnlyItsArmWrites_IsPrecededByTheWritersSite()
+    {
+        var host = WithExperiment("""
+            { "count_all": { "order": 130, "op": "RequestAggregate@1", "config": { "values": { "cand.n": { "fn": "count" } } } },
+              "author_cap": { "when": "req.cand.n >= 1000" } }
+            """);
+        var plan = host.Plan();
+
+        foreach (var arm in new[] { "exp_req_when/control", "exp_req_when/t" })
+        {
+            var result = await new PipelineExecutor().ExecuteAsync(plan,
+                HomeFeedTestHost.NewRequest(surface: "explore", arms: plan.ArmsFromIds([arm])), TestContext.Current.CancellationToken);
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.Contains("exp_req_when", result.TriggeredExperiments);
+        }
+    }
+
+    /// <summary>The home feed with <c>cand.n</c> declared and exp_req_when in its own layer: control, and t changing <paramref name="nodes"/>.</summary>
+    private static HomeFeedTestHost WithExperiment(string nodes) => HomeFeedTestHost.LoadModified(root =>
+    {
+        ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"request_columns\": {", "\"request_columns\": { \"cand.n\": { \"type\": \"int64\" },");
+        File.WriteAllText(Path.Combine(root, "experiments", "exp_req_when.jsonc"), $$"""
+            { "experiment_id": "exp_req_when", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
+              "arms": { "control": {}, "t": { "nodes": {{nodes}} } } }
+            """);
+        ReplayTests.Edit(root, "releases/home_feed.local.jsonc",
+            "\"exp_quality_weight\":        { \"layer\": \"params\" }",
+            "\"exp_quality_weight\":        { \"layer\": \"params\" }, \"exp_req_when\": { \"layer\": \"cap\" }");
+    });
+}

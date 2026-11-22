@@ -4,7 +4,7 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Pipeline.Operators;
 
-/// <summary>What a node may do to the candidate table (design 5.2). An operator declares a set.</summary>
+/// <summary>What a node may do to the candidate table and the request's columns (design 5.2). An operator declares a set.</summary>
 [Flags]
 public enum Effects : byte
 {
@@ -21,6 +21,9 @@ public enum Effects : byte
 
     /// <summary>Writes new columns or new versions of flow columns (scoring, model inference).</summary>
     ColumnWriter = 8,
+
+    /// <summary>Writes request columns, one value per request (<c>req.*</c>): a statistic of the candidates, a decision.</summary>
+    RequestWriter = 16,
 }
 
 /// <summary>Static description of an operator type and version (design 5.2, 10.4).</summary>
@@ -29,7 +32,8 @@ public enum Effects : byte
 /// <param name="Effects">
 /// Effects the operator may exercise, enforced: row changes at run time by <see cref="OperatorContext"/>, column writes at
 /// compile time by <see cref="OperatorCompileContext.TryWriteColumn"/> (<see cref="Effects.ColumnWriter"/>, or
-/// <see cref="Effects.RowSource"/> for the columns of the rows it appends).
+/// <see cref="Effects.RowSource"/> for the columns of the rows it appends), request column writes at compile time by
+/// <see cref="OperatorCompileContext.TryWriteRequestColumn"/> (<see cref="Effects.RequestWriter"/>).
 /// </param>
 /// <param name="ConfigType">C# type of the node's <c>config</c>; the single source of its JSON Schema (design 9.1).</param>
 /// <param name="Description">One-line description for docs and tooling.</param>
@@ -48,6 +52,16 @@ public readonly record struct ColumnRef(int LogicalId, int FixedSlot, ColumnType
 
 /// <summary>A column an operator writes: a slot owned by its node, committed on success (design 4.6).</summary>
 public readonly record struct OutputColumn(int LogicalId, int Slot, ColumnType Type, string Name);
+
+/// <summary>
+/// A request column an operator writes (<see cref="OperatorContext.SetRequestValue"/>): staged while the node runs,
+/// published to <c>req.&lt;name&gt;</c> when it commits, dropped when it fails.
+/// </summary>
+/// <param name="ContextId">The request-level value it is (<see cref="Planning.ContextField.Id"/>).</param>
+/// <param name="Index">Its index among the plan's request columns (<see cref="Planning.PlanSchema.RequestColumns"/>).</param>
+/// <param name="Type">Declared type.</param>
+/// <param name="Name">Name without the <c>req.</c> prefix.</param>
+public readonly record struct RequestOutput(int ContextId, int Index, ColumnType Type, string Name);
 
 /// <summary>A parameter leaf an operator reads from the request's snapshot.</summary>
 public readonly record struct ParamRef(int Id, string Name, ColumnType Type);
@@ -125,6 +139,7 @@ public sealed class OperatorRegistry
         .Add(new Standard.TopKFactory())
         .Add(new Standard.SlidingWindowQuotaFactory())
         .Add(new Standard.GroupAggregateFactory())
+        .Add(new Standard.RequestAggregateFactory())
         .Add(new Standard.ModelScorerFactory())
         .Add(new Standard.PairwiseRankerFactory())
         .Add(new Standard.ListwiseRerankerFactory())

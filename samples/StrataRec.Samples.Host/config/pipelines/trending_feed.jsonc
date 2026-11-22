@@ -14,6 +14,10 @@
     "score.engage": { "type": "float32", "default": 0.0 },
     "score.final":  { "type": "float32", "default": 0.0 }
   },
+  // One value per request that nodes write (req.*), returned to the caller under output.values.
+  "request_columns": {
+    "stock.dropped": { "type": "int64?", "description": "Candidates the stock service said are out of stock; missing when the filter was skipped." }
+  },
   "param_schema": {
     "recall_quotas": { "type": "map<string,int64>", "min": 0, "max": 500 },
     "final_top_k":   { "type": "int64", "min": 1, "max": 50 }
@@ -31,11 +35,11 @@
         "queries": { "trending": { "region": "ctx.request.region" } }
       }
     },
-    // An external filter: the stock service is sent the candidates and says which are in stock. If it fails, the feed
-    // keeps every candidate rather than failing the request ("skip").
+    // An external filter: the stock service is sent the candidates and says which are in stock, and the filter tells the
+    // caller how many it dropped. If it fails, the feed keeps every candidate rather than failing the request ("skip").
     "in_stock": {
       "order": 150, "op": "StockFilter@1", "on_failure": "skip",
-      "config": { "service": "stock", "keep_output": "in_stock" }
+      "config": { "service": "stock", "keep_output": "in_stock", "dropped_column": "stock.dropped" }
     },
     "engagement": {
       "order": 200, "op": "ModelScorer@1", "on_failure": "fallback", "fallback": "engagement_backup",
@@ -71,6 +75,7 @@
       "engage": "col.score.engage",
       "category": "col.item.category",
       "source": "col.recall.primary_source"
-    }
+    },
+    "values": { "out_of_stock": "req.stock.dropped" }
   }
 }

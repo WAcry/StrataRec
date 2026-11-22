@@ -151,6 +151,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
         Assert.Equal(HttpStatusCode.OK, served.Status);
         Assert.DoesNotContain(Items(served.Json), i => i.Id is 1 or 22);
+        Assert.Equal(2, served.Json["values"]!["out_of_stock"]!.GetValue<long>()); // the filter's request column
 
         var copy = CopyOfTheWorkspace();
         var bindings = Path.Combine(copy, "bindings", "local.jsonc");
@@ -165,6 +166,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
         Assert.True(code == 0, error);
         Assert.Contains(Items(local), i => i.Id == 1);
+        Assert.Equal(0, local["values"]!["out_of_stock"]!.GetValue<long>());
     }
 
     [Fact]

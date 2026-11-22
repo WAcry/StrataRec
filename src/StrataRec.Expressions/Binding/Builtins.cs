@@ -40,7 +40,7 @@ internal static class Builtins
     /// <summary>Words that cannot name a let binding.</summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
-        "col", "ctx", "param", "true", "false", "null", "in", "let",
+        "col", "ctx", "req", "param", "true", "false", "null", "in", "let",
         "as", "break", "const", "continue", "else", "for", "function", "if", "import", "loop", "package",
         "namespace", "return", "var", "void", "while",
     };
@@ -63,7 +63,7 @@ internal static class Builtins
 
     public static bool IsReserved(string name) => Reserved.Contains(name);
 
-    public static bool IsNamespace(string name) => name is "col" or "ctx" or "param";
+    public static bool IsNamespace(string name) => name is "col" or "ctx" or "req" or "param";
 
     public static string TokenSpelling(TokenKind kind) => kind switch
     {

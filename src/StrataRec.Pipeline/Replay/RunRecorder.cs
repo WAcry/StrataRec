@@ -368,6 +368,18 @@ internal sealed class RunRecorder : IFeatureCallHook
             items.Add(new ReplayItem { Id = ReplayJson.Key(item.Id), Rank = item.Rank, Columns = columns });
         }
 
+        var valueTypes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (name, expression) in plan.Output.Values)
+        {
+            valueTypes[name] = plan.Schema.DeclaredType(expression).ToString();
+        }
+
+        var values = new Dictionary<string, JsonElement?>(StringComparer.Ordinal);
+        foreach (var value in result.Values.All)
+        {
+            values[value.Name] = value.Value.IsMissing ? null : ReplayJson.Value(value.Value);
+        }
+
         return new ReplayResultRecord
         {
             ServedBy = servedBy,
@@ -378,6 +390,8 @@ internal sealed class RunRecorder : IFeatureCallHook
             ElapsedMs = result.ElapsedMs,
             ColumnTypes = types,
             Items = items,
+            ValueTypes = valueTypes,
+            Values = values,
             TriggeredExperiments = new List<string>(result.TriggeredExperiments),
             ColumnProducers = new Dictionary<string, string>(result.ColumnProducers, StringComparer.Ordinal),
         };

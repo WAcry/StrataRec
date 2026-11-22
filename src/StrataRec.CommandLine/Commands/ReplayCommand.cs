@@ -6,6 +6,7 @@ using StrataRec.Core.Keys;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Bindings;
 using StrataRec.Hosting.Replay;
+using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Planning;
 using StrataRec.Pipeline.Replay;
 
@@ -423,7 +424,33 @@ internal static class ReplayCommand
         }
 
         json.WriteEndArray();
+        json.WriteStartArray("value_changes");
+        foreach (var change in diff.ValueChanges)
+        {
+            json.WriteStartObject();
+            json.WriteString("value", change.Name);
+            WriteSide(json, "recorded", change.Recorded);
+            WriteSide(json, "replayed", change.Replayed);
+            json.WriteEndObject();
+        }
+
+        json.WriteEndArray();
         json.WriteEndObject();
+
+        // A side without the value is absent; one with it gives its type and value (NaN and ±∞ distinguishable from missing).
+        static void WriteSide(Utf8JsonWriter json, string side, ResultValue? value)
+        {
+            if (value is not { } present)
+            {
+                return;
+            }
+
+            json.WriteStartObject(side);
+            json.WriteString("type", present.Type.ToString());
+            json.WritePropertyName("value");
+            Output.WriteValue(json, present.Value);
+            json.WriteEndObject();
+        }
     }
 
     internal static void WriteGaps(Utf8JsonWriter json, string name, IReadOnlyList<ReplayGap> gaps)
@@ -536,6 +563,11 @@ internal static class ReplayCommand
             output.WriteLine($"    item {change.Id}: {ranks}" + (columns.Count > 0 ? "; " + string.Join("; ", columns) : string.Empty));
         }
 
+        foreach (var change in diff.ValueChanges)
+        {
+            output.WriteLine($"    value {change.Name}: {Side(change.Recorded, change.Replayed)} -> {Side(change.Replayed, change.Recorded)}");
+        }
+
         foreach (var node in report.Nodes)
         {
             if (node.Changed)
@@ -567,6 +599,14 @@ internal static class ReplayCommand
         output.WriteLine();
 
         static string Join(IReadOnlyList<string> values) => values.Count == 0 ? "(none)" : string.Join(", ", values);
+
+        // One side of a value change: absent, or its value, with its type when the other side has another.
+        static string Side(ResultValue? side, ResultValue? other) => side switch
+        {
+            null => "absent",
+            { } v when other is { } o && !o.Type.Equals(v.Type) => $"{v.Type} {v.Value}",
+            { } v => v.Value.ToString(),
+        };
     }
 
     internal static void WriteStrings(Utf8JsonWriter json, string name, IReadOnlyList<string> values)

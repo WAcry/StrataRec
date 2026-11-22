@@ -182,7 +182,7 @@ internal sealed class Binder
             if (Builtins.IsNamespace(name))
             {
                 return Fail(ExpressionErrorCodes.UnknownName, $"'{name}' is a namespace, not a value", n,
-                    $"write a full name such as '{name}.{(name == "col" ? "item.clicks_7d" : name == "ctx" ? "request.seed" : "w_click")}'");
+                    $"write a full name such as '{name}.{name switch { "col" => "item.clicks_7d", "ctx" => "request.seed", "req" => "candidates.count", _ => "w_click" }}'");
             }
 
             if (Builtins.IsFunction(name))
@@ -198,12 +198,12 @@ internal sealed class Binder
         if (TryGetLet(root, out _))
         {
             return Fail(ExpressionErrorCodes.UnknownName, $"'{root}' is a let binding and has no field '{name[(rootEnd + 1)..]}'", n,
-                "only col., ctx. and param. names are dotted paths");
+                "only col., ctx., req. and param. names are dotted paths");
         }
 
         if (!Builtins.IsNamespace(root))
         {
-            return Fail(ExpressionErrorCodes.UnknownName, $"Unknown name '{name}': names start with 'col.', 'ctx.' or 'param.'", n, NameHint(name, false));
+            return Fail(ExpressionErrorCodes.UnknownName, $"Unknown name '{name}': names start with 'col.', 'ctx.', 'req.' or 'param.'", n, NameHint(name, false));
         }
 
         if (at >= 0 && root != "col")
@@ -221,7 +221,7 @@ internal sealed class Binder
                 return Poison(n);
             }
 
-            return Fail(ExpressionErrorCodes.UnknownName, $"Unknown name '{name}'", n, NameHint(name, false));
+            return Fail(ExpressionErrorCodes.UnknownName, $"Unknown name '{name}'", n, NamespaceHint(name) ?? NameHint(name, false));
         }
 
         if (!Names.Contains(symbol))
@@ -240,10 +240,27 @@ internal sealed class Binder
             Report(ExpressionErrorCodes.RowReferenceInRequestLevel,
                 $"'{name}' is a candidate column, but this is a request-level expression evaluated once per request",
                 n.Start, n.Length,
-                "request-level sites (when, funnel keys, context features, recall queries) can only read ctx.* and param.*");
+                "request-level sites (when, funnel keys, context features, recall queries, a tap's context, the output's values) read ctx.*, req.* and param.*");
         }
 
         return IrNode.Read(symbol, type, n.Start, n.Length);
+    }
+
+    /// <summary>
+    /// The hint for a name written in the other request-level namespace: a request input read as <c>req.x</c>, or a request
+    /// column read as <c>ctx.x</c> or <c>ctx.request.x</c>. Only those lookups, which register nothing.
+    /// </summary>
+    private string? NamespaceHint(string name)
+    {
+        if (name.StartsWith("req.", StringComparison.Ordinal) && _scope.TryResolve("ctx.request." + name[4..], out _))
+        {
+            return $"'{name[4..]}' is a request input: read it as 'ctx.request.{name[4..]}' (req.* are request columns, which nodes write)";
+        }
+
+        var rest = name.StartsWith("ctx.request.", StringComparison.Ordinal) ? name[12..] : name.StartsWith("ctx.", StringComparison.Ordinal) ? name[4..] : null;
+        return rest is not null && _scope.TryResolve("req." + rest, out _)
+            ? $"'{rest}' is a request column, which nodes write: read it as 'req.{rest}'"
+            : null;
     }
 
     private string? NameHint(string name, bool includeLets)

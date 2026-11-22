@@ -80,6 +80,17 @@ internal sealed partial class UnifiedCompilation
                 }
             }
         }
+
+        foreach (var (value, expression) in output.Values)
+        {
+            foreach (var symbol in expression.Names)
+            {
+                if (symbol.Kind is SymbolKind.Param or SymbolKind.Context)
+                {
+                    Declared(new NameRef(symbol.Kind, symbol.Id), "Output value", value, "/output/values/" + JsonPointer.Escape(value), ordered, ordered.Count, later, later.Count, assigned);
+                }
+            }
+        }
     }
 
     /// <summary>

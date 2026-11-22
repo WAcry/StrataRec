@@ -45,6 +45,36 @@
       }
     },
     "columns": {
+      "description": "Candidate columns nodes write, one value per candidate, read as col.<name> (design 4.6).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "flow": {
+            "description": "Flow columns may be rewritten by later nodes on the same path.",
+            "type": "boolean"
+          },
+          "default": {
+            "description": "Replacement for non-finite numeric writes; required for non-nullable numeric columns."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "request_columns": {
+      "description": "Request columns nodes write, one value per request, read as req.<name> wherever a request-level value is read: in a later node's expressions and when, a log tap's context, the output's values. A count or a threshold over the candidates (GroupAggregate@1's request_outputs), or what a custom operator decided for the request. Declared as candidate columns are; a value a node did not write is missing.",
       "type": "object",
       "additionalProperties": {
         "type": "object",
@@ -142,6 +172,7 @@
               "ModelScorer@1",
               "MultiSourceRecall@1",
               "PairwiseRanker@1",
+              "RequestAggregate@1",
               "SlidingWindowQuota@1",
               "StockFilter@1",
               "TopK@1"
@@ -157,6 +188,7 @@
               "Scores rows with a model: named inputs from columns, named outputs to columns, batched.",
               "Concurrent multi-source retrieval with deterministic merge and entity_id dedup.",
               "Reranks the leading rows by a model's pairwise preferences, aggregated into expected wins.",
+              "Over the live candidates: count, sum, mean, min or max of an expression, written to request columns (req.*).",
               "Limits rows per group within any sliding window of ranks; over-quota rows move down or drop.",
               "Drops the rows an external service says no to: it is sent the candidates and answers a bool per item.",
               "Sorts rows by a score column (missing last, ties by entity_id) and keeps the first k."
@@ -821,6 +853,66 @@
             "if": {
               "properties": {
                 "op": {
+                  "const": "RequestAggregate@1"
+                }
+              },
+              "required": [
+                "op"
+              ]
+            },
+            "then": {
+              "properties": {
+                "config": {
+                  "description": "Over the live candidates: count, sum, mean, min or max of an expression, written to request columns (req.*).",
+                  "type": "object",
+                  "properties": {
+                    "values": {
+                      "description": "Request column (declared under request_columns) → what it gets, over the live candidates when the node runs. An object, so an experiment adds, changes or deletes (null) one value.",
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "fn": {
+                            "description": "count (the rows; with of, the rows where it has a value), sum, mean, min or max of of over the rows where it has a value. Missing values are left out, as SQL's aggregates leave out nulls, and with no value to aggregate every function but count is missing.",
+                            "type": "string"
+                          },
+                          "of": {
+                            "description": "The numeric ColumnExpr aggregated per row, e.g. col.score.final; count takes it optionally. An integer one sums, and has a min and max, as an integer; a float one as a float; a mean is a float.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "where": {
+                            "description": "A predicate (a non-nullable bool, as ExpressionFilter@1's): only the rows where it holds are aggregated, e.g. col.recall.primary_source == 'popular'.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "fn"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "values"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "config"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "op": {
                   "const": "SlidingWindowQuota@1"
                 }
               },
@@ -884,6 +976,13 @@
                     "keep_output": {
                       "description": "The service's output that keeps a row when true, e.g. in_stock.",
                       "type": "string"
+                    },
+                    "dropped_column": {
+                      "description": "Request column (declared under request_columns, an integer) the filter writes how many candidates the service said no to, e.g. stock.dropped; omitted, it writes none.",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -1091,6 +1190,13 @@
         },
         "columns": {
           "description": "Output name → column expression (usually a plain col.* reference).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "values": {
+          "description": "Output name → request-level expression (req.*, ctx.*, param.*; usually a plain req.* reference), returned once with the result, beside its items: what the request's nodes computed for the caller.",
           "type": "object",
           "additionalProperties": {
             "type": "string"

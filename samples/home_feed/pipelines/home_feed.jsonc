@@ -14,6 +14,12 @@
     "score.ctr":    { "type": "float32", "default": 0.0 },
     "score.final":  { "type": "float32", "flow": true, "default": 0.0 }
   },
+  // One value per request that nodes write (req.*): later nodes read them, taps log them, the caller receives them.
+  "request_columns": {
+    "candidates.recalled": { "type": "int64", "description": "Candidates the recall returned." },
+    "candidates.popular":  { "type": "int64", "description": "Of those, the ones the popular source recalled first." },
+    "score.best":          { "type": "float32?", "description": "The best final score; missing when nothing was ranked." }
+  },
   "param_schema": {
     "recall_quotas":  { "type": "map<string,int64>", "min": 0, "max": 1000 },
     "coarse_k":       { "type": "int64", "min": 1, "max": 1000 },
@@ -35,6 +41,15 @@
         // the user's features are stored, while popular, which needs none, starts at once.
         "queries": { "two_tower": { "user_embedding": "ctx.user.embedding" } }
       }
+    },
+    // What the recall returned, before anything is filtered: the caller gets it with the result (output.values), and the
+    // diversity cap runs only when there are enough candidates to diversify.
+    "recall_stats": {
+      "order": 120, "op": "RequestAggregate@1",
+      "config": { "values": {
+        "candidates.recalled": { "fn": "count" },
+        "candidates.popular":  { "fn": "count", "where": "(col.recall.primary_source ?? '') == 'popular'" }
+      } }
     },
     "safety_filter": {
       "order": 200, "op": "ExpressionFilter@1",
@@ -82,6 +97,10 @@
       "order": 500, "op": "TopK@1",
       "config": { "score_col": "score.final", "k": 1000 }
     },
+    "best_score": {
+      "order": 502, "op": "RequestAggregate@1",
+      "config": { "values": { "score.best": { "fn": "max", "of": "col.score.final" } } }
+    },
     // At most two items of an author on the home surface: each item's rank among its author's items, then a filter (an
     // item without an author is not capped).
     "author_rank": {
@@ -93,7 +112,7 @@
       "config": { "predicate": "(col.group.author_rank ?? 1) <= 2" }
     },
     "diversity_cap": {
-      "order": 520, "op": "SlidingWindowQuota@1", "when": "ctx.request.surface == 'home'",
+      "order": 520, "op": "SlidingWindowQuota@1", "when": "ctx.request.surface == 'home' && req.candidates.recalled >= 10",
       "config": { "group_col": "item.category", "window": 3, "max_per_window": 1 }
     }
   },
@@ -119,7 +138,7 @@
     "served": {
       "group": "all", "delivery": "durable",
       "attach": { "output": true },
-      "context": { "user_id": "ctx.request.user_id", "surface": "ctx.request.surface" },
+      "context": { "user_id": "ctx.request.user_id", "recalled": "req.candidates.recalled", "surface": "ctx.request.surface" },
       "columns": { "final": "col.score.final", "category": "col.item.category" }
     }
   },
@@ -129,6 +148,11 @@
       "score": "col.score.final",
       "category": "col.item.category",
       "primary_source": "col.recall.primary_source"
+    },
+    "values": {
+      "recalled": "req.candidates.recalled",
+      "popular": "req.candidates.popular",
+      "best_score": "req.score.best"
     }
   }
 }

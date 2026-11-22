@@ -149,11 +149,32 @@ public sealed class OutputPlan
     /// <c>0.07999999821186066</c>); a computed one has its promoted result type.</summary>
     public required ImmutableArray<(string Name, CompiledExpression Expression)> Columns { get; init; }
 
+    /// <summary>
+    /// The request-level values in order (<c>output.values</c>): each evaluated once when the result is built, after every
+    /// node, and returned beside the items with its expression's <see cref="PlanSchema.DeclaredType"/> (a plain
+    /// <c>req.x</c> has the request column's declared type).
+    /// </summary>
+    public ImmutableArray<(string Name, CompiledExpression Expression)> Values { get; init; } = [];
+
+    /// <summary>The expressions of the output's columns, then of its values: for what looks at every expression it reads.</summary>
+    public IEnumerable<CompiledExpression> Expressions()
+    {
+        foreach (var (_, expression) in Columns)
+        {
+            yield return expression;
+        }
+
+        foreach (var (_, expression) in Values)
+        {
+            yield return expression;
+        }
+    }
+
     /// <summary>The pinned versions the output's columns read (<c>col.x@node</c>), with the column that reads each.</summary>
     public ImmutableArray<(string Column, VersionRead Read)> VersionReads { get; init; } = [];
 
     /// <summary>
-    /// Experiments overriding a parameter the output reads (<c>limit_param</c> or a parameter in an output column);
+    /// Experiments overriding a parameter the output reads (<c>limit_param</c>, or a parameter in an output column or value);
     /// a parameter trigger site (design 12.6). Assigned by the experiment compiler.
     /// </summary>
     public ImmutableArray<int> ParamExperiments { get; internal set; } = [];

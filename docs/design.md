@@ -239,6 +239,7 @@ public sealed class RecResult
     public string? ErrorPointer { get; init; }     // InvalidRequest 时出错输入的 JSON 指针，例如 /inputs/user_id
     public required IReadOnlyList<RankedItem> Items { get; init; }   // entity_id、名次和 output 声明的列
     public required ResultColumns Columns { get; init; }             // 同样的内容按列：每列的名字、声明的类型和值
+    public ResultValues Values { get; init; }                        // output.values 的请求级的值：名字、声明的类型和值
     public required ExperimentRecord Experiments { get; init; }      // 分配、触发和被忽略的桶
     public required string ManifestId { get; init; }
     public required string ServedBy { get; init; } // 请求的流水线，或者它的 fallback_pipeline
@@ -412,6 +413,15 @@ internal struct OutputBindings
 
 验证失败时，错误指向造成问题的那一处修改。例如某个实验桶把 `ctr_ranker` 的 `on_failure` 改成 `skip`，而 `score.p_click` 声明为 `float32`：校验报告指出这个桶让 `score.p_click` 可能没有产出者，建议改用后备节点。实验不能修改已有的列声明（第 11.4 节），所以也不能把这一列改成可空。`default` 只替换非有限值和超出存储范围的值，不会填充一个没有产出者的列，被跳过的模型不会悄悄变成全 0 的分数。
 
+**请求列**是每个请求一个值的列，在 `request_columns` 中用同样的方式声明，表达式里写成 `req.<name>`，例如召回返回了多少候选、排序后的最高分。它由带 `RequestWriter` 效果的节点写出（内置的 `RequestAggregate@1` 对存活的候选做计数、求和、均值、最值），和候选列一样随节点提交：节点失败或被跳过时不发布，后面的节点、`when`、探针的 `context` 和输出的 `values` 读到的是最近一次提交的值。上面关于产出者、流动列和 `default` 的规则对请求列同样适用。
+
+```jsonc
+"request_columns": {
+  "candidates.recalled": { "type": "int64" },
+  "score.best":          { "type": "float32?" }   // 没有候选时为缺失
+}
+```
+
 ### 4.7 父子层级表
 
 有些页面是两层结构：例如搜索结果按商家分组展示，组的得分取决于组内前几名商品的得分。`CandidateTable` 用 `HierarchicalLink` 表达这种关系：
@@ -514,7 +524,7 @@ internal sealed class RequestMemory
 
 ### 5.2 效果类别
 
-每个算子在描述符中声明一个效果集合，集合中的元素取自四种效果：
+每个算子在描述符中声明一个效果集合，集合中的元素取自五种效果：
 
 | 效果 | 对候选表的影响 | 例子 |
 | :--- | :--- | :--- |
@@ -522,6 +532,7 @@ internal sealed class RequestMemory
 | `RowFilter` | 淘汰部分行，其余行的相对顺序不变 | 表达式过滤、频控、截断 |
 | `RowOrder` | 改变行的顺序 | 排序、MMR 多样性重排、滑窗配额 |
 | `ColumnWriter` | 写新列，或写流动列的新版本 | 表达式打分、模型推理、子项聚合 |
+| `RequestWriter` | 不改候选表，写请求列（第 4.6 节） | 候选统计、请求级的决定 |
 
 一个算子可以声明多个效果。`TopK@1` 和 `SlidingWindowQuota@1` 都是 `{RowOrder, RowFilter}`：先确定顺序，再淘汰名次之外或配额之外的行。探索注入是 `{RowSource, RowOrder}`：追加探索候选，并把它们放到指定的名次。只排序、不截断的算子只有 `RowOrder`；`ModelScorer@1` 和 `ExpressionScorer@1` 只有 `ColumnWriter`。
 
@@ -567,7 +578,7 @@ internal sealed class RequestMemory
 
 ### 5.5 请求级条件 `when`
 
-`when` 是只引用 `ctx.*` 的布尔表达式，每个请求求值一次，在节点所在区段的拉取发起之前完成，因此被跳过的节点不会引起候选特征的拉取；请求级的上下文特征在请求开始时统一预取（第 6.8 节）。结果为假时，节点的结果是 `Skipped`。
+`when` 是只引用请求级的值（`ctx.*` 和请求列 `req.*`）的布尔表达式，每个请求求值一次。只读 `ctx.*` 的 `when` 在节点所在区段的拉取发起之前完成，因此被跳过的节点不会引起候选特征的拉取；请求级的上下文特征在请求开始时统一预取（第 6.8 节）。读请求列的 `when`（例如 `req.candidates.recalled >= 10`）要等前面的节点写出它，在节点的位置求值。结果为假时，节点的结果是 `Skipped`。
 
 `when` 用来表达“只在首页生效”“新用户使用另一套召回配额”这类与候选无关的分支，不需要复制整条流水线。`when` 不读取参数：实验要改变条件时直接修改节点的 `when`，例如把 `ctx.user.tenure_days < 7` 改成 `ctx.user.tenure_days < 14`（第 11.3 节）。不同实验桶因此可以给同一个节点不同的 `when`，这些条件都在同一个请求上下文上求值；触发记录如何处理这种情况见第 12.6 节。
 
@@ -1147,6 +1158,7 @@ public sealed class ServiceCall
 | `col.entity_id` | 候选主键 | |
 | `col.<实体>.*` | 候选范围实体的特征 | `col.item.clicks_7d`、`col.creator.follower_count` |
 | `col.score.*`、`col.recall.*` | 节点产出的列 | `col.score.p_click`、`col.score.final@fusion` |
+| `req.*` | 节点产出的请求列（每个请求一个值，第 4.6 节） | `req.candidates.recalled`、`req.score.best` |
 
 ### 7.3 示例
 
@@ -1633,7 +1645,7 @@ flowchart LR
 3. `ctr_ranker` 的时间预算是 `min(40 ms, 剩余时间 − 8 ms)`，留下的 8 ms 给后备节点 `ctr_backup`。主节点失败时它没有提交任何输出，下游读到的是后备节点的结果（第 5.6 节）。
 4. `score.final` 声明为非可空的 `float64`。`fusion` 没有 `when` 条件，失败时让请求失败，所以每个请求都会产出它，编译器的验证可以通过（第 4.6 节）。
 5. `diversity_cap` 只在首页生效：同一创作者在任意连续 10 个名次中最多出现 2 次，超出的候选被移到后面，必要时淘汰。它失败时被跳过，结果保持 `rank_sort` 的顺序，因为多样性约束失败不应该让整个请求失败。
-6. 输出阶段按当前顺序截断到 `final_top_k`，返回 `output.columns` 声明的列。
+6. 输出阶段按当前顺序截断到 `final_top_k`，返回 `output.columns` 声明的列；`output.values` 声明的请求级的值（例如 `"recalled": "req.candidates.recalled"`）和条目一起返回。
 
 ### 9.4 `ExperimentArtifact` 示例
 

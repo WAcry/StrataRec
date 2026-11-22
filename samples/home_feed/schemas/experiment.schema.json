@@ -82,6 +82,7 @@
             }
           },
           "columns": {
+            "description": "Candidate columns nodes write, one value per candidate, read as col.<name> (design 4.6).",
             "type": "object",
             "additionalProperties": {
               "type": [
@@ -151,6 +152,7 @@
                     "ModelScorer@1",
                     "MultiSourceRecall@1",
                     "PairwiseRanker@1",
+                    "RequestAggregate@1",
                     "SlidingWindowQuota@1",
                     "TopK@1",
                     null
@@ -168,6 +170,7 @@
                     "Scores rows with a model: named inputs from columns, named outputs to columns, batched.",
                     "Concurrent multi-source retrieval with deterministic merge and entity_id dedup.",
                     "Reranks the leading rows by a model's pairwise preferences, aggregated into expected wins.",
+                    "Over the live candidates: count, sum, mean, min or max of an expression, written to request columns (req.*).",
                     "Limits rows per group within any sliding window of ranks; over-quota rows move down or drop.",
                     "Sorts rows by a score column (missing last, ties by entity_id) and keeps the first k."
                   ]
@@ -1152,6 +1155,73 @@
                               "string",
                               "null"
                             ]
+                          }
+                        },
+                        "additionalProperties": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "RequestAggregate@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Over the live candidates: count, sum, mean, min or max of an expression, written to request columns (req.*).",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "values": {
+                            "description": "Request column (declared under request_columns) → what it gets, over the live candidates when the node runs. An object, so an experiment adds, changes or deletes (null) one value.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "object",
+                                "null"
+                              ],
+                              "properties": {
+                                "fn": {
+                                  "description": "count (the rows; with of, the rows where it has a value), sum, mean, min or max of of over the rows where it has a value. Missing values are left out, as SQL's aggregates leave out nulls, and with no value to aggregate every function but count is missing.",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "of": {
+                                  "description": "The numeric ColumnExpr aggregated per row, e.g. col.score.final; count takes it optionally. An integer one sums, and has a min and max, as an integer; a float one as a float; a mean is a float.",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "where": {
+                                  "description": "A predicate (a non-nullable bool, as ExpressionFilter@1's): only the rows where it holds are aggregated, e.g. col.recall.primary_source == 'popular'.",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "additionalProperties": {
+                                "type": "null"
+                              }
+                            }
                           }
                         },
                         "additionalProperties": {

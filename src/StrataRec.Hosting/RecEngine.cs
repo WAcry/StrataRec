@@ -246,6 +246,13 @@ public sealed class RecResult
     /// <summary>The returned items as rows, each with its output columns by name; made from <see cref="Columns"/> when first read.</summary>
     public IReadOnlyList<RankedItem> Items => Columns.Rows;
 
+    /// <summary>
+    /// The output's request-level values (<c>output.values</c>), in the output's order, each with its declared type: what
+    /// the request's nodes computed for the caller once (a count of the candidates, a decision a node made), beside the
+    /// items. Empty when the pipeline returns none, and for a failed request.
+    /// </summary>
+    public ResultValues Values { get; init; } = ResultValues.Empty;
+
     public required ExperimentRecord Experiments { get; init; }
 
     /// <summary>Content id of the manifest the plan was built from (design 3.4).</summary>
@@ -1124,6 +1131,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ErrorKind = result.Succeeded ? RecErrorKind.None : RecErrorKind.Failed,
         Error = result.Error,
         Columns = result.Columns,
+        Values = result.Values,
         Experiments = new ExperimentRecord(merged ?? result.AssignedArms, result.TriggeredExperiments, ignored),
         ManifestId = pipeline.Plan.ManifestId,
         ServedBy = servedBy,

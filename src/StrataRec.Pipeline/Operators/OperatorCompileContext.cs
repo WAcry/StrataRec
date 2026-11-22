@@ -31,6 +31,8 @@ public sealed class OperatorCompileContext
     private readonly HashSet<NameRef> _requires = new();
     private readonly List<ColumnDeclaration> _declares = new();
     private readonly List<OutputColumn> _outputs = new();
+    private readonly List<RequestOutput> _requestOutputs = new();
+    private readonly HashSet<int> _requestReads = new();
 
     /// <summary>Set while an awaited expression's reads are recorded (<see cref="CompileAwaitedExpression"/>).</summary>
     private bool _awaiting;
@@ -96,6 +98,11 @@ public sealed class OperatorCompileContext
     internal IReadOnlyCollection<VersionRead> VersionReads => _versionReads;
 
     internal IReadOnlyList<OutputColumn> Outputs => _outputs;
+
+    internal IReadOnlyList<RequestOutput> RequestOutputs => _requestOutputs;
+
+    /// <summary>The request columns read (<see cref="Planning.CompiledNode.RequestReads"/>), by context id.</summary>
+    internal IReadOnlyCollection<int> RequestReads => _requestReads;
 
     /// <summary>The names bound before the node declared them itself (<see cref="CompiledNode.Requires"/>).</summary>
     internal IReadOnlyCollection<NameRef> Requires => _requires;
@@ -230,6 +237,55 @@ public sealed class OperatorCompileContext
         var slot = (Descriptor.Effects & Effects.RowSource) != 0 ? _schema.GetRowSourceSlot(logical) : _schema.GetNodeSlot(NodeId, logical);
         column = new OutputColumn(logical.Id, slot, logical.Type, name);
         _outputs.Add(column);
+        return true;
+    }
+
+    /// <summary>
+    /// Resolves a request column the node writes (<c>req.&lt;name&gt;</c>, declared under <c>request_columns</c>): the
+    /// operator stages its value with <see cref="OperatorContext.SetRequestValue"/>, and it is published when the node
+    /// commits. A request column is always declared: its type, nullability and default are a contract with every later
+    /// reader, a tap and the caller, stated in one place rather than by whichever node writes it first.
+    /// </summary>
+    /// <param name="configKey">Pointer suffix under <c>/config</c> for diagnostics, e.g. <c>/values/candidates.count</c>.</param>
+    /// <param name="suggested">The type the operator would write, for the hint when the column is not declared: the
+    /// declaration to add is then the one the operator accepts.</param>
+    /// <exception cref="InvalidOperationException">The operator does not declare <see cref="Effects.RequestWriter"/>: its
+    /// descriptor is wrong, the operator author's bug (the data-flow checks trust the effects).</exception>
+    public bool TryWriteRequestColumn(string name, string configKey, out RequestOutput output, ColumnType? suggested = null)
+    {
+        if ((Descriptor.Effects & Effects.RequestWriter) == 0)
+        {
+            throw new InvalidOperationException(
+                $"Operator '{Descriptor.Id}' writes request column '{name}' but its descriptor does not declare RequestWriter.");
+        }
+
+        output = default;
+        if (!_schema.TryGetRequestColumn(name, out var field))
+        {
+            if (_schema.IsUnusable("req." + name))
+            {
+                HasErrors = true; // declared with an error, reported at the declaration
+                return false;
+            }
+
+            Error(configKey, "REQUEST_COLUMN_UNDECLARED", $"Request column '{name}' is not declared.",
+                NameSuggestions.DidYouMean(name, _schema.KnownRequestColumnNames())
+                ?? $"declare it under /request_columns: \"{name}\": {{ \"type\": \"{suggested?.ToString() ?? "int64"}\" }}");
+            return false;
+        }
+
+        foreach (var existing in _requestOutputs)
+        {
+            if (existing.ContextId == field.Id)
+            {
+                Error(configKey, "COLUMN_WRITTEN_TWICE", $"Node writes request column '{name}' more than once.");
+                return false;
+            }
+        }
+
+        Require(new NameRef(SymbolKind.Context, field.Id));
+        output = new RequestOutput(field.Id, field.RequestIndex, field.DeclaredType, name);
+        _requestOutputs.Add(output);
         return true;
     }
 
@@ -567,6 +623,10 @@ public sealed class OperatorCompileContext
                 if (field.Kind == ContextFieldKind.Feature)
                 {
                     (_awaiting ? _awaitedFeatures : _readFeatures).Add(field.FeatureIndex);
+                }
+                else if (field.Kind == ContextFieldKind.RequestColumn)
+                {
+                    _requestReads.Add(field.Id);
                 }
 
                 break;

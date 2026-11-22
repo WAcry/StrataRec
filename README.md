@@ -101,6 +101,12 @@ samples/home_feed/
 "ctr_z": { "order": 465, "op": "ExpressionScorer@1",
   "config": { "output_col": "score.ctr_z", "expr": "(col.score.ctr - col.stats.ctr_mean) / max(col.stats.ctr_std, 1e-6)" } },
 
+// 请求级的统计（请求列 req.*，在 request_columns 里声明，例如 "candidates.recalled": { "type": "int64" }）：
+// 后面的节点和 when 读它（候选够多才打散），output.values 把它和条目一起返回给调用方
+"recall_stats": { "order": 120, "op": "RequestAggregate@1",
+  "config": { "values": { "candidates.recalled": { "fn": "count" } } } },
+"diversity_cap": { "order": 520, "op": "SlidingWindowQuota@1", "when": "req.candidates.recalled >= 10", "config": { "...": "..." } },
+
 // 确定性的探索扰动：ctx.request.seed 是内置字段（默认由请求 ID 哈希得到），同一请求给同样的结果，可以回放
 // （score.final 声明为 "flow": true，才能被几个节点依次改写）
 "explore": { "order": 468, "op": "ExpressionScorer@1",

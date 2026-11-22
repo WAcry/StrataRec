@@ -266,8 +266,9 @@ public sealed class PlanBuilder
         }
 
         DefineFeatures(sources, inputTypes, unusableInputs);
-        DefineColumns(pipeline.Columns, "/columns/", PipelineLabel);
-        DefineColumns(sources.ExtraColumns, "/columns/", "arms");
+        DefineColumns(pipeline.Columns, "/columns/", PipelineLabel, request: false);
+        DefineColumns(sources.ExtraColumns, "/columns/", "arms", request: false);
+        DefineColumns(pipeline.RequestColumns, "/request_columns/", PipelineLabel, request: true);
         DefineParams(pipeline, sources);
 
         DefineFunnelGroups(pipeline.FunnelGroups, PipelineLabel);
@@ -460,6 +461,9 @@ public sealed class PlanBuilder
             ReadParams = ToSortedArray(context.ReadParams),
             VersionReads = ToSortedArray(context.VersionReads),
             Outputs = ToArray(context.Outputs),
+            RequestOutputs = [.. context.RequestOutputs],
+            RequestReads = ToSortedArray(context.RequestReads),
+            WhenReadsRequest = when is not null && ReadsRequestColumn(when) is not null,
             Requires = ToSortedArray(context.Requires),
             Declares = [.. context.Declares],
         };
@@ -680,6 +684,7 @@ public sealed class PlanBuilder
         var readOutputs = new SortedSet<int>();
         var readFeatures = new SortedSet<int>();
         var readContext = new SortedSet<int>();
+        var requestReads = new SortedSet<int>();
         var pinnedNodes = new SortedSet<string>(StringComparer.Ordinal);
         var versionReads = new HashSet<VersionRead>();
         foreach (var symbol in reads)
@@ -708,6 +713,10 @@ public sealed class PlanBuilder
             {
                 readContext.Add(f);
             }
+            else if (symbol.Kind == SymbolKind.Context && Schema.ContextFields[symbol.Id].Kind == ContextFieldKind.RequestColumn)
+            {
+                requestReads.Add(symbol.Id);
+            }
         }
 
         if (!ok)
@@ -732,6 +741,7 @@ public sealed class PlanBuilder
             ReadOutputs = ToSortedArray(readOutputs),
             ReadFeatures = ToSortedArray(readFeatures),
             ReadContextFeatures = ToSortedArray(readContext),
+            RequestReads = ToSortedArray(requestReads),
             ColumnSources = [.. columnSources],
             PinnedProducers = [.. pinned],
             PinnedNodes = [.. pinnedNodes],
@@ -813,6 +823,15 @@ public sealed class PlanBuilder
                         continue;
                     }
 
+                    if (ReadsRequestColumn(key) is { } column)
+                    {
+                        // Decided before any node runs: no node has written a request column yet.
+                        _diagnostics.Error("FUNNEL_KEY_REQUEST_COLUMN", artifact, pointer + "/key/" + i,
+                            $"Funnel group key '{spec.Key[i]}' reads request column 'req.{column}'; keys are evaluated at request start, before any node writes one.",
+                            "key on request inputs, e.g. [\"ctx.request.user_id\", \"ctx.request.session_id\"]");
+                        continue;
+                    }
+
                     if (key.ResultType.Kind is not (StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64 or StorageKind.Float32
                         or StorageKind.Float64 or StorageKind.String))
                     {
@@ -861,6 +880,20 @@ public sealed class PlanBuilder
         return null;
     }
 
+    /// <summary>The first request column (<c>req.*</c>) <paramref name="expression"/> reads, without its prefix; null when it reads none.</summary>
+    private string? ReadsRequestColumn(CompiledExpression expression)
+    {
+        foreach (var symbol in expression.Reads)
+        {
+            if (symbol.Kind == SymbolKind.Context && Schema.ContextFields[symbol.Id] is { Kind: ContextFieldKind.RequestColumn } field)
+            {
+                return field.Name;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Compiles the output section (design 3.4).</summary>
     public OutputPlan? CompileOutput()
     {
@@ -897,6 +930,21 @@ public sealed class PlanBuilder
             columns.Add((name, expression));
         }
 
+        // Request-level values the caller receives once, beside the items: read where the result is built, after every node.
+        var values = new List<(string, CompiledExpression)>();
+        foreach (var name in Sorted(output.Values.Keys))
+        {
+            var source = output.Values[name];
+            if (!ExpressionCompiler.TryCompile(source, _scope!, new CompileOptions { RequestLevelOnly = true, AllowNullableResult = true }, out var expression, out var errors))
+            {
+                ExpressionErrors.Report(_diagnostics, errors, PipelineLabel, "/output/values/" + JsonPointer.Escape(name), source);
+                ok = false;
+                continue;
+            }
+
+            values.Add((name, expression));
+        }
+
         if (!ok)
         {
             return null;
@@ -915,7 +963,7 @@ public sealed class PlanBuilder
             }
         }
 
-        return new OutputPlan { Limit = limit, Columns = [.. columns], VersionReads = [.. versionReads] };
+        return new OutputPlan { Limit = limit, Columns = [.. columns], Values = [.. values], VersionReads = [.. versionReads] };
     }
 
     private void ReportOutputLimit(string name, ParamLeaf? leaf)
@@ -999,7 +1047,9 @@ public sealed class PlanBuilder
             {
                 if (!guaranteed.Contains(logical))
                 {
-                    var (why, hint) = MissingProducer(schema.Columns[logical], node, possible, ordered, i);
+                    var column = schema.Columns[logical];
+                    var (why, hint) = MissingProducer(column.Name, logical, n => Writes(n, logical),
+                        $"ExpressionScorer@1 with \"output_col\": \"{column.Name}\"", "column", node, possible, ordered, i);
                     _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, node.Pointer,
                         $"Node '{node.NodeId}' reads non-nullable column '{schema.Columns[logical].Name}', but {why}.", hint);
                 }
@@ -1016,7 +1066,7 @@ public sealed class PlanBuilder
                 else if (!SameOutputs(node, fallback))
                 {
                     _diagnostics.Error("FALLBACK_OUTPUTS", artifact, fallback.Pointer,
-                        $"Fallback '{fallback.NodeId}' must produce exactly the columns of '{node.NodeId}'.");
+                        $"Fallback '{fallback.NodeId}' must produce exactly the columns and request columns of '{node.NodeId}'.");
                 }
                 else
                 {
@@ -1209,25 +1259,30 @@ public sealed class PlanBuilder
         {
             ValidateTapDependencies(taps, ordered, fallbacks, output, artifact);
         }
+
+        ValidateRequestColumns(ordered, fallbacks, output, taps, artifact);
     }
 
     /// <summary>
-    /// Why a column a node reads may not exist when it runs, and the fix that fits: its producer may be skipped, runs
-    /// later, or does not exist at all.
+    /// Why a column or request column a node reads may not exist when it runs, and the fix that fits: its producer may be
+    /// skipped, runs later, or does not exist at all.
     /// </summary>
+    /// <param name="example">A node that would write it, e.g. <c>ExpressionScorer@1 with "output_col": "x"</c>.</param>
+    /// <param name="what"><c>column</c> or <c>request column</c>.</param>
     private static (string Why, string Hint) MissingProducer(
-        LogicalColumn column, CompiledNode reader, Dictionary<int, string> possible, List<CompiledNode> ordered, int readerIndex)
+        string name, int id, Func<CompiledNode, bool> writes, string example, string what, CompiledNode reader, Dictionary<int, string> possible,
+        List<CompiledNode> ordered, int readerIndex)
     {
-        const string Nullable = "declare the column nullable and handle missing values with '??'";
-        if (possible.TryGetValue(column.Id, out var producer))
+        var nullable = $"declare the {what} nullable and handle missing values with '??'";
+        if (possible.TryGetValue(id, out var producer))
         {
             return ($"its producer '{producer}' may be skipped (when, min_remaining_ms or on_failure: skip)",
-                $"make '{producer}' unskippable or give it a fallback, or {Nullable}");
+                $"make '{producer}' unskippable or give it a fallback, or {nullable}");
         }
 
         for (var j = readerIndex + 1; j < ordered.Count; j++)
         {
-            if (Writes(ordered[j], column.Id))
+            if (writes(ordered[j]))
             {
                 var later = ordered[j];
                 return ($"its producer '{later.NodeId}' runs later (order {later.Order}, after {reader.Order})",
@@ -1235,8 +1290,119 @@ public sealed class PlanBuilder
             }
         }
 
-        return ("no node writes it",
-            $"add a node before '{reader.NodeId}' that writes '{column.Name}' (e.g. ExpressionScorer@1 with \"output_col\": \"{column.Name}\"), or {Nullable}");
+        return ("no node writes it", $"add a node before '{reader.NodeId}' that writes '{name}' (e.g. {example}), or {nullable}");
+    }
+
+    /// <summary>
+    /// The data-flow rules of request columns on one path (design 11.5), those of columns for a single value: a node,
+    /// fallback or <c>when</c> reading a non-nullable one has a producer that cannot be skipped before it; one that is not
+    /// a flow column has one producer per path; a tap reads only what a node before its point may have written (it logs
+    /// missing when none did); the output's values read a non-nullable one only once it is certain to be written. A
+    /// fallback writes the request columns of its node (<see cref="SameOutputs"/>), and nodes sharing an order do not read
+    /// or write what the other writes (<see cref="DependsOn"/>).
+    /// </summary>
+    private void ValidateRequestColumns(
+        List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output, IReadOnlyList<CompiledTap>? taps, string artifact)
+    {
+        var schema = Schema;
+        if (schema.RequestColumns.Count == 0)
+        {
+            return;
+        }
+
+        var guaranteed = new HashSet<int>();
+        var possible = new Dictionary<int, string>();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var node = ordered[i];
+            var (_, fallback) = Branches(node, fallbacks);
+            RequireWritten(node, $"Node '{node.NodeId}'", i);
+            if (fallback is not null && SameOutputs(node, fallback))
+            {
+                RequireWritten(fallback, $"Fallback '{fallback.NodeId}' (for '{node.NodeId}')", i);
+            }
+
+            foreach (var o in node.RequestOutputs)
+            {
+                if (possible.TryGetValue(o.ContextId, out var previous) && !schema.ContextFields[o.ContextId].Flow)
+                {
+                    _diagnostics.Error("COLUMN_MULTIPLE_PRODUCERS", artifact, node.Pointer,
+                        $"Request column '{o.Name}' is written by both '{previous}' and '{node.NodeId}' on the same path.",
+                        "declare it with \"flow\": true to allow rewriting, or write a new request column");
+                }
+            }
+
+            var unskippable = Unskippable(node, fallback);
+            foreach (var o in node.RequestOutputs)
+            {
+                possible[o.ContextId] = node.NodeId;
+                if (unskippable)
+                {
+                    guaranteed.Add(o.ContextId);
+                }
+            }
+
+            foreach (var tap in taps ?? Array.Empty<CompiledTap>())
+            {
+                if (tap.AttachAfter == node.NodeId)
+                {
+                    TapReads(tap, $"'{node.NodeId}'");
+                }
+            }
+        }
+
+        foreach (var tap in taps ?? Array.Empty<CompiledTap>())
+        {
+            if (tap.AttachOutput)
+            {
+                TapReads(tap, "the output");
+            }
+        }
+
+        foreach (var (name, expression) in output?.Values ?? [])
+        {
+            foreach (var symbol in expression.Reads)
+            {
+                if (symbol.Kind == SymbolKind.Context && schema.ContextFields[symbol.Id] is { Kind: ContextFieldKind.RequestColumn } field
+                    && !field.Type.Nullable && !guaranteed.Contains(field.Id))
+                {
+                    _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, "/output/values/" + JsonPointer.Escape(name),
+                        $"Output value '{name}' reads non-nullable request column '{field.Name}', which is not guaranteed to be written"
+                        + (possible.TryGetValue(field.Id, out var producer) ? $": its producer '{producer}' may be skipped." : ": no node writes it."),
+                        possible.ContainsKey(field.Id)
+                            ? $"make '{producer}' unskippable or give it a fallback, or declare the request column nullable and read it with '??'"
+                            : $"add a node that writes '{field.Name}' (e.g. RequestAggregate@1), or declare the request column nullable");
+                }
+            }
+        }
+
+        void RequireWritten(CompiledNode reader, string subject, int position)
+        {
+            foreach (var id in reader.RequestReads)
+            {
+                var field = schema.ContextFields[id];
+                if (!field.Type.Nullable && !guaranteed.Contains(id))
+                {
+                    var (why, hint) = MissingProducer(field.Name, id, n => WritesRequest(n, id), $"RequestAggregate@1 with \"values\": {{ \"{field.Name}\": ... }}",
+                        "request column", ordered[position], possible, ordered, position);
+                    _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, reader.Pointer,
+                        $"{subject} reads non-nullable request column '{field.Name}', but {why}.", hint);
+                }
+            }
+        }
+
+        void TapReads(CompiledTap tap, string where)
+        {
+            foreach (var id in tap.RequestReads)
+            {
+                if (!possible.ContainsKey(id))
+                {
+                    _diagnostics.Error("TAP_COLUMN_NOT_PRODUCED", artifact, "/log_taps/" + JsonPointer.Escape(tap.TapId),
+                        $"Tap '{tap.TapId}' reads request column '{schema.ContextFields[id].Name}', which no node writes before {where}.",
+                        "attach the tap after a node that writes it, or to the output");
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -1297,7 +1463,7 @@ public sealed class PlanBuilder
 
                 if (output is not null)
                 {
-                    foreach (var (_, expression) in output.Columns)
+                    foreach (var expression in output.Expressions())
                     {
                         MarkSymbols(read, expression);
                     }
@@ -1389,7 +1555,9 @@ public sealed class PlanBuilder
     /// pinned node); a tap's columns, features and pinned versions (the tap, the nodes it attaches after, and the
     /// producers, feature readers or pinned node; for a candidate feature, also each row source, whose rows have no value
     /// for it until a later reader fills them); a tap's attach point (the tap and the nodes it attaches after); a
-    /// context feature a tap logs (the tap and the nodes that read the feature: the output reads the same everywhere).</para>
+    /// context feature a tap logs (the tap and the nodes that read the feature: the output reads the same everywhere); a
+    /// request column's, as a column's: a reader's non-nullable one (the reader and the producers), one producer per path
+    /// and the output's values (the producers), a tap's (the tap, the nodes it attaches after, and the producers).</para>
     /// </remarks>
     /// <param name="nodes">Node id → the variants it takes in some combination (timeline nodes and fallbacks).</param>
     /// <param name="taps">Tap id → the variants it takes in some combination.</param>
@@ -1409,6 +1577,8 @@ public sealed class PlanBuilder
         var referrers = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         var orders = new SortedDictionary<string, (HashSet<int> Orders, string Pointer)>(StringComparer.Ordinal);
         var bindsOther = new SortedSet<string>(StringComparer.Ordinal); // nodes binding a parameter or context field
+        var requestProducers = new SortedDictionary<int, SortedSet<string>>(); // by context id
+        var requestReaders = new SortedDictionary<int, SortedSet<string>>(); // non-nullable reads only
         foreach (var (id, variants) in nodes)
         {
             foreach (var node in variants)
@@ -1416,6 +1586,19 @@ public sealed class PlanBuilder
                 foreach (var written in node.Outputs)
                 {
                     Add(producers, written.LogicalId, id);
+                }
+
+                foreach (var written in node.RequestOutputs)
+                {
+                    Add(requestProducers, written.ContextId, id);
+                }
+
+                foreach (var read in node.RequestReads)
+                {
+                    if (!schema.ContextFields[read].Type.Nullable)
+                    {
+                        Add(requestReaders, read, id);
+                    }
                 }
 
                 foreach (var logical in node.RequiredOutputs)
@@ -1610,6 +1793,25 @@ public sealed class PlanBuilder
             }
         }
 
+        // A request column's producers decide one producer per path and the output's values; a reader of a non-nullable
+        // one, with them, whether it is written before.
+        var requestColumns = new SortedSet<int>(requestProducers.Keys);
+        requestColumns.UnionWith(requestReaders.Keys);
+        foreach (var contextId in requestColumns)
+        {
+            var field = schema.ContextFields[contextId];
+            requestProducers.TryGetValue(contextId, out var produced);
+            if (produced is not null)
+            {
+                Scope($"the producers of request column '{field.Name}'", field.Pointer!, produced);
+            }
+
+            foreach (var reader in requestReaders.GetValueOrDefault(contextId) ?? none)
+            {
+                Scope($"request column '{field.Name}' read by '{reader}'", field.Pointer!, With(produced, new[] { reader }));
+            }
+        }
+
         var ordered = new List<(string Id, HashSet<int> Orders, string Pointer)>();
         foreach (var (id, (set, pointer)) in orders)
         {
@@ -1670,12 +1872,15 @@ public sealed class PlanBuilder
             var reads = new SortedSet<int>();
             var features = new SortedSet<int>();
             var contextFeatures = new SortedSet<int>();
+            var requestReads = new SortedSet<int>();
             foreach (var tap in variants)
             {
                 if (tap.AttachAfter is { } after)
                 {
                     attach.Add(after);
                 }
+
+                requestReads.UnionWith(tap.RequestReads);
 
                 pinned.UnionWith(tap.PinnedNodes);
                 reads.UnionWith(tap.ReadOutputs);
@@ -1712,6 +1917,12 @@ public sealed class PlanBuilder
             foreach (var logical in reads)
             {
                 Scope($"tap '{tapId}' reading '{schema.Columns[logical].Name}'", pointer, With(attach, producers.GetValueOrDefault(logical) ?? none), tapId);
+            }
+
+            foreach (var contextId in requestReads)
+            {
+                Scope($"tap '{tapId}' reading request column '{schema.ContextFields[contextId].Name}'", pointer,
+                    With(attach, requestProducers.GetValueOrDefault(contextId) ?? none), tapId);
             }
 
             foreach (var feature in features)
@@ -2251,7 +2462,7 @@ public sealed class PlanBuilder
             MarkFetched(serving, node.ReadFeatures);
         }
 
-        foreach (var (_, expression) in output.Columns)
+        foreach (var expression in output.Expressions())
         {
             MarkSymbols(serving, expression);
         }
@@ -2404,23 +2615,28 @@ public sealed class PlanBuilder
         return symbol.Kind == SymbolKind.Context ? Schema.ContextFields[symbol.Id].FeatureIndex : -1;
     }
 
-    private void DefineColumns(IReadOnlyDictionary<string, ColumnSpec> columns, string pointerPrefix, string artifact)
+    /// <summary>
+    /// Declares candidate columns (<c>columns</c>, <c>col.*</c>) or request columns (<c>request_columns</c>, <c>req.*</c>):
+    /// one declaration, one set of rules, so a request column's type, default and flow mean what a column's do.
+    /// </summary>
+    private void DefineColumns(IReadOnlyDictionary<string, ColumnSpec> columns, string pointerPrefix, string artifact, bool request)
     {
         var schema = Schema;
+        var (prefix, what) = request ? ("req.", "Request column") : ("col.", "Column");
         foreach (var name in Sorted(columns.Keys))
         {
             var spec = columns[name];
             var pointer = pointerPrefix + JsonPointer.Escape(name);
-            if (schema.TryGetColumn(name, out _))
+            if (request ? schema.TryGetRequestColumn(name, out _) : schema.TryGetColumn(name, out _))
             {
-                _diagnostics.Error("COLUMN_DUPLICATE", artifact, pointer, $"Column '{name}' is already declared (or is a feature).");
+                _diagnostics.Error("COLUMN_DUPLICATE", artifact, pointer, $"{what} '{name}' is already declared" + (request ? "." : " (or is a feature)."));
                 continue;
             }
 
             if (!ConfigTypes.TryParse(spec.Type, TypeSite.Column, out var type, out _, out var error, out var hint))
             {
                 _diagnostics.Error("COLUMN_BAD_TYPE", artifact, pointer + "/type", error, hint);
-                schema.MarkUnusable("col." + name);
+                schema.MarkUnusable(prefix + name);
                 continue;
             }
 
@@ -2429,7 +2645,7 @@ public sealed class PlanBuilder
             if (hasDefault && !ConfigValues.TryToScalar(spec.Default, type.AsNonNullable(), out value, out var defaultError))
             {
                 _diagnostics.Error("COLUMN_BAD_DEFAULT", artifact, pointer + "/default", $"The default of '{name}' {defaultError}.");
-                schema.MarkUnusable("col." + name);
+                schema.MarkUnusable(prefix + name);
                 continue;
             }
 
@@ -2445,13 +2661,20 @@ public sealed class PlanBuilder
                     (false, true) => ("a list with an element outside the int32 range", "[]"),
                 };
                 _diagnostics.Error("COLUMN_NEEDS_DEFAULT", artifact, pointer,
-                    $"Non-nullable column '{name}' of type {type} needs a 'default': it replaces {replaced} (design 4.3).",
+                    $"Non-nullable {what.ToLowerInvariant()} '{name}' of type {type} needs a 'default': it replaces {replaced} (design 4.3).",
                     $"add \"default\": {example}, or declare the type nullable");
-                schema.MarkUnusable("col." + name);
+                schema.MarkUnusable(prefix + name);
                 continue;
             }
 
-            schema.DeclareOutputColumn(name, type, spec.Flow, hasDefault, value, pointer);
+            if (request)
+            {
+                schema.DeclareRequestColumn(name, type, spec.Flow, hasDefault, value, pointer);
+            }
+            else
+            {
+                schema.DeclareOutputColumn(name, type, spec.Flow, hasDefault, value, pointer);
+            }
         }
     }
 
@@ -2597,6 +2820,27 @@ public sealed class PlanBuilder
             }
         }
 
+        foreach (var output in writer.RequestOutputs)
+        {
+            if (reader.RequestReads.IndexOf(output.ContextId) >= 0 || WritesRequest(reader, output.ContextId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool WritesRequest(CompiledNode node, int contextId)
+    {
+        foreach (var o in node.RequestOutputs)
+        {
+            if (o.ContextId == contextId)
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -2615,7 +2859,7 @@ public sealed class PlanBuilder
 
     private static bool SameOutputs(CompiledNode a, CompiledNode b)
     {
-        if (a.Outputs.Length != b.Outputs.Length)
+        if (a.Outputs.Length != b.Outputs.Length || a.RequestOutputs.Length != b.RequestOutputs.Length)
         {
             return false;
         }
@@ -2623,6 +2867,14 @@ public sealed class PlanBuilder
         foreach (var o in a.Outputs)
         {
             if (!Writes(b, o.LogicalId))
+            {
+                return false;
+            }
+        }
+
+        foreach (var o in a.RequestOutputs)
+        {
+            if (!WritesRequest(b, o.ContextId))
             {
                 return false;
             }

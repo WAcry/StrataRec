@@ -299,6 +299,32 @@ public static class ColumnValues
         }
     }
 
+    /// <summary>
+    /// A request-level value (a context feature's, a request column's) as storage of <paramref name="type"/> holds it
+    /// (<see cref="AsStored"/>), and whether the type holds it: what a column's writer and its commit decide for a value
+    /// per row, decided for one value. <see cref="StorageFit.NonFinite"/> is NaN/±∞ in float storage (a float beyond the
+    /// float32 range too, which float32 storage rounds to an infinity), or a float list holding one;
+    /// <see cref="StorageFit.OutOfRange"/> an integer or list element outside int32 storage, or a list of another length
+    /// than a <c>list&lt;E,N&gt;</c>'s. The caller replaces such a value with its default or missing (design 4.3), and
+    /// counts it, so a value of a declared type is the same wherever it is held.
+    /// </summary>
+    public static StorageFit Store(ref ScalarValue value, ColumnType type)
+    {
+        value = AsStored(value, type);
+        if (value.IsMissing)
+        {
+            return StorageFit.Fits;
+        }
+
+        // A list of the wrong length is out of range whatever its elements are, as the column writers count it.
+        if ((value.Kind != StorageKind.List || FitsLength(value.ListLength, type)) && IsNonFinite(value))
+        {
+            return StorageFit.NonFinite;
+        }
+
+        return FitsStorage(value, type) ? StorageFit.Fits : StorageFit.OutOfRange;
+    }
+
     /// <summary>True for a value the non-finite rule replaces (design 4.3): a float that is NaN or ±∞, or a float list
     /// holding one.</summary>
     public static bool IsNonFinite(in ScalarValue value) => value.Kind switch
@@ -413,4 +439,17 @@ public static class ColumnValues
             Set(column, row, defaultValue);
         }
     }
+}
+
+/// <summary>Whether a declared type holds a value (<see cref="ColumnValues.Store"/>).</summary>
+public enum StorageFit : byte
+{
+    /// <summary>It holds it (a missing value included).</summary>
+    Fits,
+
+    /// <summary>NaN or ±∞ where floats are stored, or a float list holding one.</summary>
+    NonFinite,
+
+    /// <summary>An integer outside int32 storage, a list element outside it, or a list of another length than the type's.</summary>
+    OutOfRange,
 }

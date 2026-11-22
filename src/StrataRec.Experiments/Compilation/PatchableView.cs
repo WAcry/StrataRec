@@ -97,6 +97,7 @@ public sealed class PatchableView
             EntityKeyType = p.EntityKeyType,
             RequestSchema = p.RequestSchema,
             Columns = columns!,
+            RequestColumns = p.RequestColumns,
             ParamSchema = paramSchema!,
             Params = (JsonObject)merged["params"]!,
             Nodes = new Dictionary<string, NodeSpec>(), // read from Document (see remarks)
