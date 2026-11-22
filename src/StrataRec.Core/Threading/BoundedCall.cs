@@ -446,10 +446,9 @@ internal static class BoundedCall
         var result = Defect<T>();
         try
         {
-            var cancelledBy = lease.CancelledWhenDone();
-            var winner = Waited(wait, client, cancelledBy);
+            var winner = Waited(wait, client, bound.Caller);
             return result = winner == Winner.Client
-                ? Completed(call, new ValueTask<T>(client), bound, cancelledBy, deadline)
+                ? Completed(call, new ValueTask<T>(client), bound, lease.CancelledWhenDone(), deadline)
                 : CutOff<T>(winner, null, ownSet, bound, deadline, abandoned: true);
         }
         finally
@@ -585,18 +584,37 @@ internal static class BoundedCall
     /// <summary>
     /// The winner of the wait for a pending client, read from the wait's own outcome. The wait's timeout faults it with a
     /// <see cref="TimeoutException"/> of its own, while a client's failure is passed on as the very same exception, so a
-    /// client that throws a <see cref="TimeoutException"/> itself is told apart by identity. The caller's token cancels
-    /// the wait; so does a client whose task ended cancelled (an async method that threw a cancellation, as an HTTP
-    /// client's own timeout does), which is the client's when the caller had not cancelled as it completed
-    /// (<paramref name="cancelledBy"/>): a caller that cancels after it, before the call is classified, came second
-    /// (review of 1158d00: it was read when the call was classified, and the client, done, was said to be abandoned).
+    /// client that throws a <see cref="TimeoutException"/> itself is told apart by identity. A cancelled wait is told
+    /// apart by its token: the caller's when the caller's token ended it, the client's own when it passed on the
+    /// cancellation the client's task ended with (an async method that threw one, as an HTTP client's own timeout does;
+    /// the client never gets the caller's token itself, only one linked to it). Neither is read from the caller's token
+    /// as it is when the call is classified: a caller that cancels after the client's cancellation won the wait came
+    /// second (review of 1158d00), and one that ended the wait before the client's cancellation reached it came first
+    /// (review of 378b594, which read who came first from the lease's snapshot instead, unlike for a client that failed).
     /// </summary>
-    private static Winner Waited(Task wait, Task client, CancelledBy cancelledBy) => wait.Status switch
+    private static Winner Waited(Task wait, Task client, CancellationToken caller) => wait.Status switch
     {
         TaskStatus.RanToCompletion => Winner.Client,
         TaskStatus.Faulted => IsClientFailure(wait.Exception!, client) ? Winner.Client : Winner.Bound,
-        _ => client.IsCanceled && cancelledBy != CancelledBy.Caller ? Winner.Client : Winner.Caller,
+        _ => client.IsCanceled && !CancelledWith(wait, caller) ? Winner.Client : Winner.Caller,
     };
+
+    /// <summary>
+    /// Whether a cancelled task was cancelled with <paramref name="token"/>; read from the cancellation it throws, which
+    /// is thrown only for a wait and a client both cancelled (a cancelled task has no other public way to say).
+    /// </summary>
+    private static bool CancelledWith(Task cancelled, CancellationToken token)
+    {
+        try
+        {
+            cancelled.GetAwaiter().GetResult();
+            return false;
+        }
+        catch (OperationCanceledException ex)
+        {
+            return ex.CancellationToken == token;
+        }
+    }
 
     private static bool IsClientFailure(AggregateException waited, Task client)
     {

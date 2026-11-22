@@ -541,6 +541,55 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
+    /// A caller that ended the wait before the cancellation a client's task ended with reached it was first: the call is
+    /// the caller's, though the client's task had ended cancelled, on its own, before the caller cancelled (review of
+    /// 378b594: the lease had seen the client complete with no token cancelled, and the call was the client's own
+    /// timeout, the operator given a failed status instead of the caller's cancellation). The client's completion is held
+    /// after the lease's continuation and before the wait's, by one registered between them.
+    /// </summary>
+    [Fact]
+    public async Task ACallerThatEndedTheWaitFirst_IsWhoEndedTheCall_ThoughTheClientsTaskEndedCancelledBefore()
+    {
+        using var caller = new CancellationTokenSource();
+        using var transport = new CancellationTokenSource();
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        transport.Cancel();
+        var client = new TaskCompletionSource<int>();
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(caller.Token, Deadline(600_000));
+        var site = new Site(memory).WhenPending(() => _ = client.Task.ContinueWith(
+            _ =>
+            {
+                held.Set();
+                release.Wait(Patience);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default));
+
+        var running = Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: null).AsTask();
+        var cancelling = Task.Run(() => client.SetCanceled(transport.Token), TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.True(held.Wait(Patience, TestContext.Current.CancellationToken), "the client's completion was never held");
+            Assert.True(client.Task.IsCanceled);
+            caller.Cancel();
+            var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+            Assert.Equal((CallEnd.Cancelled, IoOutcome.Cancelled, true), (result.End, result.Outcome, result.Abandoned));
+            Assert.Equal(caller.Token, Assert.IsAssignableFrom<OperationCanceledException>(result.Exception).CancellationToken);
+            Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
+        }
+        finally
+        {
+            release.Set();
+            await cancelling.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        }
+
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
+    /// <summary>
     /// A client that answered the call's own deadline (an exception of its protocol) timed out, though the node's budget
     /// ran out too before the call was classified: the call's own deadline came first (review of 763fcbd: it was the
     /// budget's, and the operator was thrown a cancellation instead of a failed status).
