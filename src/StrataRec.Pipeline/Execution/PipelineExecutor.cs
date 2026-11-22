@@ -1331,6 +1331,13 @@ internal sealed class PipelineExecutor
                 continue;
             }
 
+            if (MissingRequestColumn(state, expression.Reads) is { } unwritten)
+            {
+                // The data-flow checks rule it out, as for the output's values (ValuesAsync).
+                return Failed(plan, request, $"output column '{name}' reads request column '{unwritten}', which no node wrote", start, state.Outcomes,
+                    state.Triggered, state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
+            }
+
             // Evaluated into storage of the declared type, so a float32 column's values print as the floats they are.
             var buffer = ColumnBuffer.Create(types[c], Math.Max(1, state.Table.StorageCapacity), state.Memory);
             expression.Evaluate(state.Eval, rows, buffer);
@@ -1431,7 +1438,7 @@ internal sealed class PipelineExecutor
             values[v] = new ResultValue(name, plan.Schema.DeclaredType(expression), expression.EvaluateScalar(state.Eval));
         }
 
-        return (new ResultValues(values), null);
+        return (ResultValues.OfOutput(values), null);
     }
 
     /// <summary>

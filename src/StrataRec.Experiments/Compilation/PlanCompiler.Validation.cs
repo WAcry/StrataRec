@@ -366,35 +366,51 @@ internal sealed partial class UnifiedCompilation
     private void Interactions(
         ArmPatch a, ArmPatch b, Dictionary<int, Dictionary<int, string>> writes, Dictionary<int, Dictionary<int, ArmRead>> addedReads, SortedSet<string>? resolves)
     {
-        foreach (var (logical, node) in writes[a.Index])
+        foreach (var (key, node) in writes[a.Index])
         {
-            var column = _builder.Schema.Columns[logical];
-            if (a.Index < b.Index && column.Flow && writes[b.Index].TryGetValue(logical, out var otherNode) && resolves is not null)
+            var (name, flow) = Footprinted(key);
+            if (a.Index < b.Index && flow && writes[b.Index].TryGetValue(key, out var otherNode) && resolves is not null)
             {
-                resolves.Add("INTERACTION_FLOW_COLUMN " + column.Name);
+                resolves.Add("INTERACTION_FLOW_COLUMN " + name);
             }
-            else if (a.Index < b.Index && column.Flow && writes[b.Index].TryGetValue(logical, out otherNode) && !Reviewed(a, b, column.Name))
+            else if (a.Index < b.Index && flow && writes[b.Index].TryGetValue(key, out otherNode) && !Reviewed(a, b, name))
             {
                 _diagnostics.Warning("INTERACTION_FLOW_COLUMN", a.Artifact, a.PointerPrefix + "/nodes/" + JsonPointer.Escape(node),
-                    $"Arms '{a.Id}' ('{node}') and '{b.Id}' ('{otherNode}') can be assigned together and both add a node writing flow column '{column.Name}'.",
-                    ReviewHint(a, b, column.Name));
+                    $"Arms '{a.Id}' ('{node}') and '{b.Id}' ('{otherNode}') can be assigned together and both add a node writing flow column '{name}'.",
+                    ReviewHint(a, b, name));
             }
 
-            if (addedReads[b.Index].TryGetValue(logical, out var read) && resolves is not null)
+            if (addedReads[b.Index].TryGetValue(key, out var read) && resolves is not null)
             {
-                resolves.Add("INTERACTION_READ " + column.Name);
+                resolves.Add("INTERACTION_READ " + name);
             }
-            else if (addedReads[b.Index].TryGetValue(logical, out read) && !Reviewed(a, b, column.Name))
+            else if (addedReads[b.Index].TryGetValue(key, out read) && !Reviewed(a, b, name))
             {
                 var reader = read.Node;
                 var how = read.Fallback is { } fallback
-                    ? $"As '{b.Id}' changes node '{reader}', it fails over to '{fallback}', reading '{column.Name}'"
-                    : $"Node '{reader}' added by '{b.Id}' reads '{column.Name}'";
+                    ? $"As '{b.Id}' changes node '{reader}', it fails over to '{fallback}', reading '{name}'"
+                    : $"Node '{reader}' added by '{b.Id}' reads '{name}'";
                 _diagnostics.Warning("INTERACTION_READ", b.Artifact, b.PointerPrefix + "/nodes/" + JsonPointer.Escape(reader),
                     $"{how}, which '{a.Id}' writes in the node it adds, '{node}'; the two arms can be assigned together.",
-                    ReviewHint(b, a, column.Name));
+                    ReviewHint(b, a, name));
             }
         }
+    }
+
+    /// <summary>
+    /// The name and flow of a footprint's key (<see cref="DescribeArm"/>): a column's logical id, or a request column's
+    /// context id complemented (<c>~id</c>), named <c>req.&lt;name&gt;</c> so a review tells it from a column of its name.
+    /// </summary>
+    private (string Name, bool Flow) Footprinted(int key)
+    {
+        if (key >= 0)
+        {
+            var column = _builder.Schema.Columns[key];
+            return (column.Name, column.Flow);
+        }
+
+        var field = _builder.Schema.ContextFields[~key];
+        return ("req." + field.Name, field.Flow);
     }
 
     private string ReviewHint(ArmPatch a, ArmPatch b, string column) =>
@@ -500,7 +516,8 @@ internal sealed partial class UnifiedCompilation
 
     /// <summary>
     /// The column footprint of an arm (design 11.5 item 2) from its single-arm variants: columns its touched nodes write,
-    /// and columns its added nodes read.
+    /// and columns its added nodes read. Request columns are in it as candidate columns are, keyed by their context id
+    /// complemented (<see cref="Footprinted"/>).
     /// </summary>
     private void DescribeArm(ArmPatch arm, out Dictionary<int, string> writes, out Dictionary<int, ArmRead> addedReads)
     {
@@ -546,6 +563,22 @@ internal sealed partial class UnifiedCompilation
                 }
             }
 
+            foreach (var output in node.RequestOutputs)
+            {
+                if (baseline is null || !WritesRequest(baseline, output.ContextId))
+                {
+                    writes.TryAdd(~output.ContextId, nodeId);
+                }
+            }
+
+            foreach (var read in node.RequestReads)
+            {
+                if (baseline is null || baseline.RequestReads.IndexOf(read) < 0)
+                {
+                    addedReads.TryAdd(~read, new ArmRead(nodeId, null));
+                }
+            }
+
             // A node's fallback reads when the node fails: an arm that turns the fallback on, or points the node at another
             // one, adds what that fallback reads (review 71). Compared with what the baseline's node could reach (itself and
             // its own fallback), so a fallback the baseline already ran adds nothing, and one no node reaches counts nowhere.
@@ -559,6 +592,14 @@ internal sealed partial class UnifiedCompilation
                         addedReads.TryAdd(read, new ArmRead(nodeId, fallback.NodeId));
                     }
                 }
+
+                foreach (var read in fallback.RequestReads)
+                {
+                    if (baseline is null || (baseline.RequestReads.IndexOf(read) < 0 && (baselineFallback is null || baselineFallback.RequestReads.IndexOf(read) < 0)))
+                    {
+                        addedReads.TryAdd(~read, new ArmRead(nodeId, fallback.NodeId));
+                    }
+                }
             }
         }
 
@@ -566,6 +607,19 @@ internal sealed partial class UnifiedCompilation
             primary.OnFailure == FailurePolicy.Fallback && primary.FallbackNodeId is { } id && _variants.TryGetValue(id, out var fv)
                 ? fv.Variants[fv.IndexOf(arms)]
                 : null;
+
+        static bool WritesRequest(CompiledNode node, int contextId)
+        {
+            foreach (var output in node.RequestOutputs)
+            {
+                if (output.ContextId == contextId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         static bool Writes(CompiledNode node, int logical)
         {

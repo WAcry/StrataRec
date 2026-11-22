@@ -119,7 +119,7 @@
             }
           },
           "request_columns": {
-            "description": "Request columns nodes write, one value per request, read as req.<name> wherever a request-level value is read: in a later node's expressions and when, a log tap's context, the output's values. A count or a threshold over the candidates (GroupAggregate@1's request_outputs), or what a custom operator decided for the request. Declared as candidate columns are; a value a node did not write is missing.",
+            "description": "Request columns nodes write, one value per request, read as req.<name> by what runs after the node that writes one: a later node's expressions and when, a log tap, the output's columns and values (not a funnel key, decided when the request starts, nor a derived feature). Written by RequestAggregate@1 (a count, sum, mean, min or max over the live candidates) or by a custom operator. Declared as candidate columns are (type, default, flow): a value no node wrote is missing, and a non-nullable one needs a node that cannot be skipped to write it before every reader. Experiments may add request columns, not change these.",
             "type": "object",
             "additionalProperties": {
               "type": [
@@ -1443,7 +1443,7 @@
       }
     },
     "reviewed_interactions": {
-      "description": "Interactions with experiments of other layers that were reviewed and may happen together (design 11.5): experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive the interaction it was for. It lives with the experiment, not the release file, because the manifest carries it.",
+      "description": "Interactions with experiments of other layers that were reviewed and may happen together (design 11.5): experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }, a request column written as req.<name>. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive the interaction it was for. It lives with the experiment, not the release file, because the manifest carries it.",
       "type": [
         "object",
         "null"

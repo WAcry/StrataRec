@@ -37,6 +37,11 @@ public sealed class ResultValues
         _values = values;
     }
 
+    private ResultValues(ResultValue[] values, bool checkedNames) => _values = values;
+
+    /// <summary>The values of a request's output: their names are the members of <c>output.values</c>, so each is there once.</summary>
+    internal static ResultValues OfOutput(ResultValue[] values) => new(values, checkedNames: true);
+
     /// <summary>No values: a pipeline without <c>output.values</c>, or a failed request.</summary>
     public static ResultValues Empty { get; } = new([]);
 

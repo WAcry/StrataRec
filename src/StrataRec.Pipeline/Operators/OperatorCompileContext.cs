@@ -284,7 +284,7 @@ public sealed class OperatorCompileContext
         }
 
         Require(new NameRef(SymbolKind.Context, field.Id));
-        output = new RequestOutput(field.Id, field.RequestIndex, field.DeclaredType, name);
+        output = new RequestOutput(field.Id, _requestOutputs.Count, field.DeclaredType, name);
         _requestOutputs.Add(output);
         return true;
     }

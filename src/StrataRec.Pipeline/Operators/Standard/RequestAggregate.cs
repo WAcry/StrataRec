@@ -48,9 +48,10 @@ public sealed class RequestAggregateValue
 /// </summary>
 /// <remarks>
 /// It aggregates the rows alive when it runs, in their order, so floating-point sums are deterministic. Each value
-/// evaluates its expressions once over the live rows into buffers rented from the request's memory; nothing is allocated
-/// per row. An integer sum that overflows int64 fails the node; a float result the request column cannot hold (NaN, ±∞)
-/// is replaced when the node commits, as any request column's value is.
+/// evaluates its expressions once over the live rows into buffers rented from the request's memory, one of each kind
+/// for the node, which its values share; nothing is allocated per row. Integer sums and means are exact until the end: a sum outside int64 fails the node, whatever the order of
+/// the rows. A float sum adds the rows in order, so it may overflow before the end where the exact one would not; a float
+/// result the request column cannot hold (NaN, ±∞) is replaced when the node commits, as any request column's value is.
 /// </remarks>
 public sealed class RequestAggregateFactory : IOperatorFactory
 {
@@ -169,9 +170,10 @@ public sealed class RequestAggregateFactory : IOperatorFactory
     {
         public override ValueTask ExecuteAsync(OperatorContext context)
         {
+            var buffers = default(Buffers);
             foreach (var value in values)
             {
-                if (Aggregate(context, value) is not { } result)
+                if (Aggregate(context, value, ref buffers) is not { } result)
                 {
                     return ValueTask.CompletedTask; // the node failed (Fail)
                 }
@@ -182,34 +184,50 @@ public sealed class RequestAggregateFactory : IOperatorFactory
             return ValueTask.CompletedTask;
         }
 
+        /// <summary>
+        /// The buffers the values evaluate their expressions into, made the first time one needs them and shared by the
+        /// values after it: each evaluation writes every live row, value and validity, so the node holds at most one of
+        /// each kind of the request's memory, however many values it computes.
+        /// </summary>
+        private struct Buffers
+        {
+            public ScalarColumn<bool>? Where;
+            public ScalarColumn<long>? Integers;
+            public ScalarColumn<double>? Floats;
+        }
+
         /// <summary>The value over the live rows; null after failing the node.</summary>
-        private static ScalarValue? Aggregate(OperatorContext context, Value value)
+        private static ScalarValue? Aggregate(OperatorContext context, Value value, ref Buffers buffers)
         {
             var live = context.LiveRows;
-            if (live.Length == 0)
+            if (live.Length == 0 || (value is { Function: Function.Count, Where: null, Of: null }))
             {
-                return value.Function == Function.Count ? ScalarValue.FromInt64(0) : ScalarValue.Missing;
+                return value.Function == Function.Count ? ScalarValue.FromInt64(live.Length) : ScalarValue.Missing;
             }
 
             var capacity = Math.Max(1, context.Table.StorageCapacity);
             ScalarColumn<bool>? where = null;
             if (value.Where is { } predicate)
             {
-                where = new ScalarColumn<bool>(ColumnType.Bool, capacity, context.Memory);
+                where = buffers.Where ??= new ScalarColumn<bool>(ColumnType.Bool, capacity, context.Memory);
                 predicate.Evaluate(context.EvalContext, live, where);
             }
 
             ColumnBuffer? of = null;
             if (value.Of is { } expression)
             {
-                of = ColumnBuffer.Create(expression.ResultType, capacity, context.Memory);
+                of = expression.ResultType.Kind == StorageKind.Int64
+                    ? buffers.Integers ??= new ScalarColumn<long>(ColumnType.Int64.AsNullable(), capacity, context.Memory)
+                    : buffers.Floats ??= new ScalarColumn<double>(ColumnType.Float64.AsNullable(), capacity, context.Memory);
                 expression.Evaluate(context.EvalContext, live, of);
             }
 
             long count = 0;
-            long integer = 0; // the sum, min or max of integer values
-            double real = 0; // of float values, or the running mean
-            var integers = of is ScalarColumn<long>;
+            Int128 sum = 0; // of integer values: exact, so the order of the rows never decides whether it fits
+            long extreme = 0; // the min or max of integer values
+            double real = 0; // the sum, min, max or running mean of float values
+            var integers = of as ScalarColumn<long>;
+            var floats = of as ScalarColumn<double>;
             foreach (var row in live)
             {
                 if ((where is not null && !where[row]) || (of is not null && !of.IsValid(row)))
@@ -218,48 +236,28 @@ public sealed class RequestAggregateFactory : IOperatorFactory
                 }
 
                 count++;
-                if (of is null || value.Function == Function.Count)
+                if (value.Function == Function.Count)
                 {
                     continue;
                 }
 
-                if (integers && value.Function != Function.Mean)
+                if (integers is not null)
                 {
-                    var x = ((ScalarColumn<long>)of)[row];
-                    switch (value.Function)
+                    var x = integers[row];
+                    sum += x;
+                    extreme = count == 1 ? x : value.Function == Function.Min ? Math.Min(extreme, x) : Math.Max(extreme, x);
+                }
+                else if (floats is not null)
+                {
+                    var y = floats[row];
+                    real = value.Function switch
                     {
-                        case Function.Sum when count > 1:
-                            var sum = integer + x;
-                            if (((integer ^ sum) & (x ^ sum)) < 0)
-                            {
-                                context.Fail($"the sum of '{value.Of!.Source}' for '{value.Output.Name}' overflows int64");
-                                return null;
-                            }
-
-                            integer = sum;
-                            break;
-                        case Function.Min:
-                            integer = count == 1 ? x : Math.Min(integer, x);
-                            break;
-                        case Function.Max:
-                            integer = count == 1 ? x : Math.Max(integer, x);
-                            break;
-                        default:
-                            integer = x; // the first value of a sum
-                            break;
-                    }
-
-                    continue;
+                        Function.Sum => count == 1 ? y : real + y,
+                        Function.Min => count == 1 ? y : Math.Min(real, y),
+                        Function.Max => count == 1 ? y : Math.Max(real, y),
+                        _ => RunningMean.Step(real, y, count),
+                    };
                 }
-
-                var y = of is ScalarColumn<long> l ? l[row] : ((ScalarColumn<double>)of)[row];
-                real = value.Function switch
-                {
-                    Function.Sum => count == 1 ? y : real + y,
-                    Function.Min => count == 1 ? y : Math.Min(real, y),
-                    Function.Max => count == 1 ? y : Math.Max(real, y),
-                    _ => RunningMean.Step(real, y, count),
-                };
             }
 
             if (value.Function == Function.Count)
@@ -272,7 +270,23 @@ public sealed class RequestAggregateFactory : IOperatorFactory
                 return ScalarValue.Missing;
             }
 
-            return integers && value.Function != Function.Mean ? ScalarValue.FromInt64(integer) : ScalarValue.FromFloat64(real);
+            if (integers is null)
+            {
+                return ScalarValue.FromFloat64(real);
+            }
+
+            switch (value.Function)
+            {
+                case Function.Sum when sum < long.MinValue || sum > long.MaxValue:
+                    context.Fail($"the sum of '{value.Of!.Source}' for '{value.Output.Name}' is {sum}, outside int64");
+                    return null;
+                case Function.Sum:
+                    return ScalarValue.FromInt64((long)sum);
+                case Function.Mean:
+                    return ScalarValue.FromFloat64((double)sum / count); // one rounding, of the exact sum
+                default:
+                    return ScalarValue.FromInt64(extreme);
+            }
         }
     }
 }

@@ -33,7 +33,8 @@ public sealed class ExperimentArtifact
 
     /// <summary>
     /// Interactions with experiments of other layers that were reviewed and may happen together (design 11.5): experiment
-    /// id → the columns, e.g. <c>{ "exp_freshness_calibration": ["score.final"] }</c>. The two experiments' interaction
+    /// id → the columns, e.g. <c>{ "exp_freshness_calibration": ["score.final"] }</c>, a request column written as
+    /// <c>req.&lt;name&gt;</c>. The two experiments' interaction
     /// warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a
     /// new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive
     /// the interaction it was for. It lives with the experiment, not the release file, because the manifest carries it.

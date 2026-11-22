@@ -23,10 +23,12 @@ public sealed class PipelineArtifact
     public Dictionary<string, ColumnSpec> Columns { get; init; } = new();
 
     /// <summary>
-    /// Request columns nodes write, one value per request, read as <c>req.&lt;name&gt;</c> wherever a request-level value is
-    /// read: in a later node's expressions and <c>when</c>, a log tap's <c>context</c>, the output's <c>values</c>. A count
-    /// or a threshold over the candidates (<c>GroupAggregate@1</c>'s <c>request_outputs</c>), or what a custom operator
-    /// decided for the request. Declared as candidate columns are; a value a node did not write is missing.
+    /// Request columns nodes write, one value per request, read as <c>req.&lt;name&gt;</c> by what runs after the node that
+    /// writes one: a later node's expressions and <c>when</c>, a log tap, the output's <c>columns</c> and <c>values</c> (not a
+    /// funnel key, decided when the request starts, nor a derived feature). Written by <c>RequestAggregate@1</c> (a count,
+    /// sum, mean, min or max over the live candidates) or by a custom operator. Declared as candidate columns are (type,
+    /// default, flow): a value no node wrote is missing, and a non-nullable one needs a node that cannot be skipped to write
+    /// it before every reader. Experiments may add request columns, not change these.
     /// </summary>
     public Dictionary<string, ColumnSpec> RequestColumns { get; init; } = new();
 

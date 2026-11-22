@@ -414,6 +414,16 @@ public sealed class PlanBuilder
                 ExpressionErrors.Report(_diagnostics, whenErrors, artifact, pointer + "/when", spec.When);
                 ok = false;
             }
+            else if (FirstParam(when) is { } param)
+            {
+                // A parameter an experiment overrides would decide whether the node runs before the experiment's trigger
+                // is recorded (it is recorded when a running node reads it): one arm's requests triggered, another's not
+                // (design 5.5, 12.6).
+                _diagnostics.Error("WHEN_READS_PARAM", artifact, pointer + "/when",
+                    $"'when' reads 'param.{param}'; a condition reads only request-level values (ctx.*, req.*).",
+                    "an experiment changes a node's condition by patching its 'when' (e.g. \"when\": \"ctx.user.tenure_days < 14\")");
+                ok = false;
+            }
         }
 
         var context = new OperatorCompileContext(schema, _scope!, _clients!, _diagnostics, artifact, nodeId, pointer, spec.Config ?? new JsonObject(), factory.Descriptor);
@@ -1363,15 +1373,25 @@ public sealed class PlanBuilder
             }
         }
 
+        foreach (var (name, expression) in output?.Columns ?? [])
+        {
+            OutputReads("/output/columns/", "Output column", name, expression);
+        }
+
         foreach (var (name, expression) in output?.Values ?? [])
+        {
+            OutputReads("/output/values/", "Output value", name, expression);
+        }
+
+        void OutputReads(string section, string what, string name, CompiledExpression expression)
         {
             foreach (var symbol in expression.Reads)
             {
                 if (symbol.Kind == SymbolKind.Context && schema.ContextFields[symbol.Id] is { Kind: ContextFieldKind.RequestColumn } field
                     && !field.Type.Nullable && !guaranteed.Contains(field.Id))
                 {
-                    _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, "/output/values/" + JsonPointer.Escape(name),
-                        $"Output value '{name}' reads non-nullable request column '{field.Name}', which is not guaranteed to be written"
+                    _diagnostics.Error("COLUMN_NO_PRODUCER", artifact, section + JsonPointer.Escape(name),
+                        $"{what} '{name}' reads non-nullable request column '{field.Name}', which is not guaranteed to be written"
                         + (possible.TryGetValue(field.Id, out var producer) ? $": its producer '{producer}' may be skipped." : ": no node writes it."),
                         possible.ContainsKey(field.Id)
                             ? $"make '{producer}' unskippable or give it a fallback, or declare the request column nullable and read it with '??'"
@@ -1797,15 +1817,28 @@ public sealed class PlanBuilder
             }
         }
 
-        // A request column's producers decide one producer per path and the output's values; a reader of a non-nullable
-        // one, with them, whether it is written before.
+        // A request column's producers together decide one producer per path (unless it is a flow column) and, for a
+        // non-nullable one the output reads, whether it is written; a reader of a non-nullable one, with them, whether it
+        // is written before. A nullable flow column only the nodes read needs neither.
+        var outputReads = new HashSet<int>();
+        foreach (var expression in output.Expressions())
+        {
+            foreach (var symbol in expression.Reads)
+            {
+                if (symbol.Kind == SymbolKind.Context && schema.ContextFields[symbol.Id] is { Kind: ContextFieldKind.RequestColumn, Type.Nullable: false })
+                {
+                    outputReads.Add(symbol.Id);
+                }
+            }
+        }
+
         var requestColumns = new SortedSet<int>(requestProducers.Keys);
         requestColumns.UnionWith(requestReaders.Keys);
         foreach (var contextId in requestColumns)
         {
             var field = schema.ContextFields[contextId];
             requestProducers.TryGetValue(contextId, out var produced);
-            if (produced is not null)
+            if (produced is not null && (!field.Flow || outputReads.Contains(contextId)))
             {
                 Scope($"the producers of request column '{field.Name}'", field.Pointer!, produced);
             }
@@ -1977,6 +2010,21 @@ public sealed class PlanBuilder
     }
 
     /// <summary>A node whose position always leaves its writes: no <c>when</c> or time limit, and a failure fails the request.</summary>
+    /// <summary>The first parameter <paramref name="expression"/> names (in any branch), or null.</summary>
+    private string? FirstParam(CompiledExpression expression)
+    {
+        var names = expression.Names;
+        for (var i = 0; i < names.Count; i++)
+        {
+            if (names[i].Kind == SymbolKind.Param)
+            {
+                return Schema.Params[names[i].Id].Name;
+            }
+        }
+
+        return null;
+    }
+
     private static bool Unskippable(CompiledNode node, CompiledNode? fallback) =>
         !MaySkip(node) && (node.OnFailure == FailurePolicy.FailRequest || (fallback is not null && fallback.OnFailure == FailurePolicy.FailRequest));
 

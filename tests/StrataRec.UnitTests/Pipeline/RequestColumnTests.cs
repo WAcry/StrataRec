@@ -173,6 +173,123 @@ public sealed class RequestColumnTests
         Assert.Contains("left non-nullable request column 'decision' without a value", result.Error);
     }
 
+    /// <summary>
+    /// An output column may read a request column, per item (here the count beside each item); a non-nullable one needs a
+    /// producer, as the output's values do (review of 1102725: a plan was accepted and threw building the result).
+    /// </summary>
+    [Fact]
+    public async Task AnOutputColumn_ReadsARequestColumn_AndANonNullableOneNeedsAProducer()
+    {
+        var plan = Compile(""" "n": { "type": "int64" } """, """
+            "count": { "order": 200, "op": "RequestAggregate@1", "config": { "values": { "n": { "fn": "count" } } } }
+            """, outputColumns: """ "candidates": "req.n" """);
+        var result = await Run(plan);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.All(result.Columns["candidates"].ToArray(), v => Assert.Equal(Items.Length, v.AsInt64()));
+
+        var refused = TryCompile(""" "n": { "type": "int64" } """, """
+            "other": { "order": 200, "op": "SetRequest@1", "when": "(ctx.request.user ?? '') == 'x'", "config": { "column": "n", "integer": 1 } }
+            """, outputColumns: """ "candidates": "req.n + 1" """);
+        var error = Assert.Single(refused.Diagnostics, d => d.IsError);
+        Assert.Equal(("COLUMN_NO_PRODUCER", "/output/columns/candidates"), (error.Code, error.Pointer));
+        Assert.Contains("its producer 'other' may be skipped", error.Message);
+    }
+
+    /// <summary>
+    /// Integer sums and means are exact until the end (review of 1102725): a sum whose running total leaves int64 on the way
+    /// is the sum, the mean of the extremes is -0.5, and only a sum outside int64 fails the node. Rows 1, 2, 3 in order.
+    /// </summary>
+    [Theory]
+    [InlineData("sum", "col.entity_id == 1 ? 9223372036854775807 : (col.entity_id == 2 ? 1 : -1)", "9223372036854775807")]
+    [InlineData("sum", "col.entity_id == 1 ? -9223372036854775807 - 1 : (col.entity_id == 2 ? -1 : 1)", "-9223372036854775808")]
+    [InlineData("mean", "col.entity_id == 1 ? 9223372036854775807 : (col.entity_id == 2 ? -9223372036854775807 - 1 : 0)", "-0.3333333333333333")]
+    [InlineData("sum", "col.entity_id == 3 ? 0 : 9223372036854775807", null)]
+    public async Task IntegerSumsAndMeans_AreExact_UntilTheEnd(string fn, string of, string? expected)
+    {
+        var type = fn == "mean" ? "float64?" : "int64?";
+        var plan = Compile($$""" "x": { "type": "{{type}}" } """, $$"""
+            "agg": { "order": 200, "op": "RequestAggregate@1", "on_failure": "skip",
+                     "config": { "values": { "x": { "fn": "{{fn}}", "of": "{{of}}", "where": "col.entity_id <= 3" } } } }
+            """, values: """ "x": "req.x" """);
+
+        var result = await Run(plan);
+
+        Assert.True(result.Succeeded, result.Error);
+        if (expected is null)
+        {
+            Assert.Equal(NodeOutcomeKind.Failed, Outcome(result, "agg"));
+            Assert.True(Values(result)["x"].IsMissing);
+        }
+        else
+        {
+            Assert.Equal(expected, fn == "mean"
+                ? Values(result)["x"].AsFloat64().ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+                : Values(result)["x"].AsInt64().ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+    }
+
+    /// <summary>
+    /// A node's <c>when</c> reads no parameter (design 5.5, review of 1102725): an experiment overriding it would decide
+    /// whether the node runs before its trigger is recorded, which only a running node's read records.
+    /// </summary>
+    [Fact]
+    public void AWhen_ReadingAParameter_IsRefused()
+    {
+        var compilation = TryCompile(""" "decision": { "type": "string?" } """, """
+            "w": { "order": 200, "op": "SetRequest@1", "when": "param.k > 5", "config": { "column": "decision", "text": "a" } }
+            """);
+
+        var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+        Assert.Equal(("WHEN_READS_PARAM", "/nodes/w/when"), (error.Code, error.Pointer));
+        Assert.Contains("'param.k'", error.Message);
+    }
+
+    /// <summary>
+    /// A defective operator's value fails its own node, which its <c>on_failure</c> handles (review of 1102725): one set
+    /// through a handle it changed is checked against what the node resolved, and a list with a null element is refused.
+    /// Committed, either broke a later reader instead: the output threw, the replay refused the recording.
+    /// </summary>
+    [Theory]
+    [InlineData("\"forge\": true", "\"n\": { \"type\": \"int64?\" }", "is int64?, and node 'w' set it to a string value")]
+    [InlineData("\"null_element\": true", "\"n\": { \"type\": \"list<string>?\" }", "a list whose element 1 is null")]
+    public async Task ADefectiveOperatorsValue_FailsItsNode(string option, string declaration, string message)
+    {
+        var plan = Compile(declaration, $$"""
+            "w": { "order": 200, "op": "SetRequest@1", "on_failure": "skip", "config": { "column": "n", {{option}} } }
+            """, values: """ "n": "req.n" """);
+
+        var result = await Run(plan);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.True(Values(result)["n"].IsMissing);
+        var outcome = result.Outcomes.Single(o => o.NodeId == "w");
+        Assert.Equal(NodeOutcomeKind.Failed, outcome.Kind);
+        Assert.Contains(message, outcome.Detail);
+    }
+
+    /// <summary>
+    /// The aggregate's values share its buffers (review of 1102725: each value rented its own, held to the request's
+    /// end): twenty values with a <c>where</c> and an <c>of</c> rent no more of the request's memory than one.
+    /// </summary>
+    [Fact]
+    public async Task TheAggregatesValues_ShareItsBuffers()
+    {
+        static async Task<long> Rented(int values)
+        {
+            var columns = string.Join(", ", Enumerable.Range(0, values).Select(i => $"\"v{i}\": {{ \"type\": \"float64?\" }}"));
+            var specs = string.Join(", ", Enumerable.Range(0, values).Select(i => $"\"v{i}\": {{ \"fn\": \"max\", \"of\": \"col.item.score\", \"where\": \"col.entity_id > {i % 3}\" }}"));
+            var plan = Compile(columns, $$"""
+                "agg": { "order": 200, "op": "RequestAggregate@1", "config": { "values": { {{specs}} } } },
+                "probe": { "order": 300, "op": "MemoryProbe@1", "config": {} }
+                """);
+            var result = await Run(plan);
+            Assert.True(result.Succeeded, result.Error);
+            return MemoryProbeFactory.Last;
+        }
+
+        Assert.Equal(await Rented(1), await Rented(20));
+    }
+
     /// <summary>The commit stores a value as the declared type holds it, replacing what it cannot hold with the default or missing.</summary>
     [Fact]
     public async Task TheCommit_ReplacesWhatTheTypeCannotHold_AndRoundsFloat32()
@@ -439,9 +556,10 @@ public sealed class RequestColumnTests
         CaptureLogs = writeLogs,
     });
 
-    private static ExecutionPlan Compile(string requestColumns, string nodes, string? values = null, string? taps = null, string? extraColumns = null)
+    private static ExecutionPlan Compile(
+        string requestColumns, string nodes, string? values = null, string? taps = null, string? extraColumns = null, string? outputColumns = null)
     {
-        var compilation = TryCompile(extraColumns is null ? requestColumns : requestColumns + ", " + extraColumns, nodes, values, taps);
+        var compilation = TryCompile(extraColumns is null ? requestColumns : requestColumns + ", " + extraColumns, nodes, values, taps, outputColumns: outputColumns);
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         return compilation.Plan!;
     }
@@ -450,7 +568,8 @@ public sealed class RequestColumnTests
     /// A workspace of one pipeline: recall of the six items, then <paramref name="nodes"/>, with
     /// <paramref name="requestColumns"/> declared and <paramref name="values"/> returned; <c>SetRequest@1</c> is registered.
     /// </summary>
-    private static PlanCompilation TryCompile(string requestColumns, string nodes, string? values = null, string? taps = null, string? funnelKey = null)
+    private static PlanCompilation TryCompile(
+        string requestColumns, string nodes, string? values = null, string? taps = null, string? funnelKey = null, string? outputColumns = null)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-request-columns-").FullName;
         Write(root, "catalog/c.jsonc", """
@@ -477,7 +596,7 @@ public sealed class RequestColumnTests
                 {{nodes}} },
               "funnel_groups": { "all": { "key": [{{(funnelKey is null ? "\"ctx.request.id\"" : $"\"{funnelKey}\"")}}], "rate": 1.0 } },
               "log_taps": { {{taps}} },
-              "output": { "limit_param": "k", "columns": { "score": "col.item.score" }, "values": { {{values}} } } }
+              "output": { "limit_param": "k", "columns": { "score": "col.item.score"{{(outputColumns is null ? "" : ", " + outputColumns)}} }, "values": { {{values}} } } }
             """);
         Write(root, "fixtures/ids.json", "{ \"items\": [" + string.Join(", ", Items.Select(i => i.Id)) + "] }");
         Write(root, "fixtures/items.json", "{ " + string.Join(", ", Items.Select(i =>
@@ -487,7 +606,7 @@ public sealed class RequestColumnTests
         var workspace = ConfigWorkspace.Load(root, diagnostics);
         var request = workspace.CreateCompileRequest("p", "local", diagnostics);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        var operators = OperatorRegistry.CreateDefault().Add(new SetRequestFactory());
+        var operators = OperatorRegistry.CreateDefault().Add(new SetRequestFactory()).Add(new MemoryProbeFactory());
         return PlanCompiler.Compile(request!, new PlanEnvironment { BaseDirectory = root, Operators = operators });
     }
 
@@ -514,6 +633,33 @@ public sealed class RequestColumnTests
         public bool Unset { get; init; }
 
         public bool Fail { get; init; }
+
+        /// <summary>Sets <see cref="Text"/> through a handle whose type the operator changed to string: a defective operator.</summary>
+        public bool Forge { get; init; }
+
+        /// <summary>Sets a list of strings with a null element: a defective operator.</summary>
+        public bool NullElement { get; init; }
+    }
+
+    /// <summary><c>MemoryProbe@1</c>: records how much of the request's memory is rented when it runs.</summary>
+    private sealed class MemoryProbeFactory : IOperatorFactory
+    {
+        public static long Last;
+
+        public OperatorDescriptor Descriptor { get; } = new("MemoryProbe", 1, Effects.None, typeof(NoConfig), "Records the rented bytes.");
+
+        private sealed class NoConfig;
+
+        public Operator? Compile(OperatorCompileContext context) => new Probe();
+
+        private sealed class Probe : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context)
+            {
+                Last = context.Memory.RentedBytes;
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     /// <summary><c>SetRequest@1</c>: a custom operator staging one request column's value, as a host's would.</summary>
@@ -530,7 +676,15 @@ public sealed class RequestColumnTests
         {
             public override ValueTask ExecuteAsync(OperatorContext context)
             {
-                if (!config.Unset)
+                if (config.Forge)
+                {
+                    context.SetRequestValue(output with { Type = ColumnType.String }, ScalarValue.FromString(config.Text ?? "forged"));
+                }
+                else if (config.NullElement)
+                {
+                    context.SetRequestValue(output, ScalarValue.FromStringList(["a", null!]));
+                }
+                else if (!config.Unset)
                 {
                     context.SetRequestValue(output, config switch
                     {

@@ -1084,6 +1084,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ErrorKind = converted.Succeeded ? RecErrorKind.None : RecErrorKind.Failed,
         Error = $"pipeline '{request.PipelineId}' failed: {executed.Error}" + (served.Succeeded ? string.Empty : $"; fallback '{fallbackId}' failed: {served.Error}"),
         Columns = converted.Columns,
+        Values = converted.Values,
         Experiments = new ExperimentRecord(merged ?? executed.AssignedArms, executed.TriggeredExperiments, ignored),
         ManifestId = converted.ManifestId,
         ServedBy = fallbackId,

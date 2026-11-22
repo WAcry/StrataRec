@@ -44,8 +44,8 @@ public sealed class OperatorContext : IServiceCallScope
     private readonly Effects _effects;
     private readonly ImmutableArray<RequestOutput> _requestOutputs;
 
-    /// <summary>The attempt's staged request values, by position in <see cref="_requestOutputs"/>; made on the first write.</summary>
-    private (bool Written, ScalarValue Value)[]? _staged;
+    /// <summary>The attempt's staged request values, by position in <see cref="_requestOutputs"/>, missing where none was; made on the first write.</summary>
+    private ScalarValue[]? _staged;
 
     internal OperatorContext(RequestState state, string nodeId, Effects effects, AttemptBudget budget, ImmutableArray<RequestOutput> requestOutputs = default)
     {
@@ -139,33 +139,30 @@ public sealed class OperatorContext : IServiceCallScope
     /// <param name="value">A value of the column's type, held promoted as every <see cref="ScalarValue"/> is (an integer for a
     /// float column is a float); missing to leave the column missing.</param>
     /// <exception cref="InvalidOperationException">The node did not resolve <paramref name="output"/> when it compiled.</exception>
-    /// <exception cref="ArgumentException">The value is of another kind than the column (a string for an int64 column).</exception>
+    /// <exception cref="ArgumentException">The value is of another kind than the column (a string for an int64 column), or
+    /// a list with a null element.</exception>
     public void SetRequestValue(in RequestOutput output, in ScalarValue value)
     {
         Require(Effects.RequestWriter, nameof(SetRequestValue));
-        var position = -1;
-        for (var i = 0; i < _requestOutputs.Length; i++)
-        {
-            if (_requestOutputs[i].ContextId == output.ContextId)
-            {
-                position = i;
-                break;
-            }
-        }
-
-        if (position < 0)
+        if ((uint)output.Index >= (uint)_requestOutputs.Length || _requestOutputs[output.Index].ContextId != output.ContextId)
         {
             throw new InvalidOperationException(
                 $"Node '{NodeId}' set request column '{output.Name}', which it did not resolve with TryWriteRequestColumn when it compiled.");
         }
 
-        if (!value.IsMissing && !OfKind(value, output.Type.Promoted()))
+        var resolved = _requestOutputs[output.Index]; // as it compiled, whatever the handle says
+        if (!value.IsMissing && !OfKind(value, resolved.Type.Promoted()))
         {
             throw new ArgumentException(
-                $"Request column '{output.Name}' is {output.Type}, and node '{NodeId}' set it to a {Kind(value)} value ({value}).", nameof(value));
+                $"Request column '{resolved.Name}' is {resolved.Type}, and node '{NodeId}' set it to a {Kind(value)} value ({value}).", nameof(value));
         }
 
-        (_staged ??= new (bool, ScalarValue)[_requestOutputs.Length])[position] = (true, value);
+        if (value.ListElement == StorageKind.String && value.AsStringList().IndexOf((string)null!) is >= 0 and var element)
+        {
+            throw new ArgumentException($"Node '{NodeId}' set request column '{resolved.Name}' to a list whose element {element} is null.", nameof(value));
+        }
+
+        (_staged ??= new ScalarValue[_requestOutputs.Length])[output.Index] = value;
     }
 
     /// <summary>Replaces a staged value with what the commit stores (<see cref="PipelineExecutor"/>); missing needs no storage.</summary>
@@ -173,12 +170,12 @@ public sealed class OperatorContext : IServiceCallScope
     {
         if (_staged is not null)
         {
-            _staged[position] = (true, value);
+            _staged[position] = value;
         }
     }
 
     /// <summary>The value staged for the node's <paramref name="position"/>-th request output; missing when none was.</summary>
-    internal ScalarValue StagedRequestValue(int position) => _staged is { } staged && staged[position].Written ? staged[position].Value : ScalarValue.Missing;
+    internal ScalarValue StagedRequestValue(int position) => _staged is { } staged ? staged[position] : ScalarValue.Missing;
 
     /// <summary>Whether a present value is of <paramref name="promoted"/>'s kind; an integer is a float's (it converts exactly as stored).</summary>
     private static bool OfKind(in ScalarValue value, ColumnType promoted)

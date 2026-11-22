@@ -1,8 +1,10 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
 using StrataRec.Pipeline.Execution;
+using StrataRec.Pipeline.Planning;
 using static StrataRec.IntegrationTests.CombinationLimitTests;
 
 namespace StrataRec.IntegrationTests;
@@ -46,6 +48,35 @@ public sealed class RequestColumnEndToEndTests
         Assert.True(outcome.Result.Values.TryGetEntry("popular", out var replayed));
         Assert.Equal(replayed, change.Replayed);
         Assert.NotEqual(popular.Value.AsInt64(), change.Replayed!.Value.Value.AsInt64());
+    }
+
+    /// <summary>
+    /// A request its fallback pipeline serves returns the fallback's values, as it returns its items, live and replayed:
+    /// the result of the run that served, the backup counting the 10 candidates it recalled.
+    /// </summary>
+    [Fact]
+    public async Task AFallbackPipelinesValues_AreTheResults_LiveAndReplayed()
+    {
+        var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        ReplayTests.Edit(root, "pipelines/backup.jsonc", "\"params\":", "\"request_columns\": { \"n\": { \"type\": \"int64\" } }, \"params\":");
+        ReplayTests.Edit(root, "pipelines/backup.jsonc", "\"config\": { \"quotas_param\": \"recall_quotas\" } } },",
+            "\"config\": { \"quotas_param\": \"recall_quotas\" } }, \"count\": { \"order\": 200, \"op\": \"RequestAggregate@1\", \"config\": { \"values\": { \"n\": { \"fn\": \"count\" } } } } },");
+        ReplayTests.Edit(root, "pipelines/backup.jsonc", "\"columns\": { \"source\": \"col.recall.primary_source\" } }",
+            "\"columns\": { \"source\": \"col.recall.primary_source\" }, \"values\": { \"count\": \"req.n\" } }");
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
+        ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", ["primary"]).ThrowIfErrors("load");
+
+        var recorded = await engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "primary", RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(2),
+            Debug = new DebugOptions { Record = true },
+        }, TestContext.Current.CancellationToken);
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!)),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(("backup", 10L), (recorded.ServedBy, recorded.Values["count"].AsInt64()));
+        Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
+        Assert.Equal(10, outcome.Result.Values["count"].AsInt64());
     }
 
     /// <summary>
@@ -156,6 +187,71 @@ public sealed class RequestColumnEndToEndTests
         Assert.Equal(("NAME_NOT_DECLARED", "experiment:b", "/arms/t/nodes/author_cap"), (error.Code, error.Artifact, error.Pointer));
         Assert.Contains("'req.cand.n'", error.Message, StringComparison.Ordinal);
         Assert.Contains("only 'a/t' declares it, and it is not assigned with it here", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A request column's producers are checked together only where a rule needs them together (review of 1102725): a
+    /// nullable flow column only nodes write, one optional writer in each of 13 layers (8,192 combinations, past the
+    /// default limit of 4,096), needs no combination of them.
+    /// </summary>
+    [Fact]
+    public void ANullableFlowRequestColumnsOptionalWriters_AreNotCheckedTogether()
+    {
+        var host = HomeFeedTestHost.Load();
+        host.Request.Pipeline.RequestColumns["review.flow"] = new ColumnSpec { Type = "int64?", Flow = true };
+        var placements = new List<ExperimentPlacement>();
+        for (var i = 0; i < 13; i++)
+        {
+            placements.Add(Treatment("w" + i, $$"""
+                { "nodes": { "count_{{i}}": { "order": {{600 + i}}, "op": "RequestAggregate@1", "config": { "values": { "review.flow": { "fn": "count" } } } } } }
+                """));
+        }
+
+        var unified = PlanCompiler.Compile(With(host.Request, placements), host.Environment);
+
+        Assert.True(unified.Succeeded, string.Join("\n", unified.Diagnostics));
+        Assert.DoesNotContain(unified.Diagnostics, d => d.Code == "COMBINATION_CHECK_LIMIT");
+    }
+
+    /// <summary>
+    /// Request columns interact between experiments as columns do (design 11.5; review of 1102725): an added node reading
+    /// what another layer's added node writes, two added nodes writing one flow column. The review names it req.&lt;name&gt;.
+    /// </summary>
+    [Fact]
+    public void AddedWritersAndReadersOfARequestColumn_Interact_UntilTheReviewIsRecorded()
+    {
+        static void Experiments(string root, bool reviewed)
+        {
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"request_columns\": {", "\"request_columns\": { \"cand.flow\": { \"type\": \"int64?\", \"flow\": true },");
+            InteractionWarningTests.Experiment(root, "exp_req_a", "t",
+                """{ "nodes": { "count_a": { "order": 130, "op": "RequestAggregate@1", "config": { "values": { "cand.flow": { "fn": "count" } } } } } }""");
+            InteractionWarningTests.Experiment(root, "exp_req_b", "t",
+                """{ "nodes": { "count_b": { "order": 140, "op": "RequestAggregate@1", "config": { "values": { "cand.flow": { "fn": "count", "where": "col.entity_id > 0" } } } } } }""");
+            InteractionWarningTests.Experiment(root, "exp_req_c", "t",
+                """{ "nodes": { "read_c": { "order": 600, "op": "ExpressionFilter@1", "config": { "predicate": "(req.cand.flow ?? 0) >= 0" } } } }""");
+            if (reviewed)
+            {
+                ReplayTests.Edit(root, "experiments/exp_req_c.jsonc", "\"expires_at\": \"2099-01-01\",",
+                    "\"expires_at\": \"2099-01-01\", \"reviewed_interactions\": { \"exp_req_a\": [\"req.cand.flow\"], \"exp_req_b\": [\"req.cand.flow\"] },");
+                ReplayTests.Edit(root, "experiments/exp_req_a.jsonc", "\"expires_at\": \"2099-01-01\",",
+                    "\"expires_at\": \"2099-01-01\", \"reviewed_interactions\": { \"exp_req_b\": [\"req.cand.flow\"] },");
+            }
+        }
+
+        var warned = HomeFeedTestHost.LoadModified(root => Experiments(root, reviewed: false)).Compile();
+        var reviewed = HomeFeedTestHost.LoadModified(root => Experiments(root, reviewed: true)).Compile();
+
+        Assert.True(warned.Succeeded, string.Join("\n", warned.Diagnostics));
+        Assert.Equal(
+            [
+                ("INTERACTION_FLOW_COLUMN", "experiment:exp_req_a", "/arms/t/nodes/count_a"),
+                ("INTERACTION_READ", "experiment:exp_req_c", "/arms/t/nodes/read_c"),
+                ("INTERACTION_READ", "experiment:exp_req_c", "/arms/t/nodes/read_c"),
+            ],
+            warned.Diagnostics.Where(d => d.Code.StartsWith("INTERACTION_", StringComparison.Ordinal)).Select(d => (d.Code, d.Artifact, d.Pointer)).Order());
+        Assert.All(warned.Diagnostics.Where(d => d.Code.StartsWith("INTERACTION_", StringComparison.Ordinal)), d => Assert.Contains("'req.cand.flow'", d.Message));
+        Assert.True(reviewed.Succeeded, string.Join("\n", reviewed.Diagnostics));
+        Assert.Empty(reviewed.Diagnostics);
     }
 
     /// <summary>A request column the baseline declares is the same in every arm: an arm may not change or delete it.</summary>
