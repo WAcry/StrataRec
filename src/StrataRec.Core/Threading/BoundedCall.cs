@@ -595,9 +595,13 @@ internal static class BoundedCall
     }
 
     /// <summary>
-    /// A client that completed in time: its answer, what it threw, or the cancellation it honoured. One it threw with none
-    /// of the framework's tokens cancelled and its deadline ahead is its own, as a transport timeout of its own is: the
-    /// call threw, a timeout (an HTTP client's timeout is a cancellation, say).
+    /// A client that completed in time: its answer, what it threw, or the cancellation it honoured. Whose the end of a
+    /// call that threw is, the framework's tokens say, whatever the client threw: a client answers a cancelled token with
+    /// an exception of its protocol as often as with a cancellation (gRPC's <c>RpcException</c> with status
+    /// <c>Cancelled</c>), and one that does so before its wait ends is recorded as when the wait ends first, the
+    /// exception dropped (2026-11-22: it was the client's error, a timeout recorded as one only when the wait's timer came
+    /// first). With none of them cancelled, what it threw is its own: a cancellation, or a <see cref="TimeoutException"/>,
+    /// a timeout of its own (an HTTP client's timeout is a cancellation, say); anything else, an error.
     /// </summary>
     /// <param name="token">The token the client got, read before it was sent.</param>
     private static CallResult<T> Completed<T, TCall>(TCall call, ValueTask<T> pending, CallBound bound, CancellationToken token, in CallDeadline deadline)
@@ -609,20 +613,21 @@ internal static class BoundedCall
             var outcome = call.Judge(value, out var error);
             return new CallResult<T>(CallEnd.Answered, value, null, outcome, outcome == IoOutcome.Ok ? null : error, false);
         }
-        catch (OperationCanceledException ex)
-        {
-            // It honoured a token in time, or cancelled on its own: the tokens say whose, the caller's first.
-            return bound.Caller.IsCancellationRequested ? Cancelled<T>(bound, ex, abandoned: false)
-                : bound.Token.IsCancellationRequested ? RanOut<T>(bound, ex, abandoned: false)
-                : token.IsCancellationRequested || deadline.HasPassed ? TimedOut<T>(deadline, abandoned: false)
-                : new CallResult<T>(CallEnd.Threw, default, ex, IoOutcome.Timeout, $"threw {ex.GetType().Name}: it cancelled the call itself, before its deadline", false);
-        }
         catch (Exception ex)
         {
-            // A client's own transport timeout is a timeout. The error names the type: the operator gets a failed status,
-            // not the exception, and the type is often what says what went wrong.
-            return new CallResult<T>(CallEnd.Threw, default, ex, ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error,
-                $"threw {ex.GetType().Name}: {ExceptionText.Of(ex)}", false);
+            // The tokens say whose the end is, the caller's first. A cancellation past the deadline by its clock is the
+            // deadline's too, as one honoured an instant before the timer fires; anything else is the client's own
+            // failure unless a token was cancelled.
+            var cancellation = ex as OperationCanceledException;
+            return bound.Caller.IsCancellationRequested ? Cancelled<T>(bound, cancellation, abandoned: false)
+                : bound.Token.IsCancellationRequested ? RanOut<T>(bound, cancellation, abandoned: false)
+                : token.IsCancellationRequested || (cancellation is not null && deadline.HasPassed) ? TimedOut<T>(deadline, abandoned: false)
+                : cancellation is not null
+                ? new CallResult<T>(CallEnd.Threw, default, ex, IoOutcome.Timeout, $"threw {ex.GetType().Name}: it cancelled the call itself, before its deadline", false)
+                // The error names the type: the operator gets a failed status, not the exception, and the type is often
+                // what says what went wrong.
+                : new CallResult<T>(CallEnd.Threw, default, ex, ex is TimeoutException ? IoOutcome.Timeout : IoOutcome.Error,
+                    $"threw {ex.GetType().Name}: {ExceptionText.Of(ex)}", false);
         }
     }
 

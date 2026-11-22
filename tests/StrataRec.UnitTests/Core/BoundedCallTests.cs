@@ -412,6 +412,44 @@ public sealed class BoundedCallTests
         Assert.Equal(0, memory.Release());
     }
 
+    /// <summary>
+    /// A client that answers its token's cancellation with an exception of its protocol, not a cancellation (gRPC's
+    /// <c>RpcException</c>, status <c>Cancelled</c>), before the wait ends: the call's own deadline cancelled the token, so
+    /// it timed out, as when the wait ends first, and the protocol's echo of the cancellation is dropped (2026-11-22: it
+    /// was recorded as the client's error). The wait's timer is put far off by moving the deadline's clock back once the
+    /// call is sent, so the client always comes first.
+    /// </summary>
+    [Fact]
+    public async Task AClientThatAnswersItsCancelledTokenWithAnotherException_TimedOut()
+    {
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Deadline(600_000));
+        var site = new Site(memory);
+        var clock = new ManualClock();
+        clock.HoldTimestamps();
+        var deadline = CallDeadline.At(clock, clock.GetTimestamp() + (clock.TimestampFrequency / 50), 20); // the token: 20 ms
+        var client = default(CancellationToken);
+
+        var result = await BoundedCall.RunAsync<int, Site>(site.With(token =>
+        {
+            client = token;
+            var answer = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            token.Register(() => answer.TrySetException(new ProtocolCancellation()));
+            clock.AdvanceTimestamps(TimeSpan.FromMinutes(-10)); // the wait: ten minutes
+            return new ValueTask<int>(answer.Task);
+        }), budget, memory, Target, deadline).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.True(client.IsCancellationRequested);
+        Assert.Equal((CallEnd.TimedOut, IoOutcome.Timeout, "timed out after 20 ms", false), (result.End, result.Outcome, result.Error, result.Abandoned));
+        Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience)); // the client completed: nothing holds it
+    }
+
+    /// <summary>What a gRPC client throws when its token is cancelled, unless it is told to throw a cancellation.</summary>
+    private sealed class ProtocolCancellation() : Exception("Status(StatusCode=\"Cancelled\", Detail=\"Call canceled by the client.\")");
+
     private sealed class MessageCountingCancellation() : OperationCanceledException(new CancellationToken(canceled: true))
     {
         public int MessageReads { get; private set; }
