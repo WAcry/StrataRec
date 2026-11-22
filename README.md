@@ -46,14 +46,15 @@ dotnet run --project src/StrataRec.Cli -- run      -c my-feed -r my-feed/request
 
 ## 在服务里嵌入引擎
 
-引擎是一个库，传输层、认证和线程模型由宿主决定。[`samples/StrataRec.Samples.Host`](samples/StrataRec.Samples.Host) 是一个 ASP.NET Core 服务：用 `AddStrataRec` 加载工作区，`POST /recommend/{pipeline}` 返回排好序的结果；并且演示三个扩展点怎么写、怎么注册（服务的召回和模型两种用法各一个）：
+引擎是一个库，传输层、认证和线程模型由宿主决定。[`samples/StrataRec.Samples.Host`](samples/StrataRec.Samples.Host) 是一个 ASP.NET Core 服务：用 `AddStrataRec` 加载工作区，`POST /recommend/{pipeline}` 返回排好序的结果；并且演示三个扩展点怎么写、怎么注册（服务的召回、模型和过滤三种用法各一个，过滤由自定义算子调用）：
 
 | 扩展点 | 契约 | 示例 |
 | --- | --- | --- |
 | 特征连接器 | `IFeatureSourceConnector` | `kv_store@1` |
 | 外部服务（召回） | `IServiceClient` | `trending@1` |
 | 外部服务（模型） | `IServiceClient` | `logistic@1` |
-| 算子 | `IOperatorFactory` | `CategoryBoost@1` |
+| 外部服务（过滤） | `IServiceClient` | `stock@1` |
+| 算子 | `IOperatorFactory` | `CategoryBoost@1`、调用服务的 `StockFilter@1` |
 
 结果的 `Items` 是逐行的（每项的输出列按名字读，`item.Columns["score"]`），返回几十行时最方便；返回大量行、还要在宿主里继续处理时读 `Columns`：按列的 id 数组和每个输出列的值数组（`result.Columns["score"][i]`），不为每行建字典。`RecResultJson` 按列写响应。
 

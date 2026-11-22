@@ -549,7 +549,7 @@ public class CacheStoreCallTests
             continuation(state);
     }
 
-    /// <summary>Completed reads of distributed tiers (<c>stratarec.source.kind</c> = <c>feature_cache</c>), and those that failed.</summary>
+    /// <summary>Completed reads of distributed tiers (<c>stratarec.io.role</c> = <c>cache</c>), and those that failed.</summary>
     private sealed class StoreCalls : IDisposable
     {
         private readonly MeterListener _listener = new();

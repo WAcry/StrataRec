@@ -10,7 +10,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// The sample with a <c>PairwiseRanker@1</c> and a <c>ListwiseReranker@1</c> after the final sort, each bound to a test
 /// model: their calls carry no per-row keys, so a recording keeps each call by the digest of its whole input and a replay
-/// serves it back only for the same input (design 13.4). Runs alone: it counts <c>stratarec.model.pairs</c>.
+/// serves it back only for the same input (design 13.4). Runs alone: it counts the pairs the model's calls send (<c>stratarec.io.keys</c>).
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class ModelRankerReplayTests
@@ -123,7 +123,7 @@ public sealed class ModelRankerReplayTests
     }
 
     private static double PairsCounted(MetricCapture metrics) =>
-        metrics.Of(StrataRecMetrics.Names.ModelPairs).Where(m => Equals(m.Tags[StrataRecTags.IoTarget], "pair_model")).Sum(m => m.Value);
+        metrics.Of(StrataRecMetrics.Names.IoKeys).Where(m => Equals(m.Tags[StrataRecTags.IoRole], "model") && Equals(m.Tags[StrataRecTags.IoTarget], "pair_model")).Sum(m => m.Value);
 
     private static RecEngine Load(HomeFeedTestHost host, PairModels pairs, ListModels lists)
     {

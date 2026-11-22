@@ -25,7 +25,7 @@ namespace StrataRec.IntegrationTests;
 /// once no served plan uses it and nothing of a replaced plan's requests can still call it; a plan is served only after its
 /// clients loaded; and secrets are resolved at load without their values reaching a diagnostic, a log or a recording.
 /// The sample's <c>ctr_model</c> is bound to <see cref="ScriptedModels"/>, whose calls, loads and disposals the tests drive;
-/// its connectors and candidate sources to counting doubles of the in-memory ones where a test covers all three kinds; and
+/// its connectors and recall services to counting doubles of the in-memory ones where a test covers all three kinds; and
 /// <see cref="RemoteSignatureModels"/> stands in for a client that has to ask a model server for its signatures.
 /// </summary>
 public sealed class BindingLifetimeTests
@@ -40,7 +40,7 @@ public sealed class BindingLifetimeTests
         await using var engine = new RecEngine(Environment(root, models));
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var old = Assert.Single(models.Created);
-        var instances = engine.Bindings.InstanceCount; // the model, and the sample's connectors and candidate sources
+        var instances = engine.Bindings.InstanceCount; // the model, and the sample's connectors and recall services
 
         models.HoldCalls();
         var running = engine.ExecuteAsync(Request("req-in-flight"), TestContext.Current.CancellationToken).AsTask();
@@ -262,7 +262,7 @@ public sealed class BindingLifetimeTests
     }
 
     [Fact]
-    public async Task ModelsConnectorsAndCandidateSources_AreSharedWhileUnchanged_ReplacedWhenChanged_AndDisposedOnceUnused()
+    public async Task ServicesAndConnectors_AreSharedWhileUnchanged_ReplacedWhenChanged_AndDisposedOnceUnused()
     {
         var models = new ScriptedModels();
         var connectors = new CountingConnectors();
@@ -489,7 +489,7 @@ public sealed class BindingLifetimeTests
             """);
 
     /// <summary>
-    /// Binds the sample's feature sources and candidate sources to the counting doubles; a latency setting (any value)
+    /// Binds the sample's feature sources and recall services to the counting doubles; a latency setting (any value)
     /// changes the identity of <c>item_store</c> and <c>popular</c> only.
     /// </summary>
     private static void BindCounting(string root, int? latencyMs)
@@ -729,7 +729,7 @@ public sealed class BindingLifetimeTests
         }
     }
 
-    /// <summary><c>counting_list@1</c>: <c>memory_list@1</c> candidate sources that count what the engine does with them.</summary>
+    /// <summary><c>counting_list@1</c>: <c>memory_list@1</c> recall services that count what the engine does with them.</summary>
     private sealed class CountingSources : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "counting_list@1";

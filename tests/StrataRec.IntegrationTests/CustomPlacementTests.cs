@@ -16,7 +16,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// Interleaving and fixed-position injection are business logic, written as custom operators against the public operator
 /// API; the framework has no slot operator. These two are reference implementations, and the tests pin down what the
-/// framework guarantees them: an injector after ranking calls a candidate source through the context (bounded, recorded,
+/// framework guarantees them: an injector after ranking calls a recall service through the context (bounded, recorded,
 /// replayed), appends what it got, gives those rows their score in the column the ranking wrote (design 4.6: a row source
 /// writes its rows into the current version), and puts them at fixed positions; an interleaver only reorders.
 /// </summary>
@@ -347,7 +347,7 @@ public sealed class CustomPlacementTests
         }
     }
 
-    /// <summary><c>failing@1</c>: a candidate source that always fails.</summary>
+    /// <summary><c>failing@1</c>: a recall service that always fails.</summary>
     private sealed class FailingSourceFactory : IBindingFactory<IServiceClient>
     {
         public string Type => "failing@1";

@@ -7,7 +7,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>A workspace of one pipeline with only candidate sources bound, written to a temp directory and compiled.</summary>
+/// <summary>A workspace of one pipeline with only recall services bound, written to a temp directory and compiled.</summary>
 internal static class MiniWorkspace
 {
     /// <param name="candidateSources">The members of the bindings' <c>services</c> object.</param>

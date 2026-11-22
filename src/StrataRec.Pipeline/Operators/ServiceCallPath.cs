@@ -161,7 +161,8 @@ internal static class ServiceCallPath
     {
         public ValueTask<ServiceStatus> Send(CancellationToken token) => client.CallAsync(call, response, token);
 
-        public int Keys => call.Items.IsEmpty ? -1 : call.Items.Length;
+        // The rows of a call about rows (its items, or a pairwise model's pairs, which have no keys): what it sends.
+        public int Keys => call.BatchSize > 0 ? call.BatchSize : -1;
 
         public IoOutcome Judge(ServiceStatus value, out string? error)
         {

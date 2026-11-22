@@ -59,7 +59,7 @@ public static class BindingKinds
     /// <summary>The pointer of entry <paramref name="name"/>'s settings, e.g. <c>/sources/item_store/cache/distributed</c>.</summary>
     public static string Pointer(this BindingKind kind, string name) => "/" + kind.Section() + "/" + JsonPointer.Escape(name) + kind.Member();
 
-    /// <summary>How a sentence starts with entry <paramref name="name"/>, e.g. <c>Model 'ctr_model'</c>.</summary>
+    /// <summary>How a sentence starts with entry <paramref name="name"/>, e.g. <c>Service 'ctr_model'</c>.</summary>
     public static string Label(this BindingKind kind, string name)
     {
         var noun = kind.Noun();

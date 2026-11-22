@@ -13,8 +13,8 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>
-/// The rules of the framework's I/O boundary for candidate sources and models (<see cref="BoundedCall"/>), checked on the
-/// helper itself so that neither call site can break them unnoticed: the wait has its own bound, the memory and the
+/// The rules of the framework's I/O boundary (<see cref="BoundedCall"/>: service calls, feature connectors, distributed
+/// caches, assignment providers), checked on the helper itself so that no call site can break them unnoticed: the wait has its own bound, the memory and the
 /// client's tokens outlive an abandoned client, the outcome is classified one way, and each call ends exactly once.
 /// </summary>
 /// <remarks>

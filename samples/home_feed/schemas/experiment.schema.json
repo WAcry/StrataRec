@@ -1039,7 +1039,7 @@
                             }
                           },
                           "queries": {
-                            "description": "Per source, the values its query carries besides the request's inputs (design 5.4): value name → a request-level expression over ctx.* and param.*, such as { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } } for a two-tower service that needs the user's features to retrieve. A source waits for the context features its own query reads and for nothing else: one without a query starts at once, one reading the user's embedding as soon as it is stored (a derived feature as soon as it is computed), while the others run; sources whose features are stored together are sent in source order. The wait is within the node's budget. A source whose query reads a feature that failed is not called, as soon as that feature failed, and counts as a failed source; a degraded one degrades the node; a missing value is sent as missing.",
+                            "description": "Per source, the values its query sends, its call's only inputs (design 5.4): value name → a request-level expression over ctx.* and param.*, such as { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } } for a two-tower service that needs the user's features to retrieve. A source waits for the context features its own query reads and for nothing else: one without a query starts at once, one reading the user's embedding as soon as it is stored (a derived feature as soon as it is computed), while the others run; sources whose features are stored together are sent in source order. The wait is within the node's budget. A source whose query reads a feature that failed is not called, as soon as that feature failed, and counts as a failed source; a degraded one degrades the node; a missing value is sent as missing.",
                             "type": [
                               "object",
                               "null"
@@ -1404,7 +1404,7 @@
                   }
                 },
                 "columns_from": {
-                  "description": "Expands to a model node's inputs, e.g. ctr_ranker.inputs.",
+                  "description": "Expands to the named inputs of a node whose operator maps columns to them (the model operators, or a custom operator's), e.g. ctr_ranker.inputs.",
                   "type": [
                     "string",
                     "null"

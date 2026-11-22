@@ -66,14 +66,12 @@ public abstract class Operator
     /// </summary>
     public virtual int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => 0;
 
-    /// <summary>Named model inputs (input name → column expression), for log taps' <c>columns_from</c> (design 6.9).</summary>
-    public virtual IReadOnlyDictionary<string, string> NamedInputs => EmptyInputs;
-
     /// <summary>
-    /// The model a model-calling operator calls (<see cref="BoundModel.Target"/>); its node's fallbacks are counted per
-    /// model (design 13.1). Public so that model operators outside this assembly are counted like the built-in ones.
+    /// The named inputs an operator sends (input name → column expression), for log taps' <c>columns_from</c> (design 6.9,
+    /// 8.5): a tap logs what the node's calls were given. The model operators give theirs; a custom operator that maps
+    /// columns to a service's inputs may too.
     /// </summary>
-    public virtual IoTarget? ModelTarget => null;
+    public virtual IReadOnlyDictionary<string, string> NamedInputs => EmptyInputs;
 
     private static readonly IReadOnlyDictionary<string, string> EmptyInputs = new Dictionary<string, string>();
 }

@@ -414,7 +414,7 @@ public sealed class BindingLoadException : Exception
     /// <summary>The bindings artifact, e.g. <c>bindings:local</c>.</summary>
     public string Artifact { get; }
 
-    /// <summary>The binding's pointer, or its setting's, e.g. <c>/models/ctr_backup/uri</c>.</summary>
+    /// <summary>The binding's pointer, or its setting's, e.g. <c>/services/ctr_backup/uri</c>.</summary>
     public string Pointer { get; }
 
     public string? Hint { get; }

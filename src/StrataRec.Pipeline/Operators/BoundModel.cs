@@ -40,7 +40,7 @@ public sealed class BoundModel
     /// <summary>The logical model name: the service's.</summary>
     public string Model => Service.Name;
 
-    /// <summary>The model's telemetry target: its duration, errors and fallbacks are tagged with the model's name.</summary>
+    /// <summary>The model's telemetry target: its calls' duration, errors and rows are tagged with the model's name.</summary>
     public IoTarget Target => Service.Target;
 
     /// <summary>

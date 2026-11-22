@@ -75,7 +75,7 @@ public sealed class MetricsTests
             Assert.Equal(node.RowsOut, Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsOut), m => TagsEqual(m, tags)).Value);
         }
 
-        // Data sources: both candidate sources and the fetched feature sources the request reads; key counts respect
+        // Data sources: both recall services and the fetched feature sources the request reads; key counts respect
         // max_batch. The local author_store makes no source calls.
         var sources = capture.Of(StrataRecMetrics.Names.IoDuration)
             .Select(m => (Tag(m, StrataRecTags.IoRole), Tag(m, StrataRecTags.IoTarget))).ToHashSet();
@@ -225,7 +225,6 @@ public sealed class MetricsTests
             m => Tag(m, StrataRecTags.IoRole) == "fetch" && Tag(m, StrataRecTags.IoTarget) == "author_store" && Tag(m, StrataRecTags.Outcome) == "error");
         Assert.Single(capture.Of(StrataRecMetrics.Names.NodeOutcomes),
             m => Tag(m, StrataRecTags.Node) == "ctr_ranker" && Tag(m, StrataRecTags.Outcome) == "fallback");
-        Assert.Single(capture.Of(StrataRecMetrics.Names.ModelFallbacks), m => Tag(m, StrataRecTags.IoTarget) == "ctr_model");
         Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model"); // the model was never called
         Assert.Single(capture.Of(StrataRecMetrics.Names.RequestDegraded));
         Assert.Equal(Arms.Order(), capture.Of(StrataRecMetrics.Names.ArmRequestDegraded).Select(m => Tag(m, StrataRecTags.Arm)).Order());
@@ -342,7 +341,7 @@ public sealed class MetricsTests
     }
 
     /// <summary>
-    /// Makes the model or both candidate sources take a minute, longer than any test waits for them; with a 50 ms timeout
+    /// Makes the model or both recall services take a minute, longer than any test waits for them; with a 50 ms timeout
     /// of their own (in their bindings), or with none shorter than the request (the untimed sample's).
     /// </summary>
     internal static void SlowDown(string root, string what, bool tightTimeout)
@@ -558,6 +557,8 @@ public sealed class TracingTests
         var ranker = Assert.Single(spans.Stopped, s => s.OperationName == "ctr_ranker");
         Assert.Equal("fallback", ranker.GetTagItem(StrataRecTags.Outcome));
         Assert.Equal("ctr_backup", ranker.GetTagItem(StrataRecTags.Fallback));
+        Assert.Contains("ctr_model", Assert.IsType<string>(ranker.GetTagItem(StrataRecTags.OutcomeDetail))); // why it fell back: its model failed
+        Assert.Equal(ActivityStatusCode.Unset, ranker.Status); // the request succeeded: a fallback is no error
         Assert.Contains("exp_quality_weight", Triggered(ranker));
         var backup = plan.SelectFallback(plan.Timeline.Single(t => t.NodeId == "ctr_ranker").Select(plan.ArmsFromIds(MetricsTests.Arms))!, plan.ArmsFromIds(MetricsTests.Arms))!;
         Assert.Equal(backup.DefinitionHash, ranker.GetTagItem(StrataRecTags.FallbackVariant));

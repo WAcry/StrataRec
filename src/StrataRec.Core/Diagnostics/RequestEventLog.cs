@@ -11,7 +11,7 @@ public enum RequestEvent : byte
 {
     /// <summary>
     /// The request stopped waiting for a call of an external dependency; subject: its role and name
-    /// (<see cref="IoTarget"/>), e.g. <c>model ctr_model</c>. A distributed cache's keys went to the connector.
+    /// (<see cref="IoTarget"/>), e.g. <c>model ctr_model</c>. A distributed cache's keys went on to what it caches.
     /// </summary>
     IoTimeout = 1,
 

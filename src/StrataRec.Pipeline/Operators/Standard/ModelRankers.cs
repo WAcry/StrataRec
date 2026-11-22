@@ -50,7 +50,7 @@ public sealed class PairwiseRankerConfig : ModelCallConfig
 /// [0, 1] fails the node rather than being clamped: a model that returns logits would otherwise rank by noise. The
 /// window is reordered by score (ties by <c>entity_id</c>); rows after it keep their order.</para>
 /// <para>Calls are recorded and replayed by the digest of each whole call (no per-row keys), since an output belongs to
-/// a pair, not a row. <see cref="StrataRecMetrics.ModelPairs"/> counts the pairs sent.</para>
+/// a pair, not a row. Each call's pairs are its rows: <c>stratarec.io.keys</c> of the model counts them, per call sent.</para>
 /// </remarks>
 public sealed class PairwiseRankerFactory : IOperatorFactory
 {
@@ -127,8 +127,6 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
     {
         public override IReadOnlyDictionary<string, string> NamedInputs => call.NamedInputs;
 
-        public override IoTarget ModelTarget => call.Target;
-
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
             var total = context.LiveRows.Length;
@@ -185,11 +183,6 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
 
                 writers[b] = new ServiceResponse(memory);
                 calls[b] = call.InvokeAsync(context, version, named, count, writers[b], ReadOnlySpan<int>.Empty);
-            }
-
-            if (StrataRecMetrics.ModelPairs.Enabled && !context.Replays)
-            {
-                StrataRecMetrics.ModelPairs.Add(pairs, call.Target.Tags);
             }
 
             // Each wait is bounded by the model's timeout and the node's budget; a batch that failed or was cut off is never
@@ -338,8 +331,6 @@ public sealed class ListwiseRerankerFactory : IOperatorFactory
     private sealed class ListwiseReranker(CompiledModelCall call, string output, int window, OutputColumn? scoreCol) : Operator
     {
         public override IReadOnlyDictionary<string, string> NamedInputs => call.NamedInputs;
-
-        public override IoTarget ModelTarget => call.Target;
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {

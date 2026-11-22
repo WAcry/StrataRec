@@ -151,8 +151,6 @@ public sealed class LlmRerankerFactory : IOperatorFactory
         private readonly KeyValuePair<string, object?>[] _unknown = LlmNode.Tags(model, "unknown");
         private readonly KeyValuePair<string, object?>[] _repeated = LlmNode.Tags(model, "repeated");
 
-        public override IoTarget ModelTarget => model.Target;
-
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
             var total = context.LiveRows.Length;
@@ -259,7 +257,7 @@ public static class LlmRegistration
 {
     /// <summary>
     /// Adds the generative operators (<c>LlmReranker@1</c>, <c>LlmAnnotator@1</c>, <c>GenerativeRetriever@1</c>) to the
-    /// operators a host's plans may use; their stand-in model client <c>fixed_text@1</c> is in the default model client
+    /// operators a host's plans may use; their stand-in service client <c>fixed_text@1</c> is in the default binding
     /// registry already.
     /// </summary>
     public static OperatorRegistry AddLlm(this OperatorRegistry registry)

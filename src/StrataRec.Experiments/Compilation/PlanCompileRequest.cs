@@ -92,8 +92,8 @@ public sealed class PlanCompilation
 
     /// <summary>
     /// What the compiled configuration needs of a binary (design 10.4), sorted: the operator of every node it compiled
-    /// and the types of the bindings it bound (model and candidate-source clients, the connector, bootstrap source and
-    /// distributed store of every feature source it reads). Every arm's included; <see cref="PlanCompiler.Requirements"/>
+    /// and the types of the bindings it bound (the client and distributed cache store of every service it calls, the
+    /// connector, update source and distributed store of every feature source it reads). Every arm's included; <see cref="PlanCompiler.Requirements"/>
     /// tells the baseline's from each experiment's.
     /// </summary>
     public IReadOnlyList<string> Requires { get; init; } = Array.Empty<string>();

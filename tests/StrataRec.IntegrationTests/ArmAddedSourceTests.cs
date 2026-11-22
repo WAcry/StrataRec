@@ -81,7 +81,7 @@ public sealed class ArmAddedSourceTests
         Assert.Equal(("RECALL_SOURCE_ORDER", "/nodes/recall/config/source_order/2"), (error.Code, error.Pointer));
     }
 
-    /// <summary>The sample with a third candidate source, <c>aaa</c>, bound in the environment.</summary>
+    /// <summary>The sample with a third recall service, <c>aaa</c>, bound in the environment.</summary>
     private static HomeFeedTestHost Host() => HomeFeedTestHost.LoadModified(root =>
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");

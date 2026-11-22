@@ -38,13 +38,17 @@ public static class StrataRecTags
 
     public const string Node = "stratarec.node";
 
-    /// <summary>Feature source name from the bindings, on what the feature runtime measures of a source (values, tables, caches).</summary>
+    /// <summary>
+    /// Feature source name from the bindings, on what the feature runtime measures of a source (values, tables, caches);
+    /// a service's name on its cache's metrics (with <c>stratarec.entity</c> = <c>answers</c>).
+    /// </summary>
     public const string Source = "stratarec.source";
 
     /// <summary>
     /// What a call of an external dependency is for (<see cref="IoRoles"/>): <c>fetch</c>, <c>cache</c>, <c>recall</c>,
-    /// <c>model</c>, or an extension's own; with <see cref="IoTarget"/> on <c>stratarec.io.duration</c>, <c>errors</c> and
-    /// <c>keys</c>, and on the metrics of what a model call reported (<c>stratarec.model.*</c>).
+    /// <c>model</c>, <c>assignment</c>, or an extension's own (the sample's filter calls in <c>filter</c>); with
+    /// <see cref="IoTarget"/> on <c>stratarec.io.duration</c>, <c>errors</c> and <c>keys</c>, and on the metrics of what a
+    /// generative service reported (<c>stratarec.model.*</c>).
     /// </summary>
     public const string IoRole = "stratarec.io.role";
 
@@ -91,7 +95,14 @@ public static class StrataRecTags
     /// <summary>Content hash of the selected node variant's merged definition (design 12.3).</summary>
     public const string Variant = "stratarec.node.variant";
 
+    /// <summary>On a node span: the fallback node that served the position.</summary>
     public const string Fallback = "stratarec.node.fallback";
+
+    /// <summary>
+    /// On a node span: why the node did not simply succeed, as the debug trace says it (<c>NodeOutcome.Detail</c>): what
+    /// failed when it fell back, was degraded or failed, why it was skipped. Only a failure also sets the span's status.
+    /// </summary>
+    public const string OutcomeDetail = "stratarec.outcome.detail";
 
     /// <summary>Content hash of the fallback node variant that served (design 12.3).</summary>
     public const string FallbackVariant = "stratarec.node.fallback.variant";

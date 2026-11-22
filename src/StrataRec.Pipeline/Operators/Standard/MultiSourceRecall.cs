@@ -25,7 +25,7 @@ public sealed class MultiSourceRecallConfig
     public List<string>? SourceOrder { get; init; }
 
     /// <summary>
-    /// Per source, the values its query carries besides the request's inputs (design 5.4): value name → a request-level
+    /// Per source, the values its query sends, its call's only inputs (design 5.4): value name → a request-level
     /// expression over <c>ctx.*</c> and <c>param.*</c>, such as <c>{ "two_tower": { "user_embedding": "ctx.user.embedding" } }</c>
     /// for a two-tower service that needs the user's features to retrieve. A source waits for the context features its own
     /// query reads and for nothing else: one without a query starts at once, one reading the user's embedding as soon as
@@ -46,9 +46,9 @@ public sealed class MultiSourceRecallConfig
 /// experiment's arm gives a quota has none without that arm, and takes no bit there, as in a compile without it.
 /// </summary>
 /// <remarks>
-/// A source gets the request's inputs and, when the node gives it a query (<see cref="MultiSourceRecallConfig.Queries"/>),
-/// the query's values, evaluated from the request's context: a two-tower service the user's embedding or features
-/// (design 5.4). The features a query reads are not filled before the node runs, as a node's reads are: each source with
+/// A source sees only what its call sends: when the node gives it a query (<see cref="MultiSourceRecallConfig.Queries"/>),
+/// the query's values, evaluated from the request's context (a two-tower service the user's embedding or features, a
+/// request field such as <c>ctx.request.region</c>); without one, no inputs (design 5.4). The features a query reads are not filled before the node runs, as a node's reads are: each source with
 /// a query is sent once its own features are stored (they were prefetched when the request started), so the sources
 /// without one start at once and a slow user feature delays only the sources that read it. A source whose query reads a
 /// feature that failed is not sent, and counts as a failed source.

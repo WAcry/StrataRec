@@ -37,8 +37,8 @@ namespace StrataRec.Core.Bindings;
 /// reads files, connects and resolves its secrets (the <see cref="Bindings.SecretReference"/> members of its settings).
 /// The engine calls it at most once, on the thread pool, bounded and cancellable, and serves no plan with the instance
 /// before it completed. Nothing on the request path waits for I/O the load could have done.</para>
-/// <para><b>Calls.</b> The request calls (<c>InvokeAsync</c>, <c>FetchAsync</c>, <c>RetrieveAsync</c>) and model
-/// signature lookups come only after the load completed; signature lookups run on the thread pool, bounded by the load's
+/// <para><b>Calls.</b> The request calls (a service's <c>CallAsync</c>, a connector's <c>FetchAsync</c>, a cache
+/// store's reads and writes) and service signature lookups (<c>DescribeAsync</c>) come only after the load completed; signature lookups run on the thread pool, bounded by the load's
 /// timeout. The engine may stop waiting for a call at its timeout and cancel its token; the instance stays alive until
 /// the call has returned, so a call that ignores its token only delays the disposal. When the engine cancels a load or
 /// the signature lookups, it also waits for the callbacks registered on that token to run; a request call should not

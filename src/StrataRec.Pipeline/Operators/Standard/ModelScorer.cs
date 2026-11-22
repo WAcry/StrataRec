@@ -100,8 +100,6 @@ public sealed class ModelScorerFactory : IOperatorFactory
     {
         public override IReadOnlyDictionary<string, string> NamedInputs => call.NamedInputs;
 
-        public override IoTarget ModelTarget => call.Target;
-
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
             var n = context.LiveRows.Length;

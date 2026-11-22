@@ -9,10 +9,11 @@ using StrataRec.Features.Cache;
 namespace StrataRec.Redis;
 
 /// <summary>
-/// <c>redis@1</c>: the distributed tier of <c>cache</c> sources in Redis (design 6.6 <c>cache</c>, tier 2), through
-/// StackExchange.Redis. One string value per (source, entity, key) under
+/// <c>redis@1</c>: the distributed tier of <c>cache</c> sources and of services' caches in Redis (design 6.6 <c>cache</c>,
+/// tier 2), through StackExchange.Redis. One string value per (source, entity, key) under
 /// <c>{key_prefix}{source}:{entity}:{key}</c> (the key's text, <see cref="CacheKeyspace.KeyText"/>: <c>10042</c>, or
-/// <c>10042:US</c> for a key of two parts), holding the engine's encoded record, with the time to live the engine
+/// <c>10042:US</c> for a key of two parts; a service's answers are under <c>{key_prefix}{service}:answers:</c> and the
+/// two halves of their hash), holding the engine's encoded record, with the time to live the engine
 /// gives (the record's lifetime and its <c>stale_if_error_ms</c> window).
 /// </summary>
 /// <remarks>
@@ -21,13 +22,13 @@ namespace StrataRec.Redis;
 /// <c>MGET</c> cannot span hash slots, pipelined <c>GET</c>s, sent together. A write is one pipelined batch of
 /// <c>SET … PX</c>. Keys are not hash-tagged, so a keyspace spreads over the cluster's shards.</para>
 /// <para><b>Failing fast.</b> The connection is made at load, but a server that is down then does not fail the load: the
-/// tier is an optimisation, so the plan serves from the connector while the client reconnects in the background, and
+/// tier is an optimisation, so the plan serves from the connector (or the service) while the client reconnects in the background, and
 /// commands sent while it is disconnected fail at once rather than queue. Credentials the server refuses (a wrong password
 /// or user, or none where the server requires one) and a missing secret do fail the load: they are a wrong setting, which
 /// reconnecting does not fix (<see cref="LoadAsync"/> says how they are told apart). A server that accepts connections
 /// and does not answer holds a load up to three connect timeouts of 2 s. Commands time out after one second; the engine
 /// stops waiting for a read much earlier (the tier's <c>timeout_ms</c>), and a read that throws or is late sends its keys
-/// to the connector.</para>
+/// to the connector (or the service).</para>
 /// </remarks>
 public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
 {

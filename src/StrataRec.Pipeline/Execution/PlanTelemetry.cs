@@ -43,14 +43,12 @@ internal sealed class PlanTelemetry
             string subject,
             KeyValuePair<string, object?>[] tags,
             KeyValuePair<string, object?>[][] outcomes,
-            KeyValuePair<string, object?>[][] outputs,
-            KeyValuePair<string, object?>[]? model)
+            KeyValuePair<string, object?>[][] outputs)
         {
             Subject = subject;
             Tags = tags;
             Outcomes = outcomes;
             Outputs = outputs;
-            Model = model;
         }
 
         /// <summary><c>pipeline/node</c>, the subject of windowed failure summaries.</summary>
@@ -65,9 +63,6 @@ internal sealed class PlanTelemetry
         /// <summary>Per entry of <see cref="CompiledNode.Outputs"/>: the node tags plus <c>stratarec.column</c>.</summary>
         public KeyValuePair<string, object?>[][] Outputs { get; }
 
-        /// <summary>The model call tags (<c>stratarec.io.role</c> = <c>model</c>, <c>stratarec.io.target</c>) of model-calling nodes, whose fallbacks are also counted per model.</summary>
-        public KeyValuePair<string, object?>[]? Model { get; }
-
         public static NodeTelemetry Create(string pipeline, CompiledNode node)
         {
             KeyValuePair<string, object?>[] tags = [new(StrataRecTags.Pipeline, pipeline), new(StrataRecTags.Node, node.NodeId)];
@@ -77,11 +72,11 @@ internal sealed class PlanTelemetry
                 outcomes[i] = [tags[0], tags[1], new(StrataRecTags.Outcome, NodeOutcomeNames.Name((NodeOutcomeKind)i))];
             }
 
-            return new NodeTelemetry(pipeline + "/" + node.NodeId, tags, outcomes, OutputTags(tags, node), node.Operator.ModelTarget?.Tags);
+            return new NodeTelemetry(pipeline + "/" + node.NodeId, tags, outcomes, OutputTags(tags, node));
         }
 
         public NodeTelemetry WithOutputs(CompiledNode node) =>
-            new(Subject, Tags, Outcomes, OutputTags(Tags, node), node.Operator.ModelTarget?.Tags);
+            new(Subject, Tags, Outcomes, OutputTags(Tags, node));
 
         private static KeyValuePair<string, object?>[][] OutputTags(KeyValuePair<string, object?>[] tags, CompiledNode node)
         {

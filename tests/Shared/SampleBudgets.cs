@@ -28,7 +28,7 @@ internal static class SampleBudgets
 
     /// <summary>
     /// Raises every budget in the configuration of the sample copy at <paramref name="root"/> to <see cref="UntimedMs"/>:
-    /// each <c>timeout_ms</c> (nodes and experiment patches of them, feature sources, models, candidate sources) and each
+    /// each <c>timeout_ms</c> (nodes and experiment patches of them, feature sources, services) and each
     /// <c>deadline_ms</c> (the request files). <c>on_failure</c> and everything else stay as written. The numbers are
     /// replaced in the text, so comments and layout stay and tests can go on editing the copy as text.
     /// </summary>

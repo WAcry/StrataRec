@@ -62,10 +62,10 @@ public sealed class BindingSpec
     /// <summary>The bindings artifact, e.g. <c>bindings:local</c>.</summary>
     public string Artifact { get; }
 
-    /// <summary>The binding's pointer in <see cref="Artifact"/>, e.g. <c>/models/ctr_backup</c>.</summary>
+    /// <summary>The binding's pointer in <see cref="Artifact"/>, e.g. <c>/services/ctr_backup</c>.</summary>
     public string Pointer { get; }
 
-    /// <summary>How messages name the instance, e.g. <c>model 'ctr_backup' (linear@1)</c>.</summary>
+    /// <summary>How messages name the instance, e.g. <c>service 'ctr_backup' (linear@1)</c>.</summary>
     public string Label => Kind.Noun() + $" '{Name}' ({Type})";
 
     /// <summary>

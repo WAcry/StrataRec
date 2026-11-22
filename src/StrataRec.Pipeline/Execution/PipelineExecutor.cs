@@ -1047,10 +1047,6 @@ internal sealed class PipelineExecutor
         if (category == NodeOutcomeKind.Fallback)
         {
             state.Events?.Report(RequestEvent.NodeFallback, telemetry.Subject, state.RequestId, detail);
-            if (telemetry.Model is { } model)
-            {
-                StrataRecMetrics.ModelFallbacks.Add(1, model);
-            }
         }
         else if (category == NodeOutcomeKind.Failed)
         {
@@ -1065,6 +1061,11 @@ internal sealed class PipelineExecutor
             if (producedBy is not null && producedBy != node.NodeId)
             {
                 span.SetTag(StrataRecTags.Fallback, producedBy);
+            }
+
+            if (detail is not null)
+            {
+                span.SetTag(StrataRecTags.OutcomeDetail, detail);
             }
 
             if (category == NodeOutcomeKind.Failed)

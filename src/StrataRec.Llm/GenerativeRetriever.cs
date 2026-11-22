@@ -152,8 +152,6 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
         private readonly KeyValuePair<string, object?>[] _present = LlmNode.Tags(model, "present");
         private readonly KeyValuePair<string, object?>[] _overLimit = LlmNode.Tags(model, "over_limit");
 
-        public override IoTarget ModelTarget => model.Target;
-
         public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => maxItems;
 
         public override async ValueTask ExecuteAsync(OperatorContext context)

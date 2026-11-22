@@ -56,8 +56,6 @@ public static class StrataRecMetrics
         public const string CacheKeys = "stratarec.cache.keys";
         public const string CacheWrites = "stratarec.cache.writes";
         public const string CacheEvictions = "stratarec.cache.evictions";
-        public const string ModelFallbacks = "stratarec.model.fallbacks";
-        public const string ModelPairs = "stratarec.model.pairs";
         public const string IoOutputTokens = "stratarec.io.output_tokens";
         public const string IoTruncated = "stratarec.io.truncated";
         public const string ModelAnswerIds = "stratarec.model.answer_ids";
@@ -157,11 +155,17 @@ public static class StrataRecMetrics
     public static readonly Counter<long> IoErrors = Meter.CreateCounter<long>(Names.IoErrors, "{call}", "Failed calls of external dependencies.");
 
     /// <summary>
-    /// Keys per keyed call sent (feature connectors, distributed caches, service calls about items). Tags:
+    /// What a call sent, per call made, whatever its outcome but the caller's cancellation (a call that failed or timed out
+    /// sent it all the same): the
+    /// keys of a feature connector's chunk or a distributed cache read, and the rows of a service call about rows, its
+    /// <c>BatchSize</c> (the items a model scores or a filter checks, the pairs a pairwise model compares, 1 for a listwise
+    /// call's list or a generative call's prompt; a cache sends and counts only the items it missed). The sum is the load a
+    /// dependency takes, the cost that a pairwise window's square drives (design 5.9). Calls about no rows (a recall, a
+    /// feature service's) are not counted. Tags:
     /// <c>stratarec.io.role</c>, <c>stratarec.io.target</c>.
     /// </summary>
     public static readonly Histogram<long> IoKeys = Meter.CreateHistogram<long>(Names.IoKeys, "{key}",
-        "Keys per call of an external dependency.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = CountBuckets });
+        "Keys or rows per call of an external dependency.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = CountBuckets });
 
     /// <summary>
     /// Cancellations of a token the framework handed to code it does not own (at a deadline or a timeout, of an abandoned
@@ -264,47 +268,39 @@ public static class StrataRecMetrics
     /// </summary>
     public static readonly Gauge<double> LocalLoadLastSuccess = Meter.CreateGauge<double>(Names.LocalLoadLastSuccess, "s", "Unix time of the last complete load or checkpoint of local feature tables.");
 
-    // Cache sources (design 6.6 cache): an in-process table (tier local) and optionally a distributed cache (tier
-    // distributed) in front of the connector. Tagged stratarec.source, stratarec.entity and stratarec.cache.tier.
+    // Caches (design 6.6 cache): an in-process table (tier local) and optionally a distributed cache (tier distributed)
+    // in front of a cache source's connector, or of a service's client. Tagged stratarec.source, stratarec.entity and
+    // stratarec.cache.tier; a service's cache with the service's name and stratarec.entity = answers.
 
     /// <summary>
-    /// Keys a request read from a tier of a <c>cache</c> source, by what the tier had. Tags: <c>stratarec.source</c>,
+    /// Keys a request read from a tier of a <c>cache</c> source or a service's cache (its items, or its whole call), by what the tier had. Tags: <c>stratarec.source</c>,
     /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c> = <c>local</c> | <c>distributed</c>, <c>stratarec.outcome</c> =
     /// <c>hit</c> (served, within its TTL) | <c>miss</c> (no record) | <c>expired</c> (a record past its TTL, so the key went
-    /// on) | <c>stale</c> (an expired record served because the connector failed) | <c>mismatch</c> (distributed only: a
+    /// on) | <c>stale</c> (an expired record served because the connector or the service failed) | <c>mismatch</c> (distributed only: a
     /// record of another field set or format, e.g. written by an instance on another catalog version) | <c>error</c>
-    /// (distributed only: the read failed or timed out, so the key went to the connector). A key goes on to the next tier
-    /// on <c>miss</c>, <c>expired</c>, <c>mismatch</c> and <c>error</c>; the connector's calls are counted as a fetch's.
+    /// (distributed only: the read failed or timed out, so the key went on). A key goes on to the next tier, then to the
+    /// connector or the service, on <c>miss</c>, <c>expired</c>, <c>mismatch</c> and <c>error</c>; those calls are counted
+    /// as the connector's or the service's.
     /// The local hit ratio is <c>hit / (hit + miss + expired)</c> of tier <c>local</c>.
     /// </summary>
-    public static readonly Counter<long> CacheKeys = Meter.CreateCounter<long>(Names.CacheKeys, "{key}", "Keys read from the tiers of cache sources, by outcome.");
+    public static readonly Counter<long> CacheKeys = Meter.CreateCounter<long>(Names.CacheKeys, "{key}", "Keys read from the tiers of caches, by outcome.");
 
     /// <summary>
-    /// Records written back to a tier of a <c>cache</c> source, off the request path. Tags: <c>stratarec.source</c>,
+    /// Records written back to a tier of a <c>cache</c> source or a service's cache, off the request path. Tags: <c>stratarec.source</c>,
     /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c>, <c>stratarec.outcome</c> = <c>written</c> | <c>dropped</c> (the
     /// tier's bounded write queue was full; the key is fetched again on its next miss) | <c>failed</c> (the write failed: a
     /// distributed write that errored or timed out, a local write that did not fit <c>max_bytes</c> even after eviction).
     /// </summary>
-    public static readonly Counter<long> CacheWrites = Meter.CreateCounter<long>(Names.CacheWrites, "{record}", "Records written back to the tiers of cache sources, by outcome.");
+    public static readonly Counter<long> CacheWrites = Meter.CreateCounter<long>(Names.CacheWrites, "{record}", "Records written back to the tiers of caches, by outcome.");
 
     /// <summary>
-    /// Records a <c>cache</c> source's in-process table dropped to stay within <c>max_bytes</c>. Tags: <c>stratarec.source</c>,
+    /// Records the in-process table of a <c>cache</c> source or a service's cache dropped to stay within <c>max_bytes</c>. Tags: <c>stratarec.source</c>,
     /// <c>stratarec.entity</c>, <c>stratarec.outcome</c> = <c>expired</c> (past their TTL and stale-if-error window, dropped
     /// first) | <c>oldest</c> (still usable, but written longest ago).
     /// </summary>
-    public static readonly Counter<long> CacheEvictions = Meter.CreateCounter<long>(Names.CacheEvictions, "{record}", "Records evicted from the in-process tables of cache sources.");
+    public static readonly Counter<long> CacheEvictions = Meter.CreateCounter<long>(Names.CacheEvictions, "{record}", "Records evicted from the in-process tables of caches.");
 
-    // Model calls: one per batch.
-
-    /// <summary>Model nodes served by their fallback node. Tags: <c>stratarec.io.role</c> = <c>model</c>, <c>stratarec.io.target</c>.</summary>
-    public static readonly Counter<long> ModelFallbacks = Meter.CreateCounter<long>(Names.ModelFallbacks, "{node}", "Model nodes served by their fallback.");
-
-    /// <summary>
-    /// Pairs of rows a pairwise operator (<c>PairwiseRanker@1</c>) sent to its model, one add per node run: the cost that
-    /// grows with the square of the window (design 5.9). Counted only while a listener is enabled, and never in a replay,
-    /// which is not traffic (design 13.4). Tags: <c>stratarec.io.role</c> = <c>model</c>, <c>stratarec.io.target</c>.
-    /// </summary>
-    public static readonly Counter<long> ModelPairs = Meter.CreateCounter<long>(Names.ModelPairs, "{pair}", "Pairs of rows sent to pairwise models.");
+    // What generative services report, and what their operators made of it.
 
     /// <summary>
     /// Tokens generative services produced, as their clients report them (<c>ServiceStatus.OutputTokens</c>; a call whose

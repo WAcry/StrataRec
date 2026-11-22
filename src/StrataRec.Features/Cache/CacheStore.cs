@@ -122,8 +122,9 @@ public sealed class CacheKeyspace
 public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> Record, TimeSpan TimeToLive);
 
 /// <summary>
-/// A distributed cache shared by a service's instances (design 6.6 <c>cache</c>, tier 2): the engine reads it for the keys
-/// its in-process table misses, before the connector, and writes back what the connector returned. Records are opaque
+/// A distributed cache shared by a deployment's instances (design 6.6 <c>cache</c>, tier 2), of a feature source in mode
+/// <c>cache</c> or of a service with a <c>cache</c>: the engine reads it for the keys its in-process table misses, before
+/// the connector or the service's client, and writes back what they returned. Records are opaque
 /// bytes the engine encodes (with their write time and a fingerprint of the field set); the store only moves them.
 /// <c>redis@1</c> (package StrataRec.Redis) is one; a host can plug in another distributed cache.
 /// </summary>
@@ -131,8 +132,8 @@ public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> R
 /// <para>A store is a binding instance: the whole lifetime contract (create, share, load, dispose) is on
 /// <see cref="BindingContext"/>. Connect in <see cref="ILoadable.LoadAsync"/>, release the connection when disposed.</para>
 /// <para>The store is only an optimisation. A read that throws, or that the engine stops waiting for (the store's
-/// <c>timeout_ms</c>, the source's budget, the request's deadline), sends its keys to the connector; a write that fails is
-/// counted and forgotten. So a store needs no retries of its own and should fail fast.</para>
+/// <c>timeout_ms</c>, the fetch's or the call's bound, the request's deadline), sends its keys on to the connector or
+/// the client; a write that fails is counted and forgotten. So a store needs no retries of its own and should fail fast.</para>
 /// <para>Implementations must be thread-safe: every request of every plan sharing the instance reads it concurrently.</para>
 /// </remarks>
 public interface ICacheStore

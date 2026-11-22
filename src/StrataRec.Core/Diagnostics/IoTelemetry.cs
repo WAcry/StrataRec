@@ -13,7 +13,11 @@ public static class IoRoles
     /// <summary>Features from a feature source's connector (design 6.5), per <c>max_batch</c> chunk.</summary>
     public const string Fetch = "fetch";
 
-    /// <summary>A read of the distributed cache of a feature source bound with mode <c>cache</c> (design 6.6), before its connector.</summary>
+    /// <summary>
+    /// A read of a distributed cache (design 6.6 tier 2), before what it caches is asked: of a feature source bound with mode
+    /// <c>cache</c>, before its connector, or of a service bound with a <c>cache</c>, before its client; the target is the
+    /// source's or the service's name.
+    /// </summary>
     public const string Cache = "cache";
 
     /// <summary>Candidates from a service, per recall call.</summary>

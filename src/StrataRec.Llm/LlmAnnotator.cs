@@ -213,8 +213,6 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
         private readonly KeyValuePair<string, object?>[] _unusable = LlmNode.Tags(model, "unusable");
         private readonly KeyValuePair<string, object?>[] _failed = LlmNode.Tags(model, "failed");
 
-        public override IoTarget ModelTarget => model.Target;
-
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
             var n = Math.Min(window, context.LiveRows.Length);

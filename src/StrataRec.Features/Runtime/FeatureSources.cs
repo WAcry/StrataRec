@@ -127,7 +127,7 @@ public sealed class CacheSupply
     /// </summary>
     internal int[] MemberOfTableField { get; }
 
-    /// <summary>Metric tags and span name of the distributed tier's reads (source kind <c>feature_cache</c>), built with the plan.</summary>
+    /// <summary>Metric tags and span name of the distributed tier's reads (role <c>cache</c>, target the source), built with the plan.</summary>
     public IoTarget Io { get; }
 }
 

@@ -21,7 +21,7 @@ public interface ILoadable
 
 /// <summary>
 /// A binding's settings are wrong, or its instance failed to load: where (a JSON pointer within the binding), why, and
-/// how to fix it. The engine reports it at the binding, e.g. <c>bindings:prod /models/ctr_backup/uri</c>.
+/// how to fix it. The engine reports it at the binding, e.g. <c>bindings:prod /services/ctr_backup/uri</c>.
 /// </summary>
 public sealed class BindingException : Exception
 {

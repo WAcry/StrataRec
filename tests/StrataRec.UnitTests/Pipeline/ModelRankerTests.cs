@@ -703,12 +703,16 @@ public sealed class ModelRankerTests
     }
 }
 
-/// <summary><c>stratarec.model.pairs</c>: the pairs a pairwise node sends, tagged with the model.</summary>
+/// <summary>
+/// The pairs a pairwise node sends are the rows of its calls: <c>stratarec.io.keys</c> of the model counts each call's,
+/// failed calls too, as every service call's rows (they replaced <c>stratarec.model.pairs</c>, which counted the node's
+/// pairs once a run, those a cache answered included).
+/// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class ModelPairsMetricTests
 {
     [Fact]
-    public async Task ThePairsSent_AreCounted_OncePerRun_TaggedWithTheModel()
+    public async Task ThePairsSent_AreTheRowsOfEachCall_TaggedWithTheModel()
     {
         var plan = ModelRankerTests.Compile(new ModelRankerTests.TestModels(
                 _ => new ServiceSignature(new[] { new TensorSpec("id", TensorElementType.Int64, new[] { -1, 2 }) }, new[] { new TensorSpec("p", TensorElementType.Float32, new[] { -1 }) }),
@@ -718,7 +722,7 @@ public sealed class ModelPairsMetricTests
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == StrataRecTelemetry.Name && instrument.Name == StrataRecMetrics.Names.ModelPairs)
+            if (instrument.Meter.Name == StrataRecTelemetry.Name && instrument.Name == StrataRecMetrics.Names.IoKeys)
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -745,7 +749,8 @@ public sealed class ModelPairsMetricTests
 
         lock (measured)
         {
-            Assert.Equal(new[] { (10L, (string?)"m") }, measured);
+            // Ten pairs of a window of five, in the fewest calls of at most three.
+            Assert.Equal(new[] { (3L, (string?)"m"), (3L, "m"), (3L, "m"), (1L, "m") }, measured.OrderByDescending(m => m.Value));
         }
     }
 }
