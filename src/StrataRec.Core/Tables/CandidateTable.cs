@@ -392,7 +392,8 @@ public sealed class CandidateTable
     /// <summary>Copies aside the keys of the rows the coming Compact releases (every physical row not alive).</summary>
     private void RecordReleasedKeys()
     {
-        // Every released key was appended once and never rolled back, so all of them together fit in Capacity.
+        // Every released row was appended once and never rolled back, so all of them together fit in Capacity (a key
+        // brought back has a row for each time it was appended, and is copied once for each).
         var rows = Rows;
         if (KeyType == EntityKeyType.Int64)
         {
@@ -428,7 +429,10 @@ public sealed class CandidateTable
             var ids = Int64Ids;
             for (var r = _indexedRows; r < PhysicalRowCount; r++)
             {
-                index.Set(ids[r], r);
+                if (!index.TryAdd(ids[r], r))
+                {
+                    index.TryReplace(ids[r], r); // a dropped key brought back: found at its new row
+                }
             }
         }
         else
@@ -436,7 +440,11 @@ public sealed class CandidateTable
             var ids = StringIds;
             for (var r = _indexedRows; r < PhysicalRowCount; r++)
             {
-                index.Set(ids.Get(r), r);
+                var key = ids.Get(r);
+                if (!index.TryAdd(key, r))
+                {
+                    index.TryReplace(key, r);
+                }
             }
         }
 

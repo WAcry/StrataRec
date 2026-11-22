@@ -203,6 +203,64 @@ public sealed class EntityKeyIndex
     }
 
     /// <summary>
+    /// Gives <paramref name="key"/> the value <paramref name="value"/> when the index holds it; returns false, adding
+    /// nothing, when it does not. Its place in insertion order is kept. Probes as <see cref="TryGetValue(long, out int)"/>
+    /// does, so a caller that adds keys and only rarely replaces one (<see cref="Tables.CandidateTable.FindRow"/>) adds
+    /// with <see cref="TryAdd(long, int)"/> and replaces when that finds the key, without slowing the adding.
+    /// </summary>
+    public bool TryReplace(long key, int value)
+    {
+        if (!_stringKeys)
+        {
+            var slots = _slots;
+            var keys = _int64Keys;
+            for (var s = Slot((ulong)key); ; s = (s + 1) & _slotMask)
+            {
+                var entry = slots[s] - 1;
+                if (entry < 0)
+                {
+                    break;
+                }
+
+                if (keys[entry] == key)
+                {
+                    _values[entry] = value;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <inheritdoc cref="TryReplace(long, int)"/>
+    public bool TryReplace(string key, int value)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (_stringKeys)
+        {
+            var hash = key.GetHashCode();
+            var slots = _slots;
+            for (var s = Slot((uint)hash); ; s = (s + 1) & _slotMask)
+            {
+                var entry = slots[s] - 1;
+                if (entry < 0)
+                {
+                    break;
+                }
+
+                if (_hashes[entry] == hash && string.Equals(_strings[entry], key))
+                {
+                    _values[entry] = value;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Returns the value of <paramref name="key"/>, adding it with <paramref name="value"/> first when it is absent —
     /// one probe sequence for both. Throws when the key's type is not <see cref="KeyType"/>.
     /// </summary>
@@ -211,44 +269,6 @@ public sealed class EntityKeyIndex
 
     /// <inheritdoc cref="GetOrAdd(in EntityKey, int, out bool)"/>
     public int GetOrAdd(long key, int value, out bool added)
-    {
-        var entry = EntryOf(key, value, out added); // first: it may grow the arrays
-        return _values[entry];
-    }
-
-    /// <inheritdoc cref="GetOrAdd(in EntityKey, int, out bool)"/>
-    public int GetOrAdd(string key, int value, out bool added)
-    {
-        var entry = EntryOf(key, value, out added); // first: it may grow the arrays
-        return _values[entry];
-    }
-
-    /// <summary>Adds the key with <paramref name="value"/>, or replaces the value of the key it holds, which keeps its place in insertion order.</summary>
-    public void Set(long key, int value)
-    {
-        var entry = EntryOf(key, value, out var added);
-        if (!added)
-        {
-            _values[entry] = value;
-        }
-    }
-
-    /// <inheritdoc cref="Set(long, int)"/>
-    public void Set(string key, int value)
-    {
-        var entry = EntryOf(key, value, out var added);
-        if (!added)
-        {
-            _values[entry] = value;
-        }
-    }
-
-    /// <summary>
-    /// The key's entry, added with <paramref name="value"/> first when it is absent: one probe sequence for both. Inlined,
-    /// so <see cref="GetOrAdd(long, int, out bool)"/> (a recall merge, a fetch's key dedup) is the probe loop itself.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int EntryOf(long key, int value, out bool added)
     {
         RequireKeyType(EntityKeyType.Int64);
         var s = Slot((ulong)key);
@@ -263,7 +283,7 @@ public sealed class EntityKeyIndex
             if (_int64Keys[entry] == key)
             {
                 added = false;
-                return entry;
+                return _values[entry];
             }
         }
 
@@ -278,12 +298,11 @@ public sealed class EntityKeyIndex
         _values[e] = value;
         _slots[s] = e + 1;
         added = true;
-        return e;
+        return value;
     }
 
-    /// <inheritdoc cref="EntryOf(long, int, out bool)"/>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int EntryOf(string key, int value, out bool added)
+    /// <inheritdoc cref="GetOrAdd(in EntityKey, int, out bool)"/>
+    public int GetOrAdd(string key, int value, out bool added)
     {
         ArgumentNullException.ThrowIfNull(key);
         RequireKeyType(EntityKeyType.String);
@@ -300,7 +319,7 @@ public sealed class EntityKeyIndex
             if (_hashes[entry] == hash && string.Equals(_strings[entry], key))
             {
                 added = false;
-                return entry;
+                return _values[entry];
             }
         }
 
@@ -316,7 +335,7 @@ public sealed class EntityKeyIndex
         _values[e] = value;
         _slots[s] = e + 1;
         added = true;
-        return e;
+        return value;
     }
 
     /// <summary>

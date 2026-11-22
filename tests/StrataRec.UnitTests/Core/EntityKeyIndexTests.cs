@@ -59,17 +59,20 @@ public class EntityKeyIndexTests
     }
 
     [Fact]
-    public void Set_AddsAKey_OrReplacesItsValue_KeepingItsPlace()
+    public void TryReplace_ReplacesTheValueOfAKeyItHolds_KeepingItsPlace_AndAddsNothing()
     {
         var memory = new RequestMemory();
         var numbers = new EntityKeyIndex(EntityKeyType.Int64, 4, memory);
-        numbers.Set(7, 1);
-        numbers.Set(8, 2);
-        numbers.Set(7, 3);
+        numbers.TryAdd(7, 1);
+        numbers.TryAdd(8, 2);
+        Assert.True(numbers.TryReplace(7, 3));
+        Assert.False(numbers.TryReplace(9, 4));
+        Assert.False(numbers.TryReplace("7", 4)); // other key type
         var strings = new EntityKeyIndex(EntityKeyType.String, 4, memory);
-        strings.Set("a", 1);
-        strings.Set("b", 2);
-        strings.Set("a", 3);
+        strings.TryAdd("a", 1);
+        strings.TryAdd("b", 2);
+        Assert.True(strings.TryReplace("a", 3));
+        Assert.False(strings.TryReplace("c", 4));
 
         Assert.Equal((2, 3, 2), (numbers.Count, numbers.TryGetValue(7, out var seven) ? seven : -1, numbers.TryGetValue(8, out var eight) ? eight : -1));
         Assert.Equal(new long[] { 7, 8 }, numbers.Int64Keys.ToArray());
