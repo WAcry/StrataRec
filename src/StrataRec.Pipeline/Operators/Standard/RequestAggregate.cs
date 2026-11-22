@@ -168,6 +168,9 @@ public sealed class RequestAggregateFactory : IOperatorFactory
 
     private sealed class RequestAggregate(Value[] values) : Operator
     {
+        /// <summary>The largest integer every smaller one of which a double holds exactly: 2^53.</summary>
+        private const long MaxExact = 1L << 53;
+
         public override ValueTask ExecuteAsync(OperatorContext context)
         {
             var buffers = default(Buffers);
@@ -282,9 +285,11 @@ public sealed class RequestAggregateFactory : IOperatorFactory
                     return null;
                 case Function.Sum:
                     return ScalarValue.FromInt64((long)sum);
+                case Function.Mean when sum >= -MaxExact && sum <= MaxExact:
+                    return ScalarValue.FromFloat64((double)sum / count); // an exact sum, one division: correctly rounded
                 case Function.Mean:
-                    // The exact quotient, then the remainder's share: equal rows give their value, and a mean whose integer
-                    // part a double holds is off by at most the rounding of that share (the sum as a double was not).
+                    // Past 2^53 the sum as a double would be rounded first: the exact quotient, then the remainder's share,
+                    // within a unit in the last place, and equal rows give their value.
                     var (quotient, remainder) = Int128.DivRem(sum, count);
                     return ScalarValue.FromFloat64((double)quotient + (double)remainder / count);
                 default:

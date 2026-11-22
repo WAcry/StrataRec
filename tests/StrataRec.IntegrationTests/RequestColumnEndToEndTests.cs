@@ -290,6 +290,33 @@ public sealed class RequestColumnEndToEndTests
         Assert.Contains("'req.maybe'", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A tap only binding a request column (in a branch the optimizer drops) is checked with the arms that decide the tap,
+    /// not with every writer of the column (third review of 1102725): thirteen layers each declaring and writing one nullable
+    /// flow column, the first also adding the tap, are 8,192 combinations, and no rule needs the writers together.
+    /// </summary>
+    [Fact]
+    public void ATapOnlyBindingARequestColumn_IsNotCheckedWithEveryWriter()
+    {
+        var host = HomeFeedTestHost.Load();
+        var placements = new List<ExperimentPlacement>();
+        for (var i = 0; i < 13; i++)
+        {
+            var tap = i == 0
+                ? """, "log_taps": { "probe": { "group": "all", "attach": { "output": true }, "context": { "flag": "true ? 1 : (req.review.flow ?? 0)" } } }"""
+                : string.Empty;
+            placements.Add(Treatment("w" + i, $$"""
+                { "request_columns": { "review.flow": { "type": "int64?", "flow": true } },
+                  "nodes": { "count_{{i}}": { "order": {{600 + i}}, "op": "RequestAggregate@1", "config": { "values": { "review.flow": { "fn": "count" } } } } }{{tap}} }
+                """));
+        }
+
+        var unified = PlanCompiler.Compile(With(host.Request, placements), host.Environment);
+
+        Assert.True(unified.Succeeded, string.Join("\n", unified.Diagnostics));
+        Assert.DoesNotContain(unified.Diagnostics, d => d.Code == "COMBINATION_CHECK_LIMIT");
+    }
+
     public sealed class GateInputsConfig
     {
         public bool Left { get; init; }

@@ -1912,6 +1912,7 @@ public sealed class PlanBuilder
             var features = new SortedSet<int>();
             var contextFeatures = new SortedSet<int>();
             var requestReads = new SortedSet<int>();
+            var bindsArmDeclared = false; // a request column only an arm declares, bound but maybe not read
             foreach (var tap in variants)
             {
                 if (tap.AttachAfter is { } after)
@@ -1931,8 +1932,9 @@ public sealed class PlanBuilder
                     }
                     else if (name.Kind == SymbolKind.Context && schema.ContextFields[name.Id].Kind == ContextFieldKind.RequestColumn && conditional(name))
                     {
-                        // An arm's declaration, bound in a branch the optimizer may drop: the tap's arms decide where it is read.
-                        requestReads.Add(name.Id);
+                        // An arm's declaration, bound in a branch the optimizer may drop: whether it is declared is the tap's
+                        // arms' to decide, not its writers' (a read of it has its own scope below, with them).
+                        bindsArmDeclared = true;
                     }
                 }
 
@@ -1944,6 +1946,10 @@ public sealed class PlanBuilder
             if (attach.Count > 0)
             {
                 Scope($"tap '{tapId}' and where it attaches", pointer + "/attach/after", new SortedSet<string>(attach, StringComparer.Ordinal), tapId);
+            }
+            else if (bindsArmDeclared)
+            {
+                Scope($"the names tap '{tapId}' binds", pointer, new SortedSet<string>(StringComparer.Ordinal), tapId);
             }
 
             foreach (var feature in contextFeatures)
