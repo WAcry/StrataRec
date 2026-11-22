@@ -4,6 +4,7 @@ using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
 using StrataRec.Pipeline.Execution;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 using static StrataRec.IntegrationTests.CombinationLimitTests;
 
@@ -252,6 +253,65 @@ public sealed class RequestColumnEndToEndTests
         Assert.All(warned.Diagnostics.Where(d => d.Code.StartsWith("INTERACTION_", StringComparison.Ordinal)), d => Assert.Contains("'req.cand.flow'", d.Message));
         Assert.True(reviewed.Succeeded, string.Join("\n", reviewed.Diagnostics));
         Assert.Empty(reviewed.Diagnostics);
+    }
+
+    /// <summary>
+    /// A tap binding a request column only another layer's arm declares, in a branch the optimizer drops, is refused
+    /// where that arm is not assigned, also when the combinations are checked by scope (past the limit): the name decides
+    /// which combinations the tap is checked in (second review of 1102725). gate's named input reads the column only when
+    /// a and b both switch it on, and only the tap c adds compiles it (columns_from); d declares it.
+    /// </summary>
+    [Fact]
+    public void ATapBindingARequestColumnAnotherLayersArmDeclares_IsRejected_WhenCheckedByScope()
+    {
+        var host = HomeFeedTestHost.Load();
+        host.Request.Pipeline.Nodes["gate"] = new NodeSpec
+        {
+            Order = 850, Op = "GateInputs@1", Config = new System.Text.Json.Nodes.JsonObject { ["left"] = false, ["right"] = false },
+        };
+        var placements = new List<ExperimentPlacement>
+        {
+            Treatment("a", """{ "nodes": { "gate": { "config": { "left": true } } } }"""),
+            Treatment("b", """{ "nodes": { "gate": { "config": { "right": true } } } }"""),
+            Treatment("c", """{ "log_taps": { "probe": { "group": "all", "attach": { "output": true }, "columns_from": "gate.inputs" } } }"""),
+            Treatment("d", """{ "request_columns": { "maybe": { "type": "int64?" } } }"""),
+        };
+        placements.AddRange(Filters(10)); // 16,384 combinations, past the limit of 4,096; the tap's scope has three layers
+        var request = With(host.Request, placements);
+        var environment = new PlanEnvironment { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new GateInputsFactory()) };
+        Assert.Contains(PlanCompiler.CompileMerged(request, ["a/t", "b/t", "c/t"], environment).Diagnostics, d => d.IsError && d.Code == "EXPR_UNKNOWN_NAME");
+        Assert.True(PlanCompiler.CompileMerged(request, ["a/t", "b/t", "c/t", "d/t"], environment).Succeeded);
+
+        var unified = PlanCompiler.Compile(request, environment);
+
+        Assert.False(unified.Report.CombinationCheckExhaustive);
+        var error = Assert.Single(unified.Diagnostics, d => d.IsError);
+        Assert.Equal(("NAME_NOT_DECLARED", "/arms/t/log_taps/probe"), (error.Code, error.Pointer));
+        Assert.Contains("'req.maybe'", error.Message, StringComparison.Ordinal);
+    }
+
+    public sealed class GateInputsConfig
+    {
+        public bool Left { get; init; }
+
+        public bool Right { get; init; }
+    }
+
+    /// <summary><c>GateInputs@1</c>: names an input for taps (columns_from) that reads <c>req.maybe</c> only when both options are on.</summary>
+    private sealed class GateInputsFactory : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("GateInputs", 1, Effects.None, typeof(GateInputsConfig), "Names an input two options decide.");
+
+        public Operator? Compile(OperatorCompileContext context) => context.BindConfig<GateInputsConfig>() is { } config
+            ? new Gate(config.Left && config.Right ? "true ? 1 : (req.maybe ?? 0)" : "1")
+            : null;
+
+        private sealed class Gate(string source) : Operator
+        {
+            public override IReadOnlyDictionary<string, string> NamedInputs { get; } = new Dictionary<string, string> { ["feature"] = source };
+
+            public override ValueTask ExecuteAsync(OperatorContext context) => ValueTask.CompletedTask;
+        }
     }
 
     /// <summary>A request column the baseline declares is the same in every arm: an arm may not change or delete it.</summary>

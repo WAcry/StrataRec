@@ -1423,7 +1423,9 @@ public sealed class PlanBuilder
                 {
                     _diagnostics.Error("TAP_COLUMN_NOT_PRODUCED", artifact, "/log_taps/" + JsonPointer.Escape(tap.TapId),
                         $"Tap '{tap.TapId}' reads request column '{schema.ContextFields[id].Name}', which no node writes before {where}.",
-                        "attach the tap after a node that writes it, or to the output");
+                        tap.AttachOutput
+                            ? "keep a node that writes it in every arm combination with the tap"
+                            : "attach the tap after a node that writes it, or to the output");
                 }
             }
         }
@@ -1926,6 +1928,11 @@ public sealed class PlanBuilder
                     if (name.Kind == SymbolKind.Column && schema.Columns[name.Id].Kind == ColumnKind.Output && conditional(name))
                     {
                         reads.Add(name.Id);
+                    }
+                    else if (name.Kind == SymbolKind.Context && schema.ContextFields[name.Id].Kind == ContextFieldKind.RequestColumn && conditional(name))
+                    {
+                        // An arm's declaration, bound in a branch the optimizer may drop: the tap's arms decide where it is read.
+                        requestReads.Add(name.Id);
                     }
                 }
 

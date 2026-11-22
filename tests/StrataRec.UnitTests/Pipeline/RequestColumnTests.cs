@@ -204,6 +204,7 @@ public sealed class RequestColumnTests
     [InlineData("sum", "col.entity_id == 1 ? -9223372036854775807 - 1 : (col.entity_id == 2 ? -1 : 1)", "-9223372036854775808")]
     [InlineData("mean", "col.entity_id == 1 ? 9223372036854775807 : (col.entity_id == 2 ? -9223372036854775807 - 1 : 0)", "-0.3333333333333333")]
     [InlineData("sum", "col.entity_id == 3 ? 0 : 9223372036854775807", null)]
+    [InlineData("mean", "3002399751580331", "3002399751580331")] // the sum is past 2^53: as a double, the mean was off by 0.5
     public async Task IntegerSumsAndMeans_AreExact_UntilTheEnd(string fn, string of, string? expected)
     {
         var type = fn == "mean" ? "float64?" : "int64?";

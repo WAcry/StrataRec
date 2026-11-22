@@ -283,7 +283,10 @@ public sealed class RequestAggregateFactory : IOperatorFactory
                 case Function.Sum:
                     return ScalarValue.FromInt64((long)sum);
                 case Function.Mean:
-                    return ScalarValue.FromFloat64((double)sum / count); // one rounding, of the exact sum
+                    // The exact quotient, then the remainder's share: equal rows give their value, and a mean whose integer
+                    // part a double holds is off by at most the rounding of that share (the sum as a double was not).
+                    var (quotient, remainder) = Int128.DivRem(sum, count);
+                    return ScalarValue.FromFloat64((double)quotient + (double)remainder / count);
                 default:
                     return ScalarValue.FromInt64(extreme);
             }
