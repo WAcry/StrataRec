@@ -596,12 +596,15 @@ internal static class BoundedCall
     {
         TaskStatus.RanToCompletion => Winner.Client,
         TaskStatus.Faulted => IsClientFailure(wait.Exception!, client) ? Winner.Client : Winner.Bound,
-        _ => client.IsCanceled && !CancelledWith(wait, caller) ? Winner.Client : Winner.Caller,
+        // Only a caller that has cancelled can have ended the wait: a client's cancellation with no token, or with any
+        // token while the caller passed none, is not the caller's because the tokens are equal (review of 110adac).
+        _ => client.IsCanceled && !(caller.IsCancellationRequested && CancelledWith(wait, caller)) ? Winner.Client : Winner.Caller,
     };
 
     /// <summary>
     /// Whether a cancelled task was cancelled with <paramref name="token"/>; read from the cancellation it throws, which
-    /// is thrown only for a wait and a client both cancelled (a cancelled task has no other public way to say).
+    /// is thrown only for a wait and a client both cancelled, with the caller's token cancelled (a cancelled task has no
+    /// other public way to say).
     /// </summary>
     private static bool CancelledWith(Task cancelled, CancellationToken token)
     {

@@ -590,6 +590,35 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
+    /// A client whose task ended cancelled with no token cancelled the call itself, with a caller that passed no token,
+    /// as with one that never cancels (review of 110adac: the wait's token, none, equalled the caller's, none, so the call
+    /// was the caller's cancellation, which never came).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AClientsCancellationWithNoToken_IsItsOwn_WhateverTokenTheCallerPassed(bool callerPassesNone)
+    {
+        using var caller = new CancellationTokenSource();
+        var client = new TaskCompletionSource<int>();
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(callerPassesNone ? CancellationToken.None : caller.Token, Deadline(600_000));
+        var site = new Site(memory);
+
+        var running = Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: null).AsTask();
+        Assert.False(running.IsCompleted);
+        await Task.Run(() => client.SetCanceled(), TestContext.Current.CancellationToken);
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((CallEnd.Threw, IoOutcome.Timeout, "threw TaskCanceledException: it cancelled the call itself, before its deadline", false),
+            (result.End, result.Outcome, result.Error, result.Abandoned));
+        Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
+    /// <summary>
     /// A client that answered the call's own deadline (an exception of its protocol) timed out, though the node's budget
     /// ran out too before the call was classified: the call's own deadline came first (review of 763fcbd: it was the
     /// budget's, and the operator was thrown a cancellation instead of a failed status).
