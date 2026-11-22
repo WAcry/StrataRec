@@ -320,14 +320,18 @@ public sealed class OperatorContext : IServiceCallScope
         _state.Table.Rows.Replace(newOrder, allowDrop: drops);
     }
 
-    /// <summary>Appends rows. Requires <see cref="Effects.RowSource"/>.</summary>
+    /// <summary>
+    /// Appends rows. Requires <see cref="Effects.RowSource"/>. A key is appended only while it is not live: skip the keys
+    /// <see cref="CandidateTableView.FindRow"/> finds at a live row, or every key the request has seen
+    /// (<see cref="CandidateTableView.ContainsKey"/>), as the built-in row sources do (design 4.5).
+    /// </summary>
     public int AppendRows(ReadOnlySpan<long> keys)
     {
         Require(Effects.RowSource, nameof(AppendRows));
         return _state.Table.AppendRows(keys);
     }
 
-    /// <summary>Appends rows with string keys. Requires <see cref="Effects.RowSource"/>.</summary>
+    /// <summary>Appends rows with string keys. Requires <see cref="Effects.RowSource"/>. A key is appended only while it is not live (see the int64 overload).</summary>
     public int AppendRows(IReadOnlyList<string> keys)
     {
         Require(Effects.RowSource, nameof(AppendRows));

@@ -212,6 +212,44 @@ public sealed class EntityKeyIndex
     /// <inheritdoc cref="GetOrAdd(in EntityKey, int, out bool)"/>
     public int GetOrAdd(long key, int value, out bool added)
     {
+        var entry = EntryOf(key, value, out added); // first: it may grow the arrays
+        return _values[entry];
+    }
+
+    /// <inheritdoc cref="GetOrAdd(in EntityKey, int, out bool)"/>
+    public int GetOrAdd(string key, int value, out bool added)
+    {
+        var entry = EntryOf(key, value, out added); // first: it may grow the arrays
+        return _values[entry];
+    }
+
+    /// <summary>Adds the key with <paramref name="value"/>, or replaces the value of the key it holds, which keeps its place in insertion order.</summary>
+    public void Set(long key, int value)
+    {
+        var entry = EntryOf(key, value, out var added);
+        if (!added)
+        {
+            _values[entry] = value;
+        }
+    }
+
+    /// <inheritdoc cref="Set(long, int)"/>
+    public void Set(string key, int value)
+    {
+        var entry = EntryOf(key, value, out var added);
+        if (!added)
+        {
+            _values[entry] = value;
+        }
+    }
+
+    /// <summary>
+    /// The key's entry, added with <paramref name="value"/> first when it is absent: one probe sequence for both. Inlined,
+    /// so <see cref="GetOrAdd(long, int, out bool)"/> (a recall merge, a fetch's key dedup) is the probe loop itself.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int EntryOf(long key, int value, out bool added)
+    {
         RequireKeyType(EntityKeyType.Int64);
         var s = Slot((ulong)key);
         for (; ; s = (s + 1) & _slotMask)
@@ -225,7 +263,7 @@ public sealed class EntityKeyIndex
             if (_int64Keys[entry] == key)
             {
                 added = false;
-                return _values[entry];
+                return entry;
             }
         }
 
@@ -240,11 +278,12 @@ public sealed class EntityKeyIndex
         _values[e] = value;
         _slots[s] = e + 1;
         added = true;
-        return value;
+        return e;
     }
 
-    /// <inheritdoc cref="GetOrAdd(in EntityKey, int, out bool)"/>
-    public int GetOrAdd(string key, int value, out bool added)
+    /// <inheritdoc cref="EntryOf(long, int, out bool)"/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int EntryOf(string key, int value, out bool added)
     {
         ArgumentNullException.ThrowIfNull(key);
         RequireKeyType(EntityKeyType.String);
@@ -261,7 +300,7 @@ public sealed class EntityKeyIndex
             if (_hashes[entry] == hash && string.Equals(_strings[entry], key))
             {
                 added = false;
-                return _values[entry];
+                return entry;
             }
         }
 
@@ -277,7 +316,7 @@ public sealed class EntityKeyIndex
         _values[e] = value;
         _slots[s] = e + 1;
         added = true;
-        return value;
+        return e;
     }
 
     /// <summary>

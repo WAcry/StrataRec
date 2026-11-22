@@ -59,6 +59,26 @@ public class EntityKeyIndexTests
     }
 
     [Fact]
+    public void Set_AddsAKey_OrReplacesItsValue_KeepingItsPlace()
+    {
+        var memory = new RequestMemory();
+        var numbers = new EntityKeyIndex(EntityKeyType.Int64, 4, memory);
+        numbers.Set(7, 1);
+        numbers.Set(8, 2);
+        numbers.Set(7, 3);
+        var strings = new EntityKeyIndex(EntityKeyType.String, 4, memory);
+        strings.Set("a", 1);
+        strings.Set("b", 2);
+        strings.Set("a", 3);
+
+        Assert.Equal((2, 3, 2), (numbers.Count, numbers.TryGetValue(7, out var seven) ? seven : -1, numbers.TryGetValue(8, out var eight) ? eight : -1));
+        Assert.Equal(new long[] { 7, 8 }, numbers.Int64Keys.ToArray());
+        Assert.Equal((2, 3), (strings.Count, strings.TryGetValue("a", out var a) ? a : -1));
+        Assert.Equal(new[] { "a", "b" }, strings.StringKeys.ToArray());
+        memory.Release();
+    }
+
+    [Fact]
     public void CollidingInt64Keys_AreAllFound_IncludingAcrossTheTableEnd()
     {
         // Capacity 8 → 16 slots, at most 8 keys. Eight keys whose home slot is the last slot fill the table to its load

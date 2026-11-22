@@ -79,6 +79,37 @@ public sealed class CustomPlacementTests
         Assert.True(degraded.Degraded);
     }
 
+    /// <summary>
+    /// A candidate TopK dropped and an injector brought back is found, and explained, at its new row (review of the
+    /// invariants, 2026-11-22: the table found its dropped row, so a second injector took it for not shown and appended it
+    /// again, and its explanation said TopK dropped it, unless the table was compacted in between); whether it was makes
+    /// no difference.
+    /// </summary>
+    [Theory]
+    [InlineData("never")]
+    [InlineData("always")]
+    public async Task ACandidateAnInjectorBringsBack_IsShownOnce_AndExplainedWhereItIs(string compact)
+    {
+        // TopK keeps 1 and 2. The first injector brings 3 back 3rd; the second skips it, as shown, and puts 21 1st.
+        var plan = Compile($$"""
+            "recall": { "order": 10, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas" } },
+            "score": { "order": 20, "op": "ExpressionScorer@1", "config": { "output_col": "score.final", "expr": "col.recall.best_score ?? 0.0" } },
+            "top": { "order": 30, "op": "TopK@1", "compact": "{{compact}}", "config": { "score_col": "score.final", "k": 2 } },
+            "ads": { "order": 40, "op": "SlotInjector@1", "compact": "{{compact}}", "config": { "source": "ads", "slots": [3], "score_col": "score.final" } },
+            "more_ads": { "order": 50, "op": "SlotInjector@1", "config": { "source": "ads", "slots": [1], "score_col": "score.final" } }
+            """, """ "score": "col.score.final", "source": "col.recall.primary_source ?? 'injected'" """);
+
+        var result = await Execute(plan, explain: [EntityKey.FromInt64(3)]);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(new[] { (21L, 0.25, "injected"), (1L, 0.9, "organic"), (2L, 0.8, "organic"), (3L, 0.95, "injected") }, Items(result));
+        var three = Assert.Single(result.Explanation!.Candidates);
+        Assert.Equal((ExplainVerdict.Returned, (int?)4, (string?)null), (three.Verdict, three.Rank, three.DroppedBy));
+        Assert.Equal(
+            new[] { ("recall", ExplainChange.Entered), ("score", ExplainChange.Stayed), ("top", ExplainChange.Dropped), ("ads", ExplainChange.Entered), ("more_ads", ExplainChange.Stayed) },
+            three.Steps.Select(s => (s.Node, s.Change)));
+    }
+
     [Fact]
     public async Task AnInterleaver_MixesTheSourcesByAPattern_KeepingEachSourcesOrder()
     {
@@ -122,7 +153,7 @@ public sealed class CustomPlacementTests
         return compilation.Plan!;
     }
 
-    private static async Task<PipelineResult> Execute(ExecutionPlan plan, bool record = false, RunReplay? replay = null) =>
+    private static async Task<PipelineResult> Execute(ExecutionPlan plan, bool record = false, RunReplay? replay = null, IReadOnlyList<EntityKey>? explain = null) =>
         await new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
         {
             RequestId = "r",
@@ -131,6 +162,7 @@ public sealed class CustomPlacementTests
             Deadline = replay is null ? TimeSpan.FromSeconds(600) : RunReplay.Deadline,
             Record = record,
             Replay = replay,
+            ExplainIds = explain,
         }).AsTask().WaitAsync(TimeSpan.FromSeconds(30));
 
     private static async Task AssertReplayAgrees(ExecutionPlan plan, PipelineResult recorded)

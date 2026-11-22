@@ -225,7 +225,26 @@ public class CandidateTableTests
     public void ColumnType_RejectsUnknown() => Assert.False(ColumnType.TryParse("float16", out _, out _));
 
     [Fact]
-    public void FindRow_IndexesRowsAppendedAfterTheFirstLookup_FirstRowWins()
+    public void ADroppedKeyAFailedAttemptBroughtBack_IsFoundAtItsRowFromBeforeAgain()
+    {
+        var table = NewTable(8, out var memory);
+        table.AppendRows(new long[] { 1, 2, 3 });
+        table.Rows.Retain(new[] { true, false, true });
+        var checkpoint = table.Checkpoint();
+        Assert.Equal(3, table.AppendRows(new long[] { 2 }));
+        Assert.Equal(3, table.FindRow(EntityKey.FromInt64(2)));
+
+        table.Rollback(checkpoint);
+
+        Assert.Equal(1, table.FindRow(EntityKey.FromInt64(2)));
+        Assert.False(table.Rows.IsAlive(1));
+        Assert.Equal(4, table.AppendRows(new long[] { 4, 2 }) + 1);
+        Assert.Equal(4, table.FindRow(EntityKey.FromInt64(2)));
+        memory.Release();
+    }
+
+    [Fact]
+    public void FindRow_IndexesRowsAppendedAfterTheFirstLookup_ADroppedKeyBroughtBackAtItsNewRow()
     {
         var table = NewTable(16, out var memory);
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(10))); // empty table
@@ -234,20 +253,27 @@ public class CandidateTableTests
         Assert.Equal(1, table.FindRow(EntityKey.FromInt64(20)));
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(40)));
 
-        table.AppendRows(new long[] { 40, 20, 50 }); // 20 again: the first row keeps it
+        // 20 dropped and brought back: found at its new, live row (review of the invariants, 2026-11-22: the first row
+        // was found, the dropped one, so an injector took 20 for not shown and appended it a third time).
+        table.Rows.Retain(new[] { true, false, true });
+        table.AppendRows(new long[] { 40, 20, 50 });
         Assert.Equal(3, table.FindRow(EntityKey.FromInt64(40)));
-        Assert.Equal(1, table.FindRow(EntityKey.FromInt64(20)));
+        Assert.Equal(4, table.FindRow(EntityKey.FromInt64(20)));
+        Assert.True(table.Rows.IsAlive(4));
         Assert.Equal(5, table.FindRow(EntityKey.FromInt64(50)));
         Assert.Equal(-1, table.FindRow(EntityKey.FromString("20"))); // other key type
 
         // Dropped rows are still found until Compact; afterwards keys map to their new rows.
         table.Rows.Replace(new[] { 5, 0, 3 }, allowDrop: true);
+        Assert.Equal(4, table.FindRow(EntityKey.FromInt64(20)));
         Assert.Equal(2, table.FindRow(EntityKey.FromInt64(30)));
         table.Compact();
         Assert.Equal(0, table.FindRow(EntityKey.FromInt64(50)));
         Assert.Equal(1, table.FindRow(EntityKey.FromInt64(10)));
         Assert.Equal(2, table.FindRow(EntityKey.FromInt64(40)));
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(30)));
+        Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(20)));
+        Assert.True(table.ContainsKey(EntityKey.FromInt64(20)));
 
         table.AppendRows(new long[] { 30, 60 });
         Assert.Equal(3, table.FindRow(EntityKey.FromInt64(30)));
@@ -309,9 +335,10 @@ public class CandidateTableTests
     {
         var memory = new RequestMemory();
         var table = new CandidateTable(new TableSchema(EntityKeyType.String, new[] { ColumnType.String }), 8, memory);
-        table.AppendRows(new[] { "a", "B", "a" });
+        table.AppendRows(new[] { "a", "B", "A" });
         Assert.Equal(0, table.FindRow(EntityKey.FromString("a")));
         Assert.Equal(1, table.FindRow(EntityKey.FromString("B")));
+        Assert.Equal(2, table.FindRow(EntityKey.FromString("A")));
         Assert.Equal(-1, table.FindRow(EntityKey.FromString("b"))); // ordinal
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(0)));
 

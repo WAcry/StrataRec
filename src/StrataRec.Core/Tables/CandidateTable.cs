@@ -104,7 +104,7 @@ public sealed class CandidateTable
     private readonly int[] _created; // [0, _createdCount): every existing slot but the key column, in creation order
     private int _createdCount;
     private int _totalAppended;
-    private EntityKeyIndex? _keyIndex; // key → first physical row, for rows [0, _indexedRows); built on first FindRow
+    private EntityKeyIndex? _keyIndex; // key → last physical row appended with it, of rows [0, _indexedRows); built on first FindRow
     private int _indexedRows;
     private int _compactions;
     private long[]? _releasedInt64; // keys of the rows Compact released, in release order (int64 keys); rented on the first release
@@ -280,7 +280,12 @@ public sealed class CandidateTable
         }
     }
 
-    /// <summary>Appends rows with the given int64 keys at the end of the ranking. Returns the first new physical row.</summary>
+    /// <summary>
+    /// Appends rows with the given int64 keys at the end of the ranking. Returns the first new physical row. A key is
+    /// appended only while it is not live, once (design 4.5): a row source that may bring back a dropped key skips the live
+    /// ones (<see cref="FindRow"/> and <see cref="RowSelection.IsAlive"/>), and the built-in ones skip every key the request
+    /// has seen (<see cref="ContainsKey"/>). The table does not check it, which would hash every appended key.
+    /// </summary>
     public int AppendRows(ReadOnlySpan<long> keys)
     {
         RequireKeyType(EntityKeyType.Int64);
@@ -295,7 +300,7 @@ public sealed class CandidateTable
         return first;
     }
 
-    /// <summary>Appends rows with the given string keys at the end of the ranking. Returns the first new physical row.</summary>
+    /// <summary>Appends rows with the given string keys at the end of the ranking. Returns the first new physical row. A key is appended only while it is not live (see the int64 overload).</summary>
     public int AppendRows(IReadOnlyList<string> keys)
     {
         RequireKeyType(EntityKeyType.String);
@@ -311,8 +316,10 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// Finds the physical row of a key (live or dropped) or returns -1. The first row wins for a repeated key. A key whose
-    /// row a <see cref="Compact"/> released has no row any more; <see cref="ContainsKey"/> still knows it.
+    /// Finds the physical row of a key (live or dropped) or returns -1: the last row appended with it, which is its live row
+    /// when it has one, since a key is appended only while it is not live (<see cref="AppendRows(ReadOnlySpan{long})"/>; a
+    /// dropped key a row source brought back is found at its new row, not at the dropped one). A key whose row a
+    /// <see cref="Compact"/> released has no row any more; <see cref="ContainsKey"/> still knows it.
     /// </summary>
     /// <remarks>
     /// The index is built on the first call and rented from the request memory, sized to <see cref="StorageCapacity"/>
@@ -336,9 +343,9 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Whether the key was appended in this request: a live or a dropped row, or a row a <see cref="Compact"/> released
-    /// (rows a <see cref="Rollback"/> released were never appended). A row source tests this, not <see cref="FindRow"/>, so
-    /// that a key a filter dropped is never appended again whether or not the table was compacted since (design 4.5,
-    /// invariant 2): compaction changes where rows are, never which entities the request has seen.
+    /// (rows a <see cref="Rollback"/> released were never appended). The built-in row sources test this, not
+    /// <see cref="FindRow"/>, so that they never append a key a filter dropped, whether or not the table was compacted
+    /// since (design 4.5, invariant 2): compaction changes where rows are, never which entities the request has seen.
     /// </summary>
     /// <remarks>
     /// Compact copies the released keys aside; they are indexed on the first call that does not find the key in a row, so
@@ -421,7 +428,7 @@ public sealed class CandidateTable
             var ids = Int64Ids;
             for (var r = _indexedRows; r < PhysicalRowCount; r++)
             {
-                index.TryAdd(ids[r], r);
+                index.Set(ids[r], r);
             }
         }
         else
@@ -429,7 +436,7 @@ public sealed class CandidateTable
             var ids = StringIds;
             for (var r = _indexedRows; r < PhysicalRowCount; r++)
             {
-                index.TryAdd(ids.Get(r), r);
+                index.Set(ids.Get(r), r);
             }
         }
 
@@ -439,7 +446,7 @@ public sealed class CandidateTable
     /// <summary>
     /// Rewrites every slot so that live rows occupy physical rows 0..n-1 in rank order and dropped rows are released
     /// (design 4.5). Fill state moves with the values. Old arrays are returned when the request ends. The released keys
-    /// are kept: <see cref="ContainsKey"/> still finds them, so no row source appends them again.
+    /// are kept: <see cref="ContainsKey"/> still finds them, so the built-in row sources do not append them again.
     /// </summary>
     public void Compact()
     {
@@ -512,8 +519,9 @@ public sealed class CandidateTable
     /// anew. The ranking is restored, and the rows appended since are released as if never appended. They are no longer
     /// found by <see cref="FindRow"/>, so a later row source may append the same keys; they hold nothing in any remaining
     /// slot (missing and unfilled); and their capacity may be appended again, reusing the same physical rows. Rows that
-    /// existed at the checkpoint keep their state in the remaining slots, dropped rows included, so a later row source
-    /// still cannot revive a filtered key, and the rows earlier row sources wrote into a shared slot keep their values.
+    /// existed at the checkpoint keep their state in the remaining slots, dropped rows included, so
+    /// <see cref="ContainsKey"/> still knows a filtered key, and the rows earlier row sources wrote into a shared slot keep
+    /// their values.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The table was compacted since the checkpoint (physical rows moved), or the checkpoint was never taken.
@@ -544,7 +552,8 @@ public sealed class CandidateTable
         ClearRowState(first, appended);
         if (_indexedRows > first)
         {
-            // Keys of released rows must not be found. Rebuilt lazily from row 0, first row first, as on first use.
+            // Keys of released rows must not be found. Rebuilt lazily from row 0 in append order, as on first use, so a key
+            // brought back by the attempt is found at its row from before it again.
             _keyIndex!.Clear();
             _indexedRows = 0;
         }

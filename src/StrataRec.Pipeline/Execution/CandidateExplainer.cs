@@ -17,9 +17,9 @@ namespace StrataRec.Pipeline.Execution;
 /// <remarks>
 /// <para>Generic: everything comes from what the executor already knows of every node (its declared reads and writes,
 /// the row selection before and after), so custom operators are explained without code of their own.</para>
-/// <para>Work is per target, not per row: a target's row is found by key (<see cref="CandidateTable.FindRow"/>) once,
-/// after the row source that appends it, and followed through compactions (<see cref="Compacted"/>) without looking it up
-/// again. Two costs follow the table instead (review 34), both only for an explained request: the rank, since the ranking
+/// <para>Work is per target, not per row: a target's row is found by key (<see cref="CandidateTable.FindRow"/>) after a
+/// row source that may append it, while the target is not live, and followed through compactions (<see cref="Compacted"/>)
+/// without looking it up again; a dropped target a row source brings back is followed at its new row. Two costs follow the table instead (review 34), both only for an explained request: the rank, since the ranking
 /// has no inverse, is one pass over the live rows after a node that changes the row set or the order, stopping at the last
 /// live target, with a bitmap of the table's capacity; and an operator's <see cref="ExplainContext.Evaluate"/> writes its
 /// target rows into one pooled column of the table's capacity per result type (the compiled expression writes at physical
@@ -116,9 +116,12 @@ internal sealed class CandidateExplainer
         for (var t = 0; t < _keys.Length; t++)
         {
             var row = _rows[t];
-            if (row < 0 && appends)
+            if (appends && (row < 0 || !rows.IsAlive(row)))
             {
-                row = table.FindRow(_keys[t]); // a key of the other key type is never found
+                // Appended, or brought back after it was dropped: the last row appended with the key (review of the
+                // invariants, 2026-11-22: a dropped target that an injector brought back was explained at its dropped row).
+                // A key of the other key type is never found.
+                row = table.FindRow(_keys[t]);
             }
 
             _pendingRows[t] = row;
@@ -195,7 +198,8 @@ internal sealed class CandidateExplainer
 
     /// <summary>
     /// The table was compacted (design 4.5): live rows moved to their rank's position, dropped rows were released. A
-    /// released target stays present and dropped: the table still knows its key, so no later row source appends it again.
+    /// released target stays present and dropped, with no row; a row source that brings it back gives it a new one, which
+    /// <see cref="Observe"/> finds.
     /// </summary>
     public void Compacted()
     {
