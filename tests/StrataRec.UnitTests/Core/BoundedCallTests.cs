@@ -499,6 +499,48 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
+    /// A client whose task ended cancelled on its own (its transport's token: an HTTP client's own timeout ends its async
+    /// method cancelled, not faulted) cancelled the call itself, though the caller cancels after it and before the call is
+    /// classified (review of 1158d00: the caller was read when the call was classified, and the client, done, was said to
+    /// be abandoned). Set up as the failure that came first: its wait's continuation is held until the caller cancelled.
+    /// </summary>
+    [Fact]
+    public async Task AClientsOwnCancellation_ThatCameFirst_StaysItsOwn_WhenTheCallerCancelsBeforeTheCallIsClassified()
+    {
+        using var gate = new ResumeGate();
+        using var caller = new CancellationTokenSource();
+        using var transport = new CancellationTokenSource();
+        using var waiting = new ManualResetEventSlim();
+        var client = new TaskCompletionSource<int>();
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(caller.Token, Deadline(600_000));
+        var site = new Site(memory).WhenPending(gate.Mark);
+        transport.Cancel();
+
+        var running = Task.Run(async () =>
+        {
+            var pending = Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: null);
+            waiting.Set();
+            return await pending;
+        });
+        Assert.True(waiting.Wait(Patience, TestContext.Current.CancellationToken));
+        var cancelling = Task.Run(() => client.SetCanceled(transport.Token), TestContext.Current.CancellationToken);
+        Assert.True(gate.WaitHeld(), "the wait never resumed on the cancelling thread");
+        caller.Cancel();
+        gate.Release();
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await cancelling.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((CallEnd.Threw, IoOutcome.Timeout, "threw TaskCanceledException: it cancelled the call itself, before its deadline", false),
+            (result.End, result.Outcome, result.Error, result.Abandoned));
+        Assert.Equal(transport.Token, Assert.IsType<TaskCanceledException>(result.Exception).CancellationToken);
+        Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
+    /// <summary>
     /// A client that answered the call's own deadline (an exception of its protocol) timed out, though the node's budget
     /// ran out too before the call was classified: the call's own deadline came first (review of 763fcbd: it was the
     /// budget's, and the operator was thrown a cancellation instead of a failed status).

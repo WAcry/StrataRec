@@ -446,9 +446,10 @@ internal static class BoundedCall
         var result = Defect<T>();
         try
         {
-            var winner = Waited(wait, client, bound.Caller);
+            var cancelledBy = lease.CancelledWhenDone();
+            var winner = Waited(wait, client, cancelledBy);
             return result = winner == Winner.Client
-                ? Completed(call, new ValueTask<T>(client), bound, lease.CancelledWhenDone(), deadline)
+                ? Completed(call, new ValueTask<T>(client), bound, cancelledBy, deadline)
                 : CutOff<T>(winner, null, ownSet, bound, deadline, abandoned: true);
         }
         finally
@@ -585,13 +586,16 @@ internal static class BoundedCall
     /// The winner of the wait for a pending client, read from the wait's own outcome. The wait's timeout faults it with a
     /// <see cref="TimeoutException"/> of its own, while a client's failure is passed on as the very same exception, so a
     /// client that throws a <see cref="TimeoutException"/> itself is told apart by identity. The caller's token cancels
-    /// the wait; so does a client's own cancellation, which counts as the client's only while the caller has not cancelled.
+    /// the wait; so does a client whose task ended cancelled (an async method that threw a cancellation, as an HTTP
+    /// client's own timeout does), which is the client's when the caller had not cancelled as it completed
+    /// (<paramref name="cancelledBy"/>): a caller that cancels after it, before the call is classified, came second
+    /// (review of 1158d00: it was read when the call was classified, and the client, done, was said to be abandoned).
     /// </summary>
-    private static Winner Waited(Task wait, Task client, CancellationToken caller) => wait.Status switch
+    private static Winner Waited(Task wait, Task client, CancelledBy cancelledBy) => wait.Status switch
     {
         TaskStatus.RanToCompletion => Winner.Client,
         TaskStatus.Faulted => IsClientFailure(wait.Exception!, client) ? Winner.Client : Winner.Bound,
-        _ => caller.IsCancellationRequested ? Winner.Caller : Winner.Client,
+        _ => client.IsCanceled && cancelledBy != CancelledBy.Caller ? Winner.Client : Winner.Caller,
     };
 
     private static bool IsClientFailure(AggregateException waited, Task client)

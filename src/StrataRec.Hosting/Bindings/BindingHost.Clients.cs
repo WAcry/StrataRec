@@ -393,7 +393,7 @@ public sealed partial class BindingHost
     private static partial void LogLoadCancellationCallbacksFailed(ILogger logger, Exception exception, string instance, string artifact);
 
     [LoggerMessage(EventId = 1213, Level = LogLevel.Warning,
-        Message = "A cancellation callback of a model signature lookup threw; the lookups are cancelled regardless")]
+        Message = "A cancellation callback of a service signature lookup threw; the lookups are cancelled regardless")]
     private static partial void LogLookupCancellationCallbacksFailed(ILogger logger, Exception exception);
 }
 

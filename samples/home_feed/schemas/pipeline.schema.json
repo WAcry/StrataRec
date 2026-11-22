@@ -1215,7 +1215,7 @@
             }
           },
           "columns_from": {
-            "description": "Expands to the named inputs of a node whose operator maps columns to them (the model operators, or a custom operator's), e.g. ctr_ranker.inputs.",
+            "description": "Expands to the named inputs of a node whose operator maps expressions to them (the model operators, or a custom operator's), e.g. ctr_ranker.inputs: the tap logs those expressions, evaluated at its own point.",
             "type": [
               "string",
               "null"

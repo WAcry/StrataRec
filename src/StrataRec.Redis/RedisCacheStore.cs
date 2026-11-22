@@ -28,7 +28,7 @@ namespace StrataRec.Redis;
 /// reconnecting does not fix (<see cref="LoadAsync"/> says how they are told apart). A server that accepts connections
 /// and does not answer holds a load up to three connect timeouts of 2 s. Commands time out after one second; the engine
 /// stops waiting for a read much earlier (the tier's <c>timeout_ms</c>), and a read that throws or is late sends its keys
-/// to the connector (or the service).</para>
+/// on to the connector (or the service) while there is time left to (<see cref="ICacheStore"/>).</para>
 /// </remarks>
 public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
 {

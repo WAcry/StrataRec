@@ -131,9 +131,10 @@ public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> R
 /// <remarks>
 /// <para>A store is a binding instance: the whole lifetime contract (create, share, load, dispose) is on
 /// <see cref="BindingContext"/>. Connect in <see cref="ILoadable.LoadAsync"/>, release the connection when disposed.</para>
-/// <para>The store is only an optimisation. A read that throws, or that the engine stops waiting for (the store's
-/// <c>timeout_ms</c>, the fetch's or the call's bound, the request's deadline), sends its keys on to the connector or
-/// the client; a write that fails is counted and forgotten. So a store needs no retries of its own and should fail fast.</para>
+/// <para>The store is only an optimisation. A read that throws, or that the engine stops waiting for at the store's
+/// <c>timeout_ms</c>, sends its keys on to the connector or the client, while the fetch's or the call's bound (and so the
+/// request's deadline) leaves time to send them; a read cut off by that bound sends nothing on, as the connector or the
+/// client would be cut off too. A write that fails is counted and forgotten. So a store needs no retries of its own and should fail fast.</para>
 /// <para>Implementations must be thread-safe: every request of every plan sharing the instance reads it concurrently.</para>
 /// </remarks>
 public interface ICacheStore

@@ -188,9 +188,6 @@ internal sealed class CompiledModelCall
     /// <summary>In ordinal order of their names.</summary>
     public ModelInput[] Inputs { get; }
 
-    /// <summary>The model's telemetry target: its duration, errors and fallbacks are tagged with the model's name.</summary>
-    public IoTarget Target => _model.Target;
-
     /// <summary>Model input name → source, for log taps' <c>columns_from</c> (design 6.9).</summary>
     public IReadOnlyDictionary<string, string> NamedInputs { get; }
 

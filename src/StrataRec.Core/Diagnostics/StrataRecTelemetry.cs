@@ -47,8 +47,9 @@ public static class StrataRecTags
     /// <summary>
     /// What a call of an external dependency is for (<see cref="IoRoles"/>): <c>fetch</c>, <c>cache</c>, <c>recall</c>,
     /// <c>model</c>, <c>assignment</c>, or an extension's own (the sample's filter calls in <c>filter</c>); with
-    /// <see cref="IoTarget"/> on <c>stratarec.io.duration</c>, <c>errors</c> and <c>keys</c>, and on the metrics of what a
-    /// generative service reported (<c>stratarec.model.*</c>).
+    /// <see cref="IoTarget"/> on <c>stratarec.io.duration</c>, <c>errors</c> and <c>keys</c>, on what a generative
+    /// service reported (<c>stratarec.io.output_tokens</c>, <c>truncated</c>), and on what the generative operators made
+    /// of its answers (<c>stratarec.model.answer_ids</c>, <c>answers</c>).
     /// </summary>
     public const string IoRole = "stratarec.io.role";
 
@@ -100,7 +101,9 @@ public static class StrataRecTags
 
     /// <summary>
     /// On a node span: why the node did not simply succeed, as the debug trace says it (<c>NodeOutcome.Detail</c>): what
-    /// failed when it fell back, was degraded or failed, why it was skipped. Only a failure also sets the span's status.
+    /// failed when it fell back, was degraded or failed, why it was skipped. A failure and an abort (the caller cancelled
+    /// while it ran) also set the span's status to error; a fallback or a degradation, part of a request that succeeded,
+    /// does not.
     /// </summary>
     public const string OutcomeDetail = "stratarec.outcome.detail";
 

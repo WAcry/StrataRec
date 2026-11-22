@@ -148,7 +148,7 @@ public sealed class LogTapSpec
 
     public Dictionary<string, string>? Columns { get; init; }
 
-    /// <summary>Expands to the named inputs of a node whose operator maps columns to them (the model operators, or a custom operator's), e.g. <c>ctr_ranker.inputs</c>.</summary>
+    /// <summary>Expands to the named inputs of a node whose operator maps expressions to them (the model operators, or a custom operator's), e.g. <c>ctr_ranker.inputs</c>: the tap logs those expressions, evaluated at its own point.</summary>
     public string? ColumnsFrom { get; init; }
 
     /// <summary>Reserved: only <c>false</c> is accepted. A tap never triggers a fetch; it logs what the serving path fetched before its point.</summary>

@@ -67,9 +67,11 @@ public abstract class Operator
     public virtual int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => 0;
 
     /// <summary>
-    /// The named inputs an operator sends (input name → column expression), for log taps' <c>columns_from</c> (design 6.9,
-    /// 8.5): a tap logs what the node's calls were given. The model operators give theirs; a custom operator that maps
-    /// columns to a service's inputs may too.
+    /// The named inputs an operator sends (input name → the expression it evaluates for it), for log taps'
+    /// <c>columns_from</c> (design 6.9, 8.5): a tap's <c>columns_from</c> expands to these expressions, evaluated where the
+    /// tap is, so it logs what they read at the tap's point, not a copy of what the calls were sent (a node after the model
+    /// that rewrites a column it reads changes what an output tap logs). The model operators give theirs; a custom
+    /// operator that maps expressions to a service's inputs may too.
     /// </summary>
     public virtual IReadOnlyDictionary<string, string> NamedInputs => EmptyInputs;
 

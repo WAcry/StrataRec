@@ -618,7 +618,7 @@ public sealed class PlanBuilder
             }
             else if (model is null || model.Operator.NamedInputs.Count == 0)
             {
-                _diagnostics.Error("TAP_BAD_COLUMNS_FROM", artifact, pointer + "/columns_from", $"'{from}' does not name the inputs of a compiled node that maps columns to named inputs.",
+                _diagnostics.Error("TAP_BAD_COLUMNS_FROM", artifact, pointer + "/columns_from", $"'{from}' does not name the inputs of a compiled node that maps expressions to named inputs.",
                     "use '<node_id>.inputs' for a node whose operator does (ModelScorer@1, PairwiseRanker@1, ListwiseReranker@1, or a custom operator's Operator.NamedInputs)");
                 ok = false;
             }
