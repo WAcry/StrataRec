@@ -447,6 +447,93 @@ public sealed class BoundedCallTests
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience)); // the client completed: nothing holds it
     }
 
+    /// <summary>
+    /// A client's failure that came before any of the framework's tokens was cancelled stays its own, type and message,
+    /// when the caller cancels or the budget runs out after it and before the call is classified (review of 763fcbd: the
+    /// tokens were read when the call was classified, so the failure became the caller's cancellation, or the budget's).
+    /// The client completes on a thread of its own with its continuations inline: the lease reads the tokens, then the
+    /// wait ends and its continuation, which alone carries the gate's mark, is held there.
+    /// </summary>
+    [Theory]
+    [InlineData("caller")]
+    [InlineData("budget")]
+    public async Task AFailureThatCameFirst_StaysTheClients_WhenATokenIsCancelledBeforeTheCallIsClassified(string late)
+    {
+        using var gate = new ResumeGate();
+        using var caller = new CancellationTokenSource();
+        using var waiting = new ManualResetEventSlim();
+        var client = new TaskCompletionSource<int>();
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(caller.Token, Deadline(late == "budget" ? 300 : 600_000));
+        var site = new Site(memory).WhenPending(gate.Mark);
+        var failure = new InvalidOperationException("the service failed");
+
+        var running = Task.Run(async () =>
+        {
+            var pending = Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: null);
+            waiting.Set();
+            return await pending;
+        });
+        Assert.True(waiting.Wait(Patience, TestContext.Current.CancellationToken));
+        var failing = Task.Run(() => client.SetException(failure), TestContext.Current.CancellationToken);
+        Assert.True(gate.WaitHeld(), "the wait never resumed on the failing thread");
+        if (late == "caller")
+        {
+            caller.Cancel();
+        }
+        else
+        {
+            Assert.True(budget.Token.WaitHandle.WaitOne(Patience));
+        }
+
+        gate.Release();
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await failing.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((CallEnd.Threw, IoOutcome.Error, "threw InvalidOperationException: the service failed", false), (result.End, result.Outcome, result.Error, result.Abandoned));
+        Assert.Same(failure, result.Exception);
+        Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
+    /// <summary>
+    /// A client that answered the call's own deadline (an exception of its protocol) timed out, though the node's budget
+    /// ran out too before the call was classified: the call's own deadline came first (review of 763fcbd: it was the
+    /// budget's, and the operator was thrown a cancellation instead of a failed status).
+    /// </summary>
+    [Fact]
+    public async Task ACallsOwnDeadline_ThatCameFirst_IsItsTimeout_ThoughTheBudgetRunsOutBeforeTheCallIsClassified()
+    {
+        using var gate = new ResumeGate();
+        var memory = new RequestMemory();
+        var budget = new AttemptBudget(CancellationToken.None, Deadline(400));
+        var site = new Site(memory).WhenPending(gate.Mark);
+        var clock = new ManualClock();
+        clock.HoldTimestamps();
+        var deadline = CallDeadline.At(clock, clock.GetTimestamp() + (clock.TimestampFrequency / 20), 50); // the token: 50 ms
+        var client = new TaskCompletionSource<int>(); // continuations inline, on the thread the token's callbacks run on
+
+        var running = Task.Run(async () => await BoundedCall.RunAsync<int, Site>(site.With(token =>
+        {
+            token.Register(() => client.TrySetException(new ProtocolCancellation()));
+            clock.AdvanceTimestamps(TimeSpan.FromMinutes(-10)); // the wait: the budget's
+            return new ValueTask<int>(client.Task);
+        }), budget, memory, Target, deadline));
+        Assert.True(gate.WaitHeld(), "the wait never resumed on the client's thread");
+        Assert.False(budget.Token.IsCancellationRequested);
+        Assert.True(budget.Token.WaitHandle.WaitOne(Patience));
+        gate.Release();
+        var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((CallEnd.TimedOut, IoOutcome.Timeout, "timed out after 50 ms", false), (result.End, result.Outcome, result.Error, result.Abandoned));
+        Assert.Null(result.Exception);
+        budget.Release();
+        memory.Release();
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
+    }
+
     /// <summary>What a gRPC client throws when its token is cancelled, unless it is told to throw a cancellation.</summary>
     private sealed class ProtocolCancellation() : Exception("Status(StatusCode=\"Cancelled\", Detail=\"Call canceled by the client.\")");
 
@@ -675,7 +762,8 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>A call site: a negative answer is a failure; every end is recorded with whether the memory was still live.</summary>
-    private readonly struct Site(RequestMemory memory, Func<CancellationToken, ValueTask<int>>? send = null, List<(CallResult<int> Result, bool MemoryLive)>? ended = null)
+    private readonly struct Site(
+        RequestMemory memory, Func<CancellationToken, ValueTask<int>>? send = null, List<(CallResult<int> Result, bool MemoryLive)>? ended = null, Action? pending = null)
         : IBoundedCall<int>
     {
         private readonly List<(CallResult<int> Result, bool MemoryLive)> _ended = ended ?? new();
@@ -691,7 +779,10 @@ public sealed class BoundedCallTests
             }
         }
 
-        public Site With(Func<CancellationToken, ValueTask<int>> client) => new(memory, client, _ended);
+        public Site With(Func<CancellationToken, ValueTask<int>> client) => new(memory, client, _ended, pending);
+
+        /// <summary>Runs <paramref name="action"/> when the call is pending, before its wait is set up.</summary>
+        public Site WhenPending(Action action) => new(memory, send, _ended, action);
 
         public ValueTask<int> Send(CancellationToken token) => send!(token);
 
@@ -701,9 +792,7 @@ public sealed class BoundedCallTests
             return value >= 0 ? IoOutcome.Ok : IoOutcome.Error;
         }
 
-        public void Pending(Task done)
-        {
-        }
+        public void Pending(Task done) => pending?.Invoke();
 
         public int Keys => -1;
 

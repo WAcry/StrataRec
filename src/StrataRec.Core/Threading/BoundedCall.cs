@@ -419,7 +419,7 @@ internal static class BoundedCall
         // or the caller gone.)
         var ownSet = own is not null;
         await wait.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-        return EndWaited(call, client, wait, io, bound, lease, ownSet, token, deadline);
+        return EndWaited(call, client, wait, io, bound, lease, ownSet, deadline);
     }
 
     /// <summary>A pending client that completed before its wait was set up, observed now (rule 1), and the call ended.</summary>
@@ -440,7 +440,7 @@ internal static class BoundedCall
 
     /// <summary>A pending client's call decided by its wait (rule 1), and ended.</summary>
     private static CallResult<T> EndWaited<T, TCall>(
-        TCall call, Task<T> client, Task wait, in IoCall io, CallBound bound, Lease lease, bool ownSet, CancellationToken token, in CallDeadline deadline)
+        TCall call, Task<T> client, Task wait, in IoCall io, CallBound bound, Lease lease, bool ownSet, in CallDeadline deadline)
         where TCall : struct, IBoundedCall<T>
     {
         var result = Defect<T>();
@@ -448,7 +448,7 @@ internal static class BoundedCall
         {
             var winner = Waited(wait, client, bound.Caller);
             return result = winner == Winner.Client
-                ? Completed(call, new ValueTask<T>(client), bound, token, deadline)
+                ? Completed(call, new ValueTask<T>(client), bound, lease.CancelledWhenDone(), deadline)
                 : CutOff<T>(winner, null, ownSet, bound, deadline, abandoned: true);
         }
         finally
@@ -531,6 +531,24 @@ internal static class BoundedCall
     /// cancellation of its own), or the bound or the caller before it. Decided once, from how the call ended, and never
     /// re-derived from the client's state afterwards: a client that completes an instant after it lost stays lost.
     /// </summary>
+    /// <summary>The first of the framework's tokens a call's client got that was cancelled: the caller's, the bound's, the call's own.</summary>
+    private enum CancelledBy : byte
+    {
+        None,
+
+        Caller,
+
+        Budget,
+
+        Own,
+    }
+
+    private static CancelledBy CancelledNow(CallBound bound, CancellationTokenSource? own) =>
+        bound.Caller.IsCancellationRequested ? CancelledBy.Caller
+        : bound.Token.IsCancellationRequested ? CancelledBy.Budget
+        : own is { IsCancellationRequested: true } ? CancelledBy.Own
+        : CancelledBy.None;
+
     private enum Winner : byte
     {
         Client,
@@ -559,7 +577,7 @@ internal static class BoundedCall
             : token.IsCancellationRequested || bound.Passed || deadline.HasPassed ? Winner.Bound
             : Winner.Client;
         return winner == Winner.Client
-            ? Completed(call, completed, bound, token, deadline)
+            ? Completed(call, completed, bound, CancelledBy.None, deadline)
             : CutOff<T>(winner, Discard(completed), own is not null, bound, deadline, abandoned: false);
     }
 
@@ -596,15 +614,18 @@ internal static class BoundedCall
 
     /// <summary>
     /// A client that completed in time: its answer, what it threw, or the cancellation it honoured. Whose the end of a
-    /// call that threw is, the framework's tokens say, whatever the client threw: a client answers a cancelled token with
-    /// an exception of its protocol as often as with a cancellation (gRPC's <c>RpcException</c> with status
-    /// <c>Cancelled</c>), and one that does so before its wait ends is recorded as when the wait ends first, the
-    /// exception dropped (2026-11-22: it was the client's error, a timeout recorded as one only when the wait's timer came
-    /// first). With none of them cancelled, what it threw is its own: a cancellation, or a <see cref="TimeoutException"/>,
-    /// a timeout of its own (an HTTP client's timeout is a cancellation, say); anything else, an error.
+    /// call that threw is, the framework's tokens say as they were when the client completed (<paramref name="cancelledBy"/>),
+    /// whatever the client threw: a client answers a cancelled token with an exception of its protocol as often as with a
+    /// cancellation (gRPC's <c>RpcException</c> with status <c>Cancelled</c>), and one that does so before its wait ends is
+    /// recorded as when the wait ends first, the exception dropped (2026-11-22: it was the client's error, a timeout
+    /// recorded as one only when the wait's timer came first). A token cancelled after the client completed changes
+    /// nothing: the client was first, and what it threw is its own (review of 763fcbd: a failure that had won became the
+    /// caller's cancellation, or the budget's, when they came before the call was classified). With none cancelled, a
+    /// cancellation, or a <see cref="TimeoutException"/>, is a timeout of its own (an HTTP client's timeout is a
+    /// cancellation, say); anything else, an error.
     /// </summary>
-    /// <param name="token">The token the client got, read before it was sent.</param>
-    private static CallResult<T> Completed<T, TCall>(TCall call, ValueTask<T> pending, CallBound bound, CancellationToken token, in CallDeadline deadline)
+    /// <param name="cancelledBy">The first of the framework's tokens that was cancelled when the client completed.</param>
+    private static CallResult<T> Completed<T, TCall>(TCall call, ValueTask<T> pending, CallBound bound, CancelledBy cancelledBy, in CallDeadline deadline)
         where TCall : struct, IBoundedCall<T>
     {
         try
@@ -619,9 +640,9 @@ internal static class BoundedCall
             // deadline's too, as one honoured an instant before the timer fires; anything else is the client's own
             // failure unless a token was cancelled.
             var cancellation = ex as OperationCanceledException;
-            return bound.Caller.IsCancellationRequested ? Cancelled<T>(bound, cancellation, abandoned: false)
-                : bound.Token.IsCancellationRequested ? RanOut<T>(bound, cancellation, abandoned: false)
-                : token.IsCancellationRequested || (cancellation is not null && deadline.HasPassed) ? TimedOut<T>(deadline, abandoned: false)
+            return cancelledBy == CancelledBy.Caller ? Cancelled<T>(bound, cancellation, abandoned: false)
+                : cancelledBy == CancelledBy.Budget ? RanOut<T>(bound, cancellation, abandoned: false)
+                : cancelledBy == CancelledBy.Own || (cancellation is not null && deadline.HasPassed) ? TimedOut<T>(deadline, abandoned: false)
                 : cancellation is not null
                 ? new CallResult<T>(CallEnd.Threw, default, ex, IoOutcome.Timeout, $"threw {ex.GetType().Name}: it cancelled the call itself, before its deadline", false)
                 // The error names the type: the operator gets a failed status, not the exception, and the type is often
@@ -697,6 +718,7 @@ internal static class BoundedCall
     private sealed class Lease(RequestMemory? memory, CallBound bound, CancellationTokenSource? own) : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
     {
         private int _parts = 2;
+        private int _cancelledBy = -1; // CancelledBy when the client completed; -1 until it has
 
         public static Lease Until(Task client, RequestMemory? memory, CallBound bound, CancellationTokenSource? own)
         {
@@ -717,9 +739,22 @@ internal static class BoundedCall
         /// <summary>The call site has recorded the call.</summary>
         public void CallSiteDone() => Release();
 
+        /// <summary>
+        /// Which of the framework's tokens had been cancelled when the client completed, for a call its client ended: read
+        /// as it completed, before its wait is told (the continuation is registered first, and runs synchronously when the
+        /// client completes inline); one classified before that (a client whose continuations run apart) reads them now, an
+        /// instant after the client completed.
+        /// </summary>
+        public CancelledBy CancelledWhenDone()
+        {
+            var read = Volatile.Read(ref _cancelledBy);
+            return read >= 0 ? (CancelledBy)read : CancelledNow(bound, own);
+        }
+
         /// <summary>The client's task has completed: it writes no more and no longer needs its token.</summary>
         private void ClientDone()
         {
+            Volatile.Write(ref _cancelledBy, (int)CancelledNow(bound, own)); // before the source is disposed
             own?.Dispose();
             bound.Release();
             Release();
