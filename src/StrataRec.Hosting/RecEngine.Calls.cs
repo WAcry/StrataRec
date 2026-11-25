@@ -30,10 +30,22 @@ public sealed partial class RecEngine
         private readonly SortedSet<string> _triggered = new(StringComparer.Ordinal);
         private List<IgnoredArm>? _ignored;
         private List<Logging.LogBatch>? _batches;
+        private List<CalledRun>? _runs;
 
         public RecEngine Engine => engine;
 
         public RecRequest Request => request;
+
+        /// <summary>The request asked for its trace: the called runs are kept with theirs (<see cref="RecResult.Calls"/>).</summary>
+        public bool Traces => request.Debug?.Trace == true;
+
+        public void Add(CalledRun run)
+        {
+            lock (_gate)
+            {
+                (_runs ??= new List<CalledRun>()).Add(run);
+            }
+        }
 
         public void Add(PipelineResult result, IgnoredArm[] ignored)
         {
@@ -69,10 +81,15 @@ public sealed partial class RecEngine
         {
             lock (_gate)
             {
-                if (_assigned.Count == 0 && _triggered.Count == 0 && _ignored is null && _batches is null)
+                if (_assigned.Count == 0 && _triggered.Count == 0 && _ignored is null && _batches is null && _runs is null)
                 {
                     return result;
                 }
+
+                // Calls end in any order: listed by who called, so the same request lists them alike.
+                _runs?.Sort(static (a, b) => string.CompareOrdinal(a.Caller, b.Caller) is not 0 and var byCaller ? byCaller
+                    : string.CompareOrdinal(a.Node, b.Node) is not 0 and var byNode ? byNode
+                    : a.Sequence.CompareTo(b.Sequence));
 
                 var ignored = result.Experiments.Ignored;
                 if (_ignored is not null)
@@ -104,6 +121,7 @@ public sealed partial class RecEngine
                     ServedBy = result.ServedBy,
                     ColumnProducers = result.ColumnProducers,
                     Trace = result.Trace,
+                    Calls = _runs is null ? result.Calls : new List<CalledRun>(_runs),
                     LogBatches = batches,
                     Recording = result.Recording,
                     Explanation = result.Explanation,
@@ -146,87 +164,102 @@ public sealed partial class RecEngine
         {
             var started = Stopwatch.GetTimestamp();
             var id = call.Call.PipelineId;
-            if (Chain(id) is { } chain)
+            PipelineResult? ran = null;
+            var answer = await RunAsync().ConfigureAwait(false);
+            if (scope.Traces)
             {
-                return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: the calls lead back to it ({chain})");
+                scope.Add(new CalledRun(pipelineId, call.Call.NodeId, call.Sequence, id, answer.Succeeded, answer.Error,
+                    Stopwatch.GetElapsedTime(started).TotalMilliseconds, ran?.AssignedArms ?? [], ran?.Outcomes ?? []));
             }
 
-            if (depth + 1 > MaxCallDepth)
+            return answer;
+
+            async ValueTask<PipelineCallResult> RunAsync()
             {
-                return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: calls nest deeper than {MaxCallDepth}");
-            }
-
-            var engine = scope.Engine;
-            var request = scope.Request;
-            if (engine.Enter(id, out _) is not { } callee)
-            {
-                return PipelineCallResult.Failed(id, $"pipeline '{id}' is not served by this engine");
-            }
-
-            try
-            {
-                var plan = callee.Plan;
-                if (call.Call.MismatchOf(plan) is { } mismatch)
+                if (Chain(id) is { } chain)
                 {
-                    return PipelineCallResult.Failed(id, $"the call does not fit pipeline '{id}': {mismatch}");
+                    return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: the calls lead back to it ({chain})");
                 }
 
-                var inputs = CallInputs(call.Given, call.CallerInputs, plan.RequestSchema);
-                if (plan.RequestSchema.Check(inputs) is { } invalid)
+                if (depth + 1 > MaxCallDepth)
                 {
-                    return PipelineCallResult.Failed(id, $"pipeline '{id}' rejects the call's inputs: {RequestSchema.Describe(invalid)}");
+                    return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: calls nest deeper than {MaxCallDepth}");
                 }
 
-                var deadline = CallBound.DeadlineAfter(started, call.Budget);
-                var assignment = await engine.AssignCallAsync(callee, request, deadline, callerCancellation).ConfigureAwait(false);
-                if (assignment.Error is { } assignmentError)
+                var engine = scope.Engine;
+                var request = scope.Request;
+                if (engine.Enter(id, out _) is not { } callee)
                 {
-                    return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: {assignmentError}");
+                    return PipelineCallResult.Failed(id, $"pipeline '{id}' is not served by this engine");
                 }
 
-                var arms = ExternalArms.Yield(plan, assignment.Arms, assignment.Ignored, out var ignored);
-                ignored = NotUnknown(ignored);
-                callee.Telemetry.RecordIgnored(ignored);
-                var remaining = call.Budget - Stopwatch.GetElapsedTime(started);
-                if (remaining <= TimeSpan.Zero)
-                {
-                    return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: nothing was left of the node's budget after its assignment");
-                }
-
-                PipelineResult? result = null;
                 try
                 {
-                    result = await engine._executor.ExecuteAsync(plan, new PipelineRequest
+                    var plan = callee.Plan;
+                    if (call.Call.MismatchOf(plan) is { } mismatch)
                     {
-                        RequestId = request.RequestId,
-                        Inputs = inputs,
-                        Arms = arms,
-                        Deadline = remaining,
-                        Seed = CallSeed(call.Seed, call.Call.NodeId, id, call.Sequence),
-                        TimeMs = call.TimeMs,
-                        CaptureLogs = request.Debug?.CaptureLogs == true,
-                        WriteLogs = WritesLogs(request),
-                        Calls = plan.Calls.IsEmpty ? null : new RunCalls(scope, id, depth + 1, this),
-                        OnEnd = callee.Bindings.Join(), // last: the executor, called next, ends it on every outcome
-                    }, callerCancellation).ConfigureAwait(false);
+                        return PipelineCallResult.Failed(id, $"the call does not fit pipeline '{id}': {mismatch}");
+                    }
+
+                    var inputs = CallInputs(call.Given, call.CallerInputs, plan.RequestSchema);
+                    if (plan.RequestSchema.Check(inputs) is { } invalid)
+                    {
+                        return PipelineCallResult.Failed(id, $"pipeline '{id}' rejects the call's inputs: {RequestSchema.Describe(invalid)}");
+                    }
+
+                    var deadline = CallBound.DeadlineAfter(started, call.Budget);
+                    var assignment = await engine.AssignCallAsync(callee, request, deadline, callerCancellation).ConfigureAwait(false);
+                    if (assignment.Error is { } assignmentError)
+                    {
+                        return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: {assignmentError}");
+                    }
+
+                    var arms = ExternalArms.Yield(plan, assignment.Arms, assignment.Ignored, out var ignored);
+                    ignored = NotUnknown(ignored);
+                    callee.Telemetry.RecordIgnored(ignored);
+                    var remaining = call.Budget - Stopwatch.GetElapsedTime(started);
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: nothing was left of the node's budget after its assignment");
+                    }
+
+                    PipelineResult? result = null;
+                    try
+                    {
+                        result = await engine._executor.ExecuteAsync(plan, new PipelineRequest
+                        {
+                            RequestId = request.RequestId,
+                            Inputs = inputs,
+                            Arms = arms,
+                            Deadline = remaining,
+                            Seed = CallSeed(call.Seed, call.Call.NodeId, id, call.Sequence),
+                            TimeMs = call.TimeMs,
+                            CaptureLogs = request.Debug?.CaptureLogs == true,
+                            WriteLogs = WritesLogs(request),
+                            Calls = plan.Calls.IsEmpty ? null : new RunCalls(scope, id, depth + 1, this),
+                            CalledBy = $"{pipelineId}/{call.Call.NodeId}#{call.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                            OnEnd = callee.Bindings.Join(), // last: the executor, called next, ends it on every outcome
+                        }, callerCancellation).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        // Counted as a request of the called pipeline and of its arms, as the host's requests of it are: its
+                        // experiments' health is read from these (an aborted one counts as an error, as there).
+                        var failed = result is not { Succeeded: true };
+                        callee.Telemetry.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, arms, failed, !failed && result!.Columns.Count == 0,
+                            !failed && result!.Degraded);
+                    }
+
+                    ran = result;
+                    scope.Add(result, ignored);
+                    return result.Succeeded
+                        ? new PipelineCallResult(id, true, null, result.Columns, result.Values)
+                        : PipelineCallResult.Failed(id, $"pipeline '{id}' failed: {result.Error}");
                 }
                 finally
                 {
-                    // Counted as a request of the called pipeline and of its arms, as the host's requests of it are: its
-                    // experiments' health is read from these (an aborted one counts as an error, as there).
-                    var failed = result is not { Succeeded: true };
-                    callee.Telemetry.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, arms, failed, !failed && result!.Columns.Count == 0,
-                        !failed && result!.Degraded);
+                    callee.Bindings.RequestEnded();
                 }
-
-                scope.Add(result, ignored);
-                return result.Succeeded
-                    ? new PipelineCallResult(id, true, null, result.Columns, result.Values)
-                    : PipelineCallResult.Failed(id, $"pipeline '{id}' failed: {result.Error}");
-            }
-            finally
-            {
-                callee.Bindings.RequestEnded();
             }
         }
 

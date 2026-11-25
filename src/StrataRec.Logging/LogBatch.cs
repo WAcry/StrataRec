@@ -26,6 +26,13 @@ public sealed class LogBatch
 
     public required string PipelineId { get; init; }
 
+    /// <summary>
+    /// For a run a node of another pipeline called: that pipeline, the node and the call's place among the node's calls,
+    /// as <c>feed/promoted#0</c>. Null for a run of the pipeline the request named. Two calls of one pipeline in a request
+    /// log under the same request and pipeline; this tells them apart.
+    /// </summary>
+    public string? CalledBy { get; init; }
+
     /// <summary>Content id of the manifest the plan was built from.</summary>
     public required string ManifestId { get; init; }
 

@@ -327,6 +327,12 @@ internal static class RunCommand
                 $"Pipeline '{pipelineId}' falls back to '{fallback}', which a run on one manifest does not load: a request that fails here does not fall back.",
                 "run on the workspace (-c) to try the fallback too");
         }
+        else if (loaded.Applied && engine.TryGetPipeline(pipelineId, out var calling) && !calling.Plan.Calls.IsEmpty)
+        {
+            notice = new ConfigDiagnostic(DiagnosticSeverity.Warning, "RUN_CALLED_NOT_LOADED", "manifest:" + read.Id, string.Empty,
+                $"Pipeline '{pipelineId}' calls {string.Join(", ", calling.Plan.Calls)}, which a run on one manifest does not load: those calls fail.",
+                "run on the workspace (-c) to run the pipelines it calls too");
+        }
 
         return (diagnostics, notice);
     }

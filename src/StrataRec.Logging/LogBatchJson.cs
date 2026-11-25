@@ -33,6 +33,11 @@ public static class LogBatchJson
         json.WriteString("request_id", batch.RequestId);
         json.WriteNumber("time_ms", batch.TimeMs);
         json.WriteString("pipeline_id", batch.PipelineId);
+        if (batch.CalledBy is { } calledBy)
+        {
+            json.WriteString("called_by", calledBy);
+        }
+
         json.WriteString("manifest", batch.ManifestId);
         json.WriteString("tap_id", batch.TapId);
         json.WriteString("schema", batch.Schema.Id);

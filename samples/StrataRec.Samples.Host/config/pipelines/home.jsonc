@@ -1,0 +1,43 @@
+// The home page: the trending feed with sponsored items placed into it. One node, a custom operator (SlotBlend@1,
+// Components/SlotBlend.cs), calls the two pipelines for the request and blends what they return; how the page is put
+// together is this node's configuration, so an experiment changes it like anything else (experiments/exp_home_slots.jsonc).
+// The host asks for one pipeline, "home", and the engine runs the other two for the same request.
+{
+  "$schema": "../schemas/pipeline.schema.json",
+  "pipeline_id": "home",
+  "entity_key_type": "int64",
+  "request_schema": {
+    "user_id": { "type": "int64?" },
+    "region":  { "type": "string?" }
+  },
+  "columns": {
+    "score":     { "type": "float32", "default": 0.0 },
+    "sponsored": { "type": "bool" }
+  },
+  "param_schema": {
+    "page_size":       { "type": "int64", "min": 1, "max": 50 },
+    "sponsored_every": { "type": "int64", "min": 0, "max": 50 }
+  },
+  "params": {
+    "page_size": 10,
+    "sponsored_every": 3
+  },
+  "nodes": {
+    "blend": {
+      "order": 100, "op": "SlotBlend@1",
+      "config": {
+        "organic": "trending_feed", "organic_score": "score",
+        "sponsored": "sponsored", "sponsored_score": "bid",
+        "limit_param": "page_size", "every_param": "sponsored_every",
+        "score_col": "score", "sponsored_col": "sponsored"
+      }
+    }
+  },
+  "output": {
+    "limit_param": "page_size",
+    "columns": {
+      "score": "col.score",
+      "sponsored": "col.sponsored"
+    }
+  }
+}

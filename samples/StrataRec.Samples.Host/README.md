@@ -3,7 +3,7 @@
 一个最小的 Web 服务，演示两件事：
 
 1. 怎样把引擎放进服务：`AddStrataRec` 在宿主启动时加载本目录下的工作区 `config/`，`POST /recommend/{pipeline}` 只做传输：请求体用 `RecRequestJson` 按流水线的 `RequestSchema` 读出，宿主补上截止时间组成 `RecRequest`，`RecResult` 用 `RecResultJson` 写回，按 `RecResult.ErrorKind` 映射状态码。请求文档和结果文档都是引擎的，换一个宿主也是同样的文档。
-2. 怎样写并注册自己的组件：三个扩展点有六个小实现（外部服务的召回、模型和过滤三种用法），在 `SampleEnvironment.cs` 里和内置组件一起注册，工作区按类型名引用它们。
+2. 怎样写并注册自己的组件：三个扩展点有七个小实现（外部服务的召回、模型和过滤三种用法，以及调用另一条流水线的算子），在 `SampleEnvironment.cs` 里和内置组件一起注册，工作区按类型名引用它们。
 
 | 组件 | 类型名 | 契约 | 演示什么 |
 | --- | --- | --- | --- |
@@ -13,8 +13,22 @@
 | `Components/CategoryBoost.cs` | `CategoryBoost@1` | `IOperatorFactory` | 配置类即 JSON Schema；只声明 `ColumnWriter`；检查都在编译期；执行时从 `RequestMemory` 租缓冲，不按行分配 |
 | `Components/StockService.cs` | `stock@1` | `IServiceClient` | 过滤节点调用的业务服务：回答关于物品的调用，每项一个 bool（`in_stock`）；一项的回答只取决于这一项，所以引擎可以随意分批、逐项缓存（绑定声明了 `cache`）和逐项回放；回答不了的调用返回失败状态并说明它回答什么 |
 | `Components/StockFilter.cs` | `StockFilter@1` | `IOperatorFactory` | 调用外部服务的自定义算子：编译期按绑定名取服务（`OperatorCompileContext.Service`），执行时把存活行作为调用的物品经 `OperatorContext.CallAsync` 发出（有界等待、缓存、录制和回放都由引擎做），按回答删行；调用失败交给节点的 `on_failure`（示例里 `skip`，保留全部候选），回答用不了也算失败，从不猜；改了流水线之后回放，没有录制过的候选是回放报告里的缺口：录制里这个服务（同一版本，哪个节点调用的都算）有过这个输出时按 bool 缺口的值 false 回答，所以被删掉，看缺口才能和真没库存的区分；录制里这个服务根本没有这个输出（录制时没有调用它）时调用失败，按 `on_failure` 保留全部候选。它还演示算子写请求列：删掉了几个候选写进 `req.stock.dropped`（描述符带 `RequestWriter`，编译期 `TryWriteRequestColumn`，执行时 `SetRequestValue`，节点提交时才发布），流水线用 `output.values` 把它作为 `out_of_stock` 返回给调用方 |
+| `Components/SlotBlend.cs` | `SlotBlend@1` | `IOperatorFactory` | 调用另外两条流水线的自定义算子：编译期声明每次调用和它需要的东西（`TryCallPipeline`、`CallAppendsRows`、`TryCallColumn`），在工作区里对着被调用流水线的接口检查；执行时两次调用先后发起、再一起等（`OperatorContext.CallPipelineAsync`），所以两条流水线并发运行；调用失败是一个结果，没有主列表就让节点失败，没有赞助内容只是降级；怎么把赞助行放进列表是它自己的规则 |
 
 每个文件的注释写了契约的规则（取消、预算、分配、缺失值）以及这个实现为什么这样写。
+
+## 一个页面，几条流水线
+
+`config/pipelines/home.jsonc` 是首页：它只有一个节点 `SlotBlend@1`，为同一个请求调用 `trending_feed` 和 `sponsored` 两条流水线，把赞助行每隔几行放进主列表。宿主只请求 `home`，另外两条由引擎运行：同一个请求 id、同一次实验分配（各条流水线运行自己的臂，结果的 `experiments` 里是全部），时间用的是这个节点剩下的预算。三条流水线各自有节点、参数、实验和日志，也都可以单独请求。
+
+页面怎么组成是这个节点的配置，所以和别的配置一样能做实验：`experiments/exp_home_slots.jsonc` 把赞助行从每三行一个改成每两行一个；换一条被调用的流水线，或者换掉这个节点，也只是补丁。
+
+```sh
+curl -s -X POST localhost:5000/recommend/home \
+     -H 'content-type: application/json' -d @config/requests/home_1001.json
+```
+
+用 `stratarec run -t` 运行同一个请求（请求文件里加上 `"pipeline_id": "home"`）时，追踪里有每条被调用流水线的节点。
 
 ## 运行
 
@@ -48,11 +62,13 @@ curl -s -X POST localhost:5000/recommend/trending_feed \
 
 ## 服务发布（manifest）
 
-上面的服务在启动时读一次工作区。生产节点服务的是发布出来的 manifest（设计 10.1、10.3）：设置 `StrataRec:Store` 为一个 artifact store 目录，服务就从那里读每条流水线（`StrataRec:Pipelines`，默认 `trending_feed`）的指针，启动前加载好，之后按 `StrataRec:ReleasePollMs`（示例默认 2 秒，生产用引擎默认的 10 秒）轮询新的发布。`config/` 这时只是绑定里相对路径的基准目录。在本目录里走一遍完整流程：
+上面的服务在启动时读一次工作区。生产节点服务的是发布出来的 manifest（设计 10.1、10.3）：设置 `StrataRec:Store` 为一个 artifact store 目录，服务就从那里读每条流水线（`StrataRec:Pipelines`，默认是示例的三条）的指针，启动前加载好，之后按 `StrataRec:ReleasePollMs`（示例默认 2 秒，生产用引擎默认的 10 秒）轮询新的发布。`config/` 这时只是绑定里相对路径的基准目录。在本目录里走一遍完整流程：
 
 ```sh
-dotnet run -- stratarec build -c config -s store          # 校验、上传产物，打印 publish 命令
-dotnet run -- stratarec publish -s store <manifest id>
+for p in trending_feed sponsored home; do                 # 每条流水线各自发布；首页调用另外两条，所以三条都要有
+  dotnet run -- stratarec build -c config -s store -p $p  # 校验、上传产物，打印 publish 命令
+done
+dotnet run -- stratarec publish -s store <manifest id>    # 每个 manifest 一次
 dotnet run --StrataRec:Store=store                        # 服务它；响应里的 manifest 是它的 id
 
 # 另一个终端：紧急停止一个实验。一次轮询之内服务换成撤销后的 manifest，这个实验的臂此后被忽略（experiments.ignored）

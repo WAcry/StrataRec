@@ -228,7 +228,8 @@ public static class ServiceCollectionExtensions
 
     /// <summary>
     /// Loads pipelines from a workspace into <paramref name="engine"/>; returns every diagnostic (warnings included).
-    /// Pipelines that fail keep their current plan, if any. A pipeline's <c>fallback_pipeline</c> is loaded with it.
+    /// Pipelines that fail keep their current plan, if any. A pipeline's <c>fallback_pipeline</c> is loaded with it, and
+    /// so are the pipelines its nodes call, and theirs.
     /// </summary>
     /// <param name="pipelines">The pipelines to load; null or empty loads every pipeline of the workspace.</param>
     /// <param name="cancellationToken">Cancels the load of the pipeline being loaded and of those not yet started.</param>
@@ -256,8 +257,12 @@ public static class ServiceCollectionExtensions
         // keeps its current plan, like any failed load.
         ids = workspace.WithFallbacks(ids, diagnostics, out var unresolved);
 
-        foreach (var id in ids)
+        // The pipelines a loaded plan's nodes call are served with it too (a call of one not served fails): each is loaded
+        // once, after the pipeline that named it, with its own fallback.
+        var listed = new HashSet<string>(ids, StringComparer.Ordinal);
+        for (var i = 0; i < ids.Count; i++)
         {
+            var id = ids[i];
             if (unresolved.Contains(id))
             {
                 continue;
@@ -271,6 +276,28 @@ public static class ServiceCollectionExtensions
 
             var result = await engine.LoadAsync(request, cancellationToken: cancellationToken).ConfigureAwait(false);
             diagnostics.AddRange(result.Diagnostics);
+            if (!result.Applied || !engine.TryGetPipeline(id, out var loaded) || loaded.Plan.Calls.IsEmpty)
+            {
+                continue;
+            }
+
+            var called = new List<string>();
+            foreach (var other in loaded.Plan.Calls)
+            {
+                if (!listed.Contains(other) && workspace.Pipelines.ContainsKey(other))
+                {
+                    called.Add(other);
+                }
+            }
+
+            foreach (var other in workspace.WithFallbacks(called, diagnostics, out var missing))
+            {
+                unresolved.UnionWith(missing);
+                if (listed.Add(other))
+                {
+                    ids.Add(other);
+                }
+            }
         }
 
         // Against the plans served now: a pipeline that failed to load is judged by the plan it keeps.

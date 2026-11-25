@@ -293,6 +293,7 @@ internal static class TapCapture
             TapId = tap.TapId,
             RequestId = state.RequestId,
             PipelineId = state.Plan.PipelineId,
+            CalledBy = state.CalledBy,
             ManifestId = state.Plan.ManifestId,
             Schema = tap.Schema,
             TimeMs = state.Context[PlanSchema.RequestTimeContext].AsInt64(),

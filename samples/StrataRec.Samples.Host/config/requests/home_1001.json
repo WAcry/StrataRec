@@ -1,0 +1,5 @@
+{
+  "request_id": "req-home-1001",
+  "inputs": { "user_id": 1001, "region": "us" },
+  "assignment": ["exp_home_slots/dense", "exp_local_boost/strong"]
+}

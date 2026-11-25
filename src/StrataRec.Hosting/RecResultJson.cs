@@ -90,6 +90,43 @@ public static class RecResultJson
             json.WriteEndArray();
         }
 
+        if (result.Calls is { } calls)
+        {
+            json.WriteStartArray("calls");
+            foreach (var call in calls)
+            {
+                json.WriteStartObject();
+                json.WriteString("caller", call.Caller);
+                json.WriteString("node", call.Node);
+                json.WriteNumber("seq", call.Sequence);
+                json.WriteString("pipeline", call.PipelineId);
+                json.WriteBoolean("succeeded", call.Succeeded);
+                if (call.Error is not null)
+                {
+                    json.WriteString("error", call.Error);
+                }
+
+                json.WriteNumber("elapsed_ms", Math.Round(call.ElapsedMs, 3));
+                json.WriteStartArray("arms");
+                foreach (var arm in call.Arms)
+                {
+                    json.WriteStringValue(arm);
+                }
+
+                json.WriteEndArray();
+                json.WriteStartArray("trace");
+                foreach (var outcome in call.Trace)
+                {
+                    WriteOutcome(json, outcome);
+                }
+
+                json.WriteEndArray();
+                json.WriteEndObject();
+            }
+
+            json.WriteEndArray();
+        }
+
         if (result.LogBatches is { } batches)
         {
             json.WriteStartArray("logs");

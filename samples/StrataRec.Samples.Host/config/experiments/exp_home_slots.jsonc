@@ -1,0 +1,13 @@
+// How dense the sponsored rows of the home page are: a parameter of the node that blends the two pipelines.
+{
+  "$schema": "../schemas/experiment.schema.json",
+  "experiment_id": "exp_home_slots",
+  "pipeline_id": "home",
+  "owner": "home-team",
+  "description": "A sponsored row after every two organic rows instead of every three.",
+  "expires_at": "2099-12-31",
+  "arms": {
+    "control": {},
+    "dense": { "params": { "sponsored_every": 2 } }
+  }
+}

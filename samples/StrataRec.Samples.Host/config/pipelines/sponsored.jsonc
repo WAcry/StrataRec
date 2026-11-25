@@ -1,0 +1,41 @@
+// Sponsored items: a sponsor list with a bid each, the best few. A pipeline like any other, with its own nodes, parameters,
+// experiments and logs: the home page calls it (pipelines/home.jsonc), and it can be requested on its own.
+{
+  "$schema": "../schemas/pipeline.schema.json",
+  "pipeline_id": "sponsored",
+  "entity_key_type": "int64",
+  "request_schema": {
+    "user_id": { "type": "int64?" },
+    "region":  { "type": "string?" }
+  },
+  "columns": {
+    "bid": { "type": "float32", "default": 0.0 }
+  },
+  "param_schema": {
+    "recall_quotas": { "type": "map<string,int64>", "min": 0, "max": 100 },
+    "top_k":         { "type": "int64", "min": 1, "max": 20 }
+  },
+  "params": {
+    "recall_quotas": { "sponsors": 6 },
+    "top_k": 4
+  },
+  "nodes": {
+    "recall": {
+      "order": 100, "op": "MultiSourceRecall@1",
+      "config": { "quotas_param": "recall_quotas" }
+    },
+    // A sponsor pays more for an item people click: the bid is the list's score scaled by the item's click rate.
+    "bid": {
+      "order": 200, "op": "ExpressionScorer@1",
+      "config": { "output_col": "bid", "expr": "col.recall.best_score * col.item.ctr_7d" }
+    },
+    "rank": {
+      "order": 300, "op": "TopK@1",
+      "config": { "score_col": "bid", "k_param": "top_k" }
+    }
+  },
+  "output": {
+    "limit_param": "top_k",
+    "columns": { "bid": "col.bid" }
+  }
+}

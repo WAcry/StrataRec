@@ -1,0 +1,10 @@
+// The release for local runs (design 10.1), as releases/trending_feed.local.jsonc.
+{
+  "$schema": "../schemas/release.schema.json",
+  "pipeline_id": "sponsored",
+  "environment": "local",
+  "catalog": "trending",
+  "bindings": "local",
+  "experiments": {
+  }
+}

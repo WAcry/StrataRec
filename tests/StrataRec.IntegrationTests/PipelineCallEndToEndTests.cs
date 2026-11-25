@@ -144,6 +144,11 @@ public sealed class PipelineCallEndToEndTests
         Assert.All(result.Items.Where(i => !i.Columns["promoted"].AsBool()), i => Assert.True(i.Columns["promo_bid"].IsMissing));
         Assert.Equal("succeeded", NodeOutcomeNames.Name(result.Trace!.Single(n => n.NodeId == "promoted").Kind));
 
+        // The trace has the called run with its own: who called, what it ran.
+        var called = Assert.Single(result.Calls!);
+        Assert.Equal(("feed", "promoted", 0, "promoted", true), (called.Caller, called.Node, called.Sequence, called.PipelineId, called.Succeeded));
+        Assert.Equal(new[] { "recall", "bid", "count" }, called.Trace.Select(n => n.NodeId));
+
         // The same request again calls with the same seed and time: the same result.
         var again = await engine.ExecuteAsync(Request("feed"), ct);
         Assert.Equal(result.Items.Select(i => i.Id), again.Items.Select(i => i.Id));
@@ -163,6 +168,8 @@ public sealed class PipelineCallEndToEndTests
         Assert.Equal(new[] { "exp_feed/control", "exp_promoted/few" }, result.Experiments.Assigned);
         Assert.Contains("exp_promoted", result.Experiments.Triggered);
         Assert.Empty(result.Experiments.Ignored);
+
+        Assert.Equal(new[] { "exp_promoted/few" }, Assert.Single(result.Calls!).Arms);
 
         // An arm no pipeline has is still ignored.
         var unknown = await engine.ExecuteAsync(Request("feed", assignment: ["exp_promoted/few", "exp_nowhere/x"]), ct);
@@ -196,6 +203,9 @@ public sealed class PipelineCallEndToEndTests
         Assert.Equal(served, result.Succeeded);
         var node = result.Trace!.Single(n => n.NodeId == "promoted");
         Assert.Contains("pipeline 'promoted' is not served by this engine", node.Detail);
+        var called = Assert.Single(result.Calls!);
+        Assert.False(called.Succeeded);
+        Assert.Empty(called.Trace);
         if (served)
         {
             Assert.Empty(PromotedRows(result));
@@ -252,6 +262,28 @@ public sealed class PipelineCallEndToEndTests
         {
             Assert.Contains($"'{suggested}'", error.Hint);
         }
+    }
+
+    [Fact]
+    public async Task ACalledRunsLogs_AreItsPipelines_AndSayWhoCalled()
+    {
+        // The called pipeline gets an experiment record of its own; captured, it comes back after the request's own batches.
+        var engine = Engine(Host());
+        var request = new RecRequest
+        {
+            PipelineId = "feed", RequestId = "req-call", Inputs = new RequestInputs().Set("user_id", 1001), Assignment = ["exp_promoted/few"],
+            Deadline = HomeFeedTestHost.Deadline, TimeMs = 1_767_225_600_000, Debug = new DebugOptions { CaptureLogs = true },
+        };
+
+        var result = await engine.ExecuteAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        var own = Assert.Single(result.LogBatches!, b => b.PipelineId == "feed");
+        Assert.Null(own.CalledBy);
+        var called = Assert.Single(result.LogBatches!, b => b.PipelineId == "promoted");
+        Assert.Equal(("$experiments", "req-call", "feed/promoted#0"), (called.TapId, called.RequestId, called.CalledBy));
+        Assert.Contains("\"called_by\": \"feed/promoted#0\"", StrataRec.Logging.LogBatchJson.Encode(called));
+        Assert.DoesNotContain("called_by", StrataRec.Logging.LogBatchJson.Encode(own));
     }
 
     [Fact]

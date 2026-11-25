@@ -26,6 +26,9 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 {
     private const string Pipeline = "trending_feed";
 
+    /// <summary>The sample's pipelines: the home page (pipelines/home.jsonc) calls the other two.</summary>
+    private static readonly string[] Pipelines = ["home", "sponsored", "trending_feed"];
+
     private readonly SampleHost _host;
 
     private readonly List<string> _copies = new(); // workspace copies this test made, deleted when it ends
@@ -55,7 +58,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         await using var engine = new RecEngine(SampleEnvironment.Create() with { BaseDirectory = ConfigRoot });
         var loaded = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, ConfigRoot, "local", cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(Clean(loaded.Items), string.Join("\n", loaded.Items));
-        Assert.Equal(new[] { Pipeline }, engine.PipelineIds());
+        Assert.Equal(Pipelines, engine.PipelineIds());
     }
 
     [Fact]
@@ -76,7 +79,8 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Contains(("BOOST_INVALID", "pipeline:trending_feed/nodes/editorial_boost/config/boosts/local_news"), errors);
         Assert.Contains(("BINDING_SETTINGS", "bindings:local/sources/user_store/data_fle"), errors);
         Assert.Contains(("SERVICE_SIGNATURE", "pipeline:trending_feed/nodes/engagement/config/model"), errors); // the node calls v3; the binding serves v4
-        Assert.Equal(3, errors.Count);
+        Assert.Contains(("PIPELINE_CALL_FAILED", "pipeline:home/nodes/blend/config/organic"), errors); // the home page calls the pipeline that does not compile
+        Assert.Equal(4, errors.Count);
     }
 
     [Fact]
@@ -252,6 +256,42 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(("exp_gone/treatment", "unknown"), (ignored!["id"]!.GetValue<string>(), ignored["reason"]!.GetValue<string>()));
     }
 
+    /// <summary>
+    /// The home page (pipelines/home.jsonc): one request, and the engine runs the trending feed and the sponsored pipeline
+    /// for it, each with its own arms; SlotBlend@1 places a sponsored row after every few organic ones.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "inputs": { "user_id": 1001, "region": "us" } }""", new[] { 4, 8 })]
+    [InlineData("""{ "inputs": { "user_id": 1001, "region": "us" }, "assignment": ["exp_home_slots/dense", "exp_local_boost/strong"] }""", new[] { 3, 6, 9 })]
+    public async Task TheHomePage_CallsTwoPipelines_AndPlacesSponsoredRowsIntoTheFeed(string body, int[] sponsoredRanks)
+    {
+        var client = _host.CreateClient();
+
+        var home = await Post(client, "home", body);
+        var feed = await Post(client, Pipeline, body);
+        var sponsored = await Post(client, "sponsored", body);
+
+        Assert.Equal(HttpStatusCode.OK, home.Status);
+        var items = home.Json["items"]!.AsArray()
+            .Select(i => (Rank: i!["rank"]!.GetValue<int>(), Id: i["id"]!.GetValue<long>(), Sponsored: i["columns"]!["sponsored"]!.GetValue<bool>(),
+                Score: i["columns"]!["score"]!.GetValue<double>()))
+            .ToList();
+        Assert.Equal(sponsoredRanks, items.Where(i => i.Sponsored).Select(i => i.Rank));
+
+        // The organic rows are the feed's, in its order; the sponsored ones the sponsored pipeline's that the feed lacks, with their bids.
+        var feedIds = feed.Json["items"]!.AsArray().Select(i => i!["id"]!.GetValue<long>()).ToList();
+        var organic = items.Where(i => !i.Sponsored).Select(i => i.Id).ToList();
+        Assert.Equal(feedIds.Take(organic.Count), organic);
+        var bids = sponsored.Json["items"]!.AsArray().Where(i => !feedIds.Contains(i!["id"]!.GetValue<long>()))
+            .Select(i => (i!["id"]!.GetValue<long>(), i["columns"]!["bid"]!.GetValue<double>())).ToList();
+        Assert.Equal(bids.Take(sponsoredRanks.Length), items.Where(i => i.Sponsored).Select(i => (i.Id, i.Score)));
+
+        // The request's arms are those of every pipeline it ran.
+        var assigned = Strings(home.Json["experiments"]!["assigned"]);
+        Assert.Equal(body.Contains("assignment", StringComparison.Ordinal) ? new[] { "exp_home_slots/dense", "exp_local_boost/strong" } : [], assigned);
+        Assert.Empty(home.Json["experiments"]!["ignored"]!.AsArray());
+    }
+
     [Fact]
     public async Task AnUnknownPipeline_Is404()
     {
@@ -259,7 +299,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
         Assert.Equal(HttpStatusCode.NotFound, response.Status);
         Assert.Equal("Unknown pipeline 'home_feed'.", response.Json["detail"]!.GetValue<string>());
-        Assert.Equal(new[] { Pipeline }, Strings(response.Json["pipelines"]));
+        Assert.Equal(Pipelines, Strings(response.Json["pipelines"]));
     }
 
     [Theory]
@@ -395,7 +435,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var json = JsonNode.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))!;
         Assert.Equal("ok", json["status"]!.GetValue<string>());
-        Assert.Equal(new[] { Pipeline }, Strings(json["pipelines"]));
+        Assert.Equal(Pipelines, Strings(json["pipelines"]));
     }
 
     /// <summary>The ids of trending@1's list for region us (bindings/local.jsonc).</summary>
@@ -436,11 +476,18 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     {
         var store = Directory.CreateTempSubdirectory("stratarec-sample-store-").FullName;
         _copies.Add(store);
-        var manifest = Path.Combine(store, "manifest.json");
-        var (code, _, error) = await StratarecText("build", "-c", ConfigRoot, "-s", store, "-m", manifest);
-        Assert.True(code == 0, error);
-        (code, _, error) = await StratarecText("publish", "-s", store, manifest);
-        Assert.True(code == 0, error);
+        int code;
+        string error;
+        foreach (var id in Pipelines)
+        {
+            // The service serves the three: each is built and published on its own, the home page's calls with it.
+            var manifest = Path.Combine(store, id + ".manifest.json");
+            (code, _, error) = await StratarecText("build", "-c", ConfigRoot, "-s", store, "-p", id, "-m", manifest);
+            Assert.True(code == 0, error);
+            (code, _, error) = await StratarecText("publish", "-s", store, manifest);
+            Assert.True(code == 0, error);
+        }
+
         var published = await Pointer(store);
 
         using var node = _host.WithWebHostBuilder(builder => builder

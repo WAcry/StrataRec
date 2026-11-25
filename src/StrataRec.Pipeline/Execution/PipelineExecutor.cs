@@ -112,6 +112,9 @@ internal sealed class PipelineRequest
     /// </summary>
     public IPipelineCalls? Calls { get; init; }
 
+    /// <summary>For a run a node of another pipeline called: who called, for its log batches (<see cref="Logging.LogBatch.CalledBy"/>).</summary>
+    public string? CalledBy { get; init; }
+
     /// <summary>The seed of a request that does not set one: a hash of its id (design 3.4).</summary>
     public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
@@ -261,6 +264,9 @@ internal sealed class RequestState
 
     /// <summary>Runs the pipelines the run's nodes call (<see cref="PipelineRequest.Calls"/>); null when nothing does.</summary>
     public IPipelineCalls? Calls { get; init; }
+
+    /// <summary>Who called the run (<see cref="PipelineRequest.CalledBy"/>); null for a run of the request's own pipeline.</summary>
+    public string? CalledBy { get; init; }
 
     public TimeSpan Remaining => Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), DeadlineTimestamp);
 
@@ -430,6 +436,7 @@ internal sealed class PipelineExecutor
                 Replay = replay,
                 Explainer = request.ExplainIds is { } explain ? new CandidateExplainer(explain) : null,
                 Calls = request.Calls,
+                CalledBy = request.CalledBy,
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures.AsSpan(), cancellationToken);
@@ -1479,6 +1486,7 @@ internal sealed class PipelineExecutor
                 TapId = "$experiments",
                 RequestId = state.RequestId,
                 PipelineId = state.Plan.PipelineId,
+                CalledBy = state.CalledBy,
                 ManifestId = state.Plan.ManifestId,
                 Schema = Logging.LogSchema.Experiments,
                 TimeMs = state.Context[PlanSchema.RequestTimeContext].AsInt64(),

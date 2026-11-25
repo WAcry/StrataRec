@@ -160,6 +160,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         foreach (var state in _pipelines)
         {
             CheckFallback(state.PipelineId, checks, DiagnosticSeverity.Error);
+            CheckCalls(state.PipelineId, checks, DiagnosticSeverity.Error);
         }
 
         LogWarnings(checks.Items);
@@ -438,11 +439,66 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     private void CheckFallbacksAround(string pipelineId, DiagnosticBag diagnostics)
     {
         CheckFallback(pipelineId, diagnostics, DiagnosticSeverity.Warning);
+        CheckCalls(pipelineId, diagnostics, DiagnosticSeverity.Warning);
         foreach (var other in _pipelines)
         {
-            if (other.PipelineId != pipelineId && _engine.TryGetPipeline(other.PipelineId, out var loaded) && loaded.FallbackPipeline == pipelineId)
+            if (other.PipelineId == pipelineId || !_engine.TryGetPipeline(other.PipelineId, out var loaded))
+            {
+                continue;
+            }
+
+            if (loaded.FallbackPipeline == pipelineId)
             {
                 CheckFallback(other.PipelineId, diagnostics, DiagnosticSeverity.Warning);
+            }
+
+            if (loaded.Plan.Calls.Contains(pipelineId))
+            {
+                CheckCalls(other.PipelineId, diagnostics, DiagnosticSeverity.Warning, only: pipelineId); // its calls of the new plan
+            }
+        }
+    }
+
+    /// <summary>
+    /// The pipelines a served pipeline's nodes call (design 3.4): one this host does not serve fails every such call (an
+    /// error at startup, a warning afterwards, as for a fallback), and a served one is checked against what each call
+    /// needs of it, which a compile without the other pipelines could not (the call would fail when made).
+    /// </summary>
+    /// <param name="only">Check the calls of this pipeline alone: the one whose plan changed.</param>
+    private void CheckCalls(string pipelineId, DiagnosticBag diagnostics, DiagnosticSeverity notServed, string? only = null)
+    {
+        if (!_engine.TryGetPipeline(pipelineId, out var loaded) || loaded.Plan.Calls.IsEmpty)
+        {
+            return;
+        }
+
+        var reported = new HashSet<(string, string)>();
+        foreach (var node in loaded.Plan.Nodes)
+        {
+            foreach (var call in node.Calls)
+            {
+                var called = call.PipelineId;
+                if (only is not null && called != only)
+                {
+                    continue;
+                }
+
+                var pointer = node.Pointer + "/config" + call.ConfigKey;
+                if (!_served.Contains(called))
+                {
+                    if (reported.Add((pointer, called)))
+                    {
+                        diagnostics.Add(new ConfigDiagnostic(notServed, "RELEASE_CALLED_NOT_SERVED", PipelineLabel(pipelineId), pointer,
+                            $"Node '{node.NodeId}' of pipeline '{pipelineId}' calls '{called}', which this host does not serve: every such call fails.",
+                            $"add '{called}' to StrataRecOptions.Pipelines and publish its manifest for environment '{_environment}'"));
+                    }
+                }
+                else if (_engine.TryGetPipeline(called, out var served) && call.MismatchOf(served.Plan) is { } mismatch && reported.Add((pointer, mismatch)))
+                {
+                    diagnostics.Warning("RELEASE_CALL_MISMATCH", PipelineLabel(pipelineId), pointer,
+                        $"Node '{node.NodeId}' of pipeline '{pipelineId}' calls '{called}', which it does not fit as served: {mismatch}. Every such call fails.",
+                        $"release '{pipelineId}' and '{called}' so that they agree");
+                }
             }
         }
     }

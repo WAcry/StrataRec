@@ -533,6 +533,7 @@ public sealed partial class RecEngine
         ServedBy = result.ServedBy,
         ColumnProducers = result.ColumnProducers,
         Trace = result.Trace,
+        Calls = result.Calls,
         LogBatches = result.LogBatches,
         Recording = bundle,
         Explanation = result.Explanation,

@@ -70,6 +70,24 @@ internal static class ResultText
             }
         }
 
+        if (result.Calls is { } calls)
+        {
+            // Each run of a pipeline a node called, under who called it, with its own nodes.
+            foreach (var call in calls)
+            {
+                var how = call.Succeeded ? "succeeded" : $"failed ({call.Error})";
+                var arms = call.Arms.Count == 0 ? string.Empty : $", arms {string.Join(", ", call.Arms)}";
+                output.WriteLine($"  call      {call.Caller}/{call.Node}#{call.Sequence.ToString(CultureInfo.InvariantCulture)} -> {call.PipelineId}: {how}, " +
+                                 $"{call.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture)} ms{arms}");
+                foreach (var node in call.Trace)
+                {
+                    var detail = node.Detail is null ? string.Empty : $" ({node.Detail})";
+                    output.WriteLine($"{Continued}  {node.NodeId}: {NodeOutcomeNames.Name(node.Kind)}{detail}, " +
+                                     $"{node.DurationMs.ToString("0.###", CultureInfo.InvariantCulture)} ms, {node.RowsIn} -> {node.RowsOut} rows");
+                }
+            }
+        }
+
         if (result.Trace is not null && result.ColumnProducers is { Count: > 0 } producers)
         {
             var pairs = new List<string>(producers.Count);

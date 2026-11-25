@@ -21,3 +21,7 @@
 {"id": 21, "ctr_7d": 0.033, "age_hours": 1, "category": "local_news"}
 {"id": 22, "ctr_7d": 0.051, "age_hours": 2, "category": "travel"}
 {"id": 23, "ctr_7d": 0.046, "age_hours": 5, "category": "music"}
+{"id": 24, "ctr_7d": 0.070, "age_hours": 4, "category": "sponsored"}
+{"id": 25, "ctr_7d": 0.045, "age_hours": 8, "category": "sponsored"}
+{"id": 26, "ctr_7d": 0.058, "age_hours": 2, "category": "sponsored"}
+{"id": 27, "ctr_7d": 0.030, "age_hours": 12, "category": "sponsored"}

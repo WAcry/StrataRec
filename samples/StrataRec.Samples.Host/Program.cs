@@ -36,7 +36,8 @@ builder.Services.AddStrataRec(options =>
     // Releases (design 10.1, 10.3): with StrataRec:Store set, the service serves what is published to that store, as a
     // production node does, and polls for what is published next; config/ is then only where the bindings' relative
     // paths resolve. Try the whole loop from this directory:
-    //   dotnet run -- stratarec build -c config -s store            validates, uploads, and prints the publish command
+    //   dotnet run -- stratarec build -c config -s store -p <id>    validates, uploads, and prints the publish command;
+    //                                                               once per pipeline (the home page calls the other two)
     //   dotnet run -- stratarec publish -s store <manifest id>
     //   dotnet run --StrataRec:Store=store                          serves it; requests answer with its manifest id
     //   dotnet run -- stratarec revoke -s store -p trending_feed exp_local_boost

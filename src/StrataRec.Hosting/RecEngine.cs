@@ -196,6 +196,18 @@ public sealed class DebugOptions
     public const int MaxExplainIds = ExplainTargets.MaxCount;
 }
 
+/// <summary>One run of a pipeline a node of another called, as a request's trace shows it (<see cref="RecResult.Calls"/>).</summary>
+/// <param name="Caller">The pipeline whose node called.</param>
+/// <param name="Node">The node that called.</param>
+/// <param name="Sequence">The call's place among the calls of the node's attempt, from 0.</param>
+/// <param name="PipelineId">The pipeline called.</param>
+/// <param name="Error">Why the call failed: the pipeline is not served, does not fit the call, rejected its inputs, failed, or had no time.</param>
+/// <param name="Arms">The arms the called run ran; empty when it did not run.</param>
+/// <param name="Trace">The called run's node outcomes; empty when it did not run.</param>
+public sealed record CalledRun(
+    string Caller, string Node, int Sequence, string PipelineId, bool Succeeded, string? Error, double ElapsedMs, IReadOnlyList<string> Arms,
+    IReadOnlyList<NodeOutcome> Trace);
+
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
 /// <remarks>
 /// A request rejected before its arms are decided (unknown pipeline, inputs the request schema rejects, invalid forced
@@ -265,6 +277,13 @@ public sealed class RecResult
     public IReadOnlyDictionary<string, string>? ColumnProducers { get; init; }
 
     public IReadOnlyList<NodeOutcome>? Trace { get; init; }
+
+    /// <summary>
+    /// With <see cref="DebugOptions.Trace"/>, the runs of the pipelines the request's nodes called
+    /// (<c>OperatorContext.CallPipelineAsync</c>), theirs included, each with its own trace: by calling pipeline, node and
+    /// the call's place among the node's calls. Null without a trace or without a call.
+    /// </summary>
+    public IReadOnlyList<CalledRun>? Calls { get; init; }
 
     /// <summary>
     /// Captured log batches when <see cref="DebugOptions.CaptureLogs"/> was set: of every run of the request in run order,

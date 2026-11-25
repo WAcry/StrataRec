@@ -51,6 +51,8 @@
     },
     // A built-in source next to the custom one: the editors' picks, a fixed list.
     "editorial": { "client": "memory_list@1", "items": [21, 22, 3, 23] },
+    // The sponsors' list, which the sponsored pipeline recalls from (pipelines/sponsored.jsonc).
+    "sponsors": { "client": "memory_list@1", "items": [24, 2, 25, 26, 5, 27] },
     // stock@1 (Components/StockService.cs), a business service the StockFilter@1 node asks about its candidates. A call
     // about items is cached item by item: a candidate's answer is kept for 5 seconds, and a later request asks the
     // service only about the candidates it has not answered since.

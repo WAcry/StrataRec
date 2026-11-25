@@ -175,6 +175,7 @@
               "PipelineSource@1",
               "RequestAggregate@1",
               "SlidingWindowQuota@1",
+              "SlotBlend@1",
               "StockFilter@1",
               "TopK@1"
             ],
@@ -192,6 +193,7 @@
               "Calls another pipeline for the request and appends the rows it returns as candidates.",
               "Over the live candidates: count, sum, mean, min or max of an expression, written to request columns (req.*).",
               "Limits rows per group within any sliding window of ranks; over-quota rows move down or drop.",
+              "Calls two pipelines and places a row of the second after every few rows of the first.",
               "Drops the rows an external service says no to: it is sent the candidates and answers a bool per item.",
               "Sorts rows by a score column (missing last, ties by entity_id) and keeps the first k."
             ]
@@ -1010,6 +1012,74 @@
                     "group_col",
                     "window",
                     "max_per_window"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "config"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "op": {
+                  "const": "SlotBlend@1"
+                }
+              },
+              "required": [
+                "op"
+              ]
+            },
+            "then": {
+              "properties": {
+                "config": {
+                  "description": "Calls two pipelines and places a row of the second after every few rows of the first.",
+                  "type": "object",
+                  "properties": {
+                    "organic": {
+                      "description": "The pipeline whose rows make up the list, e.g. trending_feed.",
+                      "type": "string"
+                    },
+                    "sponsored": {
+                      "description": "The pipeline whose rows are placed into the list, e.g. sponsored.",
+                      "type": "string"
+                    },
+                    "limit_param": {
+                      "description": "Parameter (int64) holding the most rows of the blended list.",
+                      "type": "string"
+                    },
+                    "every_param": {
+                      "description": "Parameter (int64) holding how many organic rows come before each sponsored row: 3 puts them at ranks 4, 8, …; 0 places none.",
+                      "type": "string"
+                    },
+                    "organic_score": {
+                      "description": "The organic pipeline's output column to take as a row's score, e.g. score.",
+                      "type": "string"
+                    },
+                    "sponsored_score": {
+                      "description": "The sponsored pipeline's output column to take as a row's score, e.g. bid.",
+                      "type": "string"
+                    },
+                    "score_col": {
+                      "description": "Column (float32 or float64, declared under columns) that gets each row's score from its pipeline.",
+                      "type": "string"
+                    },
+                    "sponsored_col": {
+                      "description": "Column (bool, declared under columns) written true on sponsored rows and false on the others.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "organic",
+                    "sponsored",
+                    "limit_param",
+                    "every_param",
+                    "organic_score",
+                    "sponsored_score",
+                    "score_col",
+                    "sponsored_col"
                   ],
                   "additionalProperties": false
                 }
