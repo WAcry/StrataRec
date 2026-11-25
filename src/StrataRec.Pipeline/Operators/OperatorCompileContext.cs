@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Types;
 using StrataRec.Expressions;
 using StrataRec.Pipeline.Planning;
@@ -33,6 +34,8 @@ public sealed class OperatorCompileContext
     private readonly List<OutputColumn> _outputs = new();
     private readonly List<RequestOutput> _requestOutputs = new();
     private readonly HashSet<int> _requestReads = new();
+    private readonly List<PipelineCall> _calls = new();
+    private readonly CallerOfPipelines _caller;
 
     /// <summary>Set while an awaited expression's reads are recorded (<see cref="CompileAwaitedExpression"/>).</summary>
     private bool _awaiting;
@@ -46,8 +49,10 @@ public sealed class OperatorCompileContext
         string nodeId,
         string pointer,
         JsonObject config,
-        OperatorDescriptor descriptor)
+        OperatorDescriptor descriptor,
+        CallerOfPipelines caller = default)
     {
+        _caller = caller;
         _schema = schema;
         _scope = scope;
         _clients = clients;
@@ -100,6 +105,9 @@ public sealed class OperatorCompileContext
     internal IReadOnlyList<OutputColumn> Outputs => _outputs;
 
     internal IReadOnlyList<RequestOutput> RequestOutputs => _requestOutputs;
+
+    /// <summary>The pipelines the node declared it calls (<see cref="TryCallPipeline"/>), in the order declared.</summary>
+    internal IReadOnlyList<PipelineCall> Calls => _calls;
 
     /// <summary>The request columns read (<see cref="Planning.CompiledNode.RequestReads"/>), by context id.</summary>
     internal IReadOnlyCollection<int> RequestReads => _requestReads;
@@ -455,6 +463,163 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
+    /// Declares that the node calls pipeline <paramref name="pipelineId"/>, and returns the handle its operator calls with
+    /// (<see cref="OperatorContext.CallPipelineAsync"/>). A call runs the pipeline for the
+    /// same request: its id, time and experiment assignment, within what is left of the node's budget. Say what the call
+    /// needs of the pipeline with <see cref="TryCallInput"/>, <see cref="TryCallColumn"/>, <see cref="TryCallValue"/> and
+    /// <see cref="CallAppendsRows"/>: a plan compiled with the pipelines it may call (a workspace) checks each here, at its
+    /// config key; one compiled without them (an engine loading one release) is checked when the call is made, and a call
+    /// that does not fit fails as a result.
+    /// </summary>
+    /// <returns>False after reporting an error at <paramref name="configKey"/>: no pipeline named, the node's own, one
+    /// the workspace does not have, or one whose calls lead back to this pipeline.</returns>
+    public bool TryCallPipeline(string pipelineId, string configKey, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PipelineCall? call)
+    {
+        call = null;
+        if (string.IsNullOrEmpty(pipelineId))
+        {
+            Error(configKey, "PIPELINE_CALL_UNKNOWN", $"'{configKey.TrimStart('/')}' must name a pipeline.", "set it to the id of a pipeline the engine serves");
+            return false;
+        }
+
+        if (pipelineId == _caller.PipelineId)
+        {
+            Error(configKey, "PIPELINE_CALL_CYCLE", $"Node '{NodeId}' calls its own pipeline '{pipelineId}'.", "a pipeline's calls may not lead back to it");
+            return false;
+        }
+
+        PipelineInterface? known = null;
+        if (_caller.Directory is { } directory)
+        {
+            var lookup = directory.Find(pipelineId, _caller.PipelineId, _caller.Environment);
+            switch (lookup.Status)
+            {
+                case PipelineLookupStatus.Known:
+                    known = lookup.Interface;
+                    break;
+                case PipelineLookupStatus.Unknown:
+                    Error(configKey, "PIPELINE_CALL_UNKNOWN", $"There is no pipeline '{pipelineId}'.", lookup.Detail ?? "name a pipeline of the workspace");
+                    return false;
+                case PipelineLookupStatus.Cycle:
+                    Error(configKey, "PIPELINE_CALL_CYCLE", $"Calling pipeline '{pipelineId}' leads back to '{_caller.PipelineId}': {lookup.Detail}.",
+                        "a pipeline's calls may not lead back to it");
+                    return false;
+                default:
+                    Error(configKey, "PIPELINE_CALL_FAILED", $"Pipeline '{pipelineId}', which node '{NodeId}' calls, does not compile: {lookup.Detail}",
+                        $"fix '{pipelineId}' first (validate it on its own)");
+                    return false;
+            }
+        }
+
+        call = new PipelineCall(pipelineId, _caller.PipelineId, NodeId, configKey, _caller.Inputs, _schema.KeyType, known);
+        _calls.Add(call);
+        return true;
+    }
+
+    /// <summary>
+    /// Declares an input the operator passes with the call, of <paramref name="type"/>: the pipeline must declare it, of a
+    /// type every such value converts to. Inputs the operator does not pass are passed on from the request by name.
+    /// </summary>
+    public bool TryCallInput(PipelineCall call, string name, string configKey, ColumnType type)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        if (call.PassesInput(name))
+        {
+            Error(configKey, "PIPELINE_CALL_INPUT", $"Input '{name}' is passed twice to pipeline '{call.PipelineId}'.", "pass each input once");
+            return false;
+        }
+
+        call.AddInput(name, type);
+        if (call.Interface is { } callee && PipelineCall.InputMismatch(callee, name, type) is { } mismatch)
+        {
+            Error(configKey, "PIPELINE_CALL_INPUT", Sentence(mismatch),
+                callee.Inputs.Contains(name) ? null : Spelling.DidYouMean(name, callee.Inputs.Names) ?? $"pass an input '{callee.PipelineId}' declares in its request_schema");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Declares an output column of the pipeline the operator reads from a result (<see cref="PipelineCallResult.Columns"/>),
+    /// into <paramref name="into"/>: the pipeline's output must have it, of a type whose every value converts, and not
+    /// nullable where <paramref name="into"/> is not.
+    /// </summary>
+    public bool TryCallColumn(PipelineCall call, string name, string configKey, ColumnType into) => TryCallOutput(call, name, configKey, into, value: false);
+
+    /// <summary>Declares an output value of the pipeline (<c>output.values</c>) the operator reads, as <see cref="TryCallColumn"/> a column.</summary>
+    public bool TryCallValue(PipelineCall call, string name, string configKey, ColumnType into) => TryCallOutput(call, name, configKey, into, value: true);
+
+    /// <summary>
+    /// Declares that the operator appends the result's rows to this pipeline's candidates: the pipeline's keys must be of
+    /// this pipeline's key type.
+    /// </summary>
+    public bool CallAppendsRows(PipelineCall call, string configKey)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        call.AppendsRows = true;
+        if (call.Interface is { } callee && call.KeyMismatch(callee) is { } mismatch)
+        {
+            Error(configKey, "PIPELINE_CALL_KEY_TYPE", Sentence(mismatch), "call a pipeline whose 'entity_key_type' is this pipeline's");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The inputs each called pipeline requires that nothing passes, reported where the node names the pipeline: known
+    /// once the operator has declared what it passes itself.
+    /// </summary>
+    internal void CheckCalls()
+    {
+        foreach (var call in _calls)
+        {
+            if (call.Interface is { } callee && call.MissingInput(callee) is { } missing)
+            {
+                Error(call.ConfigKey, "PIPELINE_CALL_INPUT", Sentence(missing),
+                    $"declare the input in the request_schema of '{call.Caller}' (it is passed on by name), or use an operator that passes it");
+            }
+        }
+    }
+
+    private bool TryCallOutput(PipelineCall call, string name, string configKey, ColumnType into, bool value)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        if (value)
+        {
+            call.AddValue(name, into);
+        }
+        else
+        {
+            call.AddColumn(name, into);
+        }
+
+        if (call.Interface is { } callee && PipelineCall.OutputMismatch(callee, name, into, value) is { } mismatch)
+        {
+            var found = value ? callee.TryGetValue(name, out _) : callee.TryGetColumn(name, out _);
+            Error(configKey, "PIPELINE_CALL_OUTPUT", Sentence(mismatch), found ? null : Spelling.DidYouMean(name, Names(value ? callee.Values : callee.Columns))
+                ?? $"read an output {(value ? "value" : "column")} '{callee.PipelineId}' declares under 'output'");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string Sentence(string clause) => char.ToUpperInvariant(clause[0]) + clause[1..] + ".";
+
+    private static List<string> Names(ImmutableArray<PipelineOutput> outputs)
+    {
+        var names = new List<string>(outputs.Length);
+        foreach (var output in outputs)
+        {
+            names.Add(output.Name);
+        }
+
+        return names;
+    }
+
+    /// <summary>
     /// The service bound to <paramref name="name"/>, shared with every plan of the same binding (design 6.4), for the node
     /// to call in <paramref name="role"/> (<see cref="Core.Diagnostics.IoRoles"/>: <c>model</c>, <c>recall</c>, or a role of its own, which
     /// its calls' telemetry is tagged with). Null after reporting an error at <paramref name="configKey"/>, or at the
@@ -654,3 +819,7 @@ public sealed class AwaitedReads
     /// <summary>The features, by index in the plan's feature list, ascending.</summary>
     internal ImmutableArray<int> Features { get; }
 }
+
+/// <summary>What a node's compile knows of its own pipeline as a caller of others (<see cref="OperatorCompileContext.TryCallPipeline"/>).</summary>
+/// <param name="Directory">The pipelines the plan may call, when the compile knows them; null checks calls when they are made.</param>
+internal readonly record struct CallerOfPipelines(string PipelineId, RequestSchema Inputs, IPipelineDirectory? Directory, PlanEnvironment Environment);

@@ -750,6 +750,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var runs = record ? new RunCapture() : null;
         IReadOnlyList<IgnoredArm> ignored = Array.Empty<IgnoredArm>();
         LoadedPipeline? fallback = null;
+        RequestCalls? calls = null; // what the pipelines the request's nodes call ran, when a run calls any
         LoadedPipeline? overridden = null; // the plan compiled for a configuration override, entered until the finally below
         IReadOnlyList<string>? merged = null; // the arms such a plan has merged in: it runs with none of its own
         try
@@ -819,7 +820,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 }
             }
 
-            var executed = await Run(running, request, request.Inputs, runArms, remaining, seed, timeMs, runs, cancellationToken).ConfigureAwait(false);
+            var executed = await Run(running, request, request.Inputs, runArms, remaining, seed, timeMs, runs, ref calls, cancellationToken).ConfigureAwait(false);
             remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
 
             // A disposal since the primary ran leaves the request with the primary's result, as when no fallback is served.
@@ -828,17 +829,19 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             {
                 degraded = executed.Degraded;
                 result = ToResult(request, running, executed, ignored, request.PipelineId, merged);
-                return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, null, overridden?.ConfigOverride) : result;
+                result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, null, overridden?.ConfigOverride) : result;
+                return result = calls?.Merge(result) ?? result; // after the bundle, which holds the request's own pipeline's
             }
 
             // The pipeline failed: serve its fallback pipeline, without experiments, within what is left (design 5.6), with
             // the inputs it declares (FallbackInputs).
             degraded = true;
             var served = await Run(fallback, request, FallbackInputs(request.Inputs, fallback.Plan.RequestSchema), RequestArms.None, remaining, seed, timeMs, runs,
-                cancellationToken).ConfigureAwait(false);
+                ref calls, cancellationToken).ConfigureAwait(false);
             var converted = ToResult(request, fallback, served, ignored, fallbackId);
             result = Combine(request, executed, converted, served, ignored, fallbackId, merged);
-            return result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served, overridden?.ConfigOverride) : result;
+            result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served, overridden?.ConfigOverride) : result;
+            return result = calls?.Merge(result) ?? result;
         }
         catch (Exception ex)
         {
@@ -889,7 +892,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         {
             try
             {
-                return (pipeline.Plan.ArmsFromIds(forced), Array.Empty<IgnoredArm>(), null, RecErrorKind.None);
+                return (pipeline.Plan.ArmsFromIds(OwnForced(pipeline.Plan, forced)), Array.Empty<IgnoredArm>(), null, RecErrorKind.None);
             }
             catch (ArgumentException ex)
             {
@@ -900,9 +903,56 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         if (request.Assignment is { } external)
         {
             var arms = ExternalArms.Resolve(pipeline.Plan.Layers.AsSpan(), pipeline.Plan.Arms.AsSpan(), external, out var ignored);
-            return (arms, ignored, null, RecErrorKind.None);
+            return (arms, WithoutCalled(pipeline.Plan, ignored), null, RecErrorKind.None);
         }
 
+        var asked = await AskProviderAsync(pipeline, request, CallBound.DeadlineAfter(started, request.Deadline), cancellationToken).ConfigureAwait(false);
+        return (asked.Arms, WithoutCalled(pipeline.Plan, asked.Ignored), asked.Error, asked.ErrorKind);
+    }
+
+    /// <summary>
+    /// The forced arms that are <paramref name="plan"/>'s to run: all but those it does not have and a pipeline it calls
+    /// has, which that pipeline's run takes (<see cref="AssignCallAsync"/>). An arm no pipeline has stays, and is refused
+    /// as unknown.
+    /// </summary>
+    private IReadOnlyList<string> OwnForced(ExecutionPlan plan, IReadOnlyList<string> forced)
+    {
+        if (plan.Calls.IsEmpty)
+        {
+            return forced;
+        }
+
+        List<string>? own = null;
+        for (var i = 0; i < forced.Count; i++)
+        {
+            if (!plan.TryGetArm(forced[i], out _) && KnownToCalled(plan, forced[i]))
+            {
+                if (own is null)
+                {
+                    own = new List<string>(forced.Count);
+                    for (var j = 0; j < i; j++)
+                    {
+                        own.Add(forced[j]);
+                    }
+                }
+            }
+            else
+            {
+                own?.Add(forced[i]);
+            }
+        }
+
+        return own ?? forced;
+    }
+
+    /// <summary>
+    /// The arms the assignment provider gives the request on <paramref name="pipeline"/>'s plan, asked no longer than
+    /// <paramref name="deadline"/>: of the pipeline the request names, and of each pipeline its nodes call
+    /// (<see cref="RunCalls"/>), which has experiments of its own. None without a provider.
+    /// </summary>
+    private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, RecErrorKind ErrorKind)> AskProviderAsync(
+        LoadedPipeline pipeline, RecRequest request, long deadline, CancellationToken cancellationToken)
+    {
         if (_assignmentProvider is null)
         {
             return (RequestArms.None, Array.Empty<IgnoredArm>(), null, RecErrorKind.None);
@@ -914,14 +964,13 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         // token, review 18 #2), its callbacks run on the pool and what they throw is counted and summarized (review 20 #1),
         // an answer that came after the wait timed out is not taken (review 20 #2), and its token lives until it ends
         // (review 20 #3). It writes into nothing of the request, which has no memory yet.
-        var bound = new CallBound(CancellationSite.Assignment, cancellationToken, CallBound.DeadlineAfter(started, request.Deadline), _executor.Events,
-            request.RequestId);
+        var bound = new CallBound(CancellationSite.Assignment, cancellationToken, deadline, _executor.Events, request.RequestId);
         CallResult<IReadOnlyList<string>> asked;
         try
         {
             var context = new AssignmentContext
             {
-                PipelineId = request.PipelineId,
+                PipelineId = pipeline.Plan.PipelineId,
                 RequestId = request.RequestId,
                 Inputs = request.Inputs,
                 Layers = pipeline.Layout.Layers,
@@ -1015,9 +1064,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
     /// <param name="pipeline">Entered by the caller (<see cref="Enter"/>); the run joins its lease until its calls end.</param>
     /// <param name="runs">Collects the run's recording on every exit; null when the request does not record.</param>
+    /// <param name="calls">Collects what the pipelines the run's nodes call ran (<see cref="RequestCalls"/>); made on the first such run.</param>
     private ValueTask<PipelineResult> Run(
         LoadedPipeline pipeline, RecRequest request, RequestInputs inputs, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, RunCapture? runs,
-        CancellationToken cancellationToken) =>
+        ref RequestCalls? calls, CancellationToken cancellationToken) =>
         _executor.ExecuteAsync(pipeline.Plan, new PipelineRequest
         {
             RequestId = request.RequestId,
@@ -1030,6 +1080,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             WriteLogs = WritesLogs(request), // for the fallback's run too: it serves a request a debugger shaped
             ExplainIds = request.Debug?.ExplainIds,
             OnRecording = runs is null ? null : runs.Add,
+            Calls = pipeline.Plan.Calls.IsEmpty ? null : new RunCalls(calls ??= new RequestCalls(this, request), pipeline.Plan.PipelineId, 0),
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
 

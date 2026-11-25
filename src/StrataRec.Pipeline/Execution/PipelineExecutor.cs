@@ -106,6 +106,12 @@ internal sealed class PipelineRequest
     /// </summary>
     public IReadOnlyList<EntityKey>? ExplainIds { get; init; }
 
+    /// <summary>
+    /// Runs the pipelines the run's nodes call (<see cref="Operators.OperatorContext.CallPipelineAsync"/>):
+    /// the engine's, which serves them. Null for a run nothing serves pipelines to: a call then fails as a result.
+    /// </summary>
+    public IPipelineCalls? Calls { get; init; }
+
     /// <summary>The seed of a request that does not set one: a hash of its id (design 3.4).</summary>
     public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
@@ -252,6 +258,9 @@ internal sealed class RequestState
 
     /// <summary>Follows the candidates the request explains; null unless it asked to (design 13.3).</summary>
     public CandidateExplainer? Explainer { get; init; }
+
+    /// <summary>Runs the pipelines the run's nodes call (<see cref="PipelineRequest.Calls"/>); null when nothing does.</summary>
+    public IPipelineCalls? Calls { get; init; }
 
     public TimeSpan Remaining => Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), DeadlineTimestamp);
 
@@ -420,6 +429,7 @@ internal sealed class PipelineExecutor
                 Recorder = recorder,
                 Replay = replay,
                 Explainer = request.ExplainIds is { } explain ? new CandidateExplainer(explain) : null,
+                Calls = request.Calls,
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures.AsSpan(), cancellationToken);

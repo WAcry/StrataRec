@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Json;
 using StrataRec.Artifacts.Model;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
@@ -15,6 +16,15 @@ public sealed class PlanCompileRequest
     public required SourceBindingArtifact Bindings { get; init; }
 
     public IReadOnlyList<DataTableArtifact> Tables { get; init; } = Array.Empty<DataTableArtifact>();
+
+    /// <summary>
+    /// The pipelines this one's nodes may call, when the loader knows them (a workspace's): calls are then checked at
+    /// compile time. Null, as when an engine loads one pipeline's release, checks them when they are made. Not part of the
+    /// configuration: the engine's copy of what a plan was compiled from (for a configuration override) has none, so an
+    /// override's calls are checked when they are made.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IPipelineDirectory? Pipelines { get; init; }
 
     /// <summary>Who reviews what (<c>policy.jsonc</c>): only for the arm reports' owners; a release does not carry it.</summary>
     public PolicyArtifact Policy { get; init; } = new();

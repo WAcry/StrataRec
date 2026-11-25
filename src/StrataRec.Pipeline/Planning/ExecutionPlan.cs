@@ -241,6 +241,12 @@ public sealed class ExecutionPlan
 
     public TimeSpan CompileTime { get; init; }
 
+    /// <summary>
+    /// The pipelines the plan's nodes call (<see cref="CompiledNode.Calls"/>), of every variant and fallback, sorted:
+    /// which pipelines a request of this one may run.
+    /// </summary>
+    public ImmutableArray<string> Calls { get; init; } = [];
+
     /// <summary>The inputs the pipeline accepts (<c>request_schema</c>) and the rules a request's inputs follow.</summary>
     public required RequestSchema RequestSchema { get; init; }
 

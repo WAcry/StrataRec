@@ -237,7 +237,19 @@ public sealed class ConfigWorkspace
         string environment,
         DiagnosticBag diagnostics,
         DateOnly? today = null,
-        IReadOnlyDictionary<string, string>? extraExperiments = null)
+        IReadOnlyDictionary<string, string>? extraExperiments = null) =>
+        CreateCompileRequest(pipelineId, environment, diagnostics, today, extraExperiments, new WorkspacePipelines(this, environment, pipelineId), baseline: false);
+
+    /// <param name="pipelines">The workspace's pipelines as the request's nodes may call them.</param>
+    /// <param name="baseline">Leave the release's experiments out: for a pipeline's interface, which they cannot change.</param>
+    internal PlanCompileRequest? CreateCompileRequest(
+        string pipelineId,
+        string environment,
+        DiagnosticBag diagnostics,
+        DateOnly? today,
+        IReadOnlyDictionary<string, string>? extraExperiments,
+        WorkspacePipelines pipelines,
+        bool baseline)
     {
         // Any assembly error aborts: a partial request (an experiment or table silently left out) must never be
         // compiled, loaded over a working plan, or built into a release.
@@ -322,7 +334,7 @@ public sealed class ConfigWorkspace
 
         var placements = new List<ExperimentPlacement>();
         var listed = new SortedDictionary<string, (string Layer, List<string>? YieldsTo)>(StringComparer.Ordinal);
-        if (release is not null)
+        if (release is not null && !baseline)
         {
             foreach (var (id, entry) in release.Value.Experiments)
             {
@@ -375,6 +387,7 @@ public sealed class ConfigWorkspace
             Bindings = bindings.Value,
             Tables = tables,
             Policy = Policy?.Value ?? new PolicyArtifact(),
+            Pipelines = pipelines,
             Experiments = placements,
             ManifestId = "workspace:" + pipelineId + "/" + environment,
             ArtifactIds = artifactIds,

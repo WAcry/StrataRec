@@ -187,6 +187,7 @@
                     "ModelScorer@1",
                     "MultiSourceRecall@1",
                     "PairwiseRanker@1",
+                    "PipelineSource@1",
                     "RequestAggregate@1",
                     "SlidingWindowQuota@1",
                     "StockFilter@1",
@@ -204,6 +205,7 @@
                     "Scores rows with a model: named inputs from columns, named outputs to columns, batched.",
                     "Concurrent multi-source retrieval with deterministic merge and entity_id dedup.",
                     "Reranks the leading rows by a model's pairwise preferences, aggregated into expected wins.",
+                    "Calls another pipeline for the request and appends the rows it returns as candidates.",
                     "Over the live candidates: count, sum, mean, min or max of an expression, written to request columns (req.*).",
                     "Limits rows per group within any sliding window of ranks; over-quota rows move down or drop.",
                     "Drops the rows an external service says no to: it is sent the candidates and answers a bool per item.",
@@ -954,6 +956,81 @@
                           },
                           "score_col": {
                             "description": "Optional column for each window row's aggregated score (its expected wins against the other rows of the window): float32? or float64?, missing outside the window. An undeclared column is float32?.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "PipelineSource@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Calls another pipeline for the request and appends the rows it returns as candidates.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "pipeline": {
+                            "description": "The pipeline to call: one the engine serves, of this pipeline's entity_key_type.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "inputs": {
+                            "description": "Inputs to pass: the called pipeline's input name → a request-level expression (ctx.*, req.*, param.*), such as { \"slots\": \"param.ad_slots\" }. Every other input the called pipeline declares gets this request's input of the same name, when it has one.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "limit_param": {
+                            "description": "Parameter holding the most rows to take, from the top of the result. Required, as every row source's limit is: it bounds the rows a request may hold (design 4.8).",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "columns": {
+                            "description": "Columns to copy: this pipeline's column (declared under columns) → the called pipeline's output column, such as { \"ad.bid\": \"bid\" }. Written on the appended rows only.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "mark": {
+                            "description": "A bool column written true on the appended rows, to tell them from the others. Declare it with \"default\": false to read it without ??; undeclared, it is declared bool?.",
                             "type": [
                               "string",
                               "null"

@@ -274,6 +274,76 @@ internal static class ReplayJson
     public static ReplayTypedValue Typed(ColumnType type, in ScalarValue value) =>
         new() { Type = type.ToString(), Value = value.IsMissing ? null : Value(value) };
 
+    /// <summary>The inputs an operator passed with a pipeline call, each with the type of its value.</summary>
+    public static Dictionary<string, ReplayTypedValue> Inputs(RequestInputs? given)
+    {
+        var inputs = new Dictionary<string, ReplayTypedValue>(StringComparer.Ordinal);
+        if (given is not null)
+        {
+            foreach (var (name, value) in given)
+            {
+                inputs[name] = Typed(TypeOf(value), value);
+            }
+        }
+
+        return inputs;
+    }
+
+    /// <summary>A result's columns as a pipeline call records them: in order, with their types.</summary>
+    public static List<ReplayCallColumn> Columns(Execution.ResultColumns rows)
+    {
+        var columns = new List<ReplayCallColumn>(rows.Names.Count);
+        for (var c = 0; c < rows.Names.Count; c++)
+        {
+            columns.Add(new ReplayCallColumn { Name = rows.Names[c], Type = rows.Types[c].ToString(), Values = Values(rows.Column(c)) });
+        }
+
+        return columns;
+    }
+
+    /// <summary>A result's request-level values as a pipeline call records them: each a column of one value.</summary>
+    public static List<ReplayCallColumn> Columns(Execution.ResultValues values)
+    {
+        var columns = new List<ReplayCallColumn>(values.Count);
+        foreach (var value in values.All)
+        {
+            columns.Add(new ReplayCallColumn { Name = value.Name, Type = value.Type.ToString(), Values = Values([value.Value]) });
+        }
+
+        return columns;
+    }
+
+    /// <summary>What a recorded pipeline call returned, decoded with its recorded types.</summary>
+    public static Operators.PipelineCallResult CallResult(ReplayPipelineCall call, string pointer)
+    {
+        if (!call.Succeeded)
+        {
+            return Operators.PipelineCallResult.Failed(call.Pipeline, call.Error ?? $"pipeline '{call.Pipeline}' failed");
+        }
+
+        var ids = Keys(call.Ids, pointer + "/ids");
+        var names = new string[call.Columns.Count];
+        var types = new ColumnType[names.Length];
+        var columns = new ScalarValue[names.Length][];
+        for (var c = 0; c < names.Length; c++)
+        {
+            var at = $"{pointer}/columns/{c.ToString(CultureInfo.InvariantCulture)}";
+            names[c] = call.Columns[c].Name;
+            types[c] = Type(call.Columns[c].Type, at + "/type");
+            columns[c] = Values(call.Columns[c].Values, types[c], ids.Length, at + "/values");
+        }
+
+        var values = new Execution.ResultValue[call.Values.Count];
+        for (var v = 0; v < values.Length; v++)
+        {
+            var at = $"{pointer}/values/{v.ToString(CultureInfo.InvariantCulture)}";
+            var type = Type(call.Values[v].Type, at + "/type");
+            values[v] = new Execution.ResultValue(call.Values[v].Name, type, Values(call.Values[v].Values, type, 1, at + "/values")[0]);
+        }
+
+        return new Operators.PipelineCallResult(call.Pipeline, true, null, new Execution.ResultColumns(ids, names, types, columns), Execution.ResultValues.OfOutput(values));
+    }
+
     public static ColumnType Type(string? text, string pointer)
     {
         if (!ColumnType.TryParse(text, out var type, out var error))

@@ -63,7 +63,73 @@ internal sealed class RunReplay : IFeatureCallHook
         replay.IndexNodes(run, pointer);
         replay.IndexFeatures(run, pointer);
         replay.IndexServices(run, pointer);
+        replay.IndexPipelineCalls(run, pointer);
         return replay;
+    }
+
+    /// <summary>The recorded calls of other pipelines, by node, place among its calls and pipeline, decoded.</summary>
+    private readonly Dictionary<(string Node, int Seq, string Pipeline), (ReplayPipelineCall Call, Operators.PipelineCallResult Result)> _pipelineCalls = new();
+
+    private void IndexPipelineCalls(ReplayRunRecord run, string pointer)
+    {
+        for (var i = 0; i < run.PipelineCalls.Count; i++)
+        {
+            var call = run.PipelineCalls[i];
+            var at = $"{pointer}/pipeline_calls/{i.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            foreach (var (name, input) in call.Inputs)
+            {
+                _ = ReplayJson.Value(input.Value, ReplayJson.Type(input.Type, $"{at}/inputs/{name}/type"), $"{at}/inputs/{name}/value");
+            }
+
+            if (!_pipelineCalls.TryAdd((call.Node, call.Seq, call.Pipeline), (call, ReplayJson.CallResult(call, at))))
+            {
+                throw new ReplayBundleException(at, $"node '{call.Node}' has two calls {call.Seq} of pipeline '{call.Pipeline}'", "each call of a node has its own 'seq'");
+            }
+        }
+    }
+
+    /// <summary>
+    /// What the recorded call of <paramref name="pipelineId"/> returned: the node's call at the same place, with the same
+    /// inputs. A call the recording does not have, or has with other inputs, is a gap and fails: the replay does not run
+    /// the pipeline.
+    /// </summary>
+    internal Operators.PipelineCallResult PipelineCall(string node, int sequence, string pipelineId, RequestInputs? given)
+    {
+        lock (_gate)
+        {
+            if (!_pipelineCalls.TryGetValue((node, sequence, pipelineId), out var recorded))
+            {
+                AddGap("pipeline", pipelineId, null, "not_recorded", 1, node);
+                return Operators.PipelineCallResult.Failed(pipelineId, $"pipeline '{pipelineId}': this call is not in the replay bundle");
+            }
+
+            if (!SameInputs(recorded.Call.Inputs, ReplayJson.Inputs(given)))
+            {
+                AddGap("pipeline", pipelineId, null, "inputs_changed", 1, node);
+                return Operators.PipelineCallResult.Failed(pipelineId, $"pipeline '{pipelineId}': the replay bundle has this call with other inputs");
+            }
+
+            return recorded.Result;
+        }
+    }
+
+    private static bool SameInputs(Dictionary<string, ReplayTypedValue> recorded, Dictionary<string, ReplayTypedValue> given)
+    {
+        if (recorded.Count != given.Count)
+        {
+            return false;
+        }
+
+        foreach (var (name, value) in given)
+        {
+            if (!recorded.TryGetValue(name, out var was) || was.Type != value.Type || (was.Value is null) != (value.Value is null)
+                || (was.Value is { } a && value.Value is { } b && a.GetRawText() != b.GetRawText()))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>Everything the replay lacked so far, in a stable order.</summary>

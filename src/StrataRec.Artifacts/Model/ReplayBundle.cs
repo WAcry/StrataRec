@@ -59,11 +59,12 @@ public sealed class ReplayBundle
     /// than a few values, and a few inline; 2026-11-21.14 only when it is more than four numbers or bools, and strings
     /// always so; 2026-11-21.15 when it is more than sixteen numbers or bools, or strings. 2026-11-22.1 records the result's
     /// request-level values (<c>values</c>, <c>value_types</c>): a bundle before has none, and its replay would differ by
-    /// every value the output returns.
+    /// every value the output returns. 2026-11-25.1 records the calls of other pipelines a run's nodes made
+    /// (<c>pipeline_calls</c>), each with what it returned: a build before cannot read them.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-22.1";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-25.1";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-22.1\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-25.1\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -173,12 +174,57 @@ public sealed class ReplayRunRecord
 
     public List<ReplayFeatureCall> FeatureCalls { get; init; } = new();
 
+    [Description("Calls of other pipelines the run's nodes made, by node and the call's place among its calls, each with what the pipeline returned: a replay answers them from here, without running the pipeline.")]
+    public List<ReplayPipelineCall> PipelineCalls { get; init; } = new();
+
     public required ReplaySamplingRecord Sampling { get; init; }
 
     public required ReplayResultRecord Result { get; init; }
 }
 
 /// <summary>The execution decision at one timeline position (design 5.6).</summary>
+public sealed class ReplayPipelineCall
+{
+    [Description("The node that called.")]
+    public required string Node { get; init; }
+
+    [Description("The call's place among the calls of the node's attempt, from 0.")]
+    public int Seq { get; init; }
+
+    [Description("The pipeline called.")]
+    public required string Pipeline { get; init; }
+
+    [Description("The inputs the operator passed, with their types; the called pipeline's other inputs were the request's of the same name.")]
+    public Dictionary<string, ReplayTypedValue> Inputs { get; init; } = new();
+
+    public required bool Succeeded { get; init; }
+
+    [Description("Why the call failed: the pipeline is not served, does not fit the call, rejected its inputs, failed, or had no time.")]
+    public string? Error { get; init; }
+
+    public double DurationMs { get; init; }
+
+    [Description("The returned rows' ids in rank order; absent for a failed call.")]
+    public JsonElement? Ids { get; init; }
+
+    [Description("The returned rows' output columns, in the output's order, each with one value per id.")]
+    public List<ReplayCallColumn> Columns { get; init; } = new();
+
+    [Description("The pipeline's request-level output values (output.values), each as a column of one value.")]
+    public List<ReplayCallColumn> Values { get; init; } = new();
+}
+
+public sealed class ReplayCallColumn
+{
+    public required string Name { get; init; }
+
+    [Description("The declared type its values are decoded with.")]
+    public required string Type { get; init; }
+
+    [Description("The values, in the log encoding of the type; null for a missing one.")]
+    public required JsonElement Values { get; init; }
+}
+
 public sealed class ReplayNodeRecord
 {
     public required string Node { get; init; }

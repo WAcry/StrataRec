@@ -34,6 +34,7 @@ internal sealed class RunRecorder : IFeatureCallHook
     private readonly object _gate = new();
     private readonly List<ReplayServiceCall> _services = new();
     private readonly List<ReplayFeatureCall> _features = new();
+    private readonly List<ReplayPipelineCall> _pipelines = new();
 
     // Calls begun and not yet finished, as the outstanding records a snapshot lists them as.
     private readonly Dictionary<int, ReplayServiceCall> _pendingServices = new();
@@ -320,9 +321,11 @@ internal sealed class RunRecorder : IFeatureCallHook
 
         List<ReplayServiceCall> services;
         List<ReplayFeatureCall> features;
+        List<ReplayPipelineCall> pipelines;
         lock (_gate)
         {
             _built = true;
+            pipelines = new List<ReplayPipelineCall>(_pipelines);
             services = new List<ReplayServiceCall>(_services);
             services.AddRange(_pendingServices.Values);
             features = new List<ReplayFeatureCall>(_features);
@@ -331,6 +334,7 @@ internal sealed class RunRecorder : IFeatureCallHook
 
         services.Sort(static (a, b) => a.Seq.CompareTo(b.Seq));
         features.Sort(static (a, b) => a.Seq.CompareTo(b.Seq));
+        pipelines.Sort(static (a, b) => string.CompareOrdinal(a.Node, b.Node) is not 0 and var byNode ? byNode : a.Seq.CompareTo(b.Seq));
         return new ReplayRunRecord
         {
             PipelineId = plan.PipelineId,
@@ -341,6 +345,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             Nodes = new List<ReplayNodeRecord>(_nodes),
             ServiceCalls = services,
             FeatureCalls = features,
+            PipelineCalls = pipelines,
             Sampling = BuildSampling(plan, request.Arms, logs, logsConsumed),
             Result = Result(plan, result, null, aborted),
         };
@@ -395,6 +400,35 @@ internal sealed class RunRecorder : IFeatureCallHook
             TriggeredExperiments = new List<string>(result.TriggeredExperiments),
             ColumnProducers = new Dictionary<string, string>(result.ColumnProducers, StringComparer.Ordinal),
         };
+    }
+
+    /// <summary>
+    /// Records a call of another pipeline with what it returned (<see cref="Operators.OperatorContext.CallPipelineAsync"/>):
+    /// the called run is not recorded itself, a replay answers the call from here. A call still running when the run is
+    /// built is not in the record.
+    /// </summary>
+    public void PipelineCall(string node, int sequence, string pipelineId, RequestInputs? given, Operators.PipelineCallResult result, double durationMs)
+    {
+        var record = new ReplayPipelineCall
+        {
+            Node = node,
+            Seq = sequence,
+            Pipeline = pipelineId,
+            Inputs = ReplayJson.Inputs(given),
+            Succeeded = result.Succeeded,
+            Error = result.Error,
+            DurationMs = Math.Round(durationMs, 3),
+            Ids = result.Succeeded ? ReplayJson.Keys(result.Columns.Ids) : null,
+            Columns = ReplayJson.Columns(result.Columns),
+            Values = ReplayJson.Columns(result.Values),
+        };
+        lock (_gate)
+        {
+            if (!_built)
+            {
+                _pipelines.Add(record);
+            }
+        }
     }
 
     private int NextSequence() => Interlocked.Increment(ref _sequence) - 1;

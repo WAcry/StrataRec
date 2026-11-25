@@ -899,6 +899,7 @@ internal sealed partial class UnifiedCompilation
             },
             Bindings = _request.Bindings,
             Tables = _request.Tables,
+            Pipelines = _request.Pipelines,
             ExtraColumns = columns,
             ExtraRequestColumns = requestColumns,
             ExtraParamSchema = paramSchema,

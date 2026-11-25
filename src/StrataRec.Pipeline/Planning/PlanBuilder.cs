@@ -153,6 +153,12 @@ public sealed class SchemaSources
 
     /// <summary>Funnel groups declared by arms (add-only, design 8.3).</summary>
     public IReadOnlyDictionary<string, FunnelGroupSpec> ExtraFunnelGroups { get; init; } = new Dictionary<string, FunnelGroupSpec>();
+
+    /// <summary>
+    /// The pipelines the plan's nodes may call, when the compile knows them (a workspace); null when it does not, and
+    /// calls are checked when they are made (<see cref="OperatorCompileContext.TryCallPipeline"/>).
+    /// </summary>
+    public IPipelineDirectory? Pipelines { get; init; }
 }
 
 /// <summary>
@@ -426,8 +432,14 @@ public sealed class PlanBuilder
             }
         }
 
-        var context = new OperatorCompileContext(schema, _scope!, _clients!, _diagnostics, artifact, nodeId, pointer, spec.Config ?? new JsonObject(), factory.Descriptor);
+        var context = new OperatorCompileContext(schema, _scope!, _clients!, _diagnostics, artifact, nodeId, pointer, spec.Config ?? new JsonObject(), factory.Descriptor,
+            new CallerOfPipelines(_sources!.Pipeline.PipelineId, RequestInputSchema, _sources.Pipelines, _environment));
         var op = factory.Compile(context);
+        if (op is not null && !context.HasErrors)
+        {
+            context.CheckCalls(); // what each called pipeline requires, now that the operator said what it passes
+        }
+
         if (op is null || context.HasErrors || !ok)
         {
             return null;
@@ -476,6 +488,7 @@ public sealed class PlanBuilder
             VersionReads = ToSortedArray(context.VersionReads),
             Outputs = ToArray(context.Outputs),
             RequestOutputs = [.. context.RequestOutputs],
+            Calls = [.. context.Calls],
             RequestReads = ToSortedArray(context.RequestReads),
             WhenReadsRequest = when is not null && ReadsRequestColumn(when) is not null,
             Requires = ToSortedArray(context.Requires),
@@ -2501,6 +2514,26 @@ public sealed class PlanBuilder
         return null;
     }
 
+    /// <summary>The plan's request schema, which a node that calls a pipeline passes inputs on from.</summary>
+    private RequestSchema RequestInputSchema => _requestSchema ??= RequestSchema.FromPlan(_sources!.Pipeline.PipelineId, _requestInputs!);
+
+    private RequestSchema? _requestSchema;
+
+    /// <summary>The pipelines the compiled nodes call, of every variant and fallback, sorted.</summary>
+    private ImmutableArray<string> CalledPipelines()
+    {
+        var called = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var node in _nodes)
+        {
+            foreach (var call in node.Calls)
+            {
+                called.Add(call.PipelineId);
+            }
+        }
+
+        return [.. called];
+    }
+
     /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>
     public ExecutionPlan Build(
         string manifestId,
@@ -2561,7 +2594,8 @@ public sealed class PlanBuilder
             ContextFeatures = ToSortedArray(contextFeatures),
             Warnings = _diagnostics.Items,
             CompileTime = _clock.Elapsed,
-            RequestSchema = RequestSchema.FromPlan(_sources!.Pipeline.PipelineId, _requestInputs!),
+            RequestSchema = RequestInputSchema,
+            Calls = CalledPipelines(),
         };
         _ = plan.Telemetry; // metric tags are built with the plan, not on its first request
         return plan;

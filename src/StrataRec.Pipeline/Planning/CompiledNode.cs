@@ -134,6 +134,9 @@ public sealed class CompiledNode
     /// <summary>The request columns the node writes (<see cref="Effects.RequestWriter"/>), published when it commits.</summary>
     public ImmutableArray<RequestOutput> RequestOutputs { get; init; } = [];
 
+    /// <summary>The pipelines the node's operator declared it calls (<see cref="OperatorCompileContext.TryCallPipeline"/>).</summary>
+    public ImmutableArray<PipelineCall> Calls { get; init; } = [];
+
     /// <summary>
     /// The request columns the node reads (<c>req.*</c>), by <see cref="ContextField.Id"/>, in its config and its
     /// <c>when</c>: each has its value as of the position (a later node's write is not yet there), and a non-nullable one

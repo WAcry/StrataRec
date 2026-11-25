@@ -47,6 +47,9 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>The attempt's staged request values, by position in <see cref="_requestOutputs"/>, missing where none was; made on the first write.</summary>
     private ScalarValue[]? _staged;
 
+    /// <summary>The pipeline calls the attempt has made (<see cref="CallPipelineAsync"/>): the next one's place.</summary>
+    private int _pipelineCalls;
+
     internal OperatorContext(RequestState state, string nodeId, Effects effects, AttemptBudget budget, ImmutableArray<RequestOutput> requestOutputs = default)
     {
         _state = state;
@@ -406,6 +409,85 @@ public sealed class OperatorContext : IServiceCallScope
     {
         Require(Effects.RowSource, nameof(AppendRows));
         return _state.Table.AppendRows(keys);
+    }
+
+    /// <summary>
+    /// Calls another pipeline for this request, with the handle the node declared
+    /// (<see cref="OperatorCompileContext.TryCallPipeline"/>), and returns its result: the rows its output returns with
+    /// their columns, and its output values. What the operator does with them is its own: append them as candidates
+    /// (<see cref="AppendRows(ReadOnlySpan{long})"/>), order rows by them, write columns.
+    /// </summary>
+    /// <param name="inputs">
+    /// The inputs the operator passes, each declared with <see cref="OperatorCompileContext.TryCallInput"/>. Every other
+    /// input the pipeline declares gets this request's input of the same name, when it has one.
+    /// </param>
+    /// <returns>
+    /// The result. A call that cannot be answered is a failed result, never an exception: the pipeline is not served, does
+    /// not fit the call (an input, a column or the key type the node declared), rejects the inputs, fails, or no time is
+    /// left. The operator decides what that means for its node (<see cref="Fail"/>, <see cref="ReportDegraded"/>, nothing).
+    /// </returns>
+    /// <remarks>
+    /// <para>The called run is the same request: its id, its time, and its experiment assignment, of which the pipeline
+    /// runs the arms it has; its seed is derived from this run's, the node and the call's place among the node's calls,
+    /// so calls made in the same order get the same seeds. It has what is left of the node's budget, and does not fail
+    /// over to its <c>fallback_pipeline</c>: the node's <c>on_failure</c> decides.</para>
+    /// <para>An operator may make several calls at once, as it may call several services.</para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">The handle is another node's, or an input was not declared.</exception>
+    /// <exception cref="OperationCanceledException">The caller cancelled the request.</exception>
+    public ValueTask<PipelineCallResult> CallPipelineAsync(PipelineCall call, RequestInputs? inputs = null)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        if (call.NodeId != NodeId || call.Caller != _state.Plan.PipelineId)
+        {
+            throw new ArgumentException($"Node '{NodeId}' called pipeline '{call.PipelineId}' with a handle node '{call.NodeId}' of '{call.Caller}' declared.", nameof(call));
+        }
+
+        if (inputs is not null)
+        {
+            foreach (var (name, _) in inputs)
+            {
+                if (!call.PassesInput(name))
+                {
+                    throw new ArgumentException(
+                        $"Node '{NodeId}' passes input '{name}' to pipeline '{call.PipelineId}' without having declared it (OperatorCompileContext.TryCallInput).",
+                        nameof(inputs));
+                }
+            }
+        }
+
+        var sequence = _pipelineCalls++;
+        if (_state.Replay is { } replay)
+        {
+            return new(replay.PipelineCall(NodeId, sequence, call.PipelineId, inputs)); // answered from the recording: a replay runs no other pipeline
+        }
+
+        return _state.Recorder is { } recorder ? RecordedCallAsync(recorder, call, inputs, sequence) : SendAsync(call, inputs, sequence);
+    }
+
+    private async ValueTask<PipelineCallResult> RecordedCallAsync(Replay.RunRecorder recorder, PipelineCall call, RequestInputs? inputs, int sequence)
+    {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var result = await SendAsync(call, inputs, sequence).ConfigureAwait(false);
+        recorder.PipelineCall(NodeId, sequence, call.PipelineId, inputs, result, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        return result;
+    }
+
+    private ValueTask<PipelineCallResult> SendAsync(PipelineCall call, RequestInputs? inputs, int sequence)
+    {
+        var budget = BudgetRemaining;
+        if (budget <= TimeSpan.Zero)
+        {
+            return new(PipelineCallResult.Failed(call.PipelineId, $"pipeline '{call.PipelineId}' was not called: nothing is left of the node's budget"));
+        }
+
+        if (_state.Calls is not { } calls)
+        {
+            return new(PipelineCallResult.Failed(call.PipelineId, $"pipeline '{call.PipelineId}' was not called: this run is not an engine's, which serves the pipelines a node calls"));
+        }
+
+        var timeMs = _state.Context[Planning.PlanSchema.RequestTimeContext].AsInt64();
+        return calls.CallAsync(new PipelineCallRequest(call, inputs, _state.Inputs, sequence, _state.Seed, timeMs, budget), _state.CallerCancellation);
     }
 
     /// <summary>
