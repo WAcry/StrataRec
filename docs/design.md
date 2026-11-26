@@ -342,7 +342,6 @@ public sealed class CandidateTable : IDisposable
     public RowSelection Rows { get; }             // 当前存活行及其顺序
     private readonly ColumnBuffer?[] _slots;      // 按物理槽位索引
     private readonly Bitmap?[] _filled;           // 每个槽位：哪些物理行已经填充（有值或已明确标记为缺失）
-    public HierarchicalLink? Children { get; }    // 可选的父子层级
 }
 ```
 
@@ -372,7 +371,6 @@ Compact 的规则：
 1. 时机由引擎决定：行集合节点执行后，如果存活比例低于阈值（默认 50%），并且挂在该节点上的探针已经完成复制，就执行 Compact。节点可以用 `"compact": "always"` 或 `"compact": "never"` 覆盖默认行为。
 2. Compact 同时按新顺序重排每个槽位的值、有效位图和填充位图，填充状态因此保持正确。
 3. 旧的列数组不立即归还，留到请求结束时和其他缓冲区一起归还（第 4.8 节）。
-4. 父表 Compact 时，子表按父表的新顺序重排，并重建偏移数组（第 4.7 节）。
 
 ### 4.6 节点输出的提交与流动列
 
@@ -422,19 +420,14 @@ internal struct OutputBindings
 }
 ```
 
-### 4.7 父子层级表
+### 4.7 组与成员
 
-有些页面是两层结构：例如搜索结果按商家分组展示，组的得分取决于组内前几名商品的得分。`CandidateTable` 用 `HierarchicalLink` 表达这种关系：
+有些结果是两层的：搜索结果按商家分组，首页由几个栏目组成。一条流水线只有一张候选表，一个键一行；两层结构按组和成员的关系分两种做法，都不需要第二种表。
 
-```csharp
-public sealed class HierarchicalLink
-{
-    public CandidateTable ChildTable { get; }    // 所有父行的全部子项
-    public int[] ParentToChildOffsets { get; }   // CSR 偏移，长度 = 父行数 + 1
-}
-```
+- **组由成员决定**（按商家分组的商品）：行是成员，组是一个列（`col.item.merchant_id`）。组的特征按这个键拉取，组的统计和组内名次由 `GroupAggregate@1` 算出、写回每一行，每组保留前几项用组内名次加过滤；按组展示由宿主按组键排列结果。
+- **组先于成员存在**（首页的栏目：先有栏目，再取每个栏目的内容）：行是组，成员是这一行的列表。页面是一条流水线，它的候选是栏目；`PipelineColumns@1` 为每一行调用一条流水线，把返回的 id 和输出列写进这一行的列表列（第 5 章“一个页面，几条流水线”）。各行的列表互不相干，同一个物品可以在几个栏目里；栏目是行，打分、排序、过滤、日志和实验都是已有的。跨栏目的规则是使用方的算子。
 
-父表第 `p` 行的子项是子表中 `[ParentToChildOffsets[p], ParentToChildOffsets[p + 1])` 范围内的行。子表是一张完整的候选表，可以独立补齐特征、打分和截断；`ChildAggregate@1` 算子（`sum`、`mean`、`max`、`top_k_mean`、`logsumexp`）沿偏移数组把子表的分数聚合到父表的列中。父表 Compact 时，子表跟随重排。
+没有选的是一张表下面再挂一张表（按偏移数组关联的两张候选表）：过滤了上层之后下层怎么办、下层截断之后上层的汇总过期、表达式里两张表的列怎么区分，这些问题会散落在执行器、拉取、后备恢复、日志和回放里。理由和边界见 `decisions.md` 的“范围调整”和“流水线调用”。
 
 ### 4.8 内存池与回收
 
@@ -2417,7 +2410,7 @@ stratarec/
 
 `StrataRec.Features` 是独立的命名空间和包：特征目录、实体键和连接器契约不依赖流水线，离线训练任务和特征治理工具可以单独引用它，读取同一份特征目录。
 
-核心标准算子库包括 `MultiSourceRecall`、`ExpressionFilter`、`ExpressionScorer`、`CompositeMultiplierScorer`、`ModelScorer`、`PairwiseRanker`、`ListwiseReranker`、`TopK`、`MmrDiversifier`、`SlidingWindowQuota` 和 `GroupAggregate`（父子表的 `ChildAggregate` 随第 4.7 节推后）。`StrataRec.Llm` 提供 `GenerativeRetriever`、`LlmReranker` 和 `LlmAnnotator`（第 5.9 节）。扩展包注册的算子和模型客户端类型与核心算子一样进入二进制的能力清单（第 10.4 节）：产物引用了未安装的扩展时，能力匹配会拒绝它。
+核心标准算子库包括 `MultiSourceRecall`、`ExpressionFilter`、`ExpressionScorer`、`CompositeMultiplierScorer`、`ModelScorer`、`PairwiseRanker`、`ListwiseReranker`、`TopK`、`MmrDiversifier`、`SlidingWindowQuota`、`GroupAggregate`、`RequestAggregate`、`PipelineSource` 和 `PipelineColumns`。`StrataRec.Llm` 提供 `GenerativeRetriever`、`LlmReranker` 和 `LlmAnnotator`（第 5.9 节）。扩展包注册的算子和模型客户端类型与核心算子一样进入二进制的能力清单（第 10.4 节）：产物引用了未安装的扩展时，能力匹配会拒绝它。
 
 ### 16.2 联合计划的正确性锚点
 
