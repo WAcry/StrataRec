@@ -332,11 +332,12 @@ public sealed class RecallQueryTests
         };
         await using var engine = Engine(host, sources, users);
         var running = engine.ExecuteAsync(Request("req-wait-callback"), TestContext.Current.CancellationToken).AsTask();
+        CancellationTokenRegistration callback = default;
         try
         {
             var token = await popularToken.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
             await Task.Delay(200, TestContext.Current.CancellationToken); // the node is waiting for user_store by now
-            using var callback = token.Register(() =>
+            callback = token.Register(() =>
             {
                 entered.TrySetResult();
                 resume.Wait(Patience);
@@ -353,6 +354,7 @@ public sealed class RecallQueryTests
             resume.Set();
             answer.TrySetResult();
             users.Open();
+            callback.Dispose(); // after the callback was let go: disposing a registration waits for a callback that is running
         }
     }
 
@@ -892,6 +894,9 @@ public sealed class RecallQueryListenerTests
         var result = await engine.ExecuteAsync(RecallQueryTests.WithCountry($"req-late-settle-{fault}"), TestContext.Current.CancellationToken)
             .AsTask().WaitAsync(RecallQueryTests.Patience, TestContext.Current.CancellationToken);
 
+        // The gates are opened before the engine is disposed: a fetch a gate still holds keeps its source's instance, and
+        // the disposal would wait its whole shutdown timeout for it.
+        connectors.Dispose();
         Assert.True(late.StoredLate);
         Assert.False(late.SettledLate);
         Assert.Equal("timed out after 300 ms", result.Trace!.Single(n => n.NodeId == "late").Detail);

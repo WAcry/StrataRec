@@ -339,10 +339,16 @@ public sealed class StrictJsonTests
         var options = new JsonSerializerOptions { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
         options.Converters.Add(new ElementConverter(throws: true)); // wraps an array element; never run
         var info = (JsonTypeInfo<JsonElement>)options.GetTypeInfo(typeof(JsonElement));
-        const int levels = 200_000;
+        // Checked on a small stack, which a walk of every level overflows (the test host ends): the stack is what made the
+        // depth a defect. JsonDocument.Parse takes time quadratic in the depth, so the element is no deeper than that needs
+        // (200,000 levels on a default stack took 24 s to build).
+        const int levels = 10_000;
         using var deep = JsonDocument.Parse(new string('[', levels) + new string(']', levels), new JsonDocumentOptions { MaxDepth = levels + 1 });
-
-        var error = StrictJson.Check(new JsonObject { ["p"] = JsonValue.Create(deep.RootElement, info) }, 62, out _);
+        var tree = new JsonObject { ["p"] = JsonValue.Create(deep.RootElement, info) };
+        JsonBindingError? error = null;
+        var check = new Thread(() => error = StrictJson.Check(tree, 62, out _), maxStackSize: 256 * 1024);
+        check.Start();
+        check.Join();
 
         Assert.Equal("/p" + string.Concat(Enumerable.Repeat("/0", 61)), error?.Pointer); // level 63, the root being 1
     }
