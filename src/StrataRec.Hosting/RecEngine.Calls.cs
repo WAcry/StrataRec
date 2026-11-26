@@ -91,13 +91,7 @@ public sealed partial class RecEngine
                     : string.CompareOrdinal(a.Node, b.Node) is not 0 and var byNode ? byNode
                     : a.Sequence.CompareTo(b.Sequence));
 
-                var ignored = result.Experiments.Ignored;
-                if (_ignored is not null)
-                {
-                    var all = new List<IgnoredArm>(ignored);
-                    all.AddRange(_ignored);
-                    ignored = all;
-                }
+                var ignored = Ignored(result.Experiments.Ignored);
 
                 IReadOnlyList<Logging.LogBatch>? batches = result.LogBatches;
                 if (batches is not null && _batches is not null)
@@ -129,6 +123,41 @@ public sealed partial class RecEngine
                 };
             }
         }
+
+        /// <summary>
+        /// The request's ignored arms with those of its called runs: each id and reason once (a pipeline called twice
+        /// ignores the same arm twice), by id as the record has them, and without an arm the request's pipeline did not
+        /// know that a called run ran (a pipeline its plan does not name, called by a configuration override).
+        /// </summary>
+        private IReadOnlyList<IgnoredArm> Ignored(IReadOnlyList<IgnoredArm> own)
+        {
+            if (_ignored is null && (_assigned.Count == 0 || own.Count == 0))
+            {
+                return own;
+            }
+
+            var all = new SortedSet<IgnoredArm>(ByIdThenReason);
+            foreach (var arm in own)
+            {
+                if (arm.Reason != IgnoredArmReason.Unknown || !_assigned.Contains(arm.Id))
+                {
+                    all.Add(arm);
+                }
+            }
+
+            if (_ignored is not null)
+            {
+                foreach (var arm in _ignored)
+                {
+                    all.Add(arm);
+                }
+            }
+
+            return [.. all];
+        }
+
+        private static readonly Comparer<IgnoredArm> ByIdThenReason = Comparer<IgnoredArm>.Create(static (a, b) =>
+            string.CompareOrdinal(a.Id, b.Id) is not 0 and var byId ? byId : a.Reason.CompareTo(b.Reason));
 
         private static IReadOnlyList<string> With(IReadOnlyList<string> own, SortedSet<string> called)
         {
@@ -193,6 +222,11 @@ public sealed partial class RecEngine
                     return PipelineCallResult.Failed(id, $"pipeline '{id}' is not served by this engine");
                 }
 
+                // Counted as a request of the called pipeline and of its arms from here on, as the host's requests of it are:
+                // its experiments' health is read from these, and a call that fails before it runs (inputs it rejects, an
+                // assignment that fails) is an error of it, as such a request is. An aborted one counts as an error too.
+                var arms = RequestArms.None;
+                PipelineResult? result = null;
                 try
                 {
                     var plan = callee.Plan;
@@ -214,8 +248,10 @@ public sealed partial class RecEngine
                         return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: {assignmentError}");
                     }
 
-                    var arms = ExternalArms.Yield(plan, assignment.Arms, assignment.Ignored, out var ignored);
-                    ignored = NotUnknown(ignored);
+                    // An arm the pipeline does not have, in a list every pipeline of the request shares, is another
+                    // pipeline's; in the provider's answer for this pipeline it is a mistake, and reported.
+                    arms = ExternalArms.Yield(plan, assignment.Arms, assignment.Ignored, out var ignored);
+                    ignored = assignment.Shared ? NotUnknown(ignored) : ignored;
                     callee.Telemetry.RecordIgnored(ignored);
                     var remaining = call.Budget - Stopwatch.GetElapsedTime(started);
                     if (remaining <= TimeSpan.Zero)
@@ -223,33 +259,20 @@ public sealed partial class RecEngine
                         return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: nothing was left of the node's budget after its assignment");
                     }
 
-                    PipelineResult? result = null;
-                    try
+                    result = await engine._executor.ExecuteAsync(plan, new PipelineRequest
                     {
-                        result = await engine._executor.ExecuteAsync(plan, new PipelineRequest
-                        {
-                            RequestId = request.RequestId,
-                            Inputs = inputs,
-                            Arms = arms,
-                            Deadline = remaining,
-                            Seed = CallSeed(call.Seed, call.Call.NodeId, id, call.Sequence),
-                            TimeMs = call.TimeMs,
-                            CaptureLogs = request.Debug?.CaptureLogs == true,
-                            WriteLogs = WritesLogs(request),
-                            Calls = plan.Calls.IsEmpty ? null : new RunCalls(scope, id, depth + 1, this),
-                            CalledBy = $"{pipelineId}/{call.Call.NodeId}#{call.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
-                            OnEnd = callee.Bindings.Join(), // last: the executor, called next, ends it on every outcome
-                        }, callerCancellation).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        // Counted as a request of the called pipeline and of its arms, as the host's requests of it are: its
-                        // experiments' health is read from these (an aborted one counts as an error, as there).
-                        var failed = result is not { Succeeded: true };
-                        callee.Telemetry.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, arms, failed, !failed && result!.Columns.Count == 0,
-                            !failed && result!.Degraded);
-                    }
-
+                        RequestId = request.RequestId,
+                        Inputs = inputs,
+                        Arms = arms,
+                        Deadline = remaining,
+                        Seed = CallSeed(call.Seed, call.Call.NodeId, id, call.Sequence),
+                        TimeMs = call.TimeMs,
+                        CaptureLogs = request.Debug?.CaptureLogs == true,
+                        WriteLogs = WritesLogs(request),
+                        Calls = plan.Calls.IsEmpty ? null : new RunCalls(scope, id, depth + 1, this),
+                        CalledBy = $"{pipelineId}/{call.Call.NodeId}#{call.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                        OnEnd = callee.Bindings.Join(), // last: the executor, called next, ends it on every outcome
+                    }, callerCancellation).ConfigureAwait(false);
                     ran = result;
                     scope.Add(result, ignored);
                     return result.Succeeded
@@ -258,6 +281,9 @@ public sealed partial class RecEngine
                 }
                 finally
                 {
+                    var failed = result is not { Succeeded: true };
+                    callee.Telemetry.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, arms, failed, !failed && result!.Columns.Count == 0,
+                        !failed && result!.Degraded);
                     callee.Bindings.RequestEnded();
                 }
             }
@@ -354,39 +380,36 @@ public sealed partial class RecEngine
 
     /// <summary>
     /// The arms of a called run, from where the request's own came: the debugger's forced arms, the platform's answer the
-    /// caller passed, or the assignment provider, asked for the called pipeline's experiments. All are taken as the
-    /// platform's are: an id the called pipeline does not have is another pipeline's, and is left out.
+    /// caller passed, or the assignment provider, asked for the called pipeline's experiments. A list the request's
+    /// pipelines share (<c>Shared</c>: forced, or passed) is taken as the platform's is: an id the called pipeline does
+    /// not have is another pipeline's. A provider that fails, fails the call.
     /// </summary>
-    private ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, RecErrorKind ErrorKind)> AssignCallAsync(
+    private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, bool Shared)> AssignCallAsync(
         LoadedPipeline callee, RecRequest request, long deadline, CancellationToken cancellationToken)
     {
         var plan = callee.Plan;
         if (plan.Arms.IsEmpty)
         {
-            return new((RequestArms.None, Array.Empty<IgnoredArm>(), null, RecErrorKind.None));
+            return (RequestArms.None, Array.Empty<IgnoredArm>(), null, true);
         }
 
         if ((request.Debug?.ForceArms ?? request.Assignment) is { } ids)
         {
             var arms = ExternalArms.Resolve(plan.Layers.AsSpan(), plan.Arms.AsSpan(), ids, out var ignored);
-            return new((arms, ignored, null, RecErrorKind.None));
+            return (arms, ignored, null, true);
         }
 
-        return AskProviderAsync(callee, request, deadline, cancellationToken);
+        var asked = await AskProviderAsync(callee, request, deadline, cancellationToken, called: true).ConfigureAwait(false);
+        return (asked.Arms, asked.Ignored, asked.Error, false);
     }
 
     /// <summary>
-    /// Whether a pipeline <paramref name="plan"/>'s nodes call, directly or through the pipelines those call, has arm
-    /// <paramref name="armId"/> in the plan it serves now: such an arm is not the request's pipeline's to run, and not a
-    /// mistake either.
+    /// The plans served now of the pipelines <paramref name="plan"/>'s nodes call, directly or through the pipelines those
+    /// call, each once.
     /// </summary>
-    private bool KnownToCalled(ExecutionPlan plan, string armId)
+    private List<ExecutionPlan> CalledPlans(ExecutionPlan plan)
     {
-        if (plan.Calls.IsEmpty)
-        {
-            return false;
-        }
-
+        var plans = new List<ExecutionPlan>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { plan.PipelineId };
         var pending = new Stack<string>();
         foreach (var called in plan.Calls)
@@ -401,14 +424,63 @@ public sealed partial class RecEngine
                 continue;
             }
 
-            if (loaded.Plan.TryGetArm(armId, out _))
-            {
-                return true;
-            }
-
+            plans.Add(loaded.Plan);
             foreach (var called in loaded.Plan.Calls)
             {
                 pending.Push(called);
+            }
+        }
+
+        return plans;
+    }
+
+    /// <summary>
+    /// Forced arms are strict for the pipelines the request calls too: two arms of one layer of a called pipeline are the
+    /// debugger's mistake, as two of the request's own are, not a layer that quietly runs its baseline.
+    /// </summary>
+    /// <exception cref="ArgumentException">A called pipeline cannot run the arms of it that were forced.</exception>
+    private void CheckForcedOfCalled(ExecutionPlan plan, IReadOnlyList<string> forced)
+    {
+        if (plan.Calls.IsEmpty || forced.Count < 2)
+        {
+            return;
+        }
+
+        foreach (var called in CalledPlans(plan))
+        {
+            var own = new List<string>();
+            foreach (var id in forced)
+            {
+                if (called.TryGetArm(id, out _))
+                {
+                    own.Add(id);
+                }
+            }
+
+            if (own.Count > 1)
+            {
+                _ = called.ArmsFromIds(own);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a pipeline <paramref name="plan"/>'s nodes call, directly or through the pipelines those call, has arm
+    /// <paramref name="armId"/> in the plan it serves now: such an arm is not the request's pipeline's to run, and not a
+    /// mistake either.
+    /// </summary>
+    private bool KnownToCalled(ExecutionPlan plan, string armId)
+    {
+        if (plan.Calls.IsEmpty)
+        {
+            return false;
+        }
+
+        foreach (var called in CalledPlans(plan))
+        {
+            if (called.TryGetArm(armId, out _))
+            {
+                return true;
             }
         }
 

@@ -53,6 +53,31 @@ public sealed class LinearModelClientTests
             await client.CallAsync(Call(0, NamedInput.FromFloat32("x", new[] { 1 }, new[] { 0.5f })), new Outputs(), CancellationToken.None));
     }
 
+    /// <summary>
+    /// The weights are added in the order of their inputs' names, not in the order the settings spell them: a float32
+    /// sum depends on its order, and two bindings that differ only in the order of a JSON object's members are the same
+    /// content (audit of f47a255: they scored 0 and 1).
+    /// </summary>
+    [Fact]
+    public async Task TheScore_DoesNotDependOnTheOrderTheWeightsAreWrittenIn()
+    {
+        var a = new Dictionary<string, double> { ["x"] = 1.0, ["y"] = -16777216.0 };
+        var b = new Dictionary<string, double> { ["y"] = -16777216.0, ["x"] = 1.0 };
+        var scores = new List<float>();
+        foreach (var weights in new[] { a, b })
+        {
+            var client = new LinearModelClient("m", [new LinearOutput("p", 16777216.0, weights, Sigmoid: false)]);
+            var outputs = new Outputs();
+            var status = await client.CallAsync(
+                new ServiceCall { Service = "m", BatchSize = 1, Inputs = new[] { NamedInput.FromFloat32("x", new[] { 1 }, new[] { 1f }), NamedInput.FromFloat32("y", new[] { 1 }, new[] { 1f }) } },
+                outputs, CancellationToken.None);
+            Assert.True(status.Succeeded, status.Error);
+            scores.Add(outputs.Values["p"][0]);
+        }
+
+        Assert.Equal(scores[0], scores[1]);
+    }
+
     [Fact]
     public async Task AnotherTensor_FailsTheCall()
     {

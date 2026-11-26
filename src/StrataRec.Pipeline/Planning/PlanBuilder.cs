@@ -1925,7 +1925,7 @@ public sealed class PlanBuilder
             var features = new SortedSet<int>();
             var contextFeatures = new SortedSet<int>();
             var requestReads = new SortedSet<int>();
-            var bindsArmDeclared = false; // a request column only an arm declares, bound but maybe not read
+            var bindsArmDeclared = false; // a name only an arm declares (a request column, a parameter, a feature), bound but maybe not read
             foreach (var tap in variants)
             {
                 if (tap.AttachAfter is { } after)
@@ -1943,10 +1943,13 @@ public sealed class PlanBuilder
                     {
                         reads.Add(name.Id);
                     }
-                    else if (name.Kind == SymbolKind.Context && schema.ContextFields[name.Id].Kind == ContextFieldKind.RequestColumn && conditional(name))
+                    else if (conditional(name))
                     {
-                        // An arm's declaration, bound in a branch the optimizer may drop: whether it is declared is the tap's
-                        // arms' to decide, not its writers' (a read of it has its own scope below, with them).
+                        // An arm's declaration of anything else: a request column bound in a branch the optimizer may drop
+                        // (whether it is declared is the tap's arms' to decide, not its writers'; a read of it has its own
+                        // scope below, with them), a parameter or a feature only an arm adds. Every name the complete check
+                        // judges by the assigned arms decides here that the tap is checked where its arms are (audit of
+                        // f47a255: a parameter was left out, and a tap reading it without its arm threw when it captured).
                         bindsArmDeclared = true;
                     }
                 }

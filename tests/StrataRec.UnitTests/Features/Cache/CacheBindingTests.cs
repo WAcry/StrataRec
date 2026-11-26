@@ -87,7 +87,7 @@ public class CacheBindingTests
         rig.Build();
         Assert.Equal(FeatureState.Ok, (await rig.NewRequest([1]).EnsureAsync(clicks)).State);
         await store.WhenWrittenAsync(1);
-        Assert.True(store.TryGet("item_store:item:1", out _, out var timeToLive));
+        Assert.True(store.TryGet(rig.Tables["item_store"].Cache!.Keyspace.Prefix + "1", out _, out var timeToLive));
         Assert.Equal(TimeSpan.FromTicks(LocalTableCache.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
     }
 
@@ -122,7 +122,7 @@ public class CacheBindingTests
         Assert.Equal(FeatureState.Ok, (await rig.NewRequest([1]).EnsureAsync(clicks)).State);
 
         await store.WhenWrittenAsync(1);
-        Assert.True(store.TryGet("item_store:item:1", out _, out var timeToLive));
+        Assert.True(store.TryGet(rig.Tables["item_store"].Cache!.Keyspace.Prefix + "1", out _, out var timeToLive));
         Assert.Equal(TimeSpan.FromTicks(LocalTableCache.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
     }
 

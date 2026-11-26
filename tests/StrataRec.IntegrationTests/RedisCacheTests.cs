@@ -91,7 +91,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         Assert.Equal(0, secondRead.ConnectorKeys);
 
         // What the engine wrote: under the prefix, each record kept for its lifetime (ttl_ms 600000, jittered by up to 10%).
-        var key = Assert.Single(stores.Written, k => k.EndsWith(":item:" + CacheEngineTests.Items(origin)[0].Item1, StringComparison.Ordinal));
+        var key = Assert.Single(stores.Written, k => k.EndsWith(":" + CacheEngineTests.Items(origin)[0].Item1, StringComparison.Ordinal));
         Assert.StartsWith(prefix + "item_store:item:", key, StringComparison.Ordinal);
         Assert.InRange((await server.Connection.GetDatabase().KeyTimeToLiveAsync(key))!.Value, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(660));
     }

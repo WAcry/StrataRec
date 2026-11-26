@@ -32,6 +32,15 @@ public sealed class CacheTableOptions
     /// </summary>
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
+    /// <summary>
+    /// What the table's values come from, for a feature source's cache: a digest of its connector and the connector's
+    /// settings, the same on every instance with the same configuration. Part of every key of the distributed tier
+    /// (<see cref="CacheKeyspace.Prefix"/>), so a source bound to another connector, or to other data, does not read what
+    /// the earlier binding left there, which outlives the local table; two releases that differ in it each keep their own.
+    /// Null for a service's cache, whose keys carry the service's answer identity themselves.
+    /// </summary>
+    public string? Origin { get; init; }
+
     internal void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TtlMs);
@@ -185,7 +194,7 @@ public sealed class LocalTableCache
         Options = options;
         Clock = options.Clock;
         Layout = new CacheRecordLayout(table.Schema);
-        Keyspace = new CacheKeyspace(table.Schema.Source, table.Schema.Entity, table.Schema.Key);
+        Keyspace = new CacheKeyspace(table.Schema.Source, table.Schema.Entity, table.Schema.Key, options.Origin);
         _queueLimit = options.WriteQueueBytes > 0 ? options.WriteQueueBytes : Math.Clamp(table.Options.MaxBytes / 16, 1L << 20, 64L << 20);
         MaxLifetimeMs = MaxLifetime(options.TtlMs);
         var tags = table.MetricTags.ToArray();

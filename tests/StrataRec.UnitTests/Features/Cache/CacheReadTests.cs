@@ -269,8 +269,11 @@ public class CacheReadTests
         var (writer, writerConnector, writerClicks) = DistributedRig(store);
         await writer.NewRequest(Three).EnsureAsync(writerClicks);
         await store.WhenWrittenAsync(3);
-        Assert.True(store.TryGet("item_store:item:2", out _, out var timeToLive));
+        // The keys say the source, the entity and where the source's values come from (its connector and settings).
         var cache = writer.Tables["item_store"].Cache!;
+        var keys = cache.Keyspace.Prefix;
+        Assert.Matches("^item_store:item:[0-9a-f]{16}:$", keys);
+        Assert.True(store.TryGet(keys + "2", out _, out var timeToLive));
         Assert.Equal(TimeSpan.FromMilliseconds(cache.MaxLifetimeMs + cache.Options.StaleIfErrorMs), timeToLive);
 
         var (reader, readerConnector, readerClicks) = DistributedRig(store); // another instance: an empty table
@@ -280,7 +283,7 @@ public class CacheReadTests
         Assert.Equal(FeatureState.Ok, result.State);
         Assert.Equal(new[] { 3.0, 1, 4 }, Values(request, readerClicks, 3));
         Assert.Equal(new long[] { 4 }, Assert.Single(readerConnector.Calls).Keys.Select(k => k.Int64Value));
-        Assert.Equal(new[] { "item_store:item:3", "item_store:item:1", "item_store:item:4" }, store.Gets.Last());
+        Assert.Equal(new[] { keys + "3", keys + "1", keys + "4" }, store.Gets.Last());
         Assert.Equal(1, reader.WriteBack("item_store"));
         var version = reader.Tables["item_store"].Pin();
         Assert.True(version.Find(3L).Found && version.Find(1L).Found && version.Find(4L).Found);

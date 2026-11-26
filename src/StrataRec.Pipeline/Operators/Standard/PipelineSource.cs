@@ -22,8 +22,9 @@ public sealed class PipelineSourceConfig
     public Dictionary<string, string>? Inputs { get; init; }
 
     /// <summary>
-    /// Parameter holding the most rows to take, from the top of the result. Required, as every row source's limit is: it
-    /// bounds the rows a request may hold (design 4.8).
+    /// Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already
+    /// there does not use one up. Required, as every row source's limit is: it bounds the rows a request may hold
+    /// (design 4.8). A parameter without a value (a map's key set to null) appends none.
     /// </summary>
     public required string LimitParam { get; init; }
 
@@ -34,8 +35,9 @@ public sealed class PipelineSourceConfig
     public Dictionary<string, string>? Columns { get; init; }
 
     /// <summary>
-    /// A bool column written <c>true</c> on the appended rows, to tell them from the others. Declare it with
-    /// <c>"default": false</c> to read it without <c>??</c>; undeclared, it is declared <c>bool?</c>.
+    /// A bool column written <c>true</c> on the appended rows, to tell them from the others, which have no value in it:
+    /// read it as <c>col.x ?? false</c>. Undeclared, it is declared <c>bool?</c>; declared, declare it <c>bool?</c> (a
+    /// default does not fill the rows of other row sources).
     /// </summary>
     public string? Mark { get; init; }
 }
@@ -76,7 +78,9 @@ public sealed class PipelineSourceFactory : IOperatorFactory
                 continue;
             }
 
-            ok &= context.TryCallInput(call, name, key, expression.ResultType);
+            // The declared type of what it reads, not the type its arithmetic is done in: an int32 input passed on as it is
+            // is an int32, though an expression computes with int64.
+            ok &= context.TryCallInput(call, name, key, context.Schema.DeclaredType(expression));
             inputs.Add((name, expression));
         }
 
@@ -134,7 +138,10 @@ public sealed class PipelineSourceFactory : IOperatorFactory
         PipelineCall call, (string Name, CompiledExpression Expression)[] inputs, ParamRef limit, (OutputColumn Into, string From)[] columns, OutputColumn? mark)
         : Operator
     {
-        public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => (int)Math.Min(parameters[limit.Id].AsInt64(), int.MaxValue);
+        public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => Limit(parameters[limit.Id]);
+
+        /// <summary>The most rows to append; none for a parameter without a value (a map's key set to null).</summary>
+        private static int Limit(in ScalarValue value) => value.IsMissing ? 0 : (int)Math.Clamp(value.AsInt64(), 0, int.MaxValue);
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
@@ -159,13 +166,13 @@ public sealed class PipelineSourceFactory : IOperatorFactory
         }
 
         /// <summary>
-        /// Appends the result's rows the request has not seen, as many as the limit and the table allow, and writes their
-        /// columns. A column the result lacks, or a value its column cannot hold, fails the node: the call was checked
-        /// against the pipeline's interface, so either is a defect, not data.
+        /// Appends the result's first rows the request has not seen, as many as the limit and the table allow, and writes
+        /// their columns. A column the result lacks, or a value its column cannot hold, fails the node: the call was
+        /// checked against the pipeline's interface, so either is a defect, not data.
         /// </summary>
         private void Append(OperatorContext context, ResultColumns rows)
         {
-            var take = (int)Math.Min(rows.Count, context.Param(limit).AsInt64());
+            var most = Limit(context.Param(limit));
 
             var from = new int[columns.Length];
             for (var c = 0; c < columns.Length; c++)
@@ -181,9 +188,9 @@ public sealed class PipelineSourceFactory : IOperatorFactory
             var table = context.Table;
             var ids = rows.Ids;
             var stringKeys = table.KeyType == EntityKeyType.String;
-            var free = table.FreeRows;
-            var taken = new List<int>(Math.Min(take, free));
-            for (var r = 0; r < take && taken.Count < free; r++)
+            var free = Math.Min(most, table.FreeRows);
+            var taken = new List<int>(Math.Min(rows.Count, free));
+            for (var r = 0; r < rows.Count && taken.Count < free; r++)
             {
                 if (ids[r].IsString == stringKeys && !table.ContainsKey(ids[r]))
                 {
@@ -224,7 +231,8 @@ public sealed class PipelineSourceFactory : IOperatorFactory
                 var values = rows.Column(from[c]);
                 for (var i = 0; i < taken.Count; i++)
                 {
-                    if (!ColumnValues.TrySet(into, first + i, values[taken[i]]))
+                    // Converted as the check allows (an integer list read into a float one), then stored.
+                    if (!values[taken[i]].TryConvert(into.Type, out var value) || !ColumnValues.TrySet(into, first + i, value))
                     {
                         context.Fail($"column '{columns[c].From}' of pipeline '{call.PipelineId}' returned {values[taken[i]]}, which '{columns[c].Into.Name}' ({into.Type}) cannot hold");
                         return;

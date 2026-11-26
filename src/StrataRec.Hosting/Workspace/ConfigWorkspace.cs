@@ -238,10 +238,10 @@ public sealed class ConfigWorkspace
         DiagnosticBag diagnostics,
         DateOnly? today = null,
         IReadOnlyDictionary<string, string>? extraExperiments = null) =>
-        CreateCompileRequest(pipelineId, environment, diagnostics, today, extraExperiments, new WorkspacePipelines(this, environment, pipelineId), baseline: false);
+        CreateCompileRequest(pipelineId, environment, diagnostics, today, extraExperiments, new WorkspacePipelines(this, environment, pipelineId), called: false);
 
     /// <param name="pipelines">The workspace's pipelines as the request's nodes may call them.</param>
-    /// <param name="baseline">Leave the release's experiments out: for a pipeline's interface, which they cannot change.</param>
+    /// <param name="called">The request is for a pipeline another calls (<see cref="WorkspacePipelines"/>): its arms are not validated one by one.</param>
     internal PlanCompileRequest? CreateCompileRequest(
         string pipelineId,
         string environment,
@@ -249,7 +249,7 @@ public sealed class ConfigWorkspace
         DateOnly? today,
         IReadOnlyDictionary<string, string>? extraExperiments,
         WorkspacePipelines pipelines,
-        bool baseline)
+        bool called)
     {
         // Any assembly error aborts: a partial request (an experiment or table silently left out) must never be
         // compiled, loaded over a working plan, or built into a release.
@@ -334,7 +334,7 @@ public sealed class ConfigWorkspace
 
         var placements = new List<ExperimentPlacement>();
         var listed = new SortedDictionary<string, (string Layer, List<string>? YieldsTo)>(StringComparer.Ordinal);
-        if (release is not null && !baseline)
+        if (release is not null)
         {
             foreach (var (id, entry) in release.Value.Experiments)
             {
@@ -388,6 +388,7 @@ public sealed class ConfigWorkspace
             Tables = tables,
             Policy = Policy?.Value ?? new PolicyArtifact(),
             Pipelines = pipelines,
+            ValidateArmsIndependently = !called,
             Experiments = placements,
             ManifestId = "workspace:" + pipelineId + "/" + environment,
             ArtifactIds = artifactIds,

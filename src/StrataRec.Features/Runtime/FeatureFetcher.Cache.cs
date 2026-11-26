@@ -1251,17 +1251,32 @@ public sealed partial class FeatureFetcher
             ListValue(field, value, finite);
         }
 
+        /// <summary>
+        /// A list no target of the row takes is walked without being decoded: a record holds every field of its source,
+        /// and a node that reads one number of it paid for each tag's string (audit of f47a255: 1.9 MB a read of 1,000
+        /// records with 24 tags each). A string is decoded when a target takes it, as <see cref="String"/> does.
+        /// </summary>
         public void StringListStart(int field, int count)
         {
-            _items = ArrayPool<string>.Shared.Rent(Math.Max(1, count));
+            _items = Wanted(field) ? ArrayPool<string>.Shared.Rent(Math.Max(1, count)) : null;
             _itemCount = 0;
         }
 
-        public void StringListItem(int field, ReadOnlySpan<byte> utf8) => _items![_itemCount++] = _strings.InternUtf8(utf8);
+        public void StringListItem(int field, ReadOnlySpan<byte> utf8)
+        {
+            if (_items is { } items)
+            {
+                items[_itemCount++] = _strings.InternUtf8(utf8);
+            }
+        }
 
         public void StringListEnd(int field)
         {
-            var items = _items!;
+            if (_items is not { } items)
+            {
+                return;
+            }
+
             ListValue<string>(field, items.AsSpan(0, _itemCount), finite: true);
             items.AsSpan(0, _itemCount).Clear();
             ArrayPool<string>.Shared.Return(items);
@@ -1320,6 +1335,20 @@ public sealed partial class FeatureFetcher
                     _owner.AddNonFinite(_targets[i].Info, 1);
                 }
             }
+        }
+
+        /// <summary>Whether a target of <paramref name="field"/> is not filled on the row yet: one that <see cref="Take"/> would take.</summary>
+        private readonly bool Wanted(int field)
+        {
+            for (var i = _starts[field]; i < _starts[field + 1]; i++)
+            {
+                if (!Bits.Get(_owner._table.GetFilled(_targets[i].Info.Slot), Row))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>Marks target <paramref name="i"/> filled on the row; false when it already was (the value stays).</summary>

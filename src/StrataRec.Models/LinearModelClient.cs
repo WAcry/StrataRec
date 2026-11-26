@@ -30,6 +30,13 @@ public sealed class LinearModelClient : IServiceClient
 {
     private readonly string _modelName;
     private readonly IReadOnlyList<LinearOutput> _outputs;
+
+    /// <summary>
+    /// Each output's weights by input name (ordinal): the order they are added in. A float32 sum depends on its order, and
+    /// the settings are a JSON object, whose members' order is not content (two bindings with the same content id must
+    /// score alike).
+    /// </summary>
+    private readonly KeyValuePair<string, double>[][] _weights;
     private readonly IReadOnlyList<string> _inputs;
     private readonly HashSet<string>? _versions;
     private readonly int _latencyMs;
@@ -40,9 +47,13 @@ public sealed class LinearModelClient : IServiceClient
         _modelName = modelName;
         _outputs = outputs;
         var inputs = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var output in outputs)
+        _weights = new KeyValuePair<string, double>[outputs.Count][];
+        for (var o = 0; o < outputs.Count; o++)
         {
-            foreach (var name in output.Weights.Keys)
+            var weights = new List<KeyValuePair<string, double>>(outputs[o].Weights);
+            weights.Sort(static (a, b) => string.CompareOrdinal(a.Key, b.Key));
+            _weights[o] = weights.ToArray();
+            foreach (var (name, _) in weights)
             {
                 inputs.Add(name);
             }
@@ -120,11 +131,12 @@ public sealed class LinearModelClient : IServiceClient
         }
 
         var inputs = call.Inputs.Span;
-        foreach (var output in _outputs)
+        for (var o = 0; o < _outputs.Count; o++)
         {
+            var output = _outputs[o];
             var dest = outputs.GetValues<float>(output.Name, batch).Span;
             dest.Fill((float)output.Bias);
-            foreach (var (name, weight) in output.Weights)
+            foreach (var (name, weight) in _weights[o])
             {
                 var input = FindInput(inputs, name);
                 if (input is null)

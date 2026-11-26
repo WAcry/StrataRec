@@ -268,6 +268,24 @@ internal sealed class RequestState
     /// <summary>Who called the run (<see cref="PipelineRequest.CalledBy"/>); null for a run of the request's own pipeline.</summary>
     public string? CalledBy { get; init; }
 
+    private Dictionary<string, int>? _pipelineCalls;
+
+    /// <summary>
+    /// The place of a node's next pipeline call among those it made in this run, from 0: counted over the run, not over an
+    /// attempt, since a fallback node may run for several nodes, and each of its calls needs a place of its own (a seed, a
+    /// record a replay finds). Calls made at once from several threads each get one, in no repeatable order.
+    /// </summary>
+    public int NextPipelineCall(string nodeId)
+    {
+        lock (this)
+        {
+            _pipelineCalls ??= new Dictionary<string, int>(StringComparer.Ordinal);
+            _pipelineCalls.TryGetValue(nodeId, out var next);
+            _pipelineCalls[nodeId] = next + 1;
+            return next;
+        }
+    }
+
     public TimeSpan Remaining => Stopwatch.GetElapsedTime(Stopwatch.GetTimestamp(), DeadlineTimestamp);
 
     public EvalContext Eval => new(Table, Bindings, Context, Params, Counters);
@@ -449,6 +467,9 @@ internal sealed class PipelineExecutor
             PipelineResult? result = null;
             for (; position < plan.Timeline.Length && result is null; position++)
             {
+                // A caller that cancelled gets no result, whatever the remaining nodes are: nodes that compute without
+                // I/O never look at the token, and went on to log rows as served that nobody received.
+                cancellationToken.ThrowIfCancellationRequested();
                 var appended = table.AppendedRows;
                 var error = await RunPositionAsync(state, position, cancellationToken).ConfigureAwait(false);
                 if (rowLimits[position] > 0)
@@ -465,6 +486,7 @@ internal sealed class PipelineExecutor
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested(); // as before each node: before the result is built and logged as returned
             result ??= await BuildResultAsync(state, request, start, cancellationToken).ConfigureAwait(false);
             if (state.Explainer is { } explainer)
             {
@@ -1283,6 +1305,20 @@ internal sealed class PipelineExecutor
         }
     }
 
+    /// <summary>The node whose version output column <paramref name="name"/> reads (<c>col.x@node</c>), or null.</summary>
+    private static string? PinnedProducer(OutputPlan output, string name)
+    {
+        foreach (var (column, read) in output.VersionReads)
+        {
+            if (column == name)
+            {
+                return read.Node;
+            }
+        }
+
+        return null;
+    }
+
     private static async ValueTask<PipelineResult> BuildResultAsync(RequestState state, PipelineRequest request, long start, CancellationToken cancellationToken)
     {
         var plan = state.Plan;
@@ -1355,12 +1391,24 @@ internal sealed class PipelineExecutor
                     state.Triggered, state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
             }
 
-            // Evaluated into storage of the declared type, so a float32 column's values print as the floats they are.
-            var buffer = ColumnBuffer.Create(types[c], Math.Max(1, state.Table.StorageCapacity), state.Memory);
-            expression.Evaluate(state.Eval, rows, buffer);
-            for (var i = 0; i < count; i++)
+            if (expression.ColumnReference is { } column && state.ReadColumn(column.FixedSlot, column.Id) is { } storage && storage.Type == types[c])
             {
-                values[c][i] = ColumnValues.Get(buffer, rows[i]);
+                // A column is read from its own storage, as a tap reads it: nothing to evaluate, and no buffer of the
+                // table's size for the few rows returned (2 MB for a 128-float embedding over 4,096 rows, audit of f47a255).
+                for (var i = 0; i < count; i++)
+                {
+                    values[c][i] = ColumnValues.Get(storage, rows[i]);
+                }
+            }
+            else
+            {
+                // Evaluated into storage of the declared type, so a float32 column's values print as the floats they are.
+                var buffer = ColumnBuffer.Create(types[c], Math.Max(1, state.Table.StorageCapacity), state.Memory);
+                expression.Evaluate(state.Eval, rows, buffer);
+                for (var i = 0; i < count; i++)
+                {
+                    values[c][i] = ColumnValues.Get(buffer, rows[i]);
+                }
             }
 
             if (expression.Reads.Count == 1 && expression.Reads[0] is { Kind: SymbolKind.Column, FixedSlot: < 0 } symbol)
@@ -1370,6 +1418,10 @@ internal sealed class PipelineExecutor
                 {
                     producers[name] = plan.Nodes[producer].NodeId;
                 }
+            }
+            else if (expression.ColumnReference is { FixedSlot: >= 0 } && PinnedProducer(output, name) is { } pinned && TapCapture.Produced(state, pinned))
+            {
+                producers[name] = pinned; // col.x@node always reads that node's version, as a tap's lineage has it
             }
         }
 

@@ -761,11 +761,14 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         var degraded = false;
         RecResult? result = null; // stays null when the request is aborted (cancelled by the caller, or a defect)
 
-        // A recorded request resolves its seed and time once, so both pipelines see the same values and the bundle holds
-        // exactly what ran (design 5.7).
+        // A request's time is taken once, when it arrives: the pipeline, its fallback pipeline and the pipelines its nodes
+        // call see the same, and so does a recorded request, whose bundle holds exactly what ran (design 5.7). Left to
+        // each run, a request that waited for its assignment, or fell back, ran at a later time than the same request
+        // recorded, and a filter on the time could serve it other items (audit of f47a255). A recorded request resolves
+        // its seed here too; otherwise each run derives the same from the request id.
         var record = request.Debug is { } debug && (debug.Record || debug.OnRecording is not null);
         var seed = record ? request.Seed ?? PipelineRequest.DefaultSeed(request.RequestId) : request.Seed;
-        var timeMs = record ? request.TimeMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : request.TimeMs;
+        long? timeMs = request.TimeMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var runs = record ? new RunCapture() : null;
         IReadOnlyList<IgnoredArm> ignored = Array.Empty<IgnoredArm>();
         LoadedPipeline? fallback = null;
@@ -774,6 +777,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         IReadOnlyList<string>? merged = null; // the arms such a plan has merged in: it runs with none of its own
         try
         {
+            cancellationToken.ThrowIfCancellationRequested(); // a caller that cancelled already is not served
             // Entered (see Enter) until the finally below; each run joins the lease for as long as its calls run.
             pipeline = Enter(request.PipelineId, out var disposed);
             if (pipeline is null)
@@ -911,6 +915,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         {
             try
             {
+                CheckForcedOfCalled(pipeline.Plan, forced);
                 return (pipeline.Plan.ArmsFromIds(OwnForced(pipeline.Plan, forced)), Array.Empty<IgnoredArm>(), null, RecErrorKind.None);
             }
             catch (ArgumentException ex)
@@ -969,8 +974,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// <paramref name="deadline"/>: of the pipeline the request names, and of each pipeline its nodes call
     /// (<see cref="RunCalls"/>), which has experiments of its own. None without a provider.
     /// </summary>
+    /// <param name="called">The pipeline is one a node calls: what the provider throws fails the call, as a result, and is
+    /// not thrown through the calling operator (the request's own provider failure is the host's to see).</param>
     private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, RecErrorKind ErrorKind)> AskProviderAsync(
-        LoadedPipeline pipeline, RecRequest request, long deadline, CancellationToken cancellationToken)
+        LoadedPipeline pipeline, RecRequest request, long deadline, CancellationToken cancellationToken, bool called = false)
     {
         if (_assignmentProvider is null)
         {
@@ -1008,6 +1015,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         {
             case CallEnd.Answered:
                 return Resolve(pipeline.Plan, asked.Value);
+            case CallEnd.Threw when called && asked.Outcome != IoOutcome.Timeout:
+                return (RequestArms.None, Array.Empty<IgnoredArm>(), $"its assignment failed: {asked.Error ?? "the provider threw"}", RecErrorKind.Failed);
             case CallEnd.Cancelled:
             case CallEnd.Threw when asked.Outcome != IoOutcome.Timeout:
                 ExceptionDispatchInfo.Throw(asked.Exception!); // the caller's cancellation, or what the provider threw

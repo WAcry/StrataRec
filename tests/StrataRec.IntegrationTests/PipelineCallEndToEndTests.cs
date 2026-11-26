@@ -1,4 +1,7 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Types;
+using StrataRec.Experiments.Assignment;
+using StrataRec.Pipeline.Operators;
 using StrataRec.Core.Values;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
@@ -363,5 +366,385 @@ public sealed class PipelineCallEndToEndTests
 
         Assert.True(result.Succeeded, result.Error); // the inner call fails its node, which is skipped
         Assert.NotEmpty(result.Items);
+    }
+
+    // ---- Review of f59fe2a ----
+
+    private sealed class ProbeConfig
+    {
+        public required string Pipeline { get; init; }
+    }
+
+    /// <summary><c>ProbeCall@1</c>: declares a call of a pipeline, passing <c>slots</c>, and runs what the test gives it.</summary>
+    private sealed class ProbeFactory(Func<OperatorContext, PipelineCall, ValueTask> body) : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("ProbeCall", 1, Effects.None, typeof(ProbeConfig), "Calls a pipeline as a test says.");
+
+        public Operator? Compile(OperatorCompileContext context)
+        {
+            var config = context.BindConfig<ProbeConfig>();
+            if (config is null || !context.TryCallPipeline(config.Pipeline, "/pipeline", out var call) || !context.TryCallInput(call, "slots", "/pipeline", ColumnType.Int64))
+            {
+                return null;
+            }
+
+            return new Probe(call, body);
+        }
+
+        private sealed class Probe(PipelineCall call, Func<OperatorContext, PipelineCall, ValueTask> body) : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context) => body(context, call);
+        }
+    }
+
+    private const string ProbeNode = """ "probe": { "order": 200, "op": "ProbeCall@1", "config": { "pipeline": "promoted" } } """;
+
+    private sealed class Provider(Func<AssignmentContext, CancellationToken, ValueTask<IReadOnlyList<string>>> answer) : IAssignmentProvider
+    {
+        public ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken) => answer(context, cancellationToken);
+    }
+
+    private static RecEngine EngineWith(HomeFeedTestHost host, IOperatorFactory? op = null, IAssignmentProvider? provider = null, params string[] pipelines)
+    {
+        var environment = new PlanEnvironment { BaseDirectory = host.Root, Operators = op is null ? OperatorRegistry.CreateDefault() : OperatorRegistry.CreateDefault().Add(op) };
+        var engine = new RecEngine(environment, provider);
+        foreach (var id in pipelines.Length == 0 ? ["promoted", "feed"] : pipelines)
+        {
+            var load = engine.Load(RequestOf(host, id));
+            Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+        }
+
+        return engine;
+    }
+
+    private static RecRequest Recorded(IReadOnlyList<string>? assignment = null, RequestInputs? inputs = null) => new()
+    {
+        PipelineId = "feed", RequestId = "req-call", Inputs = inputs ?? new RequestInputs().Set("user_id", 1001), Assignment = assignment,
+        Deadline = HomeFeedTestHost.Deadline, TimeMs = 1_767_225_600_000, Debug = new DebugOptions { Record = true, Trace = true },
+    };
+
+    /// <summary>The pipelines a workspace load is asked for bring the ones they call (finding 1): what <c>stratarec run</c> loads.</summary>
+    [Fact]
+    public async Task AWorkspaceLoad_ServesThePipelinesALoadedOneCalls()
+    {
+        var host = Host();
+        await using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root });
+
+        var loaded = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, host.Root, "local", ["feed"], TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(loaded.Items, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal(new[] { "feed", "promoted" }, engine.PipelineIds());
+        var result = await engine.ExecuteAsync(Request("feed"), TestContext.Current.CancellationToken);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.NotEmpty(PromotedRows(result));
+    }
+
+    /// <summary>A caller that cancelled before the call is made gets its cancellation, not a failed call an operator may shrug off (finding 3).</summary>
+    [Fact]
+    public async Task ACallMadeAfterTheCallerCancelled_IsCancelled_NotAFailedCall()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probe = new ProbeFactory(async (context, call) =>
+        {
+            entered.SetResult();
+            await go.Task;
+            _ = await context.CallPipelineAsync(call, new RequestInputs().Set("slots", 3)); // whatever it returns, the operator goes on
+        });
+        var engine = EngineWith(Host(callNode: ProbeNode), probe, null, "feed"); // promoted is not served: a failed call, were it made
+        using var cancel = new CancellationTokenSource();
+
+        var running = engine.ExecuteAsync(Request("feed"), cancel.Token).AsTask();
+        await entered.Task;
+        await cancel.CancelAsync();
+        go.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+    }
+
+    /// <summary>
+    /// A fallback node that runs for two nodes makes each of its calls at a place of its own: the recording has both, and
+    /// replays (finding 5: both were call 0 of the node, which a replay refused as a duplicate).
+    /// </summary>
+    [Fact]
+    public async Task AFallbackNodeUsedTwice_RecordsEachOfItsCalls_AndReplays()
+    {
+        const string Nodes = """
+            "a": { "order": 200, "op": "PipelineSource@1", "on_failure": "fallback", "fallback": "backup", "config": { "pipeline": "other", "limit_param": "promoted_k", "columns": { "promo.bid": "bid" }, "mark": "is_promoted" } },
+            "b": { "order": 210, "op": "PipelineSource@1", "on_failure": "fallback", "fallback": "backup", "config": { "pipeline": "other", "limit_param": "promoted_k", "columns": { "promo.bid": "bid" }, "mark": "is_promoted" } },
+            "backup": { "role": "fallback", "op": "PipelineSource@1",
+                        "config": { "pipeline": "promoted", "limit_param": "promoted_k", "inputs": { "slots": "3" }, "columns": { "promo.bid": "bid" }, "mark": "is_promoted" } }
+            """;
+        var host = Host(callNode: Nodes, more: root => File.WriteAllText(Path.Combine(root, "pipelines", "other.jsonc"),
+            Promoted.Replace("\"pipeline_id\": \"promoted\"", "\"pipeline_id\": \"other\"", StringComparison.Ordinal)
+                .Replace("\"slots\": { \"type\": \"int64\" }", "\"slots\": { \"type\": \"int64?\" }", StringComparison.Ordinal)
+                .Replace("+ ctx.request.slots", "+ (ctx.request.slots ?? 0)", StringComparison.Ordinal)));
+        var engine = EngineWith(host); // 'other' is in the workspace and not served: both calls of it fail
+        var ct = TestContext.Current.CancellationToken;
+
+        var recorded = await engine.ExecuteAsync(Recorded([]), ct);
+
+        Assert.True(recorded.Succeeded, recorded.Error);
+        var calls = recorded.Recording!.Runs[0].PipelineCalls;
+        Assert.Equal(new[] { ("a", 0, "other"), ("b", 0, "other"), ("backup", 0, "promoted"), ("backup", 1, "promoted") }, calls.Select(c => (c.Node, c.Seq, c.Pipeline)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)), cancellationToken: ct);
+        Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
+        Assert.Empty(outcome.Report.Gaps);
+    }
+
+    /// <summary>The pipelines of the tests with a list passed down and returned: <c>ids</c> in, <c>ids</c> out on every row.</summary>
+    private static HomeFeedTestHost HostWithLists(string intoType = "list<float64>?") => Host(
+        callNode: CallNode.Replace("\"inputs\": { \"slots\": \"3\" }", "\"inputs\": { \"slots\": \"3\", \"ids\": \"ctx.request.ids\" }", StringComparison.Ordinal)
+            .Replace("\"promo.bid\": \"bid\"", "\"promo.bid\": \"bid\", \"promo.ids\": \"ids\"", StringComparison.Ordinal),
+        more: root =>
+        {
+            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"slots\": { \"type\": \"int64\" }", "\"slots\": { \"type\": \"int64\" }, \"ids\": { \"type\": \"list<int64>\" }");
+            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"columns\": { \"bid\": \"col.bid\" }", "\"columns\": { \"bid\": \"col.bid\", \"ids\": \"ctx.request.ids\" }");
+            ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"country\": { \"type\": \"string?\" } },", "\"country\": { \"type\": \"string?\" }, \"ids\": { \"type\": \"list<int64>\" } },");
+            ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"promo.bid\": { \"type\": \"float32?\" }", "\"promo.bid\": { \"type\": \"float32?\" }, \"promo.ids\": { \"type\": \"" + intoType + "\" }");
+            ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"promo_bid\": \"col.promo.bid\"", "\"promo_bid\": \"col.promo.bid\", \"promo_ids\": \"col.promo.ids\"");
+        });
+
+    /// <summary>
+    /// A list passed to a call is compared as a value on replay, however the bundle's file spelled it (finding 6: a file
+    /// writes a list over several lines, and the call was a gap); and a list of integers read into one of floats, which
+    /// the check allows, is stored as floats (finding 15: the node threw at the first row).
+    /// </summary>
+    [Fact]
+    public async Task AListPassedAndReturned_IsConvertedAsChecked_AndReplaysFromAFile()
+    {
+        var engine = EngineWith(HostWithLists());
+        var ct = TestContext.Current.CancellationToken;
+
+        var recorded = await engine.ExecuteAsync(Recorded([], new RequestInputs().Set("user_id", 1001).Set("ids", new long[] { 1, 2 })), ct);
+
+        Assert.True(recorded.Succeeded, recorded.Error);
+        var row = Assert.Single(PromotedRows(recorded).Take(1));
+        Assert.Equal(new[] { 1.0, 2.0 }, row.Columns["promo_ids"].AsFloat64List().ToArray());
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!)), cancellationToken: ct);
+        Assert.Empty(outcome.Report.Gaps);
+        Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
+    }
+
+    /// <summary>
+    /// A provider that fails for a called pipeline fails the call, as a result the operator sees and the recording holds
+    /// (finding 8: it was thrown through the operator, and the replay found no call).
+    /// </summary>
+    [Fact]
+    public async Task AProviderThatFailsForACalledPipeline_FailsTheCall_AsAResult()
+    {
+        var provider = new Provider((context, _) => context.PipelineId == "promoted"
+            ? throw new IOException("provider unavailable")
+            : ValueTask.FromResult<IReadOnlyList<string>>([]));
+        var engine = EngineWith(Host("skip"), provider: provider);
+
+        var result = await engine.ExecuteAsync(Recorded(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        var call = Assert.Single(result.Recording!.Runs[0].PipelineCalls);
+        Assert.False(call.Succeeded);
+        Assert.Contains("pipeline 'promoted' was not called: its assignment failed", call.Error);
+        Assert.Contains("provider unavailable", call.Error);
+        Assert.Contains(call.Error!, result.Trace!.Single(n => n.NodeId == "promoted").Detail);
+    }
+
+    /// <summary>Two forced arms of one layer of a called pipeline are refused, as two of the request's own are (finding 9: the layer ran its baseline).</summary>
+    [Fact]
+    public async Task TwoForcedArmsOfOneLayerOfACalledPipeline_AreRefused()
+    {
+        var engine = Engine(Host());
+
+        var result = await engine.ExecuteAsync(Request("feed", force: ["exp_promoted/control", "exp_promoted/few"]), TestContext.Current.CancellationToken);
+
+        Assert.Equal(RecErrorKind.InvalidRequest, result.ErrorKind);
+        Assert.Contains("exp_promoted", result.Error);
+    }
+
+    /// <summary>
+    /// What the request ignored is each arm once, by id (finding 19), and an arm only the provider's answer for a called
+    /// pipeline names, which no pipeline has, is among them (finding 11: it vanished).
+    /// </summary>
+    [Fact]
+    public async Task TheIgnoredArms_AreEachOnce_ById_WithACalledPipelinesOwn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var shared = await Engine(Host()).ExecuteAsync(Request("feed", assignment: ["zz/x", "exp_promoted/control", "exp_promoted/few"]), ct);
+        Assert.Equal(new[] { ("exp_promoted/control", IgnoredArmReason.LayerConflict), ("exp_promoted/few", IgnoredArmReason.LayerConflict), ("zz/x", IgnoredArmReason.Unknown) },
+            shared.Experiments.Ignored.Select(a => (a.Id, a.Reason)));
+
+        var provider = new Provider((context, _) => ValueTask.FromResult<IReadOnlyList<string>>(context.PipelineId == "promoted" ? ["exp_promoted/few", "typo/x"] : []));
+        var asked = await EngineWith(Host(), provider: provider).ExecuteAsync(
+            new RecRequest { PipelineId = "feed", RequestId = "req-call", Inputs = new RequestInputs().Set("user_id", 1001), Deadline = HomeFeedTestHost.Deadline }, ct);
+        Assert.Equal(new[] { "exp_promoted/few" }, asked.Experiments.Assigned);
+        Assert.Equal(("typo/x", IgnoredArmReason.Unknown), Assert.Single(asked.Experiments.Ignored.Select(a => (a.Id, a.Reason))));
+    }
+
+    /// <summary>A call an arm adds counts for a cycle (finding 12: the called pipeline was compiled without its experiments, and the cycle loaded).</summary>
+    [Fact]
+    public void ACycleThroughACallAnArmAdds_IsRefused()
+    {
+        var host = Host(more: root => ReplayTests.Edit(root, "experiments/exp_promoted.jsonc", "\"few\": { \"params\": { \"top_k\": 2 } }",
+            "\"few\": { \"nodes\": { \"back\": { \"order\": 150, \"op\": \"PipelineSource@1\", \"config\": { \"pipeline\": \"feed\", \"limit_param\": \"top_k\" } } } }"));
+
+        var compilation = PlanCompiler.Compile(RequestOf(host, "feed"), host.Environment);
+
+        var error = Assert.Single(compilation.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal("PIPELINE_CALL_FAILED", error.Code);
+        Assert.Contains("feed → promoted → feed", error.Message);
+    }
+
+    /// <summary>
+    /// A value that may be missing is not passed as an input the called pipeline requires, whether the operator passes it
+    /// or the request's own is passed on (finding 13: both compiled, and a request without it failed the call).
+    /// </summary>
+    [Theory]
+    [InlineData(true, "/nodes/promoted/config/inputs/slots", "?? <default>")]
+    [InlineData(false, "/nodes/promoted/config/pipeline", "?? <default>")]
+    public void AnInputThatMayBeMissing_IsNotPassedAsARequiredOne(bool passed, string pointer, string hint)
+    {
+        var node = passed
+            ? CallNode.Replace("\"slots\": \"3\"", "\"slots\": \"ctx.request.slots\"", StringComparison.Ordinal)
+            : CallNode.Replace("\"inputs\": { \"slots\": \"3\" }, ", string.Empty, StringComparison.Ordinal);
+        var host = Host(callNode: node, more: root => ReplayTests.Edit(root, "pipelines/feed.jsonc",
+            "\"country\": { \"type\": \"string?\" } },", "\"country\": { \"type\": \"string?\" }, \"slots\": { \"type\": \"int64?\" } },"));
+
+        var compilation = PlanCompiler.Compile(RequestOf(host, "feed"), host.Environment);
+
+        var error = Assert.Single(compilation.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal(("PIPELINE_CALL_INPUT", pointer), (error.Code, error.Pointer));
+        Assert.Contains(hint, error.Hint);
+    }
+
+    /// <summary>An int32 input passed on as it is, is an int32 (finding 14: it was taken as the int64 an expression computes with, and refused).</summary>
+    [Fact]
+    public void AnInt32InputPassedOn_IsAnInt32()
+    {
+        var host = Host(callNode: CallNode.Replace("\"slots\": \"3\"", "\"slots\": \"ctx.request.n\"", StringComparison.Ordinal), more: root =>
+        {
+            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"slots\": { \"type\": \"int64\" }", "\"slots\": { \"type\": \"int32\" }");
+            ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"country\": { \"type\": \"string?\" } },", "\"country\": { \"type\": \"string?\" }, \"n\": { \"type\": \"int32\" } },");
+        });
+
+        var compilation = PlanCompiler.Compile(RequestOf(host, "feed"), host.Environment);
+
+        Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
+    }
+
+    /// <summary>
+    /// An operator that changes its inputs for its next call while one runs has each call recorded with what it passed
+    /// (finding 16: both were recorded with the last values, and the replay found neither).
+    /// </summary>
+    [Fact]
+    public async Task ACallsInputs_AreRecordedAsPassed_ThoughTheOperatorChangesThemMeanwhile()
+    {
+        var release = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var asked = 0;
+        var provider = new Provider((context, _) =>
+        {
+            if (context.PipelineId != "promoted" || Interlocked.Increment(ref asked) != 1)
+            {
+                return ValueTask.FromResult<IReadOnlyList<string>>([]);
+            }
+
+            waiting.SetResult(); // the first call of promoted waits here, its inputs passed already
+            return new ValueTask<IReadOnlyList<string>>(release.Task);
+        });
+        var probe = new ProbeFactory(async (context, call) =>
+        {
+            var inputs = new RequestInputs().Set("slots", 1);
+            var first = context.CallPipelineAsync(call, inputs).AsTask();
+            await waiting.Task;
+            inputs.Set("slots", 2);
+            var second = context.CallPipelineAsync(call, inputs).AsTask();
+            release.SetResult([]);
+            await Task.WhenAll(first, second);
+        });
+        var engine = EngineWith(Host(callNode: ProbeNode), probe, provider);
+
+        var result = await engine.ExecuteAsync(Recorded(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(new[] { (0, "1"), (1, "2") }, result.Recording!.Runs[0].PipelineCalls.Select(c => (c.Seq, c.Inputs["slots"].Value!.Value.GetRawText())));
+    }
+
+    /// <summary>Calls made at once from several threads each get a place of their own (finding 4: two could get the same, and the recording did not replay).</summary>
+    [Fact]
+    public async Task CallsMadeAtOnceFromSeveralThreads_EachGetAPlace()
+    {
+        const int Threads = 8, Each = 400;
+        var probe = new ProbeFactory(async (context, call) =>
+        {
+            using var start = new Barrier(Threads);
+            var threads = new Task[Threads];
+            for (var t = 0; t < Threads; t++)
+            {
+                threads[t] = Task.Run(async () =>
+                {
+                    start.SignalAndWait();
+                    for (var i = 0; i < Each; i++)
+                    {
+                        _ = await context.CallPipelineAsync(call, new RequestInputs().Set("slots", 3));
+                    }
+                });
+            }
+
+            await Task.WhenAll(threads);
+        });
+        var engine = EngineWith(Host(callNode: ProbeNode), probe, null, "feed"); // promoted is not served: each call fails at once
+
+        var result = await engine.ExecuteAsync(Recorded([]), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        var places = result.Recording!.Runs[0].PipelineCalls.Select(c => c.Seq).ToList();
+        Assert.Equal(Threads * Each, places.Count);
+        Assert.Equal(Enumerable.Range(0, Threads * Each), places.Order());
+    }
+
+    /// <summary>
+    /// The limit is of the rows appended: a row the request has already does not use one up (finding 27), and a
+    /// parameter without a value appends none instead of throwing before the first node (finding 18).
+    /// </summary>
+    [Fact]
+    public async Task TheLimit_IsOfTheRowsAppended_AndAMissingOneAppendsNone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var one = Engine(Host(more: root => ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"promoted_k\": 10 }", "\"promoted_k\": 1 }")));
+        var all = await Engine(Host()).ExecuteAsync(Request("feed"), ct);
+        var first = await one.ExecuteAsync(Request("feed"), ct);
+        Assert.Equal(PromotedRows(all).Take(1).Select(i => i.Id), PromotedRows(first).Select(i => i.Id));
+
+        var none = Engine(Host(
+            callNode: CallNode.Replace("\"limit_param\": \"promoted_k\"", "\"limit_param\": \"limits.promo\"", StringComparison.Ordinal),
+            more: root =>
+            {
+                ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"promoted_k\": { \"type\": \"int64\", \"min\": 0, \"max\": 100 } },",
+                    "\"promoted_k\": { \"type\": \"int64\", \"min\": 0, \"max\": 100 }, \"limits\": { \"type\": \"map<string,int64>\", \"min\": 0, \"max\": 100 } },");
+                ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"promoted_k\": 10 }", "\"promoted_k\": 10, \"limits\": { \"promo\": null } }");
+            }));
+        var missing = await none.ExecuteAsync(Request("feed"), ct);
+        Assert.True(missing.Succeeded, missing.Error);
+        Assert.Empty(PromotedRows(missing));
+    }
+
+    /// <summary>
+    /// A request compiled again keeps the pipelines it may call (finding 23: the copies the compiler makes dropped them,
+    /// and a misspelled pipeline built), and asks about them again for another binary's operators (finding 24).
+    /// </summary>
+    [Fact]
+    public void ACompileRequest_KeepsItsPipelines_AndAsksAgainForAnotherEnvironment()
+    {
+        var misspelled = RequestOf(Host(callNode: CallNode.Replace("\"pipeline\": \"promoted\"", "\"pipeline\": \"promotd\"", StringComparison.Ordinal)), "feed");
+        var merged = PlanCompiler.CompileMerged(misspelled, [], new PlanEnvironment());
+        Assert.Contains(merged.Diagnostics, d => d.Code == "PIPELINE_CALL_UNKNOWN");
+
+        var host = Host();
+        var request = RequestOf(host, "feed");
+        var without = new OperatorRegistry().Add(new StrataRec.Pipeline.Operators.Standard.MultiSourceRecallFactory())
+            .Add(new StrataRec.Pipeline.Operators.Standard.PipelineSourceFactory());
+        var lacking = PlanCompiler.Compile(request, new PlanEnvironment { BaseDirectory = host.Root, Operators = without });
+        Assert.Contains(lacking.Diagnostics, d => d.Code == "PIPELINE_CALL_FAILED"); // promoted uses operators that binary lacks
+        var complete = PlanCompiler.Compile(request, host.Environment);
+        Assert.True(complete.Succeeded, string.Join("\n", complete.Diagnostics));
     }
 }

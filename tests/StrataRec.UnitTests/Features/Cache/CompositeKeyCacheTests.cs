@@ -79,8 +79,10 @@ public class CompositeKeyCacheTests
         var (writer, writerConnector, writerCountry, writerBoost) = Rig(store);
         await Read(writer, writerCountry, writerBoost, "U:S%", 1, 2);
         await store.WhenWrittenAsync(2);
-        Assert.Equal(new[] { "ic_store:item_country:1:U%3AS%25", "ic_store:item_country:2:U%3AS%25" }, store.Gets.Single());
-        Assert.True(store.TryGet("ic_store:item_country:2:U%3AS%25", out _, out _));
+        var keys = writer.Tables["ic_store"].Cache!.Keyspace.Prefix; // ic_store:item_country:<where its values come from>:
+        Assert.StartsWith("ic_store:item_country:", keys, StringComparison.Ordinal);
+        Assert.Equal(new[] { keys + "1:U%3AS%25", keys + "2:U%3AS%25" }, store.Gets.Single());
+        Assert.True(store.TryGet(keys + "2:U%3AS%25", out _, out _));
 
         var (reader, readerConnector, readerCountry, readerBoost) = Rig(store); // another instance: an empty table
         Assert.Equal(new[] { 24.0, 14, 34 }, await Read(reader, readerCountry, readerBoost, "U:S%", 2, 1, 3));

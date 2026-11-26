@@ -13,7 +13,12 @@ namespace StrataRec.Hosting.Plans;
 /// </summary>
 internal sealed class PlanSource
 {
-    private static readonly JsonSerializerOptions Compact = new(ArtifactSerializer.Options) { WriteIndented = false };
+    /// <summary>
+    /// The artifacts' options with room for the request around them: an artifact as deep as a file may be
+    /// (<see cref="Artifacts.Json.Jsonc.MaxDepth"/>) is a few levels deeper inside the request, and validated and built
+    /// before it failed here, when its plan was loaded (audit of f47a255).
+    /// </summary>
+    private static readonly JsonSerializerOptions Compact = new(ArtifactSerializer.Options) { WriteIndented = false, MaxDepth = Artifacts.Json.Jsonc.MaxDepth + 8 };
 
     private readonly byte[] _json;
 

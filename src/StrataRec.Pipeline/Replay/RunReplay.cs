@@ -68,7 +68,7 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>The recorded calls of other pipelines, by node, place among its calls and pipeline, decoded.</summary>
-    private readonly Dictionary<(string Node, int Seq, string Pipeline), (ReplayPipelineCall Call, Operators.PipelineCallResult Result)> _pipelineCalls = new();
+    private readonly Dictionary<(string Node, int Seq, string Pipeline), (Dictionary<string, ReplayTypedValue> Inputs, Operators.PipelineCallResult Result)> _pipelineCalls = new();
 
     private void IndexPipelineCalls(ReplayRunRecord run, string pointer)
     {
@@ -76,12 +76,16 @@ internal sealed class RunReplay : IFeatureCallHook
         {
             var call = run.PipelineCalls[i];
             var at = $"{pointer}/pipeline_calls/{i.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+            // Decoded and encoded again: a bundle read from a file has its values as the file spelled them (a list over
+            // several lines), and a call's inputs are compared as values, not as text.
+            var inputs = new Dictionary<string, ReplayTypedValue>(call.Inputs.Count, StringComparer.Ordinal);
             foreach (var (name, input) in call.Inputs)
             {
-                _ = ReplayJson.Value(input.Value, ReplayJson.Type(input.Type, $"{at}/inputs/{name}/type"), $"{at}/inputs/{name}/value");
+                var type = ReplayJson.Type(input.Type, $"{at}/inputs/{name}/type");
+                inputs[name] = ReplayJson.Typed(type, ReplayJson.Value(input.Value, type, $"{at}/inputs/{name}/value"));
             }
 
-            if (!_pipelineCalls.TryAdd((call.Node, call.Seq, call.Pipeline), (call, ReplayJson.CallResult(call, at))))
+            if (!_pipelineCalls.TryAdd((call.Node, call.Seq, call.Pipeline), (inputs, ReplayJson.CallResult(call, at))))
             {
                 throw new ReplayBundleException(at, $"node '{call.Node}' has two calls {call.Seq} of pipeline '{call.Pipeline}'", "each call of a node has its own 'seq'");
             }
@@ -103,7 +107,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 return Operators.PipelineCallResult.Failed(pipelineId, $"pipeline '{pipelineId}': this call is not in the replay bundle");
             }
 
-            if (!SameInputs(recorded.Call.Inputs, ReplayJson.Inputs(given)))
+            if (!SameInputs(recorded.Inputs, ReplayJson.Inputs(given)))
             {
                 AddGap("pipeline", pipelineId, null, "inputs_changed", 1, node);
                 return Operators.PipelineCallResult.Failed(pipelineId, $"pipeline '{pipelineId}': the replay bundle has this call with other inputs");

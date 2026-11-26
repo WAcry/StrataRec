@@ -25,7 +25,9 @@ public sealed class CacheKeyspace
     {
     }
 
-    public CacheKeyspace(string source, string entity, EntityKeyLayout key)
+    /// <param name="origin">What the source's values come from (<see cref="CacheTableOptions.Origin"/>), which then is
+    /// part of the prefix; null for a keyspace whose keys say it themselves.</param>
+    public CacheKeyspace(string source, string entity, EntityKeyLayout key, string? origin = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(source);
         ArgumentException.ThrowIfNullOrEmpty(entity);
@@ -33,7 +35,7 @@ public sealed class CacheKeyspace
         Source = source;
         Entity = entity;
         Key = key;
-        Prefix = Escape(source) + ":" + Escape(entity) + ":";
+        Prefix = Escape(source) + ":" + Escape(entity) + ":" + (origin is null ? string.Empty : Escape(origin) + ":");
     }
 
     public string Source { get; }
@@ -43,7 +45,10 @@ public sealed class CacheKeyspace
     /// <summary>Every key of the keyspace has this layout.</summary>
     public EntityKeyLayout Key { get; }
 
-    /// <summary><c>{source}:{entity}:</c>, escaped; the store puts its own prefix (e.g. <c>key_prefix</c>) before it and the key after it.</summary>
+    /// <summary>
+    /// <c>{source}:{entity}:</c>, escaped, then <c>{origin}:</c> for a feature source's cache; the store puts its own prefix
+    /// (e.g. <c>key_prefix</c>) before it and the key after it.
+    /// </summary>
     public string Prefix { get; }
 
     /// <summary>

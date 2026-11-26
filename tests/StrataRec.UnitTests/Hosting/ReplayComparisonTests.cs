@@ -69,6 +69,24 @@ public sealed class ReplayComparisonTests
         Assert.Equal(("failed", 0, 1), (onlyAborted.Status, onlyAborted.Compared, onlyAborted.AbortedInRecording)); // nothing was compared
     }
 
+    /// <summary>
+    /// A bundle only one side replayed is in neither side's rates (audit of f47a255): the baseline counted its failure
+    /// there, and showed 50% errors of two requests beside the candidate's 0% of one.
+    /// </summary>
+    [Fact]
+    public void ABundleOnlyOneSideReplayed_IsInNeitherSidesRates()
+    {
+        var clean = Outcome(true, Items(0.5));
+        var failedOnBaselineOnly = new ReplayPair("extra", "r2", Outcome(false, Items()), null, "the candidate does not serve its pipeline");
+
+        var report = ReplayComparison.Compare(new[] { Pair(clean), failedOnBaselineOnly }, 10, "score", "base", "cand");
+
+        Assert.Equal((2, 1, 1), (report.Bundles, report.Compared, report.Unreadable));
+        Assert.Equal((1, 0.0), (report.Baseline.Requests, report.Baseline.ErrorRate));
+        Assert.Equal((1, 0.0), (report.Candidate.Requests, report.Candidate.ErrorRate));
+        Assert.Equal(2, report.Requests.Count); // the one-sided bundle is still listed, with its error
+    }
+
     private static ReplayPair Pair(ReplayOutcome outcome) => new("b", "r", outcome, outcome);
 
     private static List<RankedItem> Items(params double[] scores)

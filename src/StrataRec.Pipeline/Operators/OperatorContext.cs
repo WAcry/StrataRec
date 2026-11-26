@@ -47,9 +47,6 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>The attempt's staged request values, by position in <see cref="_requestOutputs"/>, missing where none was; made on the first write.</summary>
     private ScalarValue[]? _staged;
 
-    /// <summary>The pipeline calls the attempt has made (<see cref="CallPipelineAsync"/>): the next one's place.</summary>
-    private int _pipelineCalls;
-
     internal OperatorContext(RequestState state, string nodeId, Effects effects, AttemptBudget budget, ImmutableArray<RequestOutput> requestOutputs = default)
     {
         _state = state;
@@ -428,8 +425,8 @@ public sealed class OperatorContext : IServiceCallScope
     /// </returns>
     /// <remarks>
     /// <para>The called run is the same request: its id, its time, and its experiment assignment, of which the pipeline
-    /// runs the arms it has; its seed is derived from this run's, the node and the call's place among the node's calls,
-    /// so calls made in the same order get the same seeds. It has what is left of the node's budget, and does not fail
+    /// runs the arms it has; its seed is derived from this run's, the node and the call's place among the calls the node
+    /// made in the run, so calls made in the same order get the same seeds. It has what is left of the node's budget, and does not fail
     /// over to its <c>fallback_pipeline</c>: the node's <c>on_failure</c> decides.</para>
     /// <para>An operator may make several calls at once, as it may call several services.</para>
     /// </remarks>
@@ -456,7 +453,12 @@ public sealed class OperatorContext : IServiceCallScope
             }
         }
 
-        var sequence = _pipelineCalls++;
+        if (_state.CallerCancellation.IsCancellationRequested)
+        {
+            return ValueTask.FromCanceled<PipelineCallResult>(_state.CallerCancellation); // the caller's cancellation is never a failed call
+        }
+
+        var sequence = _state.NextPipelineCall(NodeId);
         if (_state.Replay is { } replay)
         {
             return new(replay.PipelineCall(NodeId, sequence, call.PipelineId, inputs)); // answered from the recording: a replay runs no other pipeline
@@ -467,9 +469,11 @@ public sealed class OperatorContext : IServiceCallScope
 
     private async ValueTask<PipelineCallResult> RecordedCallAsync(Replay.RunRecorder recorder, PipelineCall call, RequestInputs? inputs, int sequence)
     {
+        // What was passed, as it is now: the operator may change its inputs for its next call while this one runs.
+        var passed = Replay.ReplayJson.Inputs(inputs);
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var result = await SendAsync(call, inputs, sequence).ConfigureAwait(false);
-        recorder.PipelineCall(NodeId, sequence, call.PipelineId, inputs, result, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        recorder.PipelineCall(NodeId, sequence, call.PipelineId, passed, result, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         return result;
     }
 

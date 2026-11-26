@@ -6,9 +6,10 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Hosting.Workspace;
 
 /// <summary>
-/// A workspace's pipelines as one of them may call the others (<see cref="IPipelineDirectory"/>): a called pipeline's
-/// interface is that of its baseline, compiled when first asked for, in the same environment (its release decides its
-/// catalog and bindings) and without loading anything. Experiments are left out: they cannot change an interface.
+/// A workspace's pipelines as one of them may call the others (<see cref="IPipelineDirectory"/>): a called pipeline is
+/// compiled when first asked for, as its release has it (its catalog, bindings and experiments), without loading
+/// anything. Its experiments cannot change its interface, but an arm may add a call, and a cycle is one whichever arms
+/// its calls are in; each arm is not validated on its own again, which its own compile does.
 /// </summary>
 /// <remarks>
 /// One per pipeline being compiled, linked to the one of the pipeline that called for it: the pipelines being compiled
@@ -19,14 +20,15 @@ internal sealed class WorkspacePipelines : IPipelineDirectory
     private readonly ConfigWorkspace _workspace;
     private readonly string _environment;
     private readonly string[] _compiling;
-    private readonly Dictionary<string, PipelineLookup> _found;
+    private readonly Dictionary<(string PipelineId, PlanEnvironment Environment), PipelineLookup> _found;
 
     public WorkspacePipelines(ConfigWorkspace workspace, string environment, string pipelineId)
-        : this(workspace, environment, [pipelineId], new Dictionary<string, PipelineLookup>(StringComparer.Ordinal))
+        : this(workspace, environment, [pipelineId], new Dictionary<(string, PlanEnvironment), PipelineLookup>())
     {
     }
 
-    private WorkspacePipelines(ConfigWorkspace workspace, string environment, string[] compiling, Dictionary<string, PipelineLookup> found)
+    private WorkspacePipelines(
+        ConfigWorkspace workspace, string environment, string[] compiling, Dictionary<(string PipelineId, PlanEnvironment Environment), PipelineLookup> found)
     {
         _workspace = workspace;
         _environment = environment;
@@ -49,9 +51,11 @@ internal sealed class WorkspacePipelines : IPipelineDirectory
 
         lock (_found)
         {
-            if (!_found.TryGetValue(pipelineId, out var lookup))
+            // Kept for the environment it was compiled with: a request compiled again by a binary with other operators
+            // asks again.
+            if (!_found.TryGetValue((pipelineId, environment), out var lookup))
             {
-                _found[pipelineId] = lookup = Compile(pipelineId, environment);
+                _found[(pipelineId, environment)] = lookup = Compile(pipelineId, environment);
             }
 
             return lookup;
@@ -62,7 +66,7 @@ internal sealed class WorkspacePipelines : IPipelineDirectory
     {
         var diagnostics = new DiagnosticBag();
         var request = _workspace.CreateCompileRequest(pipelineId, _environment, diagnostics, today: null, extraExperiments: null,
-            new WorkspacePipelines(_workspace, _environment, [.. _compiling, pipelineId], _found), baseline: true);
+            new WorkspacePipelines(_workspace, _environment, [.. _compiling, pipelineId], _found), called: true);
         var compilation = request is null ? null : PlanCompiler.Compile(request, environment);
         if (compilation?.Plan is { } plan)
         {

@@ -107,11 +107,18 @@ samples/home_feed/
   "config": { "values": { "candidates.recalled": { "fn": "count" } } } },
 "diversity_cap": { "order": 520, "op": "SlidingWindowQuota@1", "when": "req.candidates.recalled >= 10", "config": { "...": "..." } },
 
+// 把另一条流水线的结果并入候选（例如广告流水线的前几名）：同一个请求、同一次实验分配，时间是这个节点剩下的预算；
+// 失败时按 on_failure 处理。promo.bid 在 columns 里声明为可空，is_promoted 读的时候写 col.is_promoted ?? false
+"promoted": { "order": 130, "op": "PipelineSource@1", "on_failure": "skip",
+  "config": { "pipeline": "promoted", "limit_param": "promoted_k", "columns": { "promo.bid": "bid" }, "mark": "is_promoted" } },
+
 // 确定性的探索扰动：ctx.request.seed 是内置字段（默认由请求 ID 哈希得到），同一请求给同样的结果，可以回放
 // （score.final 声明为 "flow": true，才能被几个节点依次改写）
 "explore": { "order": 468, "op": "ExpressionScorer@1",
   "config": { "output_col": "score.final", "expr": "col.score.final + 0.05 * hash01(ctx.request.seed, col.entity_id)" } },
 ```
+
+一个页面由几条流水线组成时，页面本身也是一条流水线：它的算子调用别的流水线（`OperatorContext.CallPipelineAsync`），怎么把结果拼起来由算子决定，所以页面结构的变化是配置里的补丁，受实验控制。宿主示例的首页（`samples/StrataRec.Samples.Host/config/pipelines/home.jsonc` 和 `Components/SlotBlend.cs`）并发调用两条流水线，把赞助内容按间隔放进主列表。
 
 类目打散用 `SlidingWindowQuota@1`（任意连续 `window` 个名次里同一组最多 `max_per_window` 个），相似内容打散用 `MmrDiversifier@1`，多目标融合用 `CompositeMultiplierScorer@1`（每个乘子、加项可以被实验单独修改）；`samples/home_feed` 里都有用法。
 

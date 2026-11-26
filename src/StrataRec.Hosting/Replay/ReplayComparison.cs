@@ -204,7 +204,10 @@ public static class ReplayComparison
         long requested = 0, missing = 0;
         foreach (var pair in pairs)
         {
-            if (side(pair) is not { } outcome || NotReplayed(pair))
+            // The bundles both sides replayed, as the comparison counts them: a bundle only one side could replay is in
+            // the request list with its error, and in neither side's rates, which would otherwise be of different
+            // samples (audit of f47a255: 50% errors of two requests beside 0% of one).
+            if (pair.Baseline is null || pair.Candidate is null || side(pair) is not { } outcome || NotReplayed(pair))
             {
                 continue;
             }

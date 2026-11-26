@@ -532,8 +532,9 @@ public sealed class OperatorCompileContext
         call.AddInput(name, type);
         if (call.Interface is { } callee && PipelineCall.InputMismatch(callee, name, type) is { } mismatch)
         {
-            Error(configKey, "PIPELINE_CALL_INPUT", Sentence(mismatch),
-                callee.Inputs.Contains(name) ? null : Spelling.DidYouMean(name, callee.Inputs.Names) ?? $"pass an input '{callee.PipelineId}' declares in its request_schema");
+            Error(configKey, "PIPELINE_CALL_INPUT", Sentence(mismatch), !callee.Inputs.Contains(name)
+                ? Spelling.DidYouMean(name, callee.Inputs.Names) ?? $"pass an input '{callee.PipelineId}' declares in its request_schema"
+                : type.Nullable ? "pass a value that is never missing, e.g. with '?? <default>'" : null);
             return false;
         }
 
@@ -578,7 +579,7 @@ public sealed class OperatorCompileContext
             if (call.Interface is { } callee && call.MissingInput(callee) is { } missing)
             {
                 Error(call.ConfigKey, "PIPELINE_CALL_INPUT", Sentence(missing),
-                    $"declare the input in the request_schema of '{call.Caller}' (it is passed on by name), or use an operator that passes it");
+                    $"have the operator pass it (PipelineSource@1: \"inputs\", with '?? <default>' for a value that may be missing), or declare it required in the request_schema of '{call.Caller}', which passes inputs on by name");
             }
         }
     }

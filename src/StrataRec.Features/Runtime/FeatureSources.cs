@@ -607,11 +607,28 @@ internal sealed class FeatureSourceResolver
             Options = new LocalFeatureTableOptions
             {
                 MaxBytes = maxBytes,
-                Cache = new CacheTableOptions { TtlMs = ttlMs, StaleIfErrorMs = staleMs, Clock = _clock },
+                Cache = new CacheTableOptions { TtlMs = ttlMs, StaleIfErrorMs = staleMs, Clock = _clock, Origin = OriginIdentity(binding) },
             },
             Distributed = distributed,
             DistributedTimeoutMs = distributedTimeoutMs,
         };
+    }
+
+    /// <summary>
+    /// What a cached source's values come from: its connector and the connector's settings, canonical, as the first 16 hex
+    /// digits of their content id. Not <c>timeout_ms</c>, <c>max_batch</c>, <c>max_bytes</c> or <c>cache</c>, which decide
+    /// when a value arrives and how long it is kept, not what it is: a release that only tunes those keeps the shared
+    /// tier's values (a service's cache follows the same rule, <c>ClientResolver.AnswerIdentity</c>).
+    /// </summary>
+    private static string OriginIdentity(FeatureSourceBinding binding)
+    {
+        var node = ArtifactSerializer.ToNode(binding).AsObject();
+        node.Remove("mode");
+        node.Remove("timeout_ms");
+        node.Remove("max_batch");
+        node.Remove("max_bytes");
+        node.Remove("cache");
+        return ContentHash.Compute(node).Substring(ContentHash.Prefix.Length, 16);
     }
 
     /// <summary>The binding's <c>max_bytes</c> (required in modes local and cache); false (diagnosed) when missing or not a positive size.</summary>

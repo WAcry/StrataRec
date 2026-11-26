@@ -234,9 +234,10 @@ public sealed class PipelineCall
     internal string? MismatchOf(ExecutionPlan plan)
     {
         var last = Volatile.Read(ref _checked);
-        if (last is null || !ReferenceEquals(last.Plan, plan))
+        if (last is null || !last.Plan.TryGetTarget(out var checkedPlan) || !ReferenceEquals(checkedPlan, plan))
         {
-            last = new Checked(plan, Mismatch(PipelineInterface.Of(plan)));
+            // Held weakly: a caller that is not called again must not keep a plan the pipeline no longer serves.
+            last = new Checked(new WeakReference<ExecutionPlan>(plan), Mismatch(PipelineInterface.Of(plan)));
             Volatile.Write(ref _checked, last);
         }
 
@@ -254,8 +255,15 @@ public sealed class PipelineCall
             return $"pipeline '{callee.PipelineId}' declares no input '{name}'";
         }
 
-        return RequestSchema.ConversionFailure(given, required) is { } failure
-            ? $"input '{name}' is passed as {given} and pipeline '{callee.PipelineId}' declares it {required}: {failure}"
+        if (RequestSchema.ConversionFailure(given, required) is { } failure)
+        {
+            return $"input '{name}' is passed as {given} and pipeline '{callee.PipelineId}' declares it {required}: {failure}";
+        }
+
+        // A value and its absence are judged apart, as for a fallback pipeline's inputs: the type says which values convert,
+        // nullability whether none may be passed.
+        return given.Nullable && !required.Nullable
+            ? $"input '{name}' is passed as {given}, which may be missing, and pipeline '{callee.PipelineId}' requires it ({required})"
             : null;
     }
 
@@ -286,6 +294,11 @@ public sealed class PipelineCall
             if (RequestSchema.ConversionFailure(given, required) is { } failure)
             {
                 return $"input '{name}' is {given} in '{Caller}' and {required} in pipeline '{callee.PipelineId}': {failure}";
+            }
+
+            if (given.Nullable && !required.Nullable)
+            {
+                return $"input '{name}' is optional in '{Caller}' ({given}) and required in pipeline '{callee.PipelineId}' ({required}): a request without it would fail the call";
             }
         }
 
@@ -325,7 +338,7 @@ public sealed class PipelineCall
         return -1;
     }
 
-    private sealed record Checked(ExecutionPlan Plan, string? Error);
+    private sealed record Checked(WeakReference<ExecutionPlan> Plan, string? Error);
 }
 
 /// <summary>What a call of a pipeline returned (<see cref="OperatorContext.CallPipelineAsync"/>).</summary>
@@ -362,7 +375,7 @@ public sealed class PipelineCallResult
 /// <summary>One call as the engine runs it: what <see cref="OperatorContext"/> hands over.</summary>
 /// <param name="Given">The inputs the operator passes; null when it passes none.</param>
 /// <param name="CallerInputs">The calling run's inputs: those of the same name as an input the pipeline declares are passed on.</param>
-/// <param name="Sequence">The call's place among the calls of its node's attempt, from 0.</param>
+/// <param name="Sequence">The call's place among the calls its node made in the run, from 0.</param>
 /// <param name="Seed">The calling run's seed; the called run's is derived from it, the node and <paramref name="Sequence"/>.</param>
 /// <param name="TimeMs">The calling run's request time, which is the called run's.</param>
 /// <param name="Budget">What is left of the node's budget: the called run's deadline.</param>

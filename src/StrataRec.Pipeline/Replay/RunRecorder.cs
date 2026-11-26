@@ -407,14 +407,16 @@ internal sealed class RunRecorder : IFeatureCallHook
     /// the called run is not recorded itself, a replay answers the call from here. A call still running when the run is
     /// built is not in the record.
     /// </summary>
-    public void PipelineCall(string node, int sequence, string pipelineId, RequestInputs? given, Operators.PipelineCallResult result, double durationMs)
+    /// <param name="passed">The inputs the operator passed, taken when the call was made (<see cref="ReplayJson.Inputs"/>).</param>
+    public void PipelineCall(
+        string node, int sequence, string pipelineId, Dictionary<string, ReplayTypedValue> passed, Operators.PipelineCallResult result, double durationMs)
     {
         var record = new ReplayPipelineCall
         {
             Node = node,
             Seq = sequence,
             Pipeline = pipelineId,
-            Inputs = ReplayJson.Inputs(given),
+            Inputs = passed,
             Succeeded = result.Succeeded,
             Error = result.Error,
             DurationMs = Math.Round(durationMs, 3),

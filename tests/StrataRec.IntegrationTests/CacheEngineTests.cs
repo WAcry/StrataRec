@@ -151,6 +151,58 @@ public sealed class CacheEngineTests
         Assert.Equal(2, shared.Created.Count); // one store per engine: each engine has its own binding host
     }
 
+    /// <summary>
+    /// The shared tier's keys say where a source's values come from (audit of f47a255): a source bound to other data reads
+    /// its connector, not what the earlier binding left under the same source and entity, where every record had the same
+    /// layout and was taken for fresh (the new plan served the old data until it expired); a binding that only tunes how
+    /// the values are fetched keeps them.
+    /// </summary>
+    [Fact]
+    public async Task ASourceBoundToOtherData_DoesNotReadTheEarlierBindingsValues_AndOneOnlyTunedDoes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var shared = new SharedStores();
+        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 1 }""")).Root;
+        using var metrics = new MetricCapture();
+        await using (var first = await Load(root, shared))
+        {
+            var origin = await first.ExecuteAsync(MetricsTests.Request("req-origin"), ct);
+            Assert.True(origin.Succeeded, origin.Error);
+            await Eventually(shared.HoldsEveryKeyRead, () => "the first engine's distributed write-back: " + Snapshot.Of(metrics));
+        }
+
+        // Fetched in other batches: the same values, read from the shared tier.
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_batch\":25", "\"max_batch\":20"); // the file as Rebind wrote it
+        var before = Snapshot.Of(metrics);
+        await using (var tuned = await Load(root, shared))
+        {
+            Assert.True((await tuned.ExecuteAsync(MetricsTests.Request("req-tuned"), ct)).Succeeded);
+        }
+
+        var tunedRead = Snapshot.Of(metrics).Minus(before);
+        Assert.True(tunedRead.Keys("distributed", "hit") >= 1 && tunedRead.ConnectorKeys == 0, tunedRead.ToString());
+
+        // Other data under the same source: every item reported, which the feed's filter drops.
+        var items = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(root, "fixtures", "items.json")))!.AsObject();
+        foreach (var item in items)
+        {
+            item.Value!["i_report_rate"] = 1.0;
+        }
+
+        File.WriteAllText(Path.Combine(root, "fixtures", "items-v2.json"), items.ToJsonString());
+        ReplayTests.Edit(root, "bindings/local.jsonc", "fixtures/items.json", "fixtures/items-v2.json");
+        before = Snapshot.Of(metrics);
+        await using var moved = await Load(root, shared);
+        var after = await moved.ExecuteAsync(MetricsTests.Request("req-moved"), ct);
+        var movedRead = Snapshot.Of(metrics).Minus(before);
+        await using var cold = await Load(root, new SharedStores());
+        var expected = await cold.ExecuteAsync(MetricsTests.Request("req-moved"), ct);
+
+        Assert.True(after.Succeeded && expected.Succeeded, after.Error ?? expected.Error);
+        Assert.Equal(Items(expected), Items(after));
+        Assert.True(movedRead.Keys("distributed", "hit") == 0 && movedRead.ConnectorKeys >= 1, movedRead.ToString());
+    }
+
     [Fact]
     public async Task TheDistributedTier_IsABindingInstance_SharedWhileUnchanged_ReplacedWhenChanged_DisposedWithTheEngine()
     {

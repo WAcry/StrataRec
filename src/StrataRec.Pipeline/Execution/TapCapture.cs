@@ -207,9 +207,10 @@ internal static class TapCapture
         if (tap.Rate < 1.0 || (tap.MaxRows is { } max && count > max))
         {
             var priorities = memory.Rent<double>(Math.Max(1, count));
+            var requestHash = state.RequestHash; // hashes the request id: once here, not once per row
             for (var i = 0; i < count; i++)
             {
-                priorities[i] = CoordinatedSampling.RowPriority(group.Seed, state.RequestHash, EntityHash(table, rows[positions[i]]));
+                priorities[i] = CoordinatedSampling.RowPriority(group.Seed, requestHash, EntityHash(table, rows[positions[i]]));
             }
 
             count = CoordinatedSampling.Select(positions.AsSpan(0, count), priorities.AsSpan(0, count), tap.Rate, tap.MaxRows, out rowProbability);
@@ -311,7 +312,7 @@ internal static class TapCapture
     }
 
     /// <summary>True when <paramref name="nodeId"/> ran and committed its outputs in this request (lineage, design 8.7).</summary>
-    private static bool Produced(RequestState state, string nodeId)
+    internal static bool Produced(RequestState state, string nodeId)
     {
         foreach (var outcome in state.Outcomes)
         {

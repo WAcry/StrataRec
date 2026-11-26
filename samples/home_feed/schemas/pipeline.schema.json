@@ -1075,7 +1075,7 @@
                       }
                     },
                     "limit_param": {
-                      "description": "Parameter holding the most rows to take, from the top of the result. Required, as every row source's limit is: it bounds the rows a request may hold (design 4.8).",
+                      "description": "Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already there does not use one up. Required, as every row source's limit is: it bounds the rows a request may hold (design 4.8). A parameter without a value (a map's key set to null) appends none.",
                       "type": "string"
                     },
                     "columns": {
@@ -1089,7 +1089,7 @@
                       }
                     },
                     "mark": {
-                      "description": "A bool column written true on the appended rows, to tell them from the others. Declare it with \"default\": false to read it without ??; undeclared, it is declared bool?.",
+                      "description": "A bool column written true on the appended rows, to tell them from the others, which have no value in it: read it as col.x ?? false. Undeclared, it is declared bool?; declared, declare it bool? (a default does not fill the rows of other row sources).",
                       "type": [
                         "string",
                         "null"

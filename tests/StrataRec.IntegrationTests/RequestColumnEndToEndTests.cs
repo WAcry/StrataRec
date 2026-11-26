@@ -259,10 +259,14 @@ public sealed class RequestColumnEndToEndTests
     /// A tap binding a request column only another layer's arm declares, in a branch the optimizer drops, is refused
     /// where that arm is not assigned, also when the combinations are checked by scope (past the limit): the name decides
     /// which combinations the tap is checked in (second review of 1102725). gate's named input reads the column only when
-    /// a and b both switch it on, and only the tap c adds compiles it (columns_from); d declares it.
+    /// a and b both switch it on, and only the tap c adds compiles it (columns_from); d declares it. The same for a
+    /// parameter only d declares (audit of f47a255: the scope left parameters out, the plan loaded, and the tap threw when
+    /// it captured a request in a, b and c).
     /// </summary>
-    [Fact]
-    public void ATapBindingARequestColumnAnotherLayersArmDeclares_IsRejected_WhenCheckedByScope()
+    [Theory]
+    [InlineData("true ? 1 : (req.maybe ?? 0)", """{ "request_columns": { "maybe": { "type": "int64?" } } }""", "'req.maybe'")]
+    [InlineData("param.maybe", """{ "param_schema": { "maybe": { "type": "int64" } }, "params": { "maybe": 17 } }""", "'param.maybe'")]
+    public void ATapBindingANameAnotherLayersArmDeclares_IsRejected_WhenCheckedByScope(string reads, string declares, string named)
     {
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Nodes["gate"] = new NodeSpec
@@ -274,11 +278,11 @@ public sealed class RequestColumnEndToEndTests
             Treatment("a", """{ "nodes": { "gate": { "config": { "left": true } } } }"""),
             Treatment("b", """{ "nodes": { "gate": { "config": { "right": true } } } }"""),
             Treatment("c", """{ "log_taps": { "probe": { "group": "all", "attach": { "output": true }, "columns_from": "gate.inputs" } } }"""),
-            Treatment("d", """{ "request_columns": { "maybe": { "type": "int64?" } } }"""),
+            Treatment("d", declares),
         };
         placements.AddRange(Filters(10)); // 16,384 combinations, past the limit of 4,096; the tap's scope has three layers
         var request = With(host.Request, placements);
-        var environment = new PlanEnvironment { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new GateInputsFactory()) };
+        var environment = new PlanEnvironment { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new GateInputsFactory(reads)) };
         Assert.Contains(PlanCompiler.CompileMerged(request, ["a/t", "b/t", "c/t"], environment).Diagnostics, d => d.IsError && d.Code == "EXPR_UNKNOWN_NAME");
         Assert.True(PlanCompiler.CompileMerged(request, ["a/t", "b/t", "c/t", "d/t"], environment).Succeeded);
 
@@ -287,7 +291,7 @@ public sealed class RequestColumnEndToEndTests
         Assert.False(unified.Report.CombinationCheckExhaustive);
         var error = Assert.Single(unified.Diagnostics, d => d.IsError);
         Assert.Equal(("NAME_NOT_DECLARED", "/arms/t/log_taps/probe"), (error.Code, error.Pointer));
-        Assert.Contains("'req.maybe'", error.Message, StringComparison.Ordinal);
+        Assert.Contains(named, error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -324,13 +328,13 @@ public sealed class RequestColumnEndToEndTests
         public bool Right { get; init; }
     }
 
-    /// <summary><c>GateInputs@1</c>: names an input for taps (columns_from) that reads <c>req.maybe</c> only when both options are on.</summary>
-    private sealed class GateInputsFactory : IOperatorFactory
+    /// <summary><c>GateInputs@1</c>: names an input for taps (columns_from) that reads <paramref name="reads"/> only when both options are on.</summary>
+    private sealed class GateInputsFactory(string reads = "true ? 1 : (req.maybe ?? 0)") : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("GateInputs", 1, Effects.None, typeof(GateInputsConfig), "Names an input two options decide.");
 
         public Operator? Compile(OperatorCompileContext context) => context.BindConfig<GateInputsConfig>() is { } config
-            ? new Gate(config.Left && config.Right ? "true ? 1 : (req.maybe ?? 0)" : "1")
+            ? new Gate(config.Left && config.Right ? reads : "1")
             : null;
 
         private sealed class Gate(string source) : Operator

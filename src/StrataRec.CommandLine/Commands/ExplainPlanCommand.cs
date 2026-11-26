@@ -325,7 +325,8 @@ internal static class ExplainPlanCommand
     /// The columns a node reads (but the entity id, which every row has), in name order, and those it writes, as the
     /// compiled node declares them: what the executor fetches before it, and versions after it. Reads are sorted by name,
     /// not listed by column id: a feature's id is the order the plan first read it in (design 6.3), which says nothing. The
-    /// request columns it reads and writes follow, as <c>req.&lt;name&gt;</c>.
+    /// request columns it reads and writes follow, as <c>req.&lt;name&gt;</c>, and the pipelines it calls, as
+    /// <c>pipeline:&lt;id&gt;</c>.
     /// </summary>
     private static (List<string> Reads, List<string> Writes) Flow(ExecutionPlan plan, CompiledNode node)
     {
@@ -348,6 +349,15 @@ internal static class ExplainPlanCommand
 
         requestReads.Sort(StringComparer.Ordinal);
         reads.AddRange(requestReads);
+
+        // The pipelines it calls, as what it reads last: pipeline:<id>.
+        var called = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var call in node.Calls)
+        {
+            called.Add("pipeline:" + call.PipelineId);
+        }
+
+        reads.AddRange(called);
 
         var writes = new List<string>(node.Outputs.Length + node.RequestOutputs.Length);
         foreach (var output in node.Outputs)
