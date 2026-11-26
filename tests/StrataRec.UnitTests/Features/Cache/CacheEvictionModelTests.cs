@@ -21,14 +21,15 @@ public class CacheEvictionModelTests
     [InlineData(3, true)]
     public void TheTableEvictsTheKeysSieveEvicts(int seed, bool vectors)
     {
-        // Vectors of four widths on small pages: records of mixed size, pages shared between versions and pages copied.
+        // Scalars: records of one width, which the table orders without a sort. Vectors of four widths on pages of
+        // 16 KiB: records of mixed size, some pages shared between versions and the runs between them copied.
         var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache,
             [new("v", vectors ? ColumnType.List(StorageKind.Float32) : ColumnType.Float64)]);
         var clock = new ManualClock();
         var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
         {
             MaxBytes = vectors ? 256 << 10 : 64 << 10,
-            PageSize = vectors ? 4096 : 1 << 20,
+            PageSize = vectors ? 16 << 10 : 1 << 20,
             Cache = new CacheTableOptions { TtlMs = 3_600_000, Clock = clock },
         });
         var cache = table.Cache!;
@@ -60,7 +61,11 @@ public class CacheEvictionModelTests
                 }
             }
 
-            var written = step % 7 == 0 && order.First is { } oldest ? oldest.Value : nextKey++; // every seventh write refreshes the oldest key
+            // Mostly a new key. Some writes are of a key written before, live or evicted since, and some of the newest
+            // key again (two requests that missed it at once): a hole anywhere in the pages, and the record the hand is at.
+            var written = step % 7 == 0 ? random.NextInt64(Math.Max(1, nextKey))
+                : step % 5 == 0 && order.Last is { } newest ? newest.Value
+                : nextKey++;
             Write(written, step);
             version = table.Pin();
             Assert.Equal(step, Value(version, version.Find(written)));

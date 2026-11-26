@@ -1063,11 +1063,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             slots[candidates++] = slot;
         }
 
-        if (bytesToFree <= 0)
-        {
-            return candidates;
-        }
-
         // Positions are FIFO insertion order, kept across compactions. An append replacing a record is a new arrival.
         // Advance the hand only when pressure actually scans; untouched survivors keep their visited bits.
         if (cursor == candidates)
