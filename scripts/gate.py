@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The mechanical gate: the rules of AGENTS.md that a script can check, checked.
 
-    python3 scripts/gate.py [--base <commit>]     every static check, then a note on the size of the change (under a second)
+    python3 scripts/gate.py [--base <commit>]     every static check, then notes on the change: its size, the pages it made longer (under a second)
     python3 scripts/gate.py slow <TestResults>    the slowest tests of the last run (scripts/check.sh writes the reports)
     python3 scripts/gate.py selftest              proves that every check still bites, on a small made-up repository
 
@@ -34,6 +34,9 @@ SIZE_PROJECTS, SIZE_LINES = 8, 1500   # nineteen in twenty changes here touch fe
 RULES = ("AGENTS.md", ".agents/", ".claude/", "scripts/", ".github/", "BannedSymbols.txt", ".editorconfig",
          "Directory.Build.props", "Directory.Build.targets")
 CODE = ("src/", "tests/", "samples/")
+# The pages somebody pays to read: AGENTS.md and a skill's description in every session, README.md on a first visit, the
+# rest when a task needs them. Not docs/decisions/: a decision is what the code cannot say.
+PAGES = ("README.md", "AGENTS.md", "docs/", ".agents/skills/")
 # Assemblies under src/ that see another's internals. New pairs are refused: make the member public with a contract, or
 # move the code to the assembly that owns the knowledge.
 FRIENDS = {("Core", "Features"), ("Core", "Pipeline"), ("Core", "Hosting"), ("Features", "Pipeline"),
@@ -228,6 +231,25 @@ def size(repo, base):
                           "and lay out the cost and a smaller cut (AGENTS.md section 5).")
 
 
+def pages(repo, base):
+    """Not a check: names the pages a change made longer, so that each addition is decided and not a habit."""
+    stat = repo.git("diff", "--numstat", "--no-renames", base, "--", *PAGES) if base else None
+    if stat is None:
+        return
+    grown = []
+    for line in stat.strip().split("\n"):
+        plus, minus, path = line.split("\t") if line else ("-", "-", "")
+        if plus != "-" and not path.startswith("docs/decisions/") and int(plus) > int(minus):
+            grown.append(f"{path} +{int(plus) - int(minus)}")
+    for path in (repo.git("ls-files", "--others", "--exclude-standard", "-z", "--", *PAGES) or "").split("\0"):   # not added yet
+        if path and not path.startswith("docs/decisions/"):
+            grown.append(f"{path} +{len(repo.read(path).splitlines())}")
+    if grown:
+        repo.notes.append(f"docs: longer since {base[:9]} (lines): {', '.join(sorted(grown))}. A fix, a small feature or a new option "
+                          "is no reason to touch a page: keep what the code cannot say and its readers need, delete the rest "
+                          "(.agents/skills/edit-docs).")
+
+
 def slow(directory):
     """The slowest tests of a run. A test that waits out a timeout is a defect of the feedback loop, not a cost of doing business."""
     tests = []
@@ -341,6 +363,11 @@ def selftest():
         commits(repo, repo.git("rev-list", "--max-parents=0", "HEAD").strip())
         if len(repo.failures) != 1 or "Directory.Build.props" not in repo.failures[0]:
             problems.append(f"the rule-file check gave: {repo.failures or 'nothing'}")
+        write(root, "README.md", "base\nand how the new option is implemented\n")
+        write(root, "docs/decisions/a.md", "- a decision\n")
+        pages(repo, repo.git("rev-parse", "HEAD").strip())
+        if len(repo.notes) != 1 or "README.md +1" not in repo.notes[0] or "decisions" in repo.notes[0]:
+            problems.append(f"the note on longer pages gave: {repo.notes or 'nothing'}")
     with tempfile.TemporaryDirectory() as root:
         row = '<UnitTestResult testName="{}" duration="00:00:{}" outcome="Passed" />'
         for name, seconds, expected in (("fast", "00.5000000", 0), ("slow", f"{SLOW_FAIL_S + 1:010.7f}", 1)):
@@ -355,7 +382,7 @@ def selftest():
                 problems.append(f"the slow-test check returned {code} for a {seconds} s test")
     for problem in problems:
         print("gate: selftest:", problem)
-    print("selftest: " + ("FAILED" if problems else f"every check bites ({len(breaks) + 3} cases)"))
+    print("selftest: " + ("FAILED" if problems else f"every check bites ({len(breaks) + 4} cases)"))
     return 1 if problems else 0
 
 
@@ -370,6 +397,7 @@ def main(argv):
     base = resolve_base(repo, argv[1] if argv else os.environ.get("GATE_BASE"))
     run(repo, base)
     size(repo, base)
+    pages(repo, base)
     for line in repo.failures + repo.notes:
         print(line)
     print(f"gate: {len(repo.failures)} failure(s)" if repo.failures else "gate: ok")

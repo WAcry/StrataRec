@@ -36,6 +36,7 @@ StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：一次推荐请求
 - 文档用中文；代码、标识符、代码注释和提交说明用英文。文档里的反引号只包仓库里现有的名字（门禁会查），已经删掉的、设想中的名字不加反引号。
 - 注释写这段代码为什么这样、契约是什么，不复述代码，不留 `TODO`、`FIXME`、`HACK`，不引用仓库里查不到的东西（第几轮评审、哪次对话）。公开类型的 XML 注释是契约；会序列化的配置成员，它的 `[Description]`（没有时是 XML 注释）就是 JSON Schema 里给使用者看的描述。
 - 决定和理由记在 `docs/decisions/<领域>.md`，只记读代码看不出来的：为什么、没选的方案、代价、刻意不做的事。怎么判断该不该记、怎么写：`.agents/skills/record-decision`。
+- **默认不改文档。** 修一个缺陷、加一个小功能、多一个选项，都不是改文档的理由：能从代码、Schema、`--help` 知道的不写。`README.md` 给第一次看到这个项目的人，只在他们的头几步变了时才改，不写内部实现。这个文件每个会话都被读：加一行之前，先问它是否对所有任务都成立。动手改任何文档之前：`.agents/skills/edit-docs`。
 
 ## 4. 验证
 
@@ -52,7 +53,7 @@ scripts/mutate.sh                                             # 按需：改动�
 - 改了容易错得很隐蔽的逻辑（候选表、列缓冲、有界等待、编译和校验）之后跑 `scripts/mutate.sh`。存活的变异体逐个判断：补一个断言那个行为的测试，或者它确实无关紧要；不照着变异体的形状凑测试。
 - 测试控制调用何时返回，不和时钟赛跑：不新增 `Thread.Sleep`、`Task.Delay`（门禁按存量计数，只许减少）。新的边界情况优先加进已有的 `[Theory]`，不复制一套夹具。
 - 测试放在被改动代码旁边：`tests/StrataRec.UnitTests/<Area>/`；基于 `samples/` 的端到端测试在 `tests/StrataRec.IntegrationTests`；宿主示例的在 `tests/StrataRec.Samples.Host.Tests`。
-- 改了配置类型或它们的 XML 注释，重新生成两个示例的 Schema（测试失败的信息里有命令）。改引擎的公开 API 时，`samples/StrataRec.Samples.Host` 和 `docs/guide/` 一起改。
+- 改了配置类型或它们的 XML 注释，重新生成两个示例的 Schema（测试失败的信息里有命令）。改引擎的公开 API 时，`samples/StrataRec.Samples.Host` 一起改；`docs/guide/` 只在它写的话因此不对了时才改。
 - 改了按行、按特征的路径：`.agents/skills/perf-check`。
 - 推送之后看 CI 的结果（`gh run watch`）。CI 失败时先修它，再做别的；只在 CI 上失败的测试，先在本地造出那个环境。
 
@@ -65,4 +66,4 @@ scripts/mutate.sh                                             # 按需：改动�
 
 ## 6. 规则文件单独提交
 
-`AGENTS.md`、`.agents/`、`.claude/`、`scripts/`、`.github/`、`BannedSymbols.txt`、`.editorconfig`、`Directory.Build.props`、`Directory.Build.targets` 是裁判。改它们的提交不同时改 `src/`、`tests/`、`samples/`（门禁按提交检查）：撞上门禁时修代码，不在同一个改动里放宽门禁；确实该改规则时单独提交、写明理由。`docs/` 随代码一起改。
+`AGENTS.md`、`.agents/`、`.claude/`、`scripts/`、`.github/`、`BannedSymbols.txt`、`.editorconfig`、`Directory.Build.props`、`Directory.Build.targets` 是裁判。改它们的提交不同时改 `src/`、`tests/`、`samples/`（门禁按提交检查）：撞上门禁时修代码，不在同一个改动里放宽门禁；确实该改规则时单独提交、写明理由。`docs/` 不是规则文件：确实要改时和代码同一个提交。
