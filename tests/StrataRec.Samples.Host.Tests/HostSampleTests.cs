@@ -347,29 +347,35 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     }
 
     /// <summary>
-    /// A shelf kept without items (a placeholder: nullable ids, no filter) goes through the page's rule with what it has.
-    /// <c>DistinctHeads@1</c> writes a new version of every list, so the row's empty list of scores has to be carried into
-    /// it (review of 5307fe0, finding 7: the row was left out, and the node failed when it committed a non-nullable
-    /// column without a value).
+    /// A shelf kept without items (a placeholder: the filter keeps it) has empty lists, which the page's rule passes on.
+    /// The ids are a column that is not nullable: <c>DistinctHeads@1</c> refuses one that is where the node names it, so
+    /// "no items" has one spelling, the empty list (two reviews of 5307fe0 found a row, then a whole column, without ids
+    /// that the operator's own handling got wrong).
     /// </summary>
     [Fact]
-    public async Task AShelfKeptWithoutItems_PassesThePagesRule_WithItsOtherLists()
+    public async Task AShelfKeptWithoutItems_HasEmptyLists_AndNullableIdsAreRefused()
     {
         var root = CopyOfTheWorkspace();
         var shelves = Path.Combine(root, "pipelines", "shelves.jsonc");
-        Edit(shelves, "\"items\":       { \"type\": \"list<int64>\",   \"flow\": true }", "\"items\":       { \"type\": \"list<int64>?\",  \"flow\": true }");
         Edit(shelves, "\"predicate\": \"size(col.items) > 0\"", "\"predicate\": \"col.entity_id != 'none'\"");
         using var kept = _host.WithWebHostBuilder(builder => builder.UseSetting("StrataRec:ConfigRoot", root));
 
         var (status, page) = await Post(kept.CreateClient(), "shelves", """{ "inputs": { "user_id": 1001, "region": "us" } }""");
 
         Assert.True(status == HttpStatusCode.OK, page.ToJsonString());
-        var rows = page["items"]!.AsArray();
-        Assert.Equal(new[] { "trending", "editors", "sponsored", "archive" }, rows.Select(n => n!["id"]!.GetValue<string>()));
-        var archive = rows[3]!["columns"]!;
-        Assert.Null(archive["items"]);
-        Assert.Empty(archive["item_scores"]!.AsArray());
-        Assert.Equal(4, rows[1]!["columns"]!["items"]!.AsArray().Count); // the other shelves as before
+        var rows = Shelves(page);
+        Assert.Equal(new[] { "trending", "editors", "sponsored", "archive" }, rows.Select(s => s.Id));
+        Assert.Empty(rows[3].Items);
+        Assert.Empty(rows[3].Scores);
+        Assert.Equal(4, rows[1].Items.Length); // the other shelves as before
+
+        Edit(shelves, "\"items\":       { \"type\": \"list<int64>\",   \"flow\": true }", "\"items\":       { \"type\": \"list<int64>?\",  \"flow\": true }");
+        var (code, report, _) = await Stratarec("validate", "-c", root, "--format", "json");
+
+        Assert.Equal(1, code);
+        Assert.Contains(("COLUMN_NULLABLE", "pipeline:shelves/nodes/heads/config/ids_col"), report["diagnostics"]!.AsArray()
+            .Where(d => d!["severity"]!.GetValue<string>() == "error")
+            .Select(d => (d!["code"]!.GetValue<string>(), d["artifact"]!.GetValue<string>() + d["pointer"]!.GetValue<string>())));
     }
 
     private sealed record Shelf(string Id, long[] Items, double[] Scores, string[]? TrackIds);

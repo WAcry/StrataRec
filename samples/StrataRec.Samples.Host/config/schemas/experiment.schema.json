@@ -461,7 +461,7 @@
                         ],
                         "properties": {
                           "ids_col": {
-                            "description": "The list column of each row's item ids (list<int64>, declared with \"flow\": true: the node rewrites it).",
+                            "description": "The list column of each row's item ids (list<int64>, not nullable: a row without items has an empty list; declared with \"flow\": true: the node rewrites it).",
                             "type": [
                               "string",
                               "null"

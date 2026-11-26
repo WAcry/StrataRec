@@ -9,7 +9,8 @@ namespace StrataRec.Samples.Host.Components;
 /// <summary>Config of <c>DistinctHeads@1</c>; its JSON Schema is generated from this class, as for <see cref="CategoryBoostConfig"/>.</summary>
 public sealed class DistinctHeadsConfig
 {
-    [Description("The list column of each row's item ids (list<int64>, declared with \"flow\": true: the node rewrites it).")]
+    [Description("The list column of each row's item ids (list<int64>, not nullable: a row without items has an empty list; " +
+        "declared with \"flow\": true: the node rewrites it).")]
     public required string IdsCol { get; init; }
 
     [Description("The list columns that go with the ids element by element (scores, labels), reordered with them. A row " +
@@ -61,7 +62,8 @@ public sealed class DistinctHeadsFactory : IOperatorFactory
         for (var i = 0; i < names.Count; i++)
         {
             var key = i == 0 ? "/ids_col" : $"/with/{i - 1}";
-            if (!context.TryReadColumn(names[i], key, out reads[i]))
+            // The ids are there on every row (a row without items has an empty list); the lists that go with them need not be.
+            if (!context.TryReadColumn(names[i], key, out reads[i], requireNonNullable: i == 0))
             {
                 ok = false;
             }
@@ -93,11 +95,7 @@ public sealed class DistinctHeadsFactory : IOperatorFactory
                 into[c] = (ListColumn)context.Output(writes[c]);
             }
 
-            if (from[0] is not ListColumn<long> ids)
-            {
-                context.Fail($"column '{reads[0].Name}' was not produced in this request");
-                return ValueTask.CompletedTask;
-            }
+            var ids = (ListColumn<long>)from[0]!; // not nullable, so the plan has it produced before this node
 
             var value = context.Param(head);
             var most = value.IsMissing ? 0 : (int)value.AsInt64();
@@ -105,21 +103,6 @@ public sealed class DistinctHeadsFactory : IOperatorFactory
             var order = new List<int>();
             foreach (var row in context.LiveRows) // in rank order
             {
-                if (!ids.IsValid(row))
-                {
-                    // A row without ids has nothing to reorder. What it has in the other lists is carried into the node's
-                    // version as it is: the node writes a new version of each, and a row it left out would have no value.
-                    for (var c = 1; c < into.Length; c++)
-                    {
-                        if (from[c] is { } other && other.IsValid(row))
-                        {
-                            into[c].CopyFrom(other, row, row);
-                        }
-                    }
-
-                    continue;
-                }
-
                 // The head: the first items no row above shows first. Then the others, in their order.
                 var items = ids.Get(row);
                 order.Clear();
