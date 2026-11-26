@@ -20,7 +20,7 @@ dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r s
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --record bundles/1001.json
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --format text --explain 17,1   # 可读的结果；每个 id 落在哪、每个节点之后的状态
 dotnet run --project src/StrataRec.Cli -- replay       -c samples/home_feed bundles   # 用录制的 I/O 重现并对比（--explain 同样可用）；compare --baseline 对比两份配置
-dotnet run --project src/StrataRec.Cli -- diff         --from <旧工作区或 manifest> --to samples/home_feed   # 按桶组合对比两份配置
+dotnet run --project src/StrataRec.Cli -- diff         --from <旧工作区或 manifest> --to samples/home_feed   # 按臂组合对比两份配置
 dotnet run --project src/StrataRec.Cli -- build        -c samples/home_feed -s store   # 产物按哈希写进 store；加载这份 manifest 的节点录制的包，replay -s store 就在录制时的 manifest 上回放（在工作区上录制的包仍用 -c）
 dotnet run --project src/StrataRec.Cli -- publish      -s store <manifest id 或文件>   # 让 store 里的指针指向它（seq 必须更大）；设置了 Releases 的服务节点会加载它
 dotnet run --project src/StrataRec.Cli -- revoke       -s store -p home_feed exp_mmr_diversity   # 紧急停止：立即发布去掉这个实验的 manifest，并撤销之前所有的 manifest
