@@ -324,10 +324,11 @@ public sealed class GeneratedExperimentTests
                 });
             case 14:
             {
-                // One node writing a count and ranking rows by it: GroupAggregate@1 compiles its outputs by name, so self.b
-                // may read the self.a it has just written, but self.a reads self.b before writing it, which only a node
-                // compiled earlier can have declared. Columns of their own, int64 either way, so a type
-                // mismatch with other writers does not refuse the plan before the declarations are checked.
+                // One node writing a count and ranking rows by it, in either order of the two names: a node reads what
+                // was committed before it ran, so its own write is not what it reads, and only a node compiled earlier
+                // can have declared the column. Both compiles refuse it wherever nothing before the node writes it.
+                // Columns of their own, int64 either way, so a type mismatch with other writers does not refuse the
+                // plan before the declarations are checked.
                 var (first, second) = random.Next(2) == 0 ? ("self.a", "self.b") : ("self.b", "self.a");
                 return Patch("nodes", "self_" + suffix, new JsonObject
                 {

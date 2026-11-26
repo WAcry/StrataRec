@@ -54,7 +54,7 @@ public static class MergePatchAnalyzer
 
     /// <summary>
     /// True when two footprints overlap: some path of one equals, or is a prefix of, some path of the other
-    /// (both buckets would change the same subtree). <paramref name="conflicts"/> lists every
+    /// (both patches would change the same subtree). <paramref name="conflicts"/> lists every
     /// overlapping pair, sorted by the first and then the second path.
     /// </summary>
     public static bool FootprintsConflict(

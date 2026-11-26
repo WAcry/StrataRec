@@ -6,7 +6,7 @@ namespace StrataRec.Logging;
 
 /// <summary>
 /// Request- and row-level sampling for funnel logs. Decisions are stable hashes, so every tap of a
-/// group sees the same requests and the same row priorities, and sampled candidates keep complete cross-stage traces.
+/// group sees the same requests and the same row priorities, and sampled candidates keep complete traces across the nodes.
 /// </summary>
 public static class CoordinatedSampling
 {
@@ -70,7 +70,7 @@ public static class CoordinatedSampling
         }
 
         // τ = (k+1)-th smallest priority: keep rows with priority < τ (exactly k rows; ties have probability ~0). The
-        // sorted copy is pooled scratch: a tap over the rows a stage dropped can see thousands of candidates.
+        // sorted copy is pooled scratch: a tap over the rows a node dropped can see thousands of candidates.
         var sorted = ArrayPool<double>.Shared.Rent(count);
         double tau;
         try

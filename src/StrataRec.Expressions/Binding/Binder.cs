@@ -221,7 +221,7 @@ internal sealed class Binder
                 return Poison(n);
             }
 
-            return Fail(ExpressionErrorCodes.UnknownName, $"Unknown name '{name}'", n, NamespaceHint(name) ?? NameHint(name, false));
+            return Fail(ExpressionErrorCodes.UnknownName, $"Unknown name '{name}'", n, NamespaceHint(name) ?? NameHint(name, false) ?? DeclareHint(name));
         }
 
         if (!Names.Contains(symbol))
@@ -261,6 +261,20 @@ internal sealed class Binder
         return rest is not null && _scope.TryResolve("req." + rest, out _)
             ? $"'{rest}' is a request column, which nodes write: read it as 'req.{rest}'"
             : null;
+    }
+
+    /// <summary>What to do about a name nothing near it is declared as: where a name of its namespace comes from.</summary>
+    private static string DeclareHint(string name)
+    {
+        var dot = name.IndexOf('.', StringComparison.Ordinal);
+        return (dot < 0 ? name : name[..dot]) switch
+        {
+            "col" => "nothing declares it: a col.* name is a declared column, a column an earlier node writes, or a candidate feature of the catalog",
+            "ctx" => "nothing declares it: a ctx.* name is a request input (ctx.request.<input>) or a context feature of the catalog (ctx.<entity>.<feature>)",
+            "req" => "nothing declares it: a req.* name is a declared request column, which an earlier node writes",
+            "param" => "nothing declares it: a param.* name is a declared parameter",
+            _ => "a name is col.<column>, ctx.<entity>.<feature>, ctx.request.<input>, req.<request column> or param.<parameter>",
+        };
     }
 
     private string? NameHint(string name, bool includeLets)

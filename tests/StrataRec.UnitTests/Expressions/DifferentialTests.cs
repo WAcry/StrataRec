@@ -245,6 +245,19 @@ public class DifferentialTests(ITestOutputHelper output)
         }
     }
 
+    /// <summary>The comparison the two back ends are held to tells a finite result from an infinite one, and the infinities apart.</summary>
+    [Theory]
+    [InlineData(1.0, 1.0 + 1e-13, true)]
+    [InlineData(1.0, 4.0, false)]
+    [InlineData(double.NaN, double.NaN, true)]
+    [InlineData(double.PositiveInfinity, double.PositiveInfinity, true)]
+    [InlineData(1.0, double.PositiveInfinity, false)]
+    [InlineData(double.PositiveInfinity, 1e300, false)]
+    [InlineData(double.PositiveInfinity, double.NegativeInfinity, false)]
+    [InlineData(1.0, double.NaN, false)]
+    public void TheComparison_TellsResultsApart(double expected, double actual, bool same) =>
+        Assert.Equal(same, Same(ScalarValue.FromFloat64(expected), ScalarValue.FromFloat64(actual)));
+
     private static string Show(ScalarValue v) =>
         v.Kind == StorageKind.Float64 ? v.AsFloat64().ToString("R", CultureInfo.InvariantCulture) : v.ToString();
 
@@ -257,8 +270,10 @@ public class DifferentialTests(ITestOutputHelper output)
 
         if (expected.Kind == StorageKind.Float64)
         {
+            // The tolerance is for two finite results only: against an infinity both sides of it are infinite, and every
+            // value would be "close".
             double e = expected.AsFloat64(), a = actual.AsFloat64();
-            return e.Equals(a) || Math.Abs(e - a) <= 1e-12 * Math.Max(Math.Abs(e), Math.Abs(a));
+            return e.Equals(a) || (double.IsFinite(e) && double.IsFinite(a) && Math.Abs(e - a) <= 1e-12 * Math.Max(Math.Abs(e), Math.Abs(a)));
         }
 
         if (expected.Kind == StorageKind.String)

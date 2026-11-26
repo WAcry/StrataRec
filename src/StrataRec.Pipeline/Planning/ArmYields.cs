@@ -10,7 +10,7 @@ namespace StrataRec.Pipeline.Planning;
 /// <remarks>
 /// <para>Judged on the arms a request is in, not on those left to run: whether an experiment runs then depends only on
 /// the other experiments' assignment, never on its own arm or on an order. Its arms stay comparable with each other
-/// (the control yields as the treatment does), and the experiment it yields to never runs beside it. A request in arms of
+/// (its control arm yields as its other arms do), and the experiment it yields to never runs beside it. A request in arms of
 /// A, B and C where C yields to B and B to A runs A only.</para>
 /// <para>Two experiments one of which yields to the other never run together, as two of one layer do not: the compiler
 /// neither checks the pair for conflicts nor compiles their combinations.</para>

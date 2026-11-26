@@ -151,12 +151,10 @@ public sealed class CompiledNode
     public bool WhenReadsRequest { get; init; }
 
     /// <summary>
-    /// The names the node binds that it has not declared itself before binding them: every column, parameter and context
-    /// field it resolves (in a branch the optimizer drops too, and a column it writes but cannot declare), but not a
-    /// column it reads after a write of its own that could declare it (GroupAggregate@1 writes <c>a</c>, then reads it for
-    /// <c>b</c>). A compile of one arm combination alone knows a name only once it is declared there: by the baseline, by an
-    /// arm in it, or (a column without a declaration) by a node compiled before. The order of reads and writes inside one
-    /// compile is not in <see cref="ReadColumns"/> and <see cref="Outputs"/>, so it is recorded.
+    /// The names the node binds: every column, parameter and context field it resolves (in a branch the optimizer drops
+    /// too, and a column it writes but cannot declare). A compile of one arm combination alone knows a name only once it
+    /// is declared there: by the baseline, by an arm in it, or (a column without a declaration) by a node compiled before.
+    /// A write of the node itself does not declare what it reads: it reads the version committed before it ran.
     /// </summary>
     public ImmutableArray<NameRef> Requires { get; init; } = [];
 

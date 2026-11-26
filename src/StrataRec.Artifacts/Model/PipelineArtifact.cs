@@ -101,8 +101,16 @@ public sealed class NodeSpec
     /// <summary>Request-level condition over <c>ctx.*</c>.</summary>
     public string? When { get; init; }
 
+    /// <summary>
+    /// Milliseconds one attempt of the node may take, at least 1; it never gets more than is left of the request's
+    /// deadline. Past it the attempt fails as a timeout, and <c>on_failure</c> decides what follows. Default: what is left.
+    /// </summary>
     public int? TimeoutMs { get; init; }
 
+    /// <summary>
+    /// The node is skipped, as by a false <c>when</c>, when less than this many milliseconds are left of the request's
+    /// deadline as it is about to start: for a node not worth starting late. Default: it starts whatever is left.
+    /// </summary>
     public int? MinRemainingMs { get; init; }
 
     /// <summary>

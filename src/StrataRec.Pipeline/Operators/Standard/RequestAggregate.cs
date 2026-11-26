@@ -42,7 +42,7 @@ public sealed class RequestAggregateValue
 
 /// <summary>
 /// <c>RequestAggregate@1</c>: statistics of the live candidates written to request columns (RequestWriter), one value per
-/// request: how many candidates a stage left, the best score, the share from one source. Later nodes read them as
+/// request: how many candidates a node left, the best score, the share from one source. Later nodes read them as
 /// <c>req.*</c> in expressions and <c>when</c> (a threshold relative to the best score, a reranker that runs only above a
 /// number of candidates), taps log them in <c>context</c>, and <c>output.values</c> returns them to the caller.
 /// </summary>

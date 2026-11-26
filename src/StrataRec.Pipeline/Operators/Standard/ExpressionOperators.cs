@@ -76,6 +76,10 @@ public sealed class ExpressionScorerConfig
     /// <summary>Column to write (declared under <c>columns</c>); may be a flow column read by <see cref="Expr"/>.</summary>
     public required string OutputCol { get; init; }
 
+    /// <summary>
+    /// The ColumnExpr computed for every row. Its result has the output column's type, and may be missing only if the
+    /// column is nullable: the row's value is then missing.
+    /// </summary>
     public required string Expr { get; init; }
 }
 

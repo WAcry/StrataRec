@@ -32,6 +32,7 @@ public sealed class OperatorCompileContext
     private readonly HashSet<VersionRead> _versionReads = new();
     private readonly HashSet<NameRef> _requires = new();
     private readonly List<ColumnDeclaration> _declares = new();
+    private readonly HashSet<int> _firstDeclared = new(); // columns nothing had declared before a write of this compile
     private readonly List<OutputColumn> _outputs = new();
     private readonly List<RequestOutput> _requestOutputs = new();
     private readonly HashSet<int> _requestReads = new();
@@ -113,7 +114,7 @@ public sealed class OperatorCompileContext
     /// <summary>The request columns read (<see cref="Planning.CompiledNode.RequestReads"/>), by context id.</summary>
     internal IReadOnlyCollection<int> RequestReads => _requestReads;
 
-    /// <summary>The names bound before the node declared them itself (<see cref="CompiledNode.Requires"/>).</summary>
+    /// <summary>The names the node binds (<see cref="CompiledNode.Requires"/>).</summary>
     internal IReadOnlyCollection<NameRef> Requires => _requires;
 
     /// <summary>The columns written with a type of the node's own, in the order written (<see cref="CompiledNode.Declares"/>).</summary>
@@ -161,6 +162,11 @@ public sealed class OperatorCompileContext
             return false;
         }
 
+        if (ReadsOwnOutput(symbol, configKey))
+        {
+            return false;
+        }
+
         RecordSymbol(symbol);
         column = new ColumnRef(symbol.Id, symbol.FixedSlot, symbol.Type, name);
         return true;
@@ -203,6 +209,7 @@ public sealed class OperatorCompileContext
             }
 
             logical = _schema.DeclareOutputColumn(name, implicitType.Value, flow: false, hasDefault: false, default, Pointer + "/config" + configKey, isImplicit: true);
+            _firstDeclared.Add(logical.Id);
         }
 
         if (logical.Kind != ColumnKind.Output)
@@ -317,6 +324,11 @@ public sealed class OperatorCompileContext
 
         foreach (var symbol in expression.Names)
         {
+            if (ReadsOwnOutput(symbol, configKey))
+            {
+                return null;
+            }
+
             Require(symbol);
         }
 
@@ -743,11 +755,39 @@ public sealed class OperatorCompileContext
             return false;
         }
 
+        if (ReadsOwnOutput(symbol, string.Empty))
+        {
+            reported = true;
+            return false;
+        }
+
         RecordSymbol(symbol);
         return true;
     }
 
-    /// <summary>Records a name the node binds (<see cref="CompiledNode.Requires"/>), unless it declared that column itself.</summary>
+    /// <summary>
+    /// A node reads what was committed before it ran: the version of a column it writes is published when it commits, so
+    /// its own write is never what it reads. A column that nothing declared before a write of this node has no earlier
+    /// version at all, and a read of it would be missing on every row, whatever the write computes
+    /// (GroupAggregate@1 writing <c>a</c> and summing <c>a</c> into <c>b</c> compiled, and <c>b</c> was missing). Refused
+    /// here, where one compile sees it; a column another arm combination declares is judged per combination, by
+    /// <see cref="CompiledNode.Requires"/>.
+    /// </summary>
+    private bool ReadsOwnOutput(in Symbol symbol, string configKey)
+    {
+        if (symbol.Kind != SymbolKind.Column || !_firstDeclared.Contains(symbol.Id))
+        {
+            return false;
+        }
+
+        var name = _schema.Columns[symbol.Id].Name;
+        Error(configKey, "COLUMN_OWN_OUTPUT",
+            $"Column '{name}' is written by this node and by nothing before it: a node reads what was committed before it ran, so there is nothing to read.",
+            $"read '{name}' in a node after this one (the same operator, at a later order), or produce it in a node before");
+        return true;
+    }
+
+    /// <summary>Records a name the node binds (<see cref="CompiledNode.Requires"/>).</summary>
     internal void Require(in Symbol symbol)
     {
         if (symbol.Kind is SymbolKind.Column or SymbolKind.Param or SymbolKind.Context)
@@ -756,21 +796,7 @@ public sealed class OperatorCompileContext
         }
     }
 
-    private void Require(NameRef name)
-    {
-        if (name.Kind == SymbolKind.Column)
-        {
-            foreach (var declared in _declares)
-            {
-                if (declared.Logical == name.Id)
-                {
-                    return; // written by the node before, with a type of its own
-                }
-            }
-        }
-
-        _requires.Add(name);
-    }
+    private void Require(NameRef name) => _requires.Add(name);
 
     /// <summary>Records a resolved name as a read of the node (<see cref="TryResolveRead"/>), and as a name it binds.</summary>
     internal void RecordSymbol(in Symbol symbol)

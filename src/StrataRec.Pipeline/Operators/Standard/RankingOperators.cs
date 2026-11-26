@@ -65,7 +65,7 @@ public sealed class TopKFactory : IOperatorFactory
         }
         else if (config.K < 0)
         {
-            context.Error("/k", "TOPK_K", "k must not be negative.");
+            context.Error("/k", "TOPK_K", $"k is {config.K}; the number of rows to keep is not negative.", "give the count to keep; 0 keeps none");
             return null;
         }
 

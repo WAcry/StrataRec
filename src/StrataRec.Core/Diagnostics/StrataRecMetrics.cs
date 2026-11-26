@@ -126,15 +126,15 @@ public static class StrataRecMetrics
     /// </summary>
     public static readonly Counter<long> RequestArmsIgnored = Meter.CreateCounter<long>(Names.RequestArmsIgnored, "{arm}", "Arm ids from the experiment platform that requests ignored, by reason.");
 
-    // Memory: recorded once per pipeline execution.
+    // Memory: recorded once per run.
 
-    /// <summary>Bytes a pipeline execution rented from the buffer pool. Tags: <c>stratarec.pipeline</c>.</summary>
+    /// <summary>Bytes a run rented from the buffer pool. Tags: <c>stratarec.pipeline</c>.</summary>
     public static readonly Histogram<long> RequestMemoryRented = Meter.CreateHistogram<long>(Names.RequestMemoryRented, "By",
-        "Bytes rented from the buffer pool per pipeline execution.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = ByteBuckets });
+        "Bytes rented from the buffer pool per run of a pipeline.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = ByteBuckets });
 
     /// <summary>
     /// External operations (connector and service calls, the context prefetch) still running when their
-    /// pipeline execution returned; they keep its buffers rented until they finish. Tags:
+    /// run returned; they keep its buffers rented until they finish. Tags:
     /// <c>stratarec.pipeline</c>.
     /// </summary>
     public static readonly Counter<long> AbandonedIo = Meter.CreateCounter<long>(Names.AbandonedIo, "{operation}", "External I/O still running after its request returned.");
@@ -206,7 +206,7 @@ public static class StrataRecMetrics
     /// Values outside the int32 storage of an <c>int32</c> or <c>list&lt;int32&gt;</c> column or feature, and lists of
     /// another length than a <c>list&lt;E,N&gt;</c>'s, replaced by the default or marked missing instead of wrapping or
     /// being stored (<c>column_out_of_range_total</c>). Recorded once
-    /// per pipeline execution: the expression backend counts them per request and does not know the column. Tags:
+    /// per run: the expression backend counts them per request and does not know the column. Tags:
     /// <c>stratarec.pipeline</c>.
     /// </summary>
     public static readonly Counter<long> ColumnOutOfRange = Meter.CreateCounter<long>(Names.ColumnOutOfRange, "{value}", "Values outside the int32 storage range or a list's fixed length, replaced or masked.");

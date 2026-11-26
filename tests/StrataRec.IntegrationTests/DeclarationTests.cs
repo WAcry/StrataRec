@@ -70,20 +70,61 @@ public sealed class DeclarationTests
         Assert.Equal(("NAME_NOT_DECLARED", "experiment:a", "/arms/t/nodes/selfagg"), (error.Code, error.Artifact, error.Pointer));
     }
 
+    /// <summary>
+    /// A node's own write is not what it reads: it reads what was committed before it ran. 'b_self' summing 'a_self',
+    /// which only this node writes, compiled, and was missing on every row. In two nodes the second reads the first's.
+    /// </summary>
     [Fact]
-    public void ANodeReadingWhatItWroteEarlierInItsCompile_IsAccepted()
+    public void ANodeReadingAColumnOnlyItWrites_IsRefused_AndInTwoNodesItCompiles()
     {
-        // Its outputs compile in order: 'a_self' is declared by the node itself when 'b_self' reads it.
         var host = HomeFeedTestHost.Load();
-        var request = With(host.Request, [Treatment("a", """
+        var one = With(host.Request, [Treatment("a", """
             { "nodes": { "selfagg": { "order": 600, "op": "GroupAggregate@1", "config": { "group_col": "item.author_id",
               "outputs": { "a_self": { "fn": "count" }, "b_self": { "fn": "sum", "value_col": "a_self" } } } } } }
             """)]);
-        Assert.True(PlanCompiler.CompileMerged(request, ["a/t"], host.Environment).Succeeded);
+
+        var merged = Assert.Single(PlanCompiler.CompileMerged(one, ["a/t"], host.Environment).Diagnostics, d => d.IsError);
+        Assert.Equal(("COLUMN_OWN_OUTPUT", "/nodes/selfagg/config/outputs/b_self/value_col"), (merged.Code, merged.Pointer));
+        Assert.Contains("a node after this one", merged.Hint, StringComparison.Ordinal);
+        var unified = Assert.Single(PlanCompiler.Compile(one, host.Environment).Diagnostics, d => d.IsError);
+        Assert.Equal(("COLUMN_OWN_OUTPUT", "experiment:a", "/arms/t/nodes/selfagg/config/outputs/b_self/value_col"),
+            (unified.Code, unified.Artifact, unified.Pointer));
+
+        var two = With(host.Request, [Treatment("a", """
+            { "nodes": {
+                "count": { "order": 600, "op": "GroupAggregate@1", "config": { "group_col": "item.author_id", "outputs": { "a_self": { "fn": "count" } } } },
+                "sum": { "order": 601, "op": "GroupAggregate@1", "config": { "group_col": "item.author_id",
+                  "outputs": { "b_self": { "fn": "sum", "value_col": "a_self" } } } } } }
+            """)]);
+        Assert.True(PlanCompiler.CompileMerged(two, ["a/t"], host.Environment).Succeeded);
+        var both = PlanCompiler.Compile(two, host.Environment);
+        Assert.True(both.Succeeded, string.Join("\n", both.Diagnostics));
+    }
+
+    /// <summary>
+    /// The same read where the unified plan's one schema has the column: the baseline's 'count' declares 'x', and the arm
+    /// replaces it with a node that writes 'x' and sums it. In the arm's combination only that node writes 'x', its own
+    /// compile refuses the read, and so does the plan.
+    /// </summary>
+    [Fact]
+    public void ANodeReadingAColumnOnlyItWrites_WhereAnotherCombinationDeclaresIt_IsRefusedInItsOwn()
+    {
+        var host = HomeFeedTestHost.Load();
+        host.Request.Pipeline.Nodes["count"] = new NodeSpec
+        {
+            Order = 600, Op = "GroupAggregate@1",
+            Config = JsonNode.Parse("""{ "group_col": "item.author_id", "outputs": { "x": { "fn": "count" } } }""")!.AsObject(),
+        };
+        var request = With(host.Request, [Treatment("a", """
+            { "nodes": { "count": null, "selfagg": { "order": 601, "op": "GroupAggregate@1", "config": { "group_col": "item.author_id",
+              "outputs": { "x": { "fn": "count" }, "y": { "fn": "sum", "value_col": "x" } } } } } }
+            """)]);
+        Assert.Contains(PlanCompiler.CompileMerged(request, ["a/t"], host.Environment).Diagnostics, d => d.IsError && d.Code == "COLUMN_OWN_OUTPUT");
 
         var unified = PlanCompiler.Compile(request, host.Environment);
 
-        Assert.True(unified.Succeeded, string.Join("\n", unified.Diagnostics));
+        var error = Assert.Single(unified.Diagnostics, d => d.IsError);
+        Assert.Equal(("NAME_NOT_DECLARED", "experiment:a", "/arms/t/nodes/selfagg"), (error.Code, error.Artifact, error.Pointer));
     }
 
     [Fact]

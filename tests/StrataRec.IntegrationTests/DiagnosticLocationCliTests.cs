@@ -144,6 +144,13 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "QUOTA_BAD_CONFIG", "/nodes/diversity_cap/config/max_per_window", "\"max_per_window\": 0")]
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"score_col\": \"score.final\"", "\"score_col\": \"item.category\"",
         "COLUMN_TYPE_MISMATCH", "/arms/mmr/nodes/mmr_diversifier/config/score_col", "\"score_col\": \"item.category\"")]
+    // A node's timing is reported at the member that is wrong (it was at the node, naming all three, without a hint).
+    [InlineData(Pipeline, "\"fallback\": \"ctr_backup\", \"timeout_ms\": 50,", "\"fallback\": \"ctr_backup\", \"timeout_ms\": 0,",
+        "NODE_BAD_TIMING", "/nodes/ctr_ranker/timeout_ms", "\"timeout_ms\": 0")]
+    [InlineData(Pipeline, "\"fallback\": \"ctr_backup\", \"timeout_ms\": 50,", "\"fallback\": \"ctr_backup\", \"timeout_ms\": 50, \"min_remaining_ms\": -1,",
+        "NODE_BAD_TIMING", "/nodes/ctr_ranker/min_remaining_ms", "\"min_remaining_ms\": -1")]
+    [InlineData(Pipeline, "\"fallback\": \"ctr_backup\", \"timeout_ms\": 50,", "\"fallback\": \"ctr_backup\", \"timeout_ms\": 50, \"fallback_reserve_ms\": -5,",
+        "NODE_BAD_TIMING", "/nodes/ctr_ranker/fallback_reserve_ms", "\"fallback_reserve_ms\": -5")]
     public void Text_ADeclarationWithAnError_IsTheOnlyError(string file, string old, string replacement, string code, string pointer, string at)
     {
         var root = Workspace((file, old, replacement));

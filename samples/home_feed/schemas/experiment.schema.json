@@ -230,12 +230,14 @@
                   ]
                 },
                 "timeout_ms": {
+                  "description": "Milliseconds one attempt of the node may take, at least 1; it never gets more than is left of the request's deadline. Past it the attempt fails as a timeout, and on_failure decides what follows. Default: what is left.",
                   "type": [
                     "integer",
                     "null"
                   ]
                 },
                 "min_remaining_ms": {
+                  "description": "The node is skipped, as by a false when, when less than this many milliseconds are left of the request's deadline as it is about to start: for a node not worth starting late. Default: it starts whatever is left.",
                   "type": [
                     "integer",
                     "null"
@@ -439,6 +441,7 @@
                             ]
                           },
                           "expr": {
+                            "description": "The ColumnExpr computed for every row. Its result has the output column's type, and may be missing only if the column is nullable: the row's value is then missing.",
                             "type": [
                               "string",
                               "null"

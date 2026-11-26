@@ -74,7 +74,7 @@ public sealed class ReplayBundle
 
     public required ReplayManifestRecord Manifest { get; init; }
 
-    [Description("Pipeline executions of the request: the primary pipeline, then its fallback_pipeline if that ran.")]
+    [Description("The runs of the request: the primary pipeline's, then its fallback_pipeline's if that ran.")]
     public required List<ReplayRunRecord> Runs { get; init; }
 
     [Description("What the caller received.")]
@@ -153,7 +153,7 @@ public sealed class ReplayManifestRecord
     public Dictionary<string, string> Artifacts { get; init; } = new();
 }
 
-/// <summary>One pipeline execution within the request.</summary>
+/// <summary>One run of a pipeline within the request.</summary>
 public sealed class ReplayRunRecord
 {
     public required string PipelineId { get; init; }
@@ -249,7 +249,7 @@ public sealed class ReplayNodeRecord
     [Description("Time left before the deadline when the node passed its when condition: what min_remaining_ms is compared with on replay.")]
     public double? RemainingMs { get; init; }
 
-    [Description("The node's run and its fallback's, with how each ended relative to its time budget.")]
+    [Description("The node's attempt and its fallback's, with how each ended relative to its time budget.")]
     public List<ReplayAttemptRecord> Attempts { get; init; } = new();
 }
 

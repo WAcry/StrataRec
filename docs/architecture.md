@@ -1,6 +1,6 @@
 # 架构：一页图和不变量
 
-每一处怎么做，读代码；这一页只给要读很多文件才拼得出来的东西：一次请求经过哪些部分，每个项目管什么，以及全局成立、改动时不能打破的不变量和它们的所有者。反引号里的名字都在仓库里（`scripts/gate.py` 检查），对不上就是这一页过时了，改这一页。
+每一处怎么做，读代码；这一页只给要读很多文件才拼得出来的东西：一次请求经过哪些部分，每个项目管什么，以及全局成立、改动时不能打破的不变量和它们的所有者。反引号里的名字都在仓库里（`scripts/gate.py` 检查拼写，不检查这句话说得对不对），对不上就是这一页过时了，改这一页。
 
 ## 从配置到一次请求
 
@@ -31,7 +31,7 @@
 
 ## 扩展点
 
-使用方接入自己的系统只通过这些契约；每个契约的规则写在它自己的文档注释里，只写一处。
+使用方接入自己的系统只通过这些契约；每个契约的规则写在它自己的文档注释里，只写一处。由绑定按名字选用的实现（服务、连接器、更新来源、缓存的存储）用 `BindingFactory` 注册，设置就有了 Schema 和校验。
 
 | 契约 | 接什么 |
 | --- | --- |
@@ -43,24 +43,27 @@
 | `IAssignmentProvider` | 实验平台：一个请求在哪些臂 |
 | `ILogSink` | 日志的去处 |
 | `ISecretResolver` | 绑定里 `secret://` 的解析 |
+| `IManifestSource`、`IArtifactStore` | 发布：当前的 manifest 和它指向的产物从哪里读 |
+| `IReleaseStatusReporter` | 每个节点加载了哪次发布，报给谁 |
+| `IExplainableOperator` | 自定义算子怎么解释它对一行做了什么（`--explain`） |
 
 ## 不变量
 
-改动可以自由选择实现，但这些要一直成立。每一条有一个所有者（规则只在那里实现）和守住它的测试；理由在 [`development.md`](development.md) 和 `decisions/`。
+改动可以自由选择实现，但这些要一直成立。每一条有一个所有者（规则只在那里实现）和守住它的测试；理由在 [`development.md`](development.md) 和 `decisions/`。每一条说到哪里为止也写在里面：括号里的例外和前提是契约的一部分，不是待补的缺口。
 
 | # | 不变量 | 所有者 | 测试 |
 | --- | --- | --- | --- |
-| 1 | 一个键一行；一行在一个列的版本里没有被写过就是缺失 | `CandidateTable` | `UnwrittenRowsTests` |
-| 2 | 失败的尝试不留痕迹：行、列的版本、请求列都回到尝试之前；预算用完之后才到的结果不采用 | `CandidateTable.Rollback`、`PipelineExecutor` | `RowSourceFallbackTests`、`NodeRunsAgainTests` |
+| 1 | 一行在一个列的版本里没有被写过就是缺失（表保证）；一个键至多一个存活行（行源在追加之前自己跳过存活的键：`OperatorContext.AppendRows` 的契约，表不去重） | `CandidateTable`、行源 | `UnwrittenRowsTests`、`CompactionTests` |
+| 2 | 失败的尝试不留痕迹：它追加的行、它写的列的版本、请求列都回到尝试之前；预算用完之后才到的结果不采用。前提是算子只写自己声明的输出和自己追加的行，输入是只读的 | `CandidateTable.Rollback`、`PipelineExecutor` | `RowSourceFallbackTests`、`NodeRunsAgainTests` |
 | 3 | 提交时，不可空的列在每个存活行上都有值；`default` 不替没写的行补值 | `PipelineExecutor` | `UnwrittenAndUncommittedDataTests` |
-| 4 | 缺失、非有限值、越界值不静默变成一个看似合法的数 | `ColumnValues`、表达式后端 | `NarrowValueTests`、`SemanticsTests` |
-| 5 | 编译期接受的，运行时就能执行；统一计划对每个臂组合的结论，和单独编译这个组合一致 | `PlanCompiler` | `GeneratedExperimentTests` |
-| 6 | 计划不可变，所有请求共用；请求期不解析配置、不按名字查找 | `ExecutionPlan` | `PlanImmutabilityTests` |
-| 7 | 确定性：计划、输入、时间、外部回答和臂相同，结果就相同；随机只来自请求种子的 `StableHash` | `PipelineExecutor` | `ReplayTests` |
-| 8 | 每一次外部等待都有上界，只有一份实现，不依赖对方响应取消 | `BoundedCall` | `BoundedCallTests`、`TimerFaultTests` |
-| 9 | 边界交付声明的类型，框架不做隐式转换 | `ColumnType`、各边界的写入器 | `DeclaredWidthEndToEndTests` |
+| 4 | 缺失、非有限值、存不下的值不静默变成一个看似合法的数（表达式里 `int64` 的加减乘溢出回绕，是指南里写明的例外） | `ColumnValues`、表达式后端 | `NarrowValueTests`、`SemanticsTests` |
+| 5 | 编译期接受的，运行时就能执行；统一计划接受的每个臂组合，单独编译它也接受、得到同样的计划（统一计划可以多拒绝：跨组合的冲突，检查超出上限） | `PlanCompiler` | `GeneratedExperimentTests` |
+| 6 | 计划所有请求共用，公开面只读：没有 setter，没有声明成可变集合或 JSON 树的成员（把只读接口强转回去改，和用反射改一样，不在保证之内）。节点的表达式、列和参数在请求期不解析、不按名字查找（请求输入按名字绑定一次；带配置覆盖的调试请求在请求内编译） | `ExecutionPlan` | `PlanImmutabilityTests` |
+| 7 | 确定性：计划、请求（输入、id、种子）、时间上的判定（时钟读数，哪一次等待先到了上界）、外部回答和臂相同，结果就相同；回放复用录制下来的这些判定。随机只来自请求种子的 `StableHash` | `PipelineExecutor` | `ReplayTests` |
+| 8 | 请求路径上框架发起的每一次外部等待（服务、连接器、缓存的存储、臂的分配）都有上界，只有一份实现，不依赖对方响应取消。不在其内：自定义算子里同步执行的代码；启动、发布状态上报和日志 sink，它们收到取消信号，不保证限时返回 | `BoundedCall` | `BoundedCallTests`、`TimerFaultTests` |
+| 9 | 向外交付的值（给服务的张量、日志、结果）是声明的类型和宽度，不做隐式转换。进来的请求输入和流水线调用的输入只按一张固定的表放宽（`int32`→`int64`、整数→浮点） | `ColumnType`、各边界的写入器、`RequestSchema` | `DeclaredWidthEndToEndTests`、`RequestSchemaTests` |
 | 10 | 表达式的向量化后端和参考解释器结果相同 | `ReferenceInterpreter` | `DifferentialTests` |
-| 11 | 请求的分配不随候选数增长（列缓冲随请求租借和归还）；`src/` 里没有 LINQ | `RequestMemory`、`BannedSymbols.txt` | `RequestAllocationTests`、`BufferPoisoningTests` |
+| 11 | 请求的分配不随候选数增长（列缓冲随请求租借和归还；交给调用方的结果随返回的行数增长）；`src/` 里不用 `BannedSymbols.txt` 列出的 API（LINQ） | `RequestMemory`、`BannedSymbols.txt` | `RequestAllocationTests`、`BufferPoisoningTests` |
 | 12 | 回放、解释、计划对比读的是请求实际执行的编译结果，不另写一份逻辑 | `RunReplay` | `ReplayTests`、`ExplainEndToEndTests` |
 | 13 | 配置严格绑定；每个错误有精确的位置和一句修法，只报一次 | `StrictJson`、`OperatorCompileContext` | `DiagnosticLocationCliTests` |
 | 14 | JSON Schema 从配置类型生成；示例里的副本和生成结果相同 | `ArtifactSchemas` | `EditorSchemaTests` |
