@@ -349,8 +349,9 @@ internal sealed class TestLocalTables : ILocalTableProvider
 internal sealed class ManualClock : TimeProvider
 {
     private long _ticks = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).UtcTicks;
-    private long _timestamp = -1;
+    private long _timestamp;
     private long _stepPerRead;
+    private int _held;
 
     public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref _ticks), TimeSpan.Zero);
 
@@ -364,11 +365,18 @@ internal sealed class ManualClock : TimeProvider
     /// </summary>
     public void HoldTimestamps(TimeSpan stepPerRead = default)
     {
-        Interlocked.Exchange(ref _stepPerRead, stepPerRead.Ticks * TimestampFrequency / TimeSpan.TicksPerSecond);
+        Interlocked.Exchange(ref _stepPerRead, Timestamps(stepPerRead));
         Interlocked.Exchange(ref _timestamp, base.GetTimestamp());
+        Volatile.Write(ref _held, 1);
     }
 
-    public void AdvanceTimestamps(TimeSpan by) => Interlocked.Add(ref _timestamp, by.Ticks * TimestampFrequency / TimeSpan.TicksPerSecond);
+    /// <summary>
+    /// Moves the held timestamps, back too and below zero: a timestamp counts from when the machine started, so on one
+    /// that started minutes ago (a CI runner) ten minutes back is a negative timestamp, and still a held one.
+    /// </summary>
+    public void AdvanceTimestamps(TimeSpan by) => Interlocked.Add(ref _timestamp, Timestamps(by));
+
+    private long Timestamps(TimeSpan time) => (long)((Int128)time.Ticks * TimestampFrequency / TimeSpan.TicksPerSecond);
 
     /// <summary>Runs before each timestamp is read: a test's clock that stalls or throws there.</summary>
     public Action? BeforeTimestamp { get; set; }
@@ -377,7 +385,7 @@ internal sealed class ManualClock : TimeProvider
     {
         BeforeTimestamp?.Invoke();
         var step = Interlocked.Read(ref _stepPerRead);
-        return Interlocked.Read(ref _timestamp) < 0 ? base.GetTimestamp() : Interlocked.Add(ref _timestamp, step) - step;
+        return Volatile.Read(ref _held) == 0 ? base.GetTimestamp() : Interlocked.Add(ref _timestamp, step) - step;
     }
 }
 
