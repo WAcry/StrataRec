@@ -21,7 +21,8 @@ jobs:
     name: build and test
     runs-on: ubuntu-latest
     services:
-      # The Redis of the redis@1 integration tests (STRATAREC_REDIS below); without it they would be skipped.
+      # The Redis of the redis@1 integration tests (STRATAREC_REDIS below). Without the variable they start a container
+      # of their own, and are skipped only where there is no Docker either; the authentication test always needs its own.
       redis:
         image: redis:7
         ports:

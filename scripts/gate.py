@@ -7,6 +7,11 @@
 
 A check that fails says what to do instead. Fix the code or the document; a budget or a baseline is raised only in a
 commit of its own that says why (AGENTS.md section 6). After changing this file, run `selftest`.
+
+The checks read text, not the compiled program, and each says what it covers: `names` finds a backticked name that no
+longer occurs outside the documents (not whether it is declared, or means what the sentence says); `terms` reads the
+names of public types and delegates (not members, configuration keys or comments); `commits` reads the commits of one
+line of history (not merges). What they cannot see is for the review (.agents/skills/north-star-review).
 """
 import glob
 import os
@@ -22,7 +27,10 @@ SLEEP_BASELINE = 56            # Thread.Sleep / Task.Delay(<a time>) in tests: o
 SLOW_NOTE_S, SLOW_FAIL_S = 1.0, float(os.environ.get("GATE_SLOW_FAIL_S", 8))   # CI's shared runners set a wider limit
 SIZE_PROJECTS, SIZE_LINES = 6, 700   # nine in ten changes here touch fewer src projects and add fewer src lines
 
-RULES = ("AGENTS.md", ".agents/", ".claude/", "scripts/", ".github/", "BannedSymbols.txt", ".editorconfig")
+# The judges (AGENTS.md section 6): directories end with a slash, files are whole names. The two build files turn
+# warnings into errors and ban APIs for every project, which is a rule like the others.
+RULES = ("AGENTS.md", ".agents/", ".claude/", "scripts/", ".github/", "BannedSymbols.txt", ".editorconfig",
+         "Directory.Build.props", "Directory.Build.targets")
 CODE = ("src/", "tests/", "samples/")
 # Assemblies under src/ that see another's internals. New pairs are refused: make the member public with a contract, or
 # move the code to the assembly that owns the knowledge.
@@ -38,10 +46,11 @@ POINTER = (re.compile(r"^(?:I?[A-Z][a-z0-9]+){2,}$"),        # CandidateTable, I
            re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$"),    # COLUMN_NO_PRODUCER
            re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$"))    # timeout_ms
 PATH = re.compile(r"^(?:src|tests|samples|docs|scripts|\.github|\.agents)/[\w./@-]+$")
-EXCUSE = re.compile(r"\b(TODO|FIXME|HACK)\b")
-SLEEP = re.compile(r"Thread\.Sleep\(|Task\.Delay\((?!Timeout\.Infinite)")
+EXCUSE = re.compile(r"(?://|/\*|^\s*\*).*\b(TODO|FIXME|HACK)\b")   # in a comment; a string or a name may say them
+SLEEP = re.compile(r"Thread\.Sleep\s*\(|Task\.Delay\s*\((?!\s*Timeout\.Infinite)")
 PUBLIC_TYPE = re.compile(r"^\s*public\s+(?:(?:sealed|static|abstract|readonly|partial|ref|unsafe)\s+)*"
-                         r"(?:class|struct|interface|enum|record(?:\s+(?:struct|class))?)\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
+                         r"(?:(?:class|struct|interface|enum|record(?:\s+(?:struct|class))?)\s+([A-Za-z_][A-Za-z0-9_]*)"
+                         r"|delegate\s+[^;(]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*[<(])", re.M)
 
 
 class Repo:
@@ -49,11 +58,11 @@ class Repo:
         self.root = os.path.abspath(root)
         self.failures = []
         self.notes = []
-        listed = self.git("ls-files", "-co", "--exclude-standard")
+        listed = self.git("ls-files", "-co", "--exclude-standard", "-z")   # -z: a path with other than ASCII is not quoted
         if listed is None:  # not a git repository (the self-test's): every file
-            listed = "\n".join(os.path.relpath(os.path.join(d, f), self.root).replace(os.sep, "/")
+            listed = "\0".join(os.path.relpath(os.path.join(d, f), self.root).replace(os.sep, "/")
                                for d, _, fs in os.walk(self.root) for f in fs)
-        self.paths = sorted(p for p in listed.split("\n") if p and os.path.isfile(os.path.join(self.root, p)))
+        self.paths = sorted(p for p in listed.split("\0") if p and os.path.isfile(os.path.join(self.root, p)))
 
     def git(self, *args):
         done = subprocess.run(("git", "-C", self.root) + args, capture_output=True, text=True)
@@ -78,7 +87,7 @@ def budgets(repo):
     limits = dict(PAGE_LINES, **{"AGENTS.md": AGENTS_LINES})
     limits.update({p: SKILL_LINES for p in repo.under((".agents/skills/",), ("SKILL.md",))})
     for path, limit in sorted(limits.items()):
-        lines = repo.read(path).count("\n")
+        lines = len(repo.read(path).splitlines())
         if lines > limit:
             repo.fail("budget", path, f"{lines} lines, the budget is {limit}. Cut what the code, a test or a check already "
                       "says, or move detail that is needed only sometimes into a skill or docs/; do not raise the budget.")
@@ -100,7 +109,8 @@ def comments(repo):
 
 def sleeps(repo):
     """Tests decide when a call returns; they do not wait for the clock. The count only goes down."""
-    count = sum(len(SLEEP.findall(repo.read(p))) for p in repo.under(("tests/",), (".cs",)))
+    count = sum(len(SLEEP.findall(line.split("//", 1)[0]))   # a comment that names the call is not a call
+                for p in repo.under(("tests/",), (".cs",)) for line in repo.read(p).split("\n"))
     if count > SLEEP_BASELINE:
         repo.fail("sleeps", "tests/", f"{count} Thread.Sleep/Task.Delay calls, the baseline is {SLEEP_BASELINE}. Find the new "
                   "one with: git diff <base> -- tests | grep -E '^\\+.*(Thread\\.Sleep|Task\\.Delay)\\('. Let the test open a "
@@ -115,7 +125,10 @@ def names(repo):
     known = set(EXTERNAL)
     for path in repo.paths:
         if not path.startswith("docs/") and not path.endswith(".md") and path.endswith(TEXT + ("BannedSymbols.txt",)):
-            known.update(WORD.findall(repo.read(path)))
+            text = repo.read(path)
+            if path == "scripts/gate.py":
+                text = text.split("\ndef selftest", 1)[0]   # the names its self-test makes up exist nowhere
+            known.update(WORD.findall(text))
     documents = [p for p in repo.paths if p.endswith(".md") and (p.startswith(("docs/", ".agents/")) or "/" not in p)]
     for doc in documents:
         text = re.sub(r"^```.*?^```", lambda m: "\n" * m.group(0).count("\n"), repo.read(doc), flags=re.S | re.M)
@@ -138,17 +151,21 @@ def layers(repo):
     order = re.findall(r"^\| `(StrataRec\.[A-Za-z.]+)` \|", repo.read("docs/architecture.md"), re.M)
     for path in repo.under(("src/",), (".csproj",)):
         project = os.path.basename(path)[:-len(".csproj")]
-        text = repo.read(path)
         if project not in order:
             repo.fail("layers", path, "the project is not in the table of docs/architecture.md: add a row where it belongs "
                       "(it may reference only the rows above it).")
             continue
-        for target in re.findall(r'<ProjectReference Include="[^"]*?([A-Za-z.]+)\.csproj"', text):
+        try:   # as XML: an attribute on the next line, or in another order, is the same reference
+            items = [(e.tag.rsplit("}", 1)[-1], e.get("Include") or "") for e in ET.fromstring(repo.read(path)).iter()]
+        except ET.ParseError as error:
+            repo.fail("layers", path, f"is not XML the gate can read ({error}); its references were not checked.")
+            continue
+        for target in [os.path.basename(i.replace("\\", "/"))[:-len(".csproj")] for t, i in items if t == "ProjectReference"]:
             if target not in order or order.index(target) >= order.index(project):
                 repo.fail("layers", path, f"references {target}, which is not above {project} in the table of "
                           "docs/architecture.md. Dependencies point up the table only: move the code to where the knowledge "
                           "lives, or put the contract in the lower project.")
-        for friend in re.findall(r'<InternalsVisibleTo Include="StrataRec\.([A-Za-z.]+)"', text):
+        for friend in [i[len("StrataRec."):] for t, i in items if t == "InternalsVisibleTo" and i.startswith("StrataRec.")]:
             pair = (project[len("StrataRec."):], friend)
             if not friend.endswith(("Tests", "Benchmarks")) and pair not in FRIENDS:
                 repo.fail("layers", path, f"{friend} is a new friend assembly of {project}. Make what it needs public with "
@@ -162,22 +179,23 @@ def terms(repo):
         banned.update(w.lower() for w in words.split("、"))
     for path in repo.under(("src/",), (".cs",)):
         for match in PUBLIC_TYPE.finditer(repo.read(path)):
-            humps = re.findall(r"[A-Z][a-z0-9]*", match.group(1))
-            for hump in humps:
-                if hump.lower() in banned:
-                    repo.fail("terms", path, f"public type {match.group(1)} uses '{hump}', a word docs/glossary.md bans. "
+            name = match.group(1) or match.group(2)
+            for hump in re.findall(r"[A-Z][a-z0-9]*", name):
+                word = hump.lower()
+                if word in banned or (word.endswith("s") and word[:-1] in banned):
+                    repo.fail("terms", path, f"public type {name} uses '{hump}', a word docs/glossary.md bans. "
                               "Use the glossary's word for the concept; a new concept gets a row in the glossary first.")
 
 
 def commits(repo, base):
     """A commit changes the rules or the code, not both (AGENTS.md section 6)."""
-    log = repo.git("log", "--no-merges", "--name-only", "--pretty=format:@%h", f"{base}..HEAD") if base else None
+    log = repo.git("log", "--no-merges", "--pretty=format:%h", f"{base}..HEAD") if base else None
     if log is None:
         repo.notes.append("commits: no base to compare with (pass --base <commit>); the rule-file check did not run.")
         return
-    for entry in log.split("@")[1:]:
-        commit, *files = [l for l in entry.split("\n") if l]
-        rules = [f for f in files if f.startswith(RULES)]
+    for commit in log.split():
+        files = (repo.git("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", commit) or "").split("\0")
+        rules = [f for f in files if any(f.startswith(r) if r.endswith("/") else f == r for r in RULES)]
         code = [f for f in files if f.startswith(CODE)]
         if rules and code:
             repo.fail("commits", commit, f"changes rule files ({rules[0]}) together with code ({code[0]}). Split it: when a "
@@ -187,11 +205,14 @@ def commits(repo, base):
 def size(repo, base):
     """Not a check: tells the author when a change is larger than nearly all changes here."""
     stat = repo.git("diff", "--numstat", base) if base else None
-    if not stat:
+    if stat is None:
         return
+    changed = [line.split("\t") for line in stat.strip().split("\n") if line]
+    for path in (repo.git("ls-files", "--others", "--exclude-standard", "-z") or "").split("\0"):   # not added yet
+        if path.startswith(CODE):
+            changed.append((str(len(repo.read(path).splitlines())), "0", path))
     projects, added, tested = set(), 0, 0
-    for line in stat.strip().split("\n"):
-        plus, _, path = line.split("\t")
+    for plus, _, path in changed:
         if plus == "-":
             continue
         if path.startswith("src/"):
@@ -235,12 +256,14 @@ def run(repo, base):
 
 
 def resolve_base(repo, given):
-    for candidate in ([given] if given else []) + ["origin/main"]:
-        if candidate and set(candidate) != {"0"}:
-            found = repo.git("merge-base", candidate, "HEAD")
-            if found:
-                return found.strip()
-    return None
+    """The commit the change is compared with: the one asked for, or where the branch left origin/main."""
+    if given and set(given) != {"0"}:   # all zeros: the "before" of a branch's first push, which names no commit
+        found = repo.git("merge-base", given, "HEAD")
+        if not found:
+            raise SystemExit(f"gate: --base {given}: not a commit that shares history with HEAD (in a shallow clone, fetch it first).")
+        return found.strip()
+    found = repo.git("merge-base", "origin/main", "HEAD")
+    return found.strip() if found else None
 
 
 def selftest():
@@ -259,25 +282,30 @@ def selftest():
         "src/StrataRec.Core/StrataRec.Core.csproj": '<Project><ItemGroup><InternalsVisibleTo Include="StrataRec.Pipeline" />'
                                                     '<InternalsVisibleTo Include="StrataRec.UnitTests" /></ItemGroup></Project>',
         "src/StrataRec.Core/CandidateTable.cs": "public sealed class CandidateTable { }\n"
-                                                'class C { string a = "timeout_ms", b = "COLUMN_NO_PRODUCER"; }\n',
+                                                'class C { string a = "timeout_ms", b = "COLUMN_NO_PRODUCER", c = "TODO"; }\n',
+        "src/StrataRec.Core/名字.cs": "public sealed class Named { }\n",
         "src/StrataRec.Pipeline/StrataRec.Pipeline.csproj": '<Project><ItemGroup><ProjectReference Include="..\\StrataRec.Core\\'
                                                             'StrataRec.Core.csproj" /></ItemGroup></Project>',
-        "tests/T/WaitTests.cs": "await Task.Delay(Timeout.Infinite, token);\n",
+        "tests/T/WaitTests.cs": "await Task.Delay(Timeout.Infinite, token);\n" + "// was Thread.Sleep(50)\n" * (SLEEP_BASELINE + 1),
     }
     breaks = [
         ("budget", "AGENTS.md", clean["AGENTS.md"] + "x\n" * AGENTS_LINES),
         ("budget", ".agents/skills/x/SKILL.md", "x\n" * (SKILL_LINES + 1)),
         ("budget", "docs/decisions/execution.md", "x" * (DECISION_CHARS + 1)),
         ("comments", "src/StrataRec.Core/Later.cs", "// TODO: handle the empty table\n"),
-        ("sleeps", "tests/T/SleepTests.cs", "Thread.Sleep(50);\n" * (SLEEP_BASELINE + 1)),
+        ("comments", "src/StrataRec.Core/名字.cs", "/// <summary>HACK around the pool.</summary>\n"),
+        ("sleeps", "tests/T/SleepTests.cs", "Thread.Sleep (50);\n" * (SLEEP_BASELINE + 1)),
         ("names", "docs/decisions/execution.md", "- **x.** `RemovedType` did this.\n"),
         ("names", "docs/decisions/execution.md", "- **x.** the key `removed_key`.\n"),
         ("names", "AGENTS.md", "See `docs/gone.md`.\n"),
-        ("layers", "src/StrataRec.Core/StrataRec.Core.csproj", '<ProjectReference Include="..\\StrataRec.Pipeline\\StrataRec.Pipeline.csproj" />'),
+        ("layers", "src/StrataRec.Core/StrataRec.Core.csproj", '<Project><ItemGroup><ProjectReference\n  PrivateAssets="all"\n'
+                                                               '  Include="..\\StrataRec.Pipeline\\StrataRec.Pipeline.csproj" /></ItemGroup></Project>'),
+        ("layers", "src/StrataRec.Core/StrataRec.Core.csproj", "<Project><ItemGroup>"),
         ("layers", "src/StrataRec.New/StrataRec.New.csproj", "<Project />"),
-        ("layers", "src/StrataRec.Pipeline/StrataRec.Pipeline.csproj", '<InternalsVisibleTo Include="StrataRec.Core" />'),
+        ("layers", "src/StrataRec.Pipeline/StrataRec.Pipeline.csproj", '<Project><ItemGroup><InternalsVisibleTo Include="StrataRec.Core" /></ItemGroup></Project>'),
         ("terms", "src/StrataRec.Core/Stage.cs", "public sealed class RankingStage { }\n"),
         ("terms", "src/StrataRec.Core/Bucket.cs", "    public readonly record struct BucketId(int Value);\n"),
+        ("terms", "src/StrataRec.Core/Buckets.cs", "public delegate int CandidateBuckets<T>(T rows);\n"),
     ]
     problems = []
     with tempfile.TemporaryDirectory() as root:
@@ -302,14 +330,14 @@ def selftest():
                            check=True, capture_output=True)
         git("init", "-q")
         for message, paths in (("base", ["README.md"]), ("rules", ["scripts/gate.py", "docs/a.md"]), ("code", ["src/a.cs", "docs/a.md"]),
-                               ("both", ["AGENTS.md", "tests/a.cs"])):
+                               ("alike", ["AGENTS.md.backup", "docs/x@1.md", "tests/b.cs"]), ("both", ["Directory.Build.props", "tests/a.cs"])):
             for path in paths:
                 write(root, path, message)
             git("add", "-A")
             git("commit", "-q", "-m", message)
         repo = Repo(root)
         commits(repo, repo.git("rev-list", "--max-parents=0", "HEAD").strip())
-        if len(repo.failures) != 1 or "AGENTS.md" not in repo.failures[0]:
+        if len(repo.failures) != 1 or "Directory.Build.props" not in repo.failures[0]:
             problems.append(f"the rule-file check gave: {repo.failures or 'nothing'}")
     with tempfile.TemporaryDirectory() as root:
         row = '<UnitTestResult testName="{}" duration="00:00:{}" outcome="Passed" />'
@@ -334,8 +362,10 @@ def main(argv):
         return selftest()
     if argv[:1] == ["slow"]:
         return slow(argv[1] if len(argv) > 1 else "TestResults")
+    if argv and (len(argv) != 2 or argv[0] != "--base"):
+        raise SystemExit("gate: usage: gate.py [--base <commit>] | slow <directory> | selftest")
     repo = Repo(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-    base = resolve_base(repo, argv[argv.index("--base") + 1] if "--base" in argv else os.environ.get("GATE_BASE"))
+    base = resolve_base(repo, argv[1] if argv else os.environ.get("GATE_BASE"))
     run(repo, base)
     size(repo, base)
     for line in repo.failures + repo.notes:

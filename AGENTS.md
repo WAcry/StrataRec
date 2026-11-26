@@ -24,7 +24,7 @@ StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：一次推荐请求
 - 失败的尝试不留痕迹；超时之后才到的结果不采用。
 - 编译期接受的，运行时就能执行；校验做不完就拒绝，不放行。请求期不解析配置、不按名字查找；计划不可变。
 - 相同的计划、输入、时间、外部回答和臂，得到相同的结果；随机只来自请求种子的稳定哈希。
-- 每个边界交付使用者声明的类型，框架不做隐式转换。
+- 向外交付的值是使用者声明的类型和宽度；进来的输入只做文档写明的放宽（`int32`→`int64`、整数→浮点），没有别的隐式转换。
 - 配置只用广泛使用的标准（JSONC、RFC 7396、RFC 6901、JSON Schema、CEL 语法、Mustache），严格绑定；错误带精确位置和一句修法，一个错误只报一次。
 - `src/` 里没有 LINQ，热路径不按行分配（`BannedSymbols.txt` 在构建时强制）。
 
@@ -34,7 +34,7 @@ StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：一次推荐请求
 
 - 一个概念一个词，文档、配置、公开 API、内部类型相同：`docs/glossary.md`。最容易混的：臂（arm，不写桶、bucket）和变体（variant，节点在某些臂组合下的编译结果）；运行（run，一条流水线对一个请求的一次执行）、尝试（attempt，一个节点的一次执行）和调用（call，对服务或另一条流水线）；行（row）和结果里的项（item）；列（column）和数据源的字段（field）。
 - 文档用中文；代码、标识符、代码注释和提交说明用英文。文档里的反引号只包仓库里现有的名字（门禁会查），已经删掉的、设想中的名字不加反引号。
-- 注释写这段代码为什么这样、契约是什么，不复述代码，不留 `TODO`、`FIXME`、`HACK`，不引用仓库里查不到的东西（第几轮评审、哪次对话）。公开类型的 XML 注释是契约；会序列化的配置成员，注释就是 JSON Schema 里给使用者看的描述。
+- 注释写这段代码为什么这样、契约是什么，不复述代码，不留 `TODO`、`FIXME`、`HACK`，不引用仓库里查不到的东西（第几轮评审、哪次对话）。公开类型的 XML 注释是契约；会序列化的配置成员，它的 `[Description]`（没有时是 XML 注释）就是 JSON Schema 里给使用者看的描述。
 - 决定和理由记在 `docs/decisions/<领域>.md`，只记读代码看不出来的：为什么、没选的方案、代价、刻意不做的事。怎么判断该不该记、怎么写：`.agents/skills/record-decision`。
 
 ## 4. 验证
@@ -63,4 +63,4 @@ scripts/red-on-base.sh HEAD -- --project tests/StrataRec.UnitTests --filter-clas
 
 ## 6. 规则文件单独提交
 
-`AGENTS.md`、`.agents/skills/`、`scripts/`、`.github/`、`BannedSymbols.txt`、`.editorconfig` 是裁判。改它们的提交不同时改 `src/`、`tests/`、`samples/`（门禁按提交检查）：撞上门禁时修代码，不在同一个改动里放宽门禁；确实该改规则时单独提交、写明理由。`docs/` 随代码一起改。
+`AGENTS.md`、`.agents/`、`.claude/`、`scripts/`、`.github/`、`BannedSymbols.txt`、`.editorconfig`、`Directory.Build.props`、`Directory.Build.targets` 是裁判。改它们的提交不同时改 `src/`、`tests/`、`samples/`（门禁按提交检查）：撞上门禁时修代码，不在同一个改动里放宽门禁；确实该改规则时单独提交、写明理由。`docs/` 随代码一起改。
