@@ -50,7 +50,7 @@ dotnet build StrataRec.sln -c Release                         # 警告视为错�
 dotnet test --project tests/StrataRec.UnitTests -c Release    # 内环，约 10 秒；只跑一类加 --filter-class <类的全名>
 scripts/check.sh                                              # 交付之前：构建、门禁、全部测试、慢测试检查，约 1 分钟
 scripts/red-on-base.sh HEAD -- --project tests/StrataRec.UnitTests --filter-class <类>   # 证明新测试在改动之前的代码上失败
-scripts/mutate.sh                                             # 按需：改动过的 src 文件被改坏时有没有测试发现；每个项目几分钟
+scripts/mutate.sh                                             # 按需：改动过的 src 文件被改坏时有没有测试发现；小文件几分钟，大文件半小时
 ```
 
 - 修缺陷先有一个失败的测试，并用 `scripts/red-on-base.sh` 确认它在修复之前的代码上失败；在旧代码上也通过的测试证明不了什么。

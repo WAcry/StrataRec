@@ -9,8 +9,13 @@
 # line. It prints the mutants no test noticed. A survivor is one of two things: a behaviour no test asserts (write the
 # test; the mutant says which behaviour), or a change that makes no difference to anyone (leave it, and do not write a
 # test to its shape). Mutations of strings are left out: they are messages.
-# Minutes per project (every test runs once alone, to learn what it covers), so this is not part of scripts/check.sh:
-# run it after changing logic that is easy to get subtly wrong. Exit 0 whatever survives; 2 when the tool could not run.
+# A mutant whose tests did not finish is reported as timed out and is not judged: it may loop for ever, or its tests may
+# only be slow. Under the tool a test that spends its time in loops through the mutated file runs much slower than it
+# did when the tool timed it, so every run gets a minute on top of what the tool allows (with its few seconds, changes
+# that alter nothing came out as timed out), and the stress tests (*ConcurrencyTests) are left out: with them nearly
+# every run timed out, that minute included.
+# Three or four minutes for a small file (every test runs once alone, to learn what it covers), half an hour for one
+# of 1,500 lines, so this is not part of scripts/check.sh: run it after changing logic that is easy to get subtly wrong. Exit 0 whatever survives; 2 when the tool could not run.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"; cd "$root"
 tests="tests/StrataRec.UnitTests"
@@ -38,7 +43,7 @@ export DOTNET_ROOT="${DOTNET_ROOT:-$(dirname "$(readlink -f "$(command -v dotnet
 dotnet tool restore >/dev/null || cannot "dotnet tool restore failed (dotnet-tools.json pins dotnet-stryker)."
 out="$(mktemp -d "${TMPDIR:-/tmp}/mutate.XXXXXX")"
 trap 'rm -rf "$out"' EXIT
-printf '{ "stryker-config": { "ignore-mutations": ["string"] } }\n' > "$out/config.json"
+printf '{ "stryker-config": { "ignore-mutations": ["string"], "additional-timeout": 60000, "test-case-filter": "FullyQualifiedName!~ConcurrencyTests" } }\n' > "$out/config.json"
 
 for project in "${projects[@]}"; do
   grep -q "$project.csproj" "$tests/StrataRec.UnitTests.csproj" || { echo "mutate: $project: the unit tests do not reference it; skipped."; continue; }
@@ -46,7 +51,7 @@ for project in "${projects[@]}"; do
   for file in "${files[@]}"; do
     [[ "$file" == "src/$project/"* ]] && only+=(-m "${file#"src/$project/"}")
   done
-  echo "mutate: $project: $(( ${#only[@]} / 2 )) file(s); a few minutes"
+  echo "mutate: $project: $(( ${#only[@]} / 2 )) file(s); minutes, up to half an hour for a large file"
   (cd "$tests" && dotnet stryker -f "$out/config.json" -p "$project.csproj" "${only[@]}" -t mtp --configuration Release \
       -r json -O "$out/$project" --skip-version-check > "$out/$project.log" 2>&1) ||
     { tail -n 25 "$out/$project.log" >&2; cannot "Stryker did not finish for $project (its log is above)."; }
@@ -59,15 +64,15 @@ for path, file in sorted(report["files"].items()):
     for mutant in file["mutants"]:
         status = mutant["status"]
         counts[status] = counts.get(status, 0) + 1
-        if status in ("Survived", "NoCoverage"):
+        if status in ("Survived", "NoCoverage", "Timeout"):
             line = mutant["location"]["start"]["line"]
-            what = "no test runs this line" if status == "NoCoverage" else "survived"
+            what = {"NoCoverage": "no test runs this line", "Survived": "survived", "Timeout": "timed out, not judged"}[status]
             was = " ".join(source[line - 1].split())[:90]
             now = " ".join((mutant.get("replacement") or "").split())[:60]
             shown.append(f"  {os.path.relpath(path, root)}:{line}: {what}: {mutant['mutatorName']}\n      {was}\n      => {now}")
 tested = sum(n for s, n in counts.items() if s in ("Killed", "Timeout", "Survived", "NoCoverage"))
-print(f"mutate: {tested} mutants: {counts.get('Killed', 0) + counts.get('Timeout', 0)} noticed by a test, "
-      f"{counts.get('Survived', 0)} survived, {counts.get('NoCoverage', 0)} on lines no test runs"
+print(f"mutate: {tested} mutants: {counts.get('Killed', 0)} noticed by a test, {counts.get('Survived', 0)} survived, "
+      f"{counts.get('NoCoverage', 0)} on lines no test runs, {counts.get('Timeout', 0)} timed out"
       + (f" ({counts['CompileError']} did not compile and are not counted)" if counts.get("CompileError") else ""))
 print("\n".join(shown))
 PY
