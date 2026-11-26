@@ -179,6 +179,7 @@
                   "enum": [
                     "CategoryBoost@1",
                     "CompositeMultiplierScorer@1",
+                    "DistinctHeads@1",
                     "ExpressionFilter@1",
                     "ExpressionScorer@1",
                     "GroupAggregate@1",
@@ -187,6 +188,7 @@
                     "ModelScorer@1",
                     "MultiSourceRecall@1",
                     "PairwiseRanker@1",
+                    "PipelineColumns@1",
                     "PipelineSource@1",
                     "RequestAggregate@1",
                     "SlidingWindowQuota@1",
@@ -198,6 +200,7 @@
                   "enumDescriptions": [
                     "Multiplies a score by a per-category factor and writes it to a column.",
                     "score = base × Π multipliers + Σ addends, with named, independently patchable terms.",
+                    "Reorders each row's list so that its first items are not among the first items of a row above.",
                     "Drops rows for which a boolean ColumnExpr predicate is false.",
                     "Evaluates a ColumnExpr for every live row and writes it to a column.",
                     "Per group of rows (by a column, or all rows): count, sum, mean, min, max, std or rank, written back to every row of the group.",
@@ -206,6 +209,7 @@
                     "Scores rows with a model: named inputs from columns, named outputs to columns, batched.",
                     "Concurrent multi-source retrieval with deterministic merge and entity_id dedup.",
                     "Reranks the leading rows by a model's pairwise preferences, aggregated into expected wins.",
+                    "Calls a pipeline for each row and writes what it returns into the row's columns: its rows as lists, its values as values.",
                     "Calls another pipeline for the request and appends the rows it returns as candidates.",
                     "Over the live candidates: count, sum, mean, min or max of an expression, written to request columns (req.*).",
                     "Limits rows per group within any sliding window of ranks; over-quota rows move down or drop.",
@@ -427,6 +431,58 @@
                                 "null"
                               ]
                             }
+                          }
+                        },
+                        "additionalProperties": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "DistinctHeads@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Reorders each row's list so that its first items are not among the first items of a row above.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "ids_col": {
+                            "description": "The list column of each row's item ids (list<int64>, declared with \"flow\": true: the node rewrites it).",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "with": {
+                            "description": "The list columns that go with the ids element by element (scores, labels), reordered with them. A row without a value in one keeps none.",
+                            "type": [
+                              "array",
+                              "null"
+                            ],
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "head_param": {
+                            "description": "Parameter (int64) holding how many items a row shows first: none of them is among the first of a row above.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "additionalProperties": {
@@ -960,6 +1016,179 @@
                             "description": "Optional column for each window row's aggregated score (its expected wins against the other rows of the window): float32? or float64?, missing outside the window. An undeclared column is float32?.",
                             "type": [
                               "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "additionalProperties": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "op": {
+                        "const": "PipelineColumns@1"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {
+                        "description": "Calls a pipeline for each row and writes what it returns into the row's columns: its rows as lists, its values as values.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "pipeline": {
+                            "description": "The pipeline every row calls. With pipelines, the one for the rows none of its entries is for; without either, such a row calls nothing and gets no values.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "by": {
+                            "description": "What says which entry of pipelines a row calls: a row-level expression of a string or an integer, such as col.kind. Without it, the row's key (col.entity_id).",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "pipelines": {
+                            "description": "The pipelines by the value of by, such as { \"ads\": { \"pipeline\": \"sponsored\" } }: rows of different kinds call different pipelines, all at once. What the node writes (ids, columns, values) is every entry's, which may add to it and replace it by name; how a pipeline is called (inputs) is its own.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "object",
+                                "null"
+                              ],
+                              "properties": {
+                                "pipeline": {
+                                  "description": "The pipeline these rows call.",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "inputs": {
+                                  "description": "Inputs to pass to this pipeline, as the node's inputs are to pipeline.",
+                                  "type": [
+                                    "object",
+                                    "null"
+                                  ],
+                                  "additionalProperties": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "ids": {
+                                  "description": "The column that gets the ids, when not the node's ids.",
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "columns": {
+                                  "description": "Lists to fill besides the node's columns, such as an output column only this pipeline has ({ \"track_ids\": \"track_id\" }); one for the same list replaces the node's.",
+                                  "type": [
+                                    "object",
+                                    "null"
+                                  ],
+                                  "additionalProperties": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "values": {
+                                  "description": "Values to take besides the node's values; one for the same column replaces the node's.",
+                                  "type": [
+                                    "object",
+                                    "null"
+                                  ],
+                                  "additionalProperties": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                }
+                              },
+                              "additionalProperties": {
+                                "type": "null"
+                              }
+                            }
+                          },
+                          "inputs": {
+                            "description": "Inputs to pass to pipeline: its input name → an expression, which may read the row (col.*), such as { \"genre\": \"col.genre\" }. Every other input the called pipeline declares gets this request's input of the same name, when it has one. An entry of pipelines has inputs of its own.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "ids": {
+                            "description": "The column (list<int64> or list<string>, as the called pipeline's keys are, declared under columns) that gets the ids of the rows the call returned, in their order.",
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "columns": {
+                            "description": "Lists to fill: this pipeline's list column (declared under columns) → the called pipeline's output column, such as { \"game_scores\": \"score\" }. Element i of each list is of the row whose id is element i of ids. The output column must have a value on every row: a list has no missing elements.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "values": {
+                            "description": "Values to take: this pipeline's column (declared under columns) → the called pipeline's output value (output.values), such as { \"best\": \"score.best\" }.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "max_calls": {
+                            "description": "The most rows it calls for, 1 to 1000: the first ones in rank order. Required: every row is a run of a pipeline, so the node says how many it may start. The rows after them get no values, and the node is degraded.",
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "timeout_ms": {
+                            "description": "The most a call may take, in milliseconds; a slower one fails, and its row gets no values. Without it, as long as the node has.",
+                            "type": [
+                              "integer",
                               "null"
                             ]
                           }

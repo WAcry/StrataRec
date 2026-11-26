@@ -12,7 +12,9 @@
     "user.affinity":  { "type": "float32", "source": "user_store", "field": "affinity",  "default": 0.0 },
     "item.ctr_7d":    { "type": "float32", "source": "item_store", "field": "ctr_7d",    "default": 0.01 },
     "item.age_hours": { "type": "float32", "source": "item_store", "field": "age_hours" },
-    "item.category":  { "type": "string",  "source": "item_store", "field": "category" }
+    "item.category":  { "type": "string",  "source": "item_store", "field": "category" },
+    // Only a sponsor's items have one.
+    "item.campaign":  { "type": "string",  "source": "item_store", "field": "campaign" }
   },
   "derived_features": {
     // Model inputs are plain references; what a missing age means is decided here, once, for training and serving.

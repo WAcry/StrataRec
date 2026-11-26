@@ -1,0 +1,86 @@
+// A page of shelves: each row of this pipeline is a shelf, and a shelf's items are the list another pipeline returned for
+// it. An item may be on several shelves, since each row holds its own list (item 3 is trending and an editors' pick), and
+// a shelf is a row like any other: score, rank, filter, log and experiment on it with the nodes every pipeline has. The
+// host asks for one pipeline, "shelves".
+//
+//   shelves (the rows)  →  content (a pipeline per shelf, all at once)  →  filled (drop the empty ones)
+//   →  heads (a custom operator, Components/DistinctHeads.cs: what a shelf shows first is not what a shelf above shows first)
+{
+  "$schema": "../schemas/pipeline.schema.json",
+  "pipeline_id": "shelves",
+  "entity_key_type": "string",
+  "request_schema": {
+    "user_id": { "type": "int64?" },
+    "region":  { "type": "string?" }
+  },
+  "columns": {
+    // A shelf's items and what goes with them, element by element. "flow": the node "heads" rewrites them.
+    "items":       { "type": "list<int64>",   "flow": true },
+    "item_scores": { "type": "list<float64>", "flow": true, "default": [] },
+    // Only the sponsored shelf's items have one: nullable, and the other rows have no value.
+    "track_ids":   { "type": "list<string>?", "flow": true }
+  },
+  "param_schema": {
+    "recall_quotas": { "type": "map<string,int64>", "min": 0, "max": 50 },
+    "shelves":       { "type": "int64", "min": 1, "max": 10 },
+    "head":          { "type": "int64", "min": 0, "max": 20 }
+  },
+  "params": {
+    "recall_quotas": { "shelf_list": 10 },
+    "shelves": 10,
+    "head": 3
+  },
+  "nodes": {
+    // The candidates are shelves: here a fixed list (bindings/local.jsonc).
+    "shelves": {
+      "order": 100, "op": "MultiSourceRecall@1",
+      "config": { "quotas_param": "recall_quotas" }
+    },
+    // A pipeline per shelf, chosen by the row's key, all called at once. What the node writes is the same for every
+    // shelf (the ids and a score per item): an entry says where its pipeline has it, and adds what only its pipeline has.
+    // A shelf without an entry ("archive") calls nothing and stays empty. (With "pipeline" and "inputs" on the node, the
+    // shelves without an entry would all call one pipeline, each passing a value of its row.)
+    "content": {
+      "order": 200, "op": "PipelineColumns@1",
+      "config": {
+        "ids": "items",
+        "columns": { "item_scores": "score" },
+        "pipelines": {
+          "trending":  { "pipeline": "trending_feed" },
+          "editors":   { "pipeline": "editors_picks" },
+          "sponsored": { "pipeline": "sponsored", "columns": { "item_scores": "bid", "track_ids": "track_id" } }
+        },
+        "max_calls": 10,
+        "timeout_ms": 400
+      }
+    },
+    "filled": {
+      "order": 300, "op": "ExpressionFilter@1",
+      "config": { "predicate": "size(col.items) > 0" }
+    },
+    // Across shelves, a rule of this page: its own operator, over the lists.
+    "heads": {
+      "order": 400, "op": "DistinctHeads@1",
+      "config": { "ids_col": "items", "with": ["item_scores", "track_ids"], "head_param": "head" }
+    }
+  },
+  // What the page showed is this pipeline's to log: a shelf's row with its list, after the rule above.
+  "funnel_groups": {
+    "all": { "key": ["ctx.request.id"], "rate": 1.0 }
+  },
+  "log_taps": {
+    "shown": {
+      "group": "all",
+      "attach": { "output": true },
+      "columns": { "items": "col.items" }
+    }
+  },
+  "output": {
+    "limit_param": "shelves",
+    "columns": {
+      "items": "col.items",
+      "item_scores": "col.item_scores",
+      "track_ids": "col.track_ids"
+    }
+  }
+}

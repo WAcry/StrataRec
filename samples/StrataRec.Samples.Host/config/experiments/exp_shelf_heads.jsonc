@@ -1,0 +1,13 @@
+// The page with and without its rule across shelves: a parameter of the page's own operator.
+{
+  "$schema": "../schemas/experiment.schema.json",
+  "experiment_id": "exp_shelf_heads",
+  "pipeline_id": "shelves",
+  "owner": "home-team",
+  "description": "Every shelf in its pipeline's own order: no item is moved for being first on a shelf above.",
+  "expires_at": "2099-12-31",
+  "arms": {
+    "control": {},
+    "as_ranked": { "params": { "head": 0 } }
+  }
+}

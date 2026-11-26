@@ -35,6 +35,17 @@ public abstract class ListColumn : ColumnBuffer
     /// <summary>Number of elements in the row's list (<c>size()</c> without touching the arena).</summary>
     public int LengthOf(int row) => _lengths[row];
 
+    /// <summary>
+    /// Makes the row's list the elements of a row of <paramref name="source"/> at <paramref name="positions"/>, in that
+    /// order: a list reordered, filtered or cut. Lists that go together element by element (a row's ids, their scores,
+    /// their labels) stay aligned when each takes the same positions, whatever its element type.
+    /// </summary>
+    /// <param name="source">A list column of the same element storage; it may be this column, and the same row.</param>
+    /// <param name="positions">Indexes into the source row's list; one may be taken more than once.</param>
+    /// <exception cref="ArgumentException">The source stores another element type.</exception>
+    /// <exception cref="IndexOutOfRangeException">A position is outside the source row's list.</exception>
+    public abstract void SetTaken(int row, ListColumn source, int sourceRow, ReadOnlySpan<int> positions);
+
     protected override void GatherValues(ReadOnlySpan<int> rows, int newCapacity)
     {
         var starts = Memory.RentCleared<int>(newCapacity);
@@ -116,6 +127,23 @@ public sealed class ListColumn<T> : ListColumn
         _arenaUsed += length;
         SetValid(row);
         return extent;
+    }
+
+    public override void SetTaken(int row, ListColumn source, int sourceRow, ReadOnlySpan<int> positions)
+    {
+        if (source is not ListColumn<T> from)
+        {
+            throw new ArgumentException($"A {Type} column takes elements of a column that stores the same, not of a {source?.Type} one.", nameof(source));
+        }
+
+        // Read before the extent is made: the span stays valid when the arena grows (SetUninitialized), also when the
+        // source is this column.
+        var values = from.Get(sourceRow);
+        var extent = SetUninitialized(row, positions.Length);
+        for (var i = 0; i < positions.Length; i++)
+        {
+            extent[i] = values[positions[i]];
+        }
     }
 
     public override void CopyFrom(ColumnBuffer source, int sourceRow, int row)

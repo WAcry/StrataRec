@@ -51,7 +51,7 @@ public sealed class PipelineSourceConfig
 /// <remarks>
 /// It uses only what any operator may (<see cref="OperatorCompileContext.TryCallPipeline"/>,
 /// <see cref="OperatorContext.CallPipelineAsync"/>): what to do with a called pipeline's rows beyond appending them,
-/// placing them at given ranks or keeping them as lists, is an operator of one's own.
+/// such as placing them at given ranks, is an operator of one's own. <c>PipelineColumns@1</c> keeps them as a row's lists.
 /// </remarks>
 public sealed class PipelineSourceFactory : IOperatorFactory
 {

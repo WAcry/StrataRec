@@ -120,6 +120,22 @@ samples/home_feed/
 
 一个页面由几条流水线组成时，页面本身也是一条流水线：它的算子调用别的流水线（`OperatorContext.CallPipelineAsync`），怎么把结果拼起来由算子决定，所以页面结构的变化是配置里的补丁，受实验控制。宿主示例的首页（`samples/StrataRec.Samples.Host/config/pipelines/home.jsonc` 和 `Components/SlotBlend.cs`）并发调用两条流水线，把赞助内容按间隔放进主列表。
 
+页面有几个栏目时，页面流水线的行是栏目，栏目的内容是这一行的列表：`PipelineColumns@1` 对每一行调用一条流水线（不同的行可以调用不同的流水线），把返回的 id 和输出列写进这一行的列表列。栏目因此和任何一行一样被打分、排序、过滤、记日志和做实验，同一个物品可以出现在几个栏目里。
+
+```jsonc
+"content": { "order": 200, "op": "PipelineColumns@1",
+  "config": {
+    "ids": "items",                                   // columns 里声明为 list<int64>
+    "columns": { "item_scores": "score" },            // 每个栏目都有的：一个物品一个分数
+    "pipelines": {                                    // 按行的键选流水线，同时调用
+      "trending":  { "pipeline": "trending_feed" },
+      "sponsored": { "pipeline": "sponsored", "columns": { "item_scores": "bid", "track_ids": "track_id" } }  // 只有它有的列
+    },
+    "max_calls": 10 } },
+```
+
+宿主示例的 `config/pipelines/shelves.jsonc` 是完整的一页，`Components/DistinctHeads.cs` 是它跨栏目的规则。
+
 类目打散用 `SlidingWindowQuota@1`（任意连续 `window` 个名次里同一组最多 `max_per_window` 个），相似内容打散用 `MmrDiversifier@1`，多目标融合用 `CompositeMultiplierScorer@1`（每个乘子、加项可以被实验单独修改）；`samples/home_feed` 里都有用法。
 
 ## 基准

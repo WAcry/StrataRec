@@ -1,8 +1,8 @@
 {"id": 1, "ctr_7d": 0.060, "age_hours": 2, "category": "sports"}
-{"id": 2, "ctr_7d": 0.055, "age_hours": 30, "category": "tech"}
+{"id": 2, "ctr_7d": 0.055, "age_hours": 30, "category": "tech", "campaign": "retarget-2"}
 {"id": 3, "ctr_7d": 0.048, "age_hours": 5, "category": "local_news"}
 {"id": 4, "ctr_7d": 0.052, "age_hours": 12, "category": "music"}
-{"id": 5, "ctr_7d": 0.040, "age_hours": 1, "category": "local_news"}
+{"id": 5, "ctr_7d": 0.040, "age_hours": 1, "category": "local_news", "campaign": "retarget-5"}
 {"id": 6, "ctr_7d": 0.070, "age_hours": 48, "category": "sports"}
 {"id": 7, "ctr_7d": 0.035, "age_hours": 3, "category": "travel"}
 {"id": 8, "ctr_7d": 0.045, "category": "tech"}
@@ -21,7 +21,7 @@
 {"id": 21, "ctr_7d": 0.033, "age_hours": 1, "category": "local_news"}
 {"id": 22, "ctr_7d": 0.051, "age_hours": 2, "category": "travel"}
 {"id": 23, "ctr_7d": 0.046, "age_hours": 5, "category": "music"}
-{"id": 24, "ctr_7d": 0.070, "age_hours": 4, "category": "sponsored"}
-{"id": 25, "ctr_7d": 0.045, "age_hours": 8, "category": "sponsored"}
-{"id": 26, "ctr_7d": 0.058, "age_hours": 2, "category": "sponsored"}
-{"id": 27, "ctr_7d": 0.030, "age_hours": 12, "category": "sponsored"}
+{"id": 24, "ctr_7d": 0.070, "age_hours": 4, "category": "sponsored", "campaign": "spring-24"}
+{"id": 25, "ctr_7d": 0.045, "age_hours": 8, "category": "sponsored", "campaign": "spring-25"}
+{"id": 26, "ctr_7d": 0.058, "age_hours": 2, "category": "sponsored", "campaign": "launch-26"}
+{"id": 27, "ctr_7d": 0.030, "age_hours": 12, "category": "sponsored", "campaign": "launch-27"}

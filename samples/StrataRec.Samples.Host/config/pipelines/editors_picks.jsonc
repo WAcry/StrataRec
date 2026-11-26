@@ -1,0 +1,29 @@
+// The editors' picks, in the editors' order: the smallest pipeline there is. The page of shelves calls it for one of its
+// shelves (pipelines/shelves.jsonc).
+{
+  "$schema": "../schemas/pipeline.schema.json",
+  "pipeline_id": "editors_picks",
+  "entity_key_type": "int64",
+  "request_schema": {
+    "user_id": { "type": "int64?" },
+    "region":  { "type": "string?" }
+  },
+  "param_schema": {
+    "recall_quotas": { "type": "map<string,int64>", "min": 0, "max": 100 },
+    "top_k":         { "type": "int64", "min": 1, "max": 20 }
+  },
+  "params": {
+    "recall_quotas": { "editorial": 4 },
+    "top_k": 4
+  },
+  "nodes": {
+    "recall": {
+      "order": 100, "op": "MultiSourceRecall@1",
+      "config": { "quotas_param": "recall_quotas" }
+    }
+  },
+  "output": {
+    "limit_param": "top_k",
+    "columns": { "score": "col.recall.best_score" }
+  }
+}

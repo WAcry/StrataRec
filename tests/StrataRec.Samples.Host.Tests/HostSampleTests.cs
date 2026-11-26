@@ -27,7 +27,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     private const string Pipeline = "trending_feed";
 
     /// <summary>The sample's pipelines: the home page (pipelines/home.jsonc) calls the other two.</summary>
-    private static readonly string[] Pipelines = ["home", "sponsored", "trending_feed"];
+    private static readonly string[] Pipelines = ["editors_picks", "home", "shelves", "sponsored", "trending_feed"];
 
     private readonly SampleHost _host;
 
@@ -79,8 +79,10 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Contains(("BOOST_INVALID", "pipeline:trending_feed/nodes/editorial_boost/config/boosts/local_news"), errors);
         Assert.Contains(("BINDING_SETTINGS", "bindings:local/sources/user_store/data_fle"), errors);
         Assert.Contains(("SERVICE_SIGNATURE", "pipeline:trending_feed/nodes/engagement/config/model"), errors); // the node calls v3; the binding serves v4
-        Assert.Contains(("PIPELINE_CALL_FAILED", "pipeline:home/nodes/blend/config/organic"), errors); // the home page calls the pipeline that does not compile
-        Assert.Equal(4, errors.Count);
+        // The pages that call the pipeline that does not compile say so where they name it.
+        Assert.Contains(("PIPELINE_CALL_FAILED", "pipeline:home/nodes/blend/config/organic"), errors);
+        Assert.Contains(("PIPELINE_CALL_FAILED", "pipeline:shelves/nodes/content/config/pipelines/trending/pipeline"), errors);
+        Assert.Equal(5, errors.Count);
     }
 
     [Fact]
@@ -291,6 +293,63 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(body.Contains("assignment", StringComparison.Ordinal) ? new[] { "exp_home_slots/dense", "exp_local_boost/strong" } : [], assigned);
         Assert.Empty(home.Json["experiments"]!["ignored"]!.AsArray());
     }
+
+    /// <summary>
+    /// The page of shelves: each row is a shelf, and its items are the list the shelf's pipeline returned, called by
+    /// <c>PipelineColumns@1</c>. An item is on two shelves; only the sponsored shelf has track ids; a shelf no pipeline
+    /// fills is dropped; and the page's own operator (<c>DistinctHeads@1</c>) moves what a shelf above shows first
+    /// behind the head, with every list that goes with the ids, unless the experiment's arm turns the rule off.
+    /// </summary>
+    [Fact]
+    public async Task ThePageOfShelves_HasAListPerShelf_AndItsOwnRuleAcrossThem()
+    {
+        await using var factory = new WebApplicationFactory<Program>();
+        using var client = factory.CreateClient();
+
+        var (status, page) = await Post(client, "shelves", """{ "inputs": { "user_id": 1001, "region": "us" } }""");
+        var (_, plain) = await Post(client, "shelves", """{ "inputs": { "user_id": 1001, "region": "us" }, "assignment": ["exp_shelf_heads/as_ranked"] }""");
+        var (_, editors) = await Post(client, "editors_picks", """{ "inputs": { "user_id": 1001, "region": "us" } }""");
+        var (_, sponsored) = await Post(client, "sponsored", """{ "inputs": { "user_id": 1001, "region": "us" } }""");
+        var (_, trending) = await Post(client, "trending_feed", """{ "inputs": { "user_id": 1001, "region": "us" } }""");
+
+        Assert.True(status == HttpStatusCode.OK, page.ToJsonString());
+        Assert.Equal(new[] { "trending", "editors", "sponsored" }, Shelves(page).Select(s => s.Id)); // "archive" has no pipeline, and no items
+
+        // Without the rule, a shelf is its pipeline's result as it is.
+        var asRanked = Shelves(plain).ToDictionary(s => s.Id);
+        Assert.Equal(Ids(trending), asRanked["trending"].Items);
+        Assert.Equal(Ids(editors), asRanked["editors"].Items);
+        Assert.Equal(Ids(sponsored), asRanked["sponsored"].Items);
+        Assert.Equal(sponsored["items"]!.AsArray().Select(i => (double)(float)i!["columns"]!["bid"]!.GetValue<double>()),
+            asRanked["sponsored"].Scores.Select(s => (double)(float)s));
+        Assert.Equal(sponsored["items"]!.AsArray().Select(i => i!["columns"]!["track_id"]!.GetValue<string>()), asRanked["sponsored"].TrackIds);
+        Assert.Null(asRanked["trending"].TrackIds);
+        Assert.NotEmpty(asRanked["trending"].Items.Intersect(asRanked["editors"].Items)); // an item on two shelves
+
+        // With it, the editors' shelf starts with what the trending shelf does not show first, and its scores moved with its ids.
+        var ruled = Shelves(page).ToDictionary(s => s.Id);
+        var head = ruled["trending"].Items.Take(3).ToHashSet();
+        Assert.Equal(asRanked["trending"].Items, ruled["trending"].Items);
+        Assert.NotEmpty(asRanked["editors"].Items.Take(3).Intersect(head));
+        Assert.Empty(ruled["editors"].Items.Take(2).Intersect(head));
+        Assert.Equal(asRanked["editors"].Items.Order(), ruled["editors"].Items.Order()); // nothing dropped
+        var scoreOf = asRanked["editors"].Items.Zip(asRanked["editors"].Scores).ToDictionary(p => p.First, p => p.Second);
+        Assert.Equal(ruled["editors"].Items.Select(i => scoreOf[i]), ruled["editors"].Scores);
+        Assert.Equal(new[] { "exp_shelf_heads/as_ranked" }, Strings(plain["experiments"]!["assigned"]));
+    }
+
+    private sealed record Shelf(string Id, long[] Items, double[] Scores, string[]? TrackIds);
+
+    private static List<Shelf> Shelves(JsonNode result) => result["items"]!.AsArray().Select(n =>
+    {
+        var columns = n!["columns"]!;
+        return new Shelf(n["id"]!.GetValue<string>(),
+            columns["items"]!.AsArray().Select(i => i!.GetValue<long>()).ToArray(),
+            columns["item_scores"]!.AsArray().Select(i => i!.GetValue<double>()).ToArray(),
+            columns["track_ids"]?.AsArray().Select(i => i!.GetValue<string>()).ToArray());
+    }).ToList();
+
+    private static long[] Ids(JsonNode result) => result["items"]!.AsArray().Select(i => i!["id"]!.GetValue<long>()).ToArray();
 
     /// <summary>The home page on a copy of the workspace, edited, as <c>stratarec run</c> serves it with its trace.</summary>
     private async Task<JsonNode> RunHome(Action<string> edit)

@@ -178,6 +178,9 @@ public sealed class PipelineCall
     /// <summary>The operator appends the result's rows: the pipeline's keys must be of the caller's key type.</summary>
     internal bool AppendsRows { get; set; }
 
+    /// <summary>The key type the operator reads the result's ids as (<see cref="OperatorCompileContext.CallReadsKeys"/>); null when it said none.</summary>
+    internal EntityKeyType? ReadsKeys { get; set; }
+
     internal bool PassesInput(string name) => IndexOf(_inputs, name) >= 0;
 
     internal void AddInput(string name, ColumnType type) => _inputs.Add(new PipelineOutput(name, type));
@@ -196,6 +199,11 @@ public sealed class PipelineCall
         if (AppendsRows && KeyMismatch(callee) is { } key)
         {
             return key;
+        }
+
+        if (ReadsKeys is { } keys && ReadKeyMismatch(callee, keys) is { } read)
+        {
+            return read;
         }
 
         foreach (var input in _inputs)
@@ -247,6 +255,10 @@ public sealed class PipelineCall
     internal string? KeyMismatch(PipelineInterface callee) => callee.KeyType == CallerKeyType
         ? null
         : $"pipeline '{callee.PipelineId}' has {Name(callee.KeyType)} keys and '{Caller}' has {Name(CallerKeyType)} keys: its rows cannot be appended";
+
+    internal static string? ReadKeyMismatch(PipelineInterface callee, EntityKeyType read) => callee.KeyType == read
+        ? null
+        : $"pipeline '{callee.PipelineId}' has {Name(callee.KeyType)} keys, and its ids are read as {Name(read)}";
 
     internal static string? InputMismatch(PipelineInterface callee, string name, ColumnType given)
     {

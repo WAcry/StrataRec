@@ -659,7 +659,7 @@ internal sealed class RequestMemory
 
 其中生成式召回和大模型类算子（`GenerativeRetriever@1`、`LlmReranker@1`、`LlmAnnotator@1`）由扩展包 `StrataRec.Llm` 提供，其余属于核心标准算子库（第 16.1 节）。几个与生成式模型相关的规则在框架层面统一处理：
 
-**一个页面，几条流水线。** 一条流水线是一张候选表和一条时间轴，流水线之间的组合由算子完成：算子在编译时声明它调用的流水线（`TryCallPipeline`），执行时调用（`CallPipelineAsync`），拿到被调用流水线的结果行、输出列和 `output.values`。被调用的运行是同一个请求（请求 id、时间、实验分配，时间是节点剩下的预算），调用失败是一个结果。内置的 `PipelineSource@1` 把结果行并入候选；按位置安放、组成栏目、跨栏目的规则由使用方的算子按自己的规则写（宿主示例的 `SlotBlend@1`）。页面的结构因此是节点的配置，实验用补丁改它。决定和取舍见 `decisions.md` 的“流水线调用”。
+**一个页面，几条流水线。** 一条流水线是一张候选表和一条时间轴，流水线之间的组合由算子完成：算子在编译时声明它调用的流水线（`TryCallPipeline`），执行时调用（`CallPipelineAsync`），拿到被调用流水线的结果行、输出列和 `output.values`。被调用的运行是同一个请求（请求 id、时间、实验分配，时间是节点剩下的预算），调用失败是一个结果。内置的 `PipelineSource@1` 把结果行并入候选，`PipelineColumns@1` 对每一行调用一条流水线、把结果写进这一行的列表列（页面的行是栏目，栏目的内容是它的列表，同一个物品可以在几个栏目里）；按位置安放、跨栏目的规则由使用方的算子按自己的规则写（宿主示例的 `SlotBlend@1`、`DistinctHeads@1`）。页面的结构因此是节点的配置，实验用补丁改它。决定和取舍见 `decisions.md` 的“流水线调用”。
 
 1. **提示词用 Mustache 模板。** 模板写在产物里，引用列和 `ctx` 字段。Mustache 没有逻辑，提示词里不会出现第二种表达式语言；模板引用的名字在加载期按列和请求 Schema 检查。
 2. **成本上限带默认值。** 成对算子用 `max_pairs` 限制比较的对数，生成类算子用 `max_output_tokens` 限制输出长度，两者都有算子定义的默认值，可以在节点配置中调整。成对比较的数量随候选数平方增长，所以只在前 `window` 名里两两比较；窗口的对数 `window · (window − 1) / 2` 在加载时与 `max_pairs` 比较，超过是配置错误，请求期不截断（理由见 `decisions.md`）。`max_output_tokens` 随调用交给模型客户端，由客户端在生成时执行，因为只有它有分词器；它回报生成的 token 数和是否在上限处截断，引擎对所有服务调用统一计数（`stratarec.io.output_tokens`、`stratarec.io.truncated`）。

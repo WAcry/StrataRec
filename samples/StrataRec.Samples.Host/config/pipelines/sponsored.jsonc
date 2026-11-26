@@ -36,6 +36,8 @@
   },
   "output": {
     "limit_param": "top_k",
-    "columns": { "bid": "col.bid" }
+    // What only this pipeline's rows have: the campaign a click is billed to. A caller that keeps several pipelines' rows
+    // takes it for these rows alone (pipelines/shelves.jsonc).
+    "columns": { "bid": "col.bid", "track_id": "col.item.campaign ?? 'none'" }
   }
 }

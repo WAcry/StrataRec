@@ -136,6 +136,7 @@ public sealed class OperatorRegistry
     public static OperatorRegistry CreateDefault() => new OperatorRegistry()
         .Add(new Standard.MultiSourceRecallFactory())
         .Add(new Standard.PipelineSourceFactory())
+        .Add(new Standard.PipelineColumnsFactory())
         .Add(new Standard.ExpressionFilterFactory())
         .Add(new Standard.ExpressionScorerFactory())
         .Add(new Standard.CompositeMultiplierScorerFactory())

@@ -19,7 +19,7 @@ namespace StrataRec.IntegrationTests;
 public sealed class PipelineCallEndToEndTests
 {
     /// <summary>The called pipeline: the popular list's first rows with a bid, and how many it had.</summary>
-    private const string Promoted = """
+    internal const string Promoted = """
         {
           "pipeline_id": "promoted",
           "entity_key_type": "int64",
@@ -56,12 +56,12 @@ public sealed class PipelineCallEndToEndTests
         }
         """;
 
-    private const string Releases = """
+    internal const string Releases = """
         { "pipeline_id": "PIPELINE", "environment": "local", "catalog": "home_feed", "bindings": "local",
           "experiments": { "exp_PIPELINE": { "layer": "PIPELINE" } } }
         """;
 
-    private const string Experiments = """
+    internal const string Experiments = """
         { "experiment_id": "exp_PIPELINE", "pipeline_id": "PIPELINE", "owner": "team", "description": "Fewer rows.", "expires_at": "2099-12-31",
           "arms": { "control": {}, "few": { "params": { "top_k": 2 } } } }
         """;

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Diagnostics;
+using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
 using StrataRec.Expressions;
 using StrataRec.Pipeline.Planning;
@@ -562,6 +563,24 @@ public sealed class OperatorCompileContext
         if (call.Interface is { } callee && call.KeyMismatch(callee) is { } mismatch)
         {
             Error(configKey, "PIPELINE_CALL_KEY_TYPE", Sentence(mismatch), "call a pipeline whose 'entity_key_type' is this pipeline's");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Declares that the operator reads the ids of the result's rows as keys of <paramref name="type"/> (into a list
+    /// column, say), whatever this pipeline's own keys are: the pipeline's keys must be of that type.
+    /// </summary>
+    public bool CallReadsKeys(PipelineCall call, string configKey, EntityKeyType type)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+        call.ReadsKeys = type;
+        if (call.Interface is { } callee && PipelineCall.ReadKeyMismatch(callee, type) is { } mismatch)
+        {
+            Error(configKey, "PIPELINE_CALL_KEY_TYPE", Sentence(mismatch),
+                $"read them into a list of {(callee.KeyType == EntityKeyType.Int64 ? "int64" : "string")}, the key type of '{callee.PipelineId}'");
             return false;
         }
 

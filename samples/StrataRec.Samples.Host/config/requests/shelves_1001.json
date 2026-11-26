@@ -1,0 +1,5 @@
+{
+  "request_id": "req-shelves-1001",
+  "inputs": { "user_id": 1001, "region": "us" },
+  "assignment": []
+}

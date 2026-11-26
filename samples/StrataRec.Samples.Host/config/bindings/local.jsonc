@@ -51,6 +51,9 @@
     },
     // A built-in source next to the custom one: the editors' picks, a fixed list.
     "editorial": { "client": "memory_list@1", "items": [21, 22, 3, 23] },
+    // The shelves of the page of shelves (pipelines/shelves.jsonc), in the order the page shows them. A real one would be
+    // a service that picks a user's shelves; the pipeline would not change.
+    "shelf_list": { "client": "memory_list@1", "items": ["trending", "editors", "sponsored", "archive"] },
     // The sponsors' list, which the sponsored pipeline recalls from (pipelines/sponsored.jsonc).
     "sponsors": { "client": "memory_list@1", "items": [24, 2, 25, 26, 5, 27] },
     // stock@1 (Components/StockService.cs), a business service the StockFilter@1 node asks about its candidates. A call
