@@ -1,0 +1,39 @@
+name: soak
+
+# The slow loop: the generated differential tests with many more seeds than a change waits for. A failure prints its
+# seed; rerun it locally with the same variable, fix, and add the seed's case to the tests the fast loop runs.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  generated:
+    name: generated tests, more seeds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build StrataRec.sln -c Release
+
+      - name: Expressions against the reference interpreter
+        env:
+          STRATAREC_DIFF_SEEDS: 400
+        run: dotnet test --project tests/StrataRec.UnitTests -c Release --no-build --filter-class StrataRec.UnitTests.Expressions.DifferentialTests
+
+      - name: The unified plan against every combination's own compile
+        env:
+          STRATAREC_GENERATED_SEEDS: 3000
+        run: dotnet test --project tests/StrataRec.IntegrationTests -c Release --no-build --filter-class StrataRec.IntegrationTests.GeneratedExperimentTests

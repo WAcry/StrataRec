@@ -14,9 +14,13 @@ artifacts/
 /out/
 .DS_Store
 
-# Local agent tooling (worktrees, settings)
-.claude/
+# Local agent tooling (worktrees, settings). The skills are the repository's: .claude/skills links to .agents/skills.
+.claude/*
+!.claude/skills
 
 # Artifact stores the READMEs build into (stratarec build -s store)
 /store/
 /samples/StrataRec.Samples.Host/store/
+
+# Python bytecode of the scripts
+__pycache__/

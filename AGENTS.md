@@ -1,50 +1,65 @@
 # AGENTS.md：在 StrataRec 上工作
 
-StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：列式候选表、编译一次的算子流水线、CEL 风格表达式 `ColumnExpr`，以及用 RFC 7396 合并补丁表达的多层实验。
+StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：一次推荐请求的召回、特征、打分、重排和实验，是一条编译一次、按列执行的流水线，全部行为由标准格式的配置描述。
 
-开始改动之前先读 `docs/development.md`：项目的核心目标、判断方案的标准和取舍的方向（可演进性、更简单的方案、性能与分配、缺失与确定性、内部类型与边界类型、配置与错误信息、兼容与版本、范围、测试、文档），以及背后的理由。
+怎么实现由你决定。这个文件只定三样东西：目标（第 1 节）、不能打破的边界（第 2、3 节）、怎么证明改对了（第 4 节）。系统现在怎么做，读代码和测试；仓库里没有、也不要新写描述实现的文档。
 
-- `docs/development.md`：开发理念、判断标准和取舍的方向，适用于每一次改动。
-- `docs/decisions.md`：实现中的决定和理由。改变设计或做出取舍时在这里补一条。
-- `docs/design.md`：整体设计（最初的草稿，优先级最低），代码注释中的 “design 4.6” 指它的章节号。
+## 1. 目标和取舍
 
-## 构建、测试、运行
+判断任何方案只看三条（理由和展开在 `docs/development.md`）：
+
+1. **好用。** 配置和接口容易写对，错误说出位置和修法，排查有工具。使用者写直观的代码就得到高性能，不需要学内部约定。
+2. **好改。** 一条规则只有一个实现、一个所有者；漏改由编译、校验或测试暴露；不为眼前方便堆特例。
+3. **快且省。** 优化的是随候选数和特征数增长的开销；请求级的固定开销交给 GC。
+
+冲突时：按行、按特征的路径上，性能可以换来集中在一处、有测试的复杂度；其余地方简单优先；任何时候都不让使用者为了快去适应框架。做一项功能之前先问它在这三条上的收益值不值它带来的复杂度，不值就简化、推迟或不做，并记下理由。
+
+**不做**（遇到这类需求，说明并推回；完整的清单和理由在 `docs/decisions/scope.md`）：流量分配（归实验平台）；个人数据保护（归部署环境）；内置模型推理运行时；为业务形态特化的概念（栏目、广告位、页面由使用方用行、列、调用和自己的算子表达）；请求状态的对象池；1.0 之前的兼容层和旧格式读取器；依赖部署环境的测量进 CI。
+
+## 2. 不变量和依赖方向
+
+全局不变量、它们的所有者和守住它们的测试在 `docs/architecture.md`（一页，改执行器、候选表、计划编译、外部调用之前读）。最常被打破的几条：
+
+- 缺失是显式的：不把缺失、非有限值、越界值静默变成 0 或别的合法值。
+- 失败的尝试不留痕迹；超时之后才到的结果不采用。
+- 编译期接受的，运行时就能执行；校验做不完就拒绝，不放行。请求期不解析配置、不按名字查找；计划不可变。
+- 相同的计划、输入、时间、外部回答和臂，得到相同的结果；随机只来自请求种子的稳定哈希。
+- 每个边界交付使用者声明的类型，框架不做隐式转换。
+- 配置只用广泛使用的标准（JSONC、RFC 7396、RFC 6901、JSON Schema、CEL 语法、Mustache），严格绑定；错误带精确位置和一句修法，一个错误只报一次。
+- `src/` 里没有 LINQ，热路径不按行分配（`BannedSymbols.txt` 在构建时强制）。
+
+项目的依赖方向在 `docs/architecture.md` 的表里，只能指向表中更靠上的项目，核心不引用扩展包（`StrataRec.Redis`、`StrataRec.Llm`）。
+
+## 3. 术语和文字
+
+- 一个概念一个词，文档、配置、公开 API、内部类型相同：`docs/glossary.md`。最容易混的：臂（arm，不写桶、bucket）和变体（variant，节点在某些臂组合下的编译结果）；运行（run，一条流水线对一个请求的一次执行）、尝试（attempt，一个节点的一次执行）和调用（call，对服务或另一条流水线）；行（row）和结果里的项（item）；列（column）和数据源的字段（field）。
+- 文档用中文；代码、标识符、代码注释和提交说明用英文。文档里的反引号只包仓库里现有的名字（门禁会查），已经删掉的、设想中的名字不加反引号。
+- 注释写这段代码为什么这样、契约是什么，不复述代码，不留 `TODO`、`FIXME`、`HACK`。公开类型的 XML 注释是契约；会序列化的配置成员，注释就是 JSON Schema 里给使用者看的描述。
+- 决定和理由记在 `docs/decisions/<领域>.md`，只记读代码看不出来的：为什么、没选的方案、代价、刻意不做的事。怎么判断该不该记、怎么写：`.agents/skills/record-decision`。
+
+## 4. 验证
 
 ```sh
-dotnet build StrataRec.sln              # 警告视为错误
-dotnet test StrataRec.sln               # 单元测试 + 集成测试
-dotnet run --project src/StrataRec.Cli -- --help
+dotnet build StrataRec.sln -c Release                         # 警告视为错误；无改动约 3 秒
+dotnet test --project tests/StrataRec.UnitTests -c Release    # 内环，约 10 秒；只跑一类加 --filter-class <类的全名>
+scripts/check.sh                                              # 交付之前：构建、门禁、全部测试、慢测试检查，约 1 分钟
+scripts/red-on-base.sh HEAD -- --project tests/StrataRec.UnitTests --filter-class <类>   # 证明新测试在改动之前的代码上失败
 ```
 
-测试是 xUnit.net v3，跑在 Microsoft Testing Platform 上（global.json）：只跑一部分用 `dotnet test --project <测试项目> --filter-class <类的全名>` 或 `--filter-method`。改动完成之前必须全部通过。测试放在被改动代码旁边：组件测试放 `tests/StrataRec.UnitTests/<Area>/`，基于 `samples/` 的端到端测试放 `tests/StrataRec.IntegrationTests`；宿主示例的测试在 `tests/StrataRec.Samples.Host.Tests`（它带上 ASP.NET Core 共享框架，见 `docs/decisions.md`）。
+- 修缺陷先有一个失败的测试，并用 `scripts/red-on-base.sh` 确认它在修复之前的代码上失败；在旧代码上也通过的测试证明不了什么。
+- 测不变量和边界，不照着实现抄一遍期望值。编译和表达式这类复杂逻辑用生成式的差分测试（`GeneratedExperimentTests`、`DifferentialTests`，种子数由 `STRATAREC_GENERATED_SEEDS`、`STRATAREC_DIFF_SEEDS` 加大）。
+- 测试控制调用何时返回，不和时钟赛跑：不新增 `Thread.Sleep`、`Task.Delay`（门禁按存量计数，只许减少）。新的边界情况优先加进已有的 `[Theory]`，不复制一套夹具。
+- 测试放在被改动代码旁边：`tests/StrataRec.UnitTests/<Area>/`；基于 `samples/` 的端到端测试在 `tests/StrataRec.IntegrationTests`；宿主示例的在 `tests/StrataRec.Samples.Host.Tests`。
+- 改了配置类型或它们的 XML 注释，重新生成两个示例的 Schema（测试失败的信息里有命令）。改引擎的公开 API 时，`samples/StrataRec.Samples.Host` 和 `docs/guide/` 一起改。
+- 改了按行、按特征的路径：`.agents/skills/perf-check`。
 
-## 项目结构
+## 5. 什么时候停下来问人
 
-| 项目 | 职责 |
-| --- | --- |
-| `StrataRec.Core` | 类型系统、`CandidateTable`、`RowSelection`、列缓冲、位图、`OutputBindings`、`RequestMemory`、稳定哈希、服务契约 `IServiceClient` |
-| `StrataRec.Artifacts` | JSON 标准（JSONC、RFC 8785、RFC 7396、RFC 6901）、产物模型、内容寻址存储 |
-| `StrataRec.Expressions` | `ColumnExpr`：解析、类型与可空性检查、IR、向量化后端 |
-| `StrataRec.Features` | 特征目录、拉取规划、连接器、暂存与回填 |
-| `StrataRec.Models` | 内置的模型客户端（`IServiceClient` 的实现） |
-| `StrataRec.Logging` | 漏斗组、探针、协调采样、异步日志管道 |
-| `StrataRec.Pipeline` | 节点模型、效果、算子、执行器 |
-| `StrataRec.Experiments` | 外部分配的映射、补丁校验、足迹、联合计划、触发 |
-| `StrataRec.Hosting` | `IRecEngine`、计划加载与切换、请求输入与结果的 JSON、DI 与启动时加载 |
-| `StrataRec.CommandLine` | `stratarec` 各命令做成的库：宿主二进制用自己的组件调用全部命令 |
-| `StrataRec.Redis` | `redis@1`：特征源 `cache` 供给方式和服务缓存的分布式层（StackExchange.Redis），核心包不依赖它 |
-| `StrataRec.Llm` | 生成式与大模型类算子（`LlmReranker@1`、`LlmAnnotator@1`、`GenerativeRetriever@1`）、Mustache 提示词；依赖 `StrataRec.Pipeline`，核心包不依赖它 |
-| `StrataRec.Cli` | `stratarec` 命令行工具：只是用内置组件、`StrataRec.Llm` 和 `redis@1` 调用 `StrataRec.CommandLine` |
+- 用户给的是做法而不是目的，而你看到达成同一目的的更简单的路：先说出来（`docs/development.md` 第 3 节）。
+- 要新增或修改公开 API、配置格式、持久化格式：动手之前在对话里给 10–20 行使用者视角的样例（配置片段或调用代码），内部怎么做不用预览。
+- 一个子需求或罕见情况让改动跨了很多项目、或者要加特例才做得下来：`scripts/check.sh` 末尾的规模提示亮了就停，摆出代价和裁剪的方案。
+- 处理评审意见和缺陷报告：逐条判断，不逐条打补丁（`.agents/skills/handle-findings`）。交付之前可以自查：`.agents/skills/north-star-review`。
 
-依赖关系按表格自上而下，不允许引入循环引用。
+## 6. 规则文件单独提交
 
-`samples/` 下有两个示例：`home_feed` 是演示全部功能的工作区（CLI 和集成测试都用它）；`StrataRec.Samples.Host` 是在 ASP.NET Core 服务里嵌入引擎、三个扩展点共八个自定义组件的宿主示例，属于解决方案，改动引擎公开 API 时要一起改。
-
-## 约定
-
-理念和理由在 `docs/development.md`，具体的决定在 `docs/decisions.md`，这里只列操作上的约定。
-
-- C# 14、文件级命名空间、启用 nullable、`TreatWarningsAsErrors`。私有字段用 `_camelCase`。
-- `src/` 中禁止 LINQ（理由见 `docs/development.md` 第 4 节），由 `BannedSymbols.txt`（RS0030）和移除隐式 `System.Linq` using（`Directory.Build.targets`）在构建时强制。
-- 改了配置类型，或改了会序列化的成员的 XML 文档注释（它们是 Schema 里的描述），要重新生成示例的 Schema，否则测试失败（失败信息里有命令）：`dotnet run --project src/StrataRec.Cli -- schema --out samples/home_feed/schemas`，以及在 `samples/StrataRec.Samples.Host` 下 `dotnet run -- stratarec schema --out config/schemas`。
-- CI 只用 Linux（`.github/workflows/ci.yml`），用 SDK 10 构建，测试跑在 .NET 10 运行时上。
+`AGENTS.md`、`.agents/skills/`、`scripts/`、`.github/`、`BannedSymbols.txt`、`.editorconfig` 是裁判。改它们的提交不同时改 `src/`、`tests/`、`samples/`（门禁按提交检查）：撞上门禁时修代码，不在同一个改动里放宽门禁；确实该改规则时单独提交、写明理由。`docs/` 随代码一起改。
