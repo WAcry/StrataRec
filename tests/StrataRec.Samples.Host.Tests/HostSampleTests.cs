@@ -335,10 +335,13 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(pinned.Count, pinned.Select(i => i.Id).Distinct().Count());
         Assert.True(pinned[0].Sponsored);
 
-        // No sponsored rows: the sponsored pipeline is not called.
-        var none = await RunHome(root => Edit(Path.Combine(root, home), "\"sponsored_every\": 3", "\"sponsored_every\": 0"));
-        Assert.Equal(new[] { "trending_feed" }, none["calls"]!.AsArray().Select(c => c!["pipeline"]!.GetValue<string>()));
-        Assert.DoesNotContain(HomeItems(none), i => i.Sponsored);
+        // No sponsored rows, or a page with no place for one: the sponsored pipeline is not called.
+        foreach (var (from, to) in new[] { ("\"sponsored_every\": 3", "\"sponsored_every\": 0"), ("\"page_size\": 10", "\"page_size\": 3") })
+        {
+            var none = await RunHome(root => Edit(Path.Combine(root, home), from, to));
+            Assert.Equal(new[] { "trending_feed" }, none["calls"]!.AsArray().Select(c => c!["pipeline"]!.GetValue<string>()));
+            Assert.DoesNotContain(HomeItems(none), i => i.Sponsored);
+        }
     }
 
     /// <summary>

@@ -87,7 +87,12 @@ public sealed partial class RecEngine
                 }
 
                 // Calls end in any order: listed by who called, so the same request lists them alike.
-                _runs?.Sort(static (a, b) => string.CompareOrdinal(a.CalledBy, b.CalledBy));
+                _runs?.Sort(static (a, b) =>
+                {
+                    // By who called, then by the call's number: as text, a node's tenth call would come before its third.
+                    var byCaller = a.CalledBy.AsSpan(0, a.CalledBy.LastIndexOf('#')).CompareTo(b.CalledBy.AsSpan(0, b.CalledBy.LastIndexOf('#')), StringComparison.Ordinal);
+                    return byCaller != 0 ? byCaller : a.Sequence.CompareTo(b.Sequence);
+                });
 
                 var ignored = Ignored(result.Experiments.Ignored);
 
@@ -445,7 +450,8 @@ public sealed partial class RecEngine
 
         if (fallback is not null)
         {
-            seen.Add(fallback.Plan.PipelineId);
+            // What the fallback pipeline's nodes call, of any of its arms (it runs none, so this takes a few more for
+            // callable than are). The fallback itself is not marked seen: a node may call it too, and then it runs its arms.
             foreach (var called in fallback.Plan.Calls)
             {
                 pending.Push(called);

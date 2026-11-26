@@ -419,8 +419,10 @@ public sealed class OperatorContext : IServiceCallScope
     /// input the pipeline declares gets this request's input of the same name, when it has one.
     /// </param>
     /// <param name="timeout">
-    /// The most time the called run gets, when less than what is left of the node's budget: for a call the node can do
-    /// without (a page's sponsored rows), so that a slow one fails as a result while the node still has time to go on.
+    /// The called run's deadline, when less than what is left of the node's budget: for a call the node can do without
+    /// (a page's sponsored rows), so that a slow one ends while the node still has time to go on. It is the run's
+    /// deadline as a request's is, not a time after which its answer is thrown away: a pipeline that serves what it has
+    /// when a node of its own times out (<c>on_failure: skip</c>) answers so here too.
     /// </param>
     /// <returns>
     /// The result. A call that cannot be answered is a failed result, never an exception: the pipeline is not served, does

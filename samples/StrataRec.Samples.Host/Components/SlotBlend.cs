@@ -139,11 +139,20 @@ public sealed class SlotBlendFactory : IOperatorFactory
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
-            // Started one after the other, awaited afterwards: the two pipelines run at once, and the calls are numbered
-            // in this order every time, which is what their seeds are derived from. No sponsored rows, no call.
+            // What the page can hold is known before anything is called: a page without a place for a sponsored row (none
+            // asked for, or a page no longer than the gap) does not call the sponsored pipeline, and an empty one calls none.
+            var table = context.Table;
+            var most = Math.Min(Count(context.Param(limit)), table.FreeRows);
             var gap = Count(context.Param(every));
+            if (most == 0)
+            {
+                return;
+            }
+
+            // Started one after the other, awaited afterwards: the two pipelines run at once, and the calls are numbered
+            // in this order every time, which is what their seeds are derived from.
             var organicCall = context.CallPipelineAsync(organic).AsTask();
-            var sponsoredCall = gap > 0 ? context.CallPipelineAsync(sponsored, timeout: sponsoredTimeout).AsTask() : null;
+            var sponsoredCall = gap > 0 && most > gap ? context.CallPipelineAsync(sponsored, timeout: sponsoredTimeout).AsTask() : null;
             var list = await organicCall;
             var ads = sponsoredCall is null ? null : await sponsoredCall;
             if (!list.Succeeded)
@@ -168,8 +177,6 @@ public sealed class SlotBlendFactory : IOperatorFactory
 
             // The placement: organic rows in their order, a sponsored one after every `gap` of them. A row source appends
             // only keys the request has not seen: one already there (an earlier node's) is passed over, and takes no place.
-            var table = context.Table;
-            var most = Math.Min(Count(context.Param(limit)), table.FreeRows);
             var keys = new List<long>(most);
             var scores = new List<ScalarValue>(most);
             var flags = new List<bool>(most);

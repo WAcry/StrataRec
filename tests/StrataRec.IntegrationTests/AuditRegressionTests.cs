@@ -192,7 +192,7 @@ public sealed class AuditRegressionTests
     public async Task AnOutputColumnReadingANodesVersion_HasThatNodeAsItsProducer()
     {
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"score\": \"col.score.final\",", "\"score\": \"col.score.final\",\n      \"fused\": \"col.score.final@fusion\",\n      \"doubled\": \"col.score.final@fusion * 2.0\","));
+            "\"score\": \"col.score.final\",", "\"score\": \"col.score.final\",\n      \"fused\": \"col.score.final@fusion\",\n      \"doubled\": \"col.score.final@fusion * 2.0\",\n      \"scaled\": \"col.score.final@fusion * param.quality_weight\",\n      \"weighted\": \"col.score.final * param.quality_weight\","));
         var engine = new RecEngine(host.Environment);
         Assert.True(engine.Load(host.Request).Applied);
 
@@ -204,6 +204,7 @@ public sealed class AuditRegressionTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(("engagement_boost", "fusion", "fusion"), (result.ColumnProducers!["score"], result.ColumnProducers["fused"], result.ColumnProducers["doubled"]));
+        Assert.Equal(("fusion", "engagement_boost"), (result.ColumnProducers["scaled"], result.ColumnProducers["weighted"])); // a parameter beside the column is no second producer
     }
 
     /// <summary>A pipeline whose output returns a column <paramref name="times"/> times, under as many names.</summary>

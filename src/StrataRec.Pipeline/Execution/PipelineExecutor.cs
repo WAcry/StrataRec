@@ -268,6 +268,12 @@ internal sealed class RequestState
     /// <summary>Who called the run (<see cref="PipelineRequest.CalledBy"/>); null for a run of the request's own pipeline.</summary>
     public string? CalledBy { get; init; }
 
+    /// <summary>
+    /// Where the batches of the output's taps start in <see cref="Batches"/>, once they fire: a run aborted after that
+    /// (the caller cancelled while the result was put together) takes them back, and delivers what its nodes logged.
+    /// </summary>
+    public int? OutputBatchesFrom { get; set; }
+
     private Dictionary<string, int>? _pipelineCalls;
 
     /// <summary>
@@ -534,6 +540,11 @@ internal sealed class PipelineExecutor
             }
 
             EndNodeSpan(state, position, reason);
+            if (state.OutputBatchesFrom is { } from && state.Batches is { } batches && batches.Count > from)
+            {
+                batches.RemoveRange(from, batches.Count - from); // the output's taps: rows logged as returned, which they were not
+            }
+
             var aborted = Failed(plan, request, reason, start, state.Outcomes, state.Triggered, state.NonFinite, state.Counters.OutOfRange);
             if (recorder is not null)
             {
@@ -1328,6 +1339,26 @@ internal sealed class PipelineExecutor
         }
     }
 
+    /// <summary>The column an expression reads, when it reads exactly one; null when none or several.</summary>
+    private static Symbol? OnlyColumn(IReadOnlyList<Symbol> reads)
+    {
+        Symbol? only = null;
+        for (var i = 0; i < reads.Count; i++)
+        {
+            if (reads[i].Kind == SymbolKind.Column)
+            {
+                if (only is not null)
+                {
+                    return null;
+                }
+
+                only = reads[i];
+            }
+        }
+
+        return only;
+    }
+
     /// <summary>The node whose version output column <paramref name="name"/> reads (<c>col.x@node</c>), or null.</summary>
     private static string? PinnedProducer(OutputPlan output, string name)
     {
@@ -1437,18 +1468,22 @@ internal sealed class PipelineExecutor
                 }
             }
 
-            if (expression.Reads.Count == 1 && expression.Reads[0] is { Kind: SymbolKind.Column, FixedSlot: < 0 } symbol)
+            // The one column the expression reads, whatever parameters and request values it reads beside it, as a tap's
+            // lineage has it.
+            if (OnlyColumn(expression.Reads) is { } symbol)
             {
-                var producer = state.Bindings.Producer(symbol.Id);
-                if (producer >= 0)
+                if (symbol.FixedSlot < 0)
                 {
-                    producers[name] = plan.Nodes[producer].NodeId;
+                    var producer = state.Bindings.Producer(symbol.Id);
+                    if (producer >= 0)
+                    {
+                        producers[name] = plan.Nodes[producer].NodeId;
+                    }
                 }
-            }
-            else if (expression.Reads.Count == 1 && expression.Reads[0] is { Kind: SymbolKind.Column, FixedSlot: >= 0 }
-                && PinnedProducer(output, name) is { } pinned && TapCapture.Produced(state, pinned))
-            {
-                producers[name] = pinned; // col.x@node always reads that node's version, as a tap's lineage has it
+                else if (PinnedProducer(output, name) is { } pinned && TapCapture.Produced(state, pinned))
+                {
+                    producers[name] = pinned; // col.x@node always reads that node's version
+                }
             }
         }
 
@@ -1467,18 +1502,13 @@ internal sealed class PipelineExecutor
 
         // The rows are about to be logged as returned (the output's taps), and the result handed over: not for a caller that
         // cancelled while it was built (the output's features and values are awaited above). A cancellation that lands
-        // while the taps fire takes back what they captured: the abort delivers what the nodes logged, never an exposure
-        // nobody received.
+        // later, while the taps fire or the result is put together, is seen where the result is handed over, and the abort
+        // takes back what the output's taps captured: it delivers what the nodes logged, never an exposure nobody received.
         cancellationToken.ThrowIfCancellationRequested();
         if (state.Batches is { } captured)
         {
-            var before = captured.Count;
+            state.OutputBatchesFrom = captured.Count; // what the abort takes back (see the catch of ExecuteAsync)
             await TapCapture.OutputAsync(state, rows, cancellationToken).ConfigureAwait(false);
-            if (cancellationToken.IsCancellationRequested)
-            {
-                captured.RemoveRange(before, captured.Count - before);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
         }
 
         var ids = new EntityKey[count];

@@ -811,6 +811,28 @@ public sealed class PipelineCallEndToEndTests
     }
 
     /// <summary>
+    /// A pipeline that is both called and the fallback pipeline, and calls another itself, is still one whose arms a
+    /// request may force (third review: following the fallback's calls marked it seen, and its own arms were unknown).
+    /// </summary>
+    [Fact]
+    public async Task AForcedArmOfAPipelineThatIsCalledAndTheFallback_IsAccepted()
+    {
+        var host = Host(more: root =>
+        {
+            File.WriteAllText(Path.Combine(root, "pipelines", "leaf.jsonc"), Promoted.Replace("\"pipeline_id\": \"promoted\"", "\"pipeline_id\": \"leaf\"", StringComparison.Ordinal));
+            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"nodes\": {",
+                "\"nodes\": {\n\"sub\": { \"order\": 150, \"op\": \"PipelineSource@1\", \"on_failure\": \"skip\", \"config\": { \"pipeline\": \"leaf\", \"limit_param\": \"top_k\" } },");
+            ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"pipeline_id\": \"feed\",", "\"pipeline_id\": \"feed\",\n  \"fallback_pipeline\": \"promoted\",");
+        });
+        var engine = EngineWith(host, null, null, "leaf", "promoted", "feed");
+
+        var result = await engine.ExecuteAsync(Request("feed", force: ["exp_promoted/few"]), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains("exp_promoted/few", result.Experiments.Assigned);
+    }
+
+    /// <summary>
     /// A run a called run called says the whole path of calls in its logs: a pipeline called twice numbers its own calls
     /// alike, and its two runs' calls were both <c>feed/promoted#0</c> (second review).
     /// </summary>
