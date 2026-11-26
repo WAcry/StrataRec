@@ -6,16 +6,16 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec publish</c>: the smallest release controller of design 10.1 item 3, without staged rollout (its emergency
+/// <c>stratarec publish</c>: the smallest release controller, without staged rollout (its emergency
 /// stop is <see cref="RevokeCommand"/>). It points the manifest's (pipeline, environment) at the manifest, in the pointer
 /// files of the store's directory (<see cref="FileSystemManifestSource"/>), which nodes serving releases poll.
 /// </summary>
 /// <remarks>
 /// <para>A pointer only moves forward and only to something a node can read: every artifact of the manifest must be in the
 /// store and read as a node reads it, and its <c>seq</c> must be greater than that of the manifest the pointer names now (a
-/// rollback is a new manifest with a greater <c>seq</c>, design 10.2). A manifest file is stored first, under the id
+/// rollback is a new manifest with a greater <c>seq</c>). A manifest file is stored first, under the id
 /// <c>build</c> gives it. Capabilities are not checked: the binary that publishes need not be the one that serves, and a
-/// node that lacks one reports the manifest <c>incompatible</c> and keeps its plan (design 10.4).</para>
+/// node that lacks one reports the manifest <c>incompatible</c> and keeps its plan.</para>
 /// <para>Two publishes of one pointer on one machine take turns (a lock file next to the pointer); the pointer itself is
 /// replaced atomically, so a node reads the old pointer or the new one.</para>
 /// </remarks>
@@ -175,7 +175,7 @@ internal static class PublishCommand
                         ? "sequence numbers end there (2^53 - 1, the largest safe integer), and nodes that applied it take nothing lower: " +
                           "release under another environment name"
                         : $"build it again without --seq, which makes the next release of what is published, or with --seq {published.Seq + 1} or higher; " +
-                          "a rollback is a new build too (design 10.2)");
+                          "a rollback is a new build too");
                 return null;
             }
         }

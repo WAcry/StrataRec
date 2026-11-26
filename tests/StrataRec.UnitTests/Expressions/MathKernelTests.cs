@@ -5,7 +5,7 @@ namespace StrataRec.UnitTests.Expressions;
 /// <summary>
 /// The transcendental kernels must give every lane the same bits as the scalar entry point, whatever its neighbours
 /// hold: dead rows contain garbage, the row domain depends on the live ratio, and hoisted or constant-folded values must
-/// match per-row ones (design 5.7, 7.7).
+/// match per-row ones.
 /// </summary>
 public class MathKernelTests
 {

@@ -17,7 +17,7 @@ using StrataRec.Features.Local;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The request read path of cache groups (design 6.6 <c>cache</c>): everything a request does with a cache source is here.
+/// The request read path of cache groups: everything a request does with a cache source is here.
 /// </summary>
 /// <remarks>
 /// <para><b>Tiers.</b> A cache read starts as a local read (<c>FeatureFetcher.Local.cs</c>): the same rows, one lookup of
@@ -41,7 +41,7 @@ namespace StrataRec.Features.Runtime;
 /// without any field as an absent record (negative caching). A record's version is when the connector call started, so
 /// a slow call never replaces what a later one wrote. A miss fetches every field of the table, not only the ones the
 /// node needs, so that the records it writes back are complete.</para>
-/// <para><b>Replay</b> (design 13.4). A recording request records each cache read as one feature call: its keys (the
+/// <para><b>Replay</b>. A recording request records each cache read as one feature call: its keys (the
 /// keys a fetch of the same rows takes, in the same order), the values it served whichever tier they came from, and how
 /// it ended. A replay answers cache groups like local ones, through the fetch path from the recording, so it never
 /// touches a table, a store or a connector.</para>
@@ -597,7 +597,7 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// What became of each miss once the connector has answered or failed (design 6.6 <c>cache</c> item 4): a key the
+    /// What became of each miss once the connector has answered or failed: a key the
     /// connector did not answer is served stale if a tier has a record within <c>stale_if_error_ms</c> (the newer one),
     /// and fails otherwise.
     /// </summary>
@@ -1245,7 +1245,7 @@ public sealed partial class FeatureFetcher
         public readonly void List<T>(int field, ReadOnlySpan<T> value)
             where T : unmanaged
         {
-            // A float list holding NaN or ±inf is replaced as a whole, as a float is (design 4.3).
+            // A float list holding NaN or ±inf is replaced as a whole, as a float is.
             var finite = typeof(T) == typeof(float) ? ColumnValues.AllFinite(MemoryMarshal.Cast<T, float>(value))
                 : typeof(T) != typeof(double) || ColumnValues.AllFinite(MemoryMarshal.Cast<T, double>(value));
             ListValue(field, value, finite);

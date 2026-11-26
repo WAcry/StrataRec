@@ -12,13 +12,13 @@ public static class ExpressionErrorCodes
     /// <summary>The source exceeds <see cref="ExpressionCompiler.MaxSourceLength"/> characters.</summary>
     public const string TooLong = "EXPR_TOO_LONG";
 
-    /// <summary>Nesting exceeds <see cref="CompileOptions.MaxDepth"/> (design 7.9).</summary>
+    /// <summary>Nesting exceeds <see cref="CompileOptions.MaxDepth"/>.</summary>
     public const string TooDeep = "EXPR_TOO_DEEP";
 
     /// <summary>A name that is neither a symbol of the scope nor a <c>let</c> binding.</summary>
     public const string UnknownName = "EXPR_UNKNOWN_NAME";
 
-    /// <summary>A call of a function outside the built-in whitelist (design 7.6).</summary>
+    /// <summary>A call of a function outside the built-in whitelist.</summary>
     public const string UnknownFunction = "EXPR_UNKNOWN_FUNCTION";
 
     /// <summary><c>lookup()</c> names a table the scope does not provide.</summary>
@@ -36,7 +36,7 @@ public static class ExpressionErrorCodes
     /// <summary>A <c>let</c> binding that shadows a namespace, a function or another binding.</summary>
     public const string InvalidLet = "EXPR_INVALID_LET";
 
-    /// <summary>The result may be missing but the site requires a value (design 7.4 rule 4).</summary>
+    /// <summary>The result may be missing but the site requires a value.</summary>
     public const string NullableResult = "EXPR_NULLABLE_RESULT";
 
     /// <summary>A request-level site (<c>when</c>, funnel key) reads a candidate column.</summary>

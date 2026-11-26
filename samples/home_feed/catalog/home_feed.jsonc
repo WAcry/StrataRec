@@ -1,4 +1,4 @@
-// Features of the home feed (design 6.3). A feature with "default" is non-nullable; without one it is T?.
+// Features of the home feed. A feature with "default" is non-nullable; without one it is T?.
 {
   "$schema": "../schemas/catalog.schema.json",
   "catalog_id": "home_feed",
@@ -6,10 +6,10 @@
     "user":   { "key": "ctx.request.user_id" },
     "item":   { "key": "col.entity_id" },
     "author": { "key": "col.item.author_id" },
-    // A key of two parts (design 6.2): the item in the request's country. Per candidate, since one part is per row; a
+    // A key of two parts: the item in the request's country. Per candidate, since one part is per row; a
     // request without a country has no key, so its boost is the default.
     "item_country": { "key": ["col.entity_id", "ctx.request.country"] },
-    // A key read from another source (design 6.2): the geo service gives a country's sales region, and the regional
+    // A key read from another source: the geo service gives a country's sales region, and the regional
     // weights are kept per region. The region is fetched once the country's record is stored, concurrently with recall;
     // without a country, or for a country without a region, there is no region key and the weight is the default.
     "country": { "key": "ctx.request.country" },
@@ -21,7 +21,7 @@
   "features": {
     "user.ctr_30d":        { "type": "float32", "source": "user_store", "field": "u_ctr_30d", "default": 0.02 },
     "user.tenure_days":    { "type": "float32", "source": "user_store", "field": "u_tenure_d", "default": 0.0 },
-    // The user tower's output, which the two-tower recall searches with (design 5.4); a user without one (an anonymous
+    // The user tower's output, which the two-tower recall searches with; a user without one (an anonymous
     // request, a new user) searches with the cold-start vector.
     "user.embedding":      { "type": "list<float32,3>", "source": "user_store", "field": "u_emb", "default": [0.0, 0.0, 1.0] },
     "item.clicks_7d":      { "type": "float32", "source": "item_store", "field": "i_clk_7d", "default": 0.0 },
@@ -40,7 +40,7 @@
   },
   "derived_features": {
     "item.smoothed_ctr":    { "type": "float32", "expr": "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)" },
-    // Model inputs are plain references; transformations live here so training and serving share them (design 6.9).
+    // Model inputs are plain references; transformations live here so training and serving share them.
     "author.log_followers": { "type": "float32", "expr": "log1p(col.author.followers)" }
   }
 }

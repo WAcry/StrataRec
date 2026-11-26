@@ -130,7 +130,7 @@ public sealed class ArmAnalyzerTests
     [Fact]
     public void PathsOutsideThePatchableView_AreRejected_WithWhatIsPatchable()
     {
-        // The rule is the engine's, the same in every repository (design 11.4): policy.jsonc no longer narrows or widens it.
+        // The rule is the engine's, the same in every repository: policy.jsonc no longer narrows or widens it.
         var (_, diagnostics) = Analyze("""{ "entity_key_type": "string" }""");
 
         var error = Assert.Single(diagnostics.Items);

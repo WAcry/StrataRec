@@ -11,7 +11,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Hosting;
 
 /// <summary>
-/// The node side of releases (design 10.1 item 4, 10.3) for <see cref="ServiceCollectionExtensions.AddStrataRec"/> with
+/// The node side of releases for <see cref="ServiceCollectionExtensions.AddStrataRec"/> with
 /// <see cref="StrataRecOptions.Releases"/>: loads the manifest each pipeline's pointer names before the host starts, then
 /// polls the pointers and loads each new manifest in the background (<see cref="ReleaseOptions"/> has the schedule).
 /// </summary>
@@ -154,7 +154,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
             }
         }
 
-        // The fallbacks of the plans served now (a fallback that is not served never happens, design 5.6), and the inputs
+        // The fallbacks of the plans served now (a fallback that is not served never happens), and the inputs
         // a served fallback would fail requests on, as for a workspace.
         var checks = new DiagnosticBag();
         foreach (var state in _pipelines)
@@ -460,7 +460,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     }
 
     /// <summary>
-    /// The pipelines a served pipeline's nodes call (design 3.4): one this host does not serve fails every such call (an
+    /// The pipelines a served pipeline's nodes call: one this host does not serve fails every such call (an
     /// error at startup, a warning afterwards, as for a fallback), and a served one is checked against what each call
     /// needs of it, which a compile without the other pipelines could not (the call would fail when made).
     /// </summary>

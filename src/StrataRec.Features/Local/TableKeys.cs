@@ -6,7 +6,7 @@ using StrataRec.Core.Keys;
 namespace StrataRec.Features.Local;
 
 /// <summary>
-/// How a local table stores its keys (design 6.6): the one place that knows the canonical encoding of a key's parts.
+/// How a local table stores its keys: the one place that knows the canonical encoding of a key's parts.
 /// </summary>
 /// <remarks>
 /// <para>A one-part int64 key is the index's key itself: no encoding, no hash, nothing stored in the record. Every other

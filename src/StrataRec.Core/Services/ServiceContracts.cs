@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace StrataRec.Core.Services;
 
 /// <summary>
-/// Element type of a service tensor: one per declared column type a service can take (design 4.3), so a value reaches
+/// Element type of a service tensor: one per declared column type a service can take, so a value reaches
 /// the service client at the width it was declared and fetched with, plus <see cref="Text"/>.
 /// </summary>
 public enum TensorElementType : byte
@@ -26,7 +26,7 @@ public enum TensorElementType : byte
 /// <summary>Name, element type and shape of a service input or output. A dimension of -1 is dynamic (batch).</summary>
 public sealed record TensorSpec(string Name, TensorElementType ElementType, IReadOnlyList<int> Shape);
 
-/// <summary>Inputs and outputs a version of a service's operation accepts and produces; checked at load time (design 6.9).</summary>
+/// <summary>Inputs and outputs a version of a service's operation accepts and produces; checked at load time.</summary>
 public sealed record ServiceSignature(IReadOnlyList<TensorSpec> Inputs, IReadOnlyList<TensorSpec> Outputs)
 {
     public TensorSpec? FindInput(string name) => Find(Inputs, name);
@@ -195,7 +195,7 @@ public readonly struct NamedInput
     public TensorElementType ElementType => _missing != 0 ? _missing : _text is null ? Values.ElementType : TensorElementType.Text;
 
     /// <summary>
-    /// The value is missing (design 4.3: missing is explicit, never a zero): the service decides what it does without
+    /// The value is missing (missing is explicit, never a zero): the service decides what it does without
     /// it. Its <see cref="ElementType"/> and <see cref="Shape"/> are the declared ones, so a service checks them whether or
     /// not a request has the value; it has no elements.
     /// </summary>
@@ -303,15 +303,15 @@ public readonly struct NamedInput
 }
 
 /// <summary>Per-call options.</summary>
-/// <param name="Seed">The request's seed (<c>ctx.request.seed</c>), for a service that samples (design 5.9 rule 5).</param>
+/// <param name="Seed">The request's seed (<c>ctx.request.seed</c>), for a service that samples.</param>
 /// <param name="MaxOutputTokens">
-/// The most tokens a generative service may produce for this call (design 5.9 rule 2); a client that stops there says so
+/// The most tokens a generative service may produce for this call; a client that stops there says so
 /// with <see cref="ServiceStatus.Truncated"/>. Null for calls that generate nothing.
 /// </param>
 public readonly record struct ServiceCallOptions(long? Seed = null, int? MaxOutputTokens = null);
 
 /// <summary>
-/// One call of a service (design 6.9): named inputs in; named outputs, text and items out. What a call carries depends on
+/// One call of a service: named inputs in; named outputs, text and items out. What a call carries depends on
 /// its use. A model scoring rows sends a tensor per input whose leading dimension is the rows, the rows'
 /// <see cref="Items"/>, and reads an output per row; a recall sends its query's values and reads the items the service
 /// adds, up to <see cref="Limit"/>; a generative call sends text and reads text; a filter sends the candidates as
@@ -324,7 +324,7 @@ public readonly record struct ServiceCallOptions(long? Seed = null, int? MaxOutp
 /// text), and a service answers an item from its slice of each per-item input and all of each shared one: a shared
 /// <c>[1, d]</c> vector is that vector sent with every item, and in a batch of one the two are the same. That is what
 /// lets a replay answer an item from any recorded call that had it with the same inputs, however the items were batched
-/// (design 13.4), and a cache answer it from another call's record. A call without items is answered as a whole.</para>
+///, and a cache answer it from another call's record. A call without items is answered as a whole.</para>
 /// <para>A service sees only what the call sends: its inputs, not the request's. A value of the request it needs is an
 /// input the operator sends (a recall node's <c>queries</c>, e.g. <c>ctx.request.region</c>), so the digest a replay
 /// matches by covers everything the service saw.</para>
@@ -446,13 +446,13 @@ public readonly record struct ServiceStatus(bool Succeeded, string? Error = null
 }
 
 /// <summary>
-/// An external service the pipeline calls (design 6.9): a model server, a retrieval index, a filter, any business logic
+/// An external service the pipeline calls: a model server, a retrieval index, a filter, any business logic
 /// behind a protocol. It knows nothing about candidates, rows or columns: operators bind columns, queries and parameters
 /// to inputs, and outputs and items to columns and rows. Thread-safe: every request of every plan that binds it calls the
 /// one instance concurrently (the lifetime contract is on <see cref="Bindings.BindingContext"/>).
 /// </summary>
 /// <remarks>
-/// A call only reads (design 5.8): it must not change what a later call, request or anyone else sees (no write, no counter,
+/// A call only reads: it must not change what a later call, request or anyone else sees (no write, no counter,
 /// no message), because the engine decides whether a call is made and whether its answer is used. A cache hit or a replay
 /// makes no call; a call past its deadline is no longer waited for, and the service may still carry it out; a failed node's
 /// fallback may call again; a preview, a replay comparison, a debug request with forced arms, a node whose output nothing

@@ -4,7 +4,7 @@ using StrataRec.Core.Memory;
 namespace StrataRec.Core.Tables;
 
 /// <summary>
-/// The live rows of a <see cref="CandidateTable"/> and their current ranking (design 4.5).
+/// The live rows of a <see cref="CandidateTable"/> and their current ranking.
 /// </summary>
 /// <remarks>
 /// Invariants: physical rows are only appended; dropped rows never come back; ordering never moves column data.
@@ -135,7 +135,7 @@ public sealed class RowSelection
 
     /// <summary>
     /// Restores a ranking captured by <see cref="Capture"/> with no Compact in between. Only for
-    /// <see cref="CandidateTable.Rollback"/>: undoing a node attempt restores more than the ranking (design 4.6).
+    /// <see cref="CandidateTable.Rollback"/>: undoing a node attempt restores more than the ranking.
     /// </summary>
     internal void Restore(ReadOnlySpan<int> captured)
     {

@@ -4,7 +4,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Experiments.Assignment;
 
 /// <summary>
-/// Asks the experimentation platform which arms a request is in (design 11.1). Traffic allocation (ratios, ramping,
+/// Asks the experimentation platform which arms a request is in. Traffic allocation (ratios, ramping,
 /// salts, holdouts) is the platform's; the engine only applies the arms it answers.
 /// </summary>
 /// <remarks>
@@ -34,7 +34,7 @@ public interface IAssignmentProvider
     ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken);
 }
 
-/// <summary>What an <see cref="IAssignmentProvider"/> is told about the request it assigns (design 11.1).</summary>
+/// <summary>What an <see cref="IAssignmentProvider"/> is told about the request it assigns.</summary>
 /// <remarks>
 /// <para>A readonly struct of references the engine holds anyway (the plan's views are built once per plan), so asking a
 /// provider allocates nothing for it. New members are added as optional init properties, so neither providers nor the

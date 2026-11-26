@@ -11,11 +11,11 @@ using StrataRec.Features.Local;
 namespace StrataRec.Benchmarks;
 
 /// <summary>
-/// The request read path of a local feature table (design 6.6 target: 500 rows × 30 features in about 20 μs): one
+/// The request read path of a local feature table (500 rows × 30 features in about 20 μs): one
 /// lookup per key, then the features written into candidate-table columns.
 /// </summary>
 /// <remarks>
-/// <para>The table holds 1,000,000 items with 30 features each, the shape of design 6.3's <c>item_store</c>: 25
+/// <para>The table holds 1,000,000 items with 30 features each, the shape's <c>item_store</c>: 25
 /// <c>float32</c>, 2 <c>int64</c>, 1 <c>bool</c>, 1 low-cardinality <c>string</c> and a 64-dimensional embedding
 /// (about 400 B per record, 400 MB in all). Each invocation reads the next of 64 random key sets, so a request's records
 /// are not already in the core's caches from the previous one (a large L3 may still hold much of the table). A tenth of the

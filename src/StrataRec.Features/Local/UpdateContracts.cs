@@ -8,7 +8,7 @@ using StrataRec.Core.Keys;
 namespace StrataRec.Features.Local;
 
 /// <summary>
-/// A background feed of a local feature table: a snapshot loader, an update stream consumer, or both (design 6.6).
+/// A background feed of a local feature table: a snapshot loader, an update stream consumer, or both.
 /// Like a connector, it decodes bytes straight into the writer (<see cref="IFeatureTableWriter.Begin(long, long)"/> and
 /// <see cref="RecordBuilder"/>), with no object per message.
 /// </summary>
@@ -39,7 +39,7 @@ public interface IFeatureUpdateSource
 }
 
 /// <summary>
-/// The write side of a local feature table, as seen by update sources (design 6.6). Implemented by the engine
+/// The write side of a local feature table, as seen by update sources. Implemented by the engine
 /// (<see cref="LocalTableWriter"/>); there is one per table and it has a single writer.
 /// </summary>
 /// <remarks>
@@ -85,7 +85,7 @@ public interface IFeatureTableWriter
     void Checkpoint(UpdatePosition position);
 
     /// <summary>
-    /// Starts building a replacement of the whole table (a snapshot load or reload, design 6.6 local item 5). Writes go to
+    /// Starts building a replacement of the whole table (a snapshot load or reload). Writes go to
     /// an empty version that readers do not see until <see cref="CompleteReload"/> swaps it in.
     /// </summary>
     void BeginReload();
@@ -101,7 +101,7 @@ public interface IFeatureTableWriter
 public readonly record struct PartitionOffset(int Partition, long Offset);
 
 /// <summary>
-/// Where an update stream stands (design 6.6 local item 1): for each partition, the offset of the next update not yet
+/// Where an update stream stands: for each partition, the offset of the next update not yet
 /// applied (the convention of Kafka's committed offsets). A snapshot records the position its data covers, and the stream
 /// is consumed from there. A partition the position does not mention is at its start.
 /// </summary>
@@ -275,7 +275,7 @@ public sealed class FeatureUpdateException : Exception
 
 /// <summary>
 /// A write would take a local table past its <c>max_bytes</c> even after compaction. For a <c>local</c> table the load
-/// fails and the source is unavailable (design 6.6 local item 6); a <c>cache</c> table will evict instead (phase 2).
+/// fails and the source is unavailable; a <c>cache</c> table will evict instead (phase 2).
 /// </summary>
 public sealed class LocalTableFullException : InvalidOperationException
 {

@@ -6,7 +6,7 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>on_failure</c> is one of three words and the fallback node is its own field (design 5.5, 5.6): each setting is
+/// <c>on_failure</c> is one of three words and the fallback node is its own field: each setting is
 /// checked where it is written, a fallback setting on a node that does not fall back is an error, and the time a node
 /// leaves to its fallback defaults to the fallback's <c>timeout_ms</c>.
 /// </summary>

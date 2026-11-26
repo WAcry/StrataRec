@@ -15,10 +15,10 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A <c>cache</c> source through the engine (design 6.6): the sample's <c>item_store</c> (every column type of the catalog,
+/// A <c>cache</c> source through the engine: the sample's <c>item_store</c> (every column type of the catalog,
 /// nullable fields, batches of 25) read through an in-process table in front of its connector, and optionally a
 /// distributed tier shared by engines. Served results are those of the fetched source; a recorded request replays exactly
-/// without the cache; the distributed tier is a binding instance (design 10.3).
+/// without the cache; the distributed tier is a binding instance.
 /// </summary>
 /// <remarks>
 /// Write-backs run in the background, so how many of a first request's keys miss depends on when they land: a later read

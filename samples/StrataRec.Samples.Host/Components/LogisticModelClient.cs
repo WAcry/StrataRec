@@ -14,7 +14,7 @@ namespace StrataRec.Samples.Host.Components;
 /// binds them to it, and the factory only checks what the type cannot say.</para>
 /// <para>The rules of the contract, and how this client keeps them:</para>
 /// <list type="bullet">
-/// <item>The signature is the training-serving contract (design 6.9): the engine checks every node calling the model
+/// <item>The signature is the training-serving contract: the engine checks every node calling the model
 /// against it before the plan serves. It follows from the settings here, so it is built once and returned at once; that
 /// also lets <c>validate</c>, which loads nothing, check the nodes. A client that asks a model server implements
 /// <see cref="ILoadable"/> and answers after its load.</item>

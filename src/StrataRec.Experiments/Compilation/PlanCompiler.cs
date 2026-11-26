@@ -16,13 +16,13 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Experiments.Compilation;
 
 /// <summary>
-/// Compiles a pipeline and its experiments into one unified <see cref="ExecutionPlan"/> (design 12): parameter
+/// Compiles a pipeline and its experiments into one unified <see cref="ExecutionPlan"/>: parameter
 /// snapshots for parameter-only arms, precompiled node variants for every arm combination of the layers that touch a
 /// node, timeline positions for added, deleted and moved nodes, and trigger sites.
 /// </summary>
 /// <remarks>
 /// With no experiments this is the plain pipeline compiler. <see cref="CompileMerged"/> compiles baseline ⊕ a set of
-/// arms as a plain pipeline; it is the reference the unified plan is differentially tested against (design 16.2).
+/// arms as a plain pipeline; it is the reference the unified plan is differentially tested against.
 /// </remarks>
 public static class PlanCompiler
 {
@@ -43,7 +43,7 @@ public static class PlanCompiler
     public const int OverrideMaxDepth = Jsonc.MaxDepth - 2;
 
     /// <param name="bindings">
-    /// Where the plan's local feature tables, clients and connectors come from (design 6.4, 6.6): the engine passes the
+    /// Where the plan's local feature tables, clients and connectors come from: the engine passes the
     /// plan's binding lease, which shares and loads them. Null gives ones that are never loaded, for compiling without
     /// serving (validate, build, explain): requests reading such a table fail the features, and model signatures that
     /// need a loaded client are checked when an engine loads the plan.
@@ -78,7 +78,7 @@ public static class PlanCompiler
     /// arm whose experiment yields to the experiment of another of them is left out, as a request runs without it.
     /// </summary>
     /// <param name="configOverride">
-    /// A request's configuration override (design 13.3), applied after the arms, so it wins over them: an RFC 7396 merge
+    /// A request's configuration override, applied after the arms, so it wins over them: an RFC 7396 merge
     /// patch of the patchable view (<see cref="PatchableView.Sections"/>), checked as the baseline is, not by the
     /// experiment policy. Its own mistakes are reported at <see cref="OverrideArtifact"/>, <see cref="OverridePointer"/>,
     /// and so is what the compile finds at a value it sets or within an object it patches (<see cref="InOverride"/>). It is
@@ -267,7 +267,7 @@ public static class PlanCompiler
     }
 
     /// <summary>
-    /// What a release of <paramref name="request"/> needs of a binary (design 10.4): the baseline's needs, and for each
+    /// What a release of <paramref name="request"/> needs of a binary: the baseline's needs, and for each
     /// experiment what it adds, so that every set of experiments left after revocations requires at least what it needs. No
     /// plan is built and nothing is loaded. Null after reporting the errors of a compile that failed; its warnings are the
     /// full compile's to report.
@@ -642,14 +642,14 @@ internal sealed partial class UnifiedCompilation
             else if (_request.Today is { } today && expires < today)
             {
                 _diagnostics.Error("EXPERIMENT_EXPIRED", artifact, "/expires_at", $"Experiment expired on {e.ExpiresAt}.",
-                    "graduate the winning arm into the baseline or remove the experiment (design 11.7)");
+                    "graduate the winning arm into the baseline or remove the experiment");
             }
             else if (_request.Today is { } now && expires.DayNumber - now.DayNumber <= PlanCompileRequest.ExpiryWarningDays)
             {
                 var days = expires.DayNumber - now.DayNumber;
                 _diagnostics.Warning("EXPERIMENT_EXPIRING", artifact, "/expires_at",
                     $"Experiment expires on {e.ExpiresAt}, {(days == 0 ? "today" : days == 1 ? "in 1 day" : $"in {days} days")}; after that it cannot be built into a release.",
-                    "graduate the winning arm into the baseline, remove the experiment, or move expires_at (design 11.7)");
+                    "graduate the winning arm into the baseline, remove the experiment, or move expires_at");
             }
 
             if (e.Arms.Count == 0)
@@ -705,7 +705,7 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// The yields of the release (<see cref="ExperimentPlacement.YieldsTo"/>, design 11.1): an experiment yields only to
+    /// The yields of the release (<see cref="ExperimentPlacement.YieldsTo"/>): an experiment yields only to
     /// another of this compile in another layer, never to itself, and never back along a chain of yields.
     /// </summary>
     private void DefineYields()
@@ -743,7 +743,7 @@ internal sealed partial class UnifiedCompilation
                 {
                     _diagnostics.Warning("YIELD_SAME_LAYER", placement.Release, pointer,
                         $"'{id}' yields to '{name}', but both are in layer '{_layers[_experiments[from].Layer]}': a request is never in both.",
-                        "remove the entry (arms of one layer never run together, design 11.1)");
+                        "remove the entry (arms of one layer never run together)");
                 }
                 else if ((yieldsTo[from] ??= new SortedSet<int>()).Add(to))
                 {
@@ -817,7 +817,7 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    // ------------------------------------------------------------------ schema (design 11.4)
+    // ------------------------------------------------------------------ schema
 
     private SchemaSources BuildSchemaSources()
     {
@@ -856,7 +856,7 @@ internal sealed partial class UnifiedCompilation
                     {
                         _diagnostics.Error("ADD_CONFLICT", arm.Artifact, pointer,
                             $"'/{section}/{name}' is also added by '{existing.Arm.Id}' with a different definition.",
-                            "an added name has one meaning everywhere: use identical definitions or different names (design 11.4)");
+                            "an added name has one meaning everywhere: use identical definitions or different names");
                     }
                 }
             }
@@ -923,14 +923,14 @@ internal sealed partial class UnifiedCompilation
             else
             {
                 _diagnostics.Error("PATCH_SCHEMA", arm.Artifact, arm.PointerPrefix + "/" + section + "/" + JsonPointer.Escape(name) + error.Pointer,
-                    error.Message, error.Hint ?? "a new entry must be a complete definition (design 11.3)");
+                    error.Message, error.Hint ?? "a new entry must be a complete definition");
             }
         }
 
         return result;
     }
 
-    // ------------------------------------------------------------------ parameters (design 12.2)
+    // ------------------------------------------------------------------ parameters
 
     private ParamTable BuildParams(out Dictionary<int, SortedSet<int>> leafExperiments)
     {
@@ -986,10 +986,10 @@ internal sealed partial class UnifiedCompilation
         return new ParamTable(ImmutableCollectionsMarshal.AsImmutableArray(baseline), ImmutableCollectionsMarshal.AsImmutableArray(overrides));
     }
 
-    // ------------------------------------------------------------------ node variants (design 12.3)
+    // ------------------------------------------------------------------ node variants
 
     /// <summary>
-    /// The arm combinations of the layers that touch one node or tap (design 12.3): per touching layer, "not
+    /// The arm combinations of the layers that touch one node or tap: per touching layer, "not
     /// modified" plus each arm that modifies it, indexed mixed-radix exactly like <see cref="TimelineSlot.Select"/>.
     /// </summary>
     internal class VariantSpace
@@ -1076,7 +1076,7 @@ internal sealed partial class UnifiedCompilation
         public bool IsFallback { get; set; }
     }
 
-    /// <summary>Variants of one log tap; taps vary independently of the node they attach to (design 12.3).</summary>
+    /// <summary>Variants of one log tap; taps vary independently of the node they attach to.</summary>
     internal sealed class TapVariants : VariantSpace
     {
         public required string TapId { get; init; }
@@ -1318,7 +1318,7 @@ internal sealed partial class UnifiedCompilation
         return variants;
     }
 
-    /// <summary>Compiles every tap variant (design 8.3, 12.3). Runs after the nodes: <c>columns_from</c> needs them.</summary>
+    /// <summary>Compiles every tap variant. Runs after the nodes: <c>columns_from</c> needs them.</summary>
     private void CompileTapVariants()
     {
         var taps = (JsonObject)_view.Document["log_taps"]!;
@@ -1341,7 +1341,7 @@ internal sealed partial class UnifiedCompilation
             var pointer = "/log_taps/" + JsonPointer.Escape(tapId);
 
             // columns_from logs a model node's inputs: the tap must vary with every layer that changes that node, or a
-            // treatment would serve one input contract while its training log records another (design 6.9, 8.3).
+            // treatment would serve one input contract while its training log records another.
             var models = ColumnsFromNodes(tapId, taps[tapId] as JsonObject);
             if (BuildSpace(arm => arm.TouchedTaps.Contains(tapId) || TouchesAny(arm, models), $"Tap '{tapId}'", pointer) is not { } space)
             {
@@ -1494,7 +1494,7 @@ internal sealed partial class UnifiedCompilation
                 }
             }
 
-            // A moved node occupies one position per order, with complementary variant arrays (design 12.4).
+            // A moved node occupies one position per order, with complementary variant arrays.
             foreach (var order in orders)
             {
                 var selected = new CompiledNode?[v.Variants.Length];
@@ -1521,7 +1521,7 @@ internal sealed partial class UnifiedCompilation
         Variants = variants,
     };
 
-    // ------------------------------------------------------------------ trigger sites (design 12.6)
+    // ------------------------------------------------------------------ trigger sites
 
     private void AssignTriggerSites(
         ImmutableArray<TimelineSlot> timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan? output, Dictionary<int, SortedSet<int>> leafExperiments)
@@ -1575,7 +1575,7 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// The experiments whose site includes a position (design 12.6): those with an arm that modifies, adds, removes or
+    /// The experiments whose site includes a position: those with an arm that modifies, adds, removes or
     /// moves the node here. Whether reaching it triggers one is decided per request from its arms' nodes
     /// (<see cref="TimelineSlot.SelectWith"/>), since the other layers' arms of the request decide which node each arm has.
     /// </summary>

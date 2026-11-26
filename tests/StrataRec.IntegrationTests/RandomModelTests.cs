@@ -6,7 +6,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// The sample's <c>ctr_model</c> bound to <c>random@1</c> instead of <c>linear@1</c>, as a dev or test environment binds a
-/// real model's name to the stand-in (design 6.4 item 1): only the binding changes, the plan loads because the stand-in
+/// real model's name to the stand-in: only the binding changes, the plan loads because the stand-in
 /// declares the signature the scorer maps, the request is served with its scores, and a recording replays identically.
 /// </summary>
 public sealed class RandomModelTests

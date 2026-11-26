@@ -18,7 +18,7 @@
         "type": "object",
         "properties": {
           "mode": {
-            "description": "Supply mode (design 6.6): 'fetch' (default) fetches from the connector on every request; 'local' serves the features from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'cache' keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'; 'service' asks the service named by 'service' once per request, for the features of an entity with args. Settings of another mode are errors.",
+            "description": "Supply mode: 'fetch' (default) fetches from the connector on every request; 'local' serves the features from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'cache' keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'; 'service' asks the service named by 'service' once per request, for the features of an entity with args. Settings of another mode are errors.",
             "type": [
               "string",
               "null"
@@ -263,7 +263,7 @@
       }
     },
     "services": {
-      "description": "The services the pipeline calls (design 6.9), by logical name: model servers, recall sources, any external service. A model operator's model and a recall's sources name them.",
+      "description": "The services the pipeline calls, by logical name: model servers, recall sources, any external service. A model operator's model and a recall's sources name them.",
       "type": "object",
       "additionalProperties": {
         "type": "object",

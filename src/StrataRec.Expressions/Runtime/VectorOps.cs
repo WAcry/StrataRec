@@ -4,7 +4,7 @@ using System.Numerics.Tensors;
 namespace StrataRec.Expressions.Runtime;
 
 /// <summary>
-/// <c>dot</c>, <c>cosine</c> and <c>l2_norm</c> over float lists (design 7.6), in the precision their operands are
+/// <c>dot</c>, <c>cosine</c> and <c>l2_norm</c> over float lists, in the precision their operands are
 /// declared in: float32 when every operand is declared <c>list&lt;float32&gt;</c> (a column, a context value, or a choice
 /// between such lists), float64 when any is declared <c>list&lt;float64&gt;</c> or is a literal. The binder decides
 /// (<see cref="Ir.Float32Lists"/>); each function's <c>T</c> is that precision, and both backends pass lists of it.

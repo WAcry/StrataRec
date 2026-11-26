@@ -27,7 +27,7 @@ public enum PromptScope : byte
 }
 
 /// <summary>
-/// A prompt template of one node (design 5.9 rule 1): a <see cref="MustacheTemplate"/> whose names are StrataRec
+/// A prompt template of one node: a <see cref="MustacheTemplate"/> whose names are StrataRec
 /// references, resolved and type-checked once, when the node is compiled, and rendered per request.
 /// </summary>
 /// <remarks>

@@ -14,7 +14,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// <c>list&lt;int32&gt;</c> features (design 4.3): connector staging, the memory connector's decoding, backfill,
+/// <c>list&lt;int32&gt;</c> features: connector staging, the memory connector's decoding, backfill,
 /// configuration values, and the out-of-range rule for derived and context values of int32 types.
 /// </summary>
 public class ListInt32FeatureTests

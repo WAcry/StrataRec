@@ -19,7 +19,7 @@ namespace StrataRec.UnitTests.Expressions;
 public class ExpressionReviewRegressionTests
 {
     // ------------------------------------------------------------------------------------------------------------
-    // #11: desugared built-ins must lift every argument (design 7.4 rule 2).
+    // #11: desugared built-ins must lift every argument.
 
     private static readonly double?[] Grid = { null, -1.0, 0.0, 0.5, 1.0, 2.0, double.NaN };
 

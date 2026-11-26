@@ -17,7 +17,7 @@ namespace StrataRec.Hosting;
 public sealed class StrataRecOptions
 {
     /// <summary>
-    /// Configuration directory (design 10.1 layout). A relative path resolves against the host's content root
+    /// Configuration directory. A relative path resolves against the host's content root
     /// (<see cref="IHostEnvironment.ContentRootPath"/>), where appsettings.json is read from too, or against the current
     /// directory without a host environment. When the host serves <see cref="Releases"/>, no workspace is read, and this is
     /// only the directory relative paths in bindings resolve against (as when the workspace was validated), unless
@@ -38,7 +38,7 @@ public sealed class StrataRecOptions
     public List<string> Pipelines { get; } = new();
 
     /// <summary>
-    /// Serve release manifests instead of the workspace (design 10.1 item 4, 10.3): set, the host reads the manifest
+    /// Serve release manifests instead of the workspace: set, the host reads the manifest
     /// pointer of each of <see cref="Pipelines"/> in <see cref="Environment"/> from the container's
     /// <see cref="IManifestSource"/>, the manifests and their artifacts from its <see cref="IArtifactStore"/>, loads them
     /// before it starts, and then polls for new ones. Null (the default) serves the workspace in <see cref="ConfigRoot"/>
@@ -53,7 +53,7 @@ public sealed class StrataRecOptions
     /// </summary>
     public PlanEnvironment? PlanEnvironment { get; set; }
 
-    /// <summary>Where tap batches and trigger records go (design 8.6); null disables persistent logging.</summary>
+    /// <summary>Where tap batches and trigger records go; null disables persistent logging.</summary>
     public Logging.ILogSink? LogSink { get; set; }
 
     public Logging.LogPipelineOptions LogPipeline { get; set; } = new();
@@ -72,7 +72,7 @@ public sealed class StrataRecOptions
 /// another's release (an emergency revocation included); loads of different pipelines may run at the same time. The
 /// <see cref="IReleaseStatusReporter"/> is told the outcomes after the fact, off the polling: a slow reporter delays only
 /// the reports.</para>
-/// <para>No last-known-good copy is kept on disk in this version (design 10.3 item 6): a host that must start while the
+/// <para>No last-known-good copy is kept on disk in this version: a host that must start while the
 /// control plane is down composes an <see cref="IManifestSource"/> that falls back to a pointer baked into its image.</para>
 /// </remarks>
 public sealed class ReleaseOptions
@@ -109,8 +109,8 @@ public static class ServiceCollectionExtensions
     /// with a <see cref="ConfigException"/> listing every error, so a bad configuration never serves traffic; load warnings
     /// go to the host's logger (event 1003). An <see cref="IAssignmentProvider"/> registered in the container asks the
     /// experimentation platform for the arms of requests that do not carry them, and an <see cref="ISecretResolver"/>
-    /// resolves the <c>secret://</c> references of bindings (design 6.4) when plans load. An <see cref="ILoggerFactory"/>
-    /// in the container (from <c>AddLogging</c>) receives the engine's event logs (design 13.2); without one the engine
+    /// resolves the <c>secret://</c> references of bindings when plans load. An <see cref="ILoggerFactory"/>
+    /// in the container (from <c>AddLogging</c>) receives the engine's event logs; without one the engine
     /// logs nothing. Metrics and spans need no registration: subscribe to the <c>StrataRec</c> meter and activity source.
     /// </summary>
     /// <remarks>
@@ -120,7 +120,7 @@ public static class ServiceCollectionExtensions
     /// service takes no request until every plan has loaded, so once it listens, it is ready. A host that is not a generic
     /// host (a bare service provider) loads the workspace itself with <see cref="LoadWorkspaceAsync"/>.</para>
     /// <para>The engine serves the workspace as it was at startup. With <see cref="StrataRecOptions.Releases"/> it serves
-    /// release manifests instead (design 10.3): it loads the manifest each pipeline's pointer names in the same starting
+    /// release manifests instead: it loads the manifest each pipeline's pointer names in the same starting
     /// phase, and a pipeline without one, or whose manifest is not applied (unreadable, incompatible, rejected), or
     /// whose plan falls back to a pipeline not served, stops the host with a <see cref="ConfigException"/> that gives each
     /// pipeline's status. Once the host has started, it polls the pointers in the background and swaps in each new manifest
@@ -141,7 +141,7 @@ public static class ServiceCollectionExtensions
         if (options.LogSink is { } sink)
         {
             options.LogPipeline.Validate(); // at registration: the pipeline itself is made when first resolved
-            // Disposed by the container on shutdown, which drains durable batches (design 8.6 item 4).
+            // Disposed by the container on shutdown, which drains durable batches.
             services.AddSingleton(provider => new Logging.LogPipeline(sink, options.LogPipeline, loggerFactory: provider.GetService<ILoggerFactory>()));
         }
 

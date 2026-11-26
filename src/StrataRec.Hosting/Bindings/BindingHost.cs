@@ -39,12 +39,12 @@ public sealed class BindingHostOptions
     /// </summary>
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
-    /// <summary>The host's secret store (design 6.4 item 4), which instances resolve their credentials through when they load.</summary>
+    /// <summary>The host's secret store, which instances resolve their credentials through when they load.</summary>
     public ISecretResolver? Secrets { get; init; }
 }
 
 /// <summary>
-/// Owns what the engine's plans bind (design 6.4, 6.6): the local feature tables, and the instances bindings name
+/// Owns what the engine's plans bind: the local feature tables, and the instances bindings name
 /// (service clients, feature connectors). Each is created once per key and shared with every plan whose spec
 /// has the same key (<see cref="LocalTableSpec.Key"/>, <see cref="BindingSpec.Key"/>: the identity of the configuration,
 /// and the factory or connector object the data comes from, so engines with different registries never share), so a

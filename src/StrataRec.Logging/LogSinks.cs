@@ -3,7 +3,7 @@ using System.Text;
 namespace StrataRec.Logging;
 
 /// <summary>
-/// Destination of encoded log batches: a message queue, object storage, a file (design 8.6). Throwing signals a
+/// Destination of encoded log batches: a message queue, object storage, a file. Throwing signals a
 /// failed write; durable batches are retried, best-effort ones are dropped and counted. Throw
 /// <see cref="LogBatchRejectedException"/> for batches that can never be written, after writing all the others.
 /// </summary>
@@ -41,7 +41,7 @@ public sealed class InMemoryLogSink : ILogSink
 }
 
 /// <summary>
-/// Writes one JSON document per batch per line (the debug encoding of design 8.7), and before the first batch of each
+/// Writes one JSON document per batch per line (the debug encoding), and before the first batch of each
 /// schema id the sink has not written, that schema's record (<see cref="LogBatchJson.WriteSchema"/>).
 /// </summary>
 public sealed class JsonLinesLogSink : ILogSink, IDisposable

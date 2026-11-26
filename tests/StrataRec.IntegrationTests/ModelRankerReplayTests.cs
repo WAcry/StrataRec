@@ -10,7 +10,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// The sample with a <c>PairwiseRanker@1</c> and a <c>ListwiseReranker@1</c> after the final sort, each bound to a test
 /// model: their calls carry no per-row keys, so a recording keeps each call by the digest of its whole input and a replay
-/// serves it back only for the same input (design 13.4). Runs alone: it counts the pairs the model's calls send (<c>stratarec.io.keys</c>).
+/// serves it back only for the same input. Runs alone: it counts the pairs the model's calls send (<c>stratarec.io.keys</c>).
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class ModelRankerReplayTests

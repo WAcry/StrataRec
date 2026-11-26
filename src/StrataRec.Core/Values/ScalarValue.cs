@@ -11,8 +11,8 @@ namespace StrataRec.Core.Values;
 /// is a <c>long[]</c>, a <c>list&lt;float32&gt;</c> one a <c>double[]</c>, exactly as an <c>int32</c> value is an int64.
 /// The kinds <see cref="StorageKind.Int32"/> and <see cref="StorageKind.Float32"/> therefore never occur here, as a value or
 /// as a list's <see cref="ListElement"/>; storage narrowing happens when a value is written into a column, which checks
-/// the int32 range (design 4.3). A value with <see cref="IsMissing"/> = true represents a legitimately absent value of a
-/// nullable type (design 6.7, layer 3).
+/// the int32 range. A value with <see cref="IsMissing"/> = true represents a legitimately absent value of a
+/// nullable type (layer 3).
 /// </para>
 /// <para>
 /// A float64 value read from float32 storage (<see cref="FromFloat32"/>) remembers it, only so that its text is the float's
@@ -238,7 +238,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 case StorageKind.Int32:
                     return Int32Range.AllFit(AsInt64List());
                 case StorageKind.String:
-                    // A list's elements are values (design 4.3): a host's string[] may hold a null, JSON cannot.
+                    // A list's elements are values: a host's string[] may hold a null, JSON cannot.
                     foreach (var text in AsStringList())
                     {
                         if (text is null)

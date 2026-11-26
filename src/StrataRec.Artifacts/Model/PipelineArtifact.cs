@@ -5,8 +5,8 @@ using System.Text.Json.Serialization;
 namespace StrataRec.Artifacts.Model;
 
 /// <summary>
-/// Baseline pipeline (design 9.3): request schema, column declarations, parameters, nodes, funnel groups, log taps
-/// and output. Every experiment-patchable collection is an object keyed by a stable id (design 11.3).
+/// Baseline pipeline: request schema, column declarations, parameters, nodes, funnel groups, log taps
+/// and output. Every experiment-patchable collection is an object keyed by a stable id.
 /// </summary>
 public sealed class PipelineArtifact
 {
@@ -19,7 +19,7 @@ public sealed class PipelineArtifact
 
     public Dictionary<string, RequestFieldSpec> RequestSchema { get; init; } = new();
 
-    /// <summary>Candidate columns nodes write, one value per candidate, read as <c>col.&lt;name&gt;</c> (design 4.6).</summary>
+    /// <summary>Candidate columns nodes write, one value per candidate, read as <c>col.&lt;name&gt;</c>.</summary>
     public Dictionary<string, ColumnSpec> Columns { get; init; } = new();
 
     /// <summary>
@@ -34,7 +34,7 @@ public sealed class PipelineArtifact
 
     public Dictionary<string, ParamSpec> ParamSchema { get; init; } = new();
 
-    /// <summary>Parameter values; map-typed parameters are nested objects flattened to leaves (design 11.8).</summary>
+    /// <summary>Parameter values; map-typed parameters are nested objects flattened to leaves.</summary>
     public JsonObject Params { get; init; } = new();
 
     public Dictionary<string, NodeSpec> Nodes { get; init; } = new();
@@ -45,7 +45,7 @@ public sealed class PipelineArtifact
 
     public required OutputSpec Output { get; init; }
 
-    /// <summary>Optional pipeline the host may serve when this one fails (design 5.6).</summary>
+    /// <summary>Optional pipeline the host may serve when this one fails.</summary>
     public string? FallbackPipeline { get; init; }
 }
 
@@ -57,7 +57,7 @@ public sealed class RequestFieldSpec
     public string? Description { get; init; }
 }
 
-/// <summary>Declaration of a node-produced column (design 4.6): a candidate column, or a request column.</summary>
+/// <summary>Declaration of a node-produced column: a candidate column, or a request column.</summary>
 public sealed class ColumnSpec
 {
     public required string Type { get; init; }
@@ -71,7 +71,7 @@ public sealed class ColumnSpec
     public string? Description { get; init; }
 }
 
-/// <summary>Parameter schema entry (design 11.8).</summary>
+/// <summary>Parameter schema entry.</summary>
 public sealed class ParamSpec
 {
     /// <summary><c>int64</c>, <c>float64</c>, <c>bool</c>, <c>string</c> or <c>map&lt;string,T&gt;</c>.</summary>
@@ -87,7 +87,7 @@ public sealed class ParamSpec
     public string? Description { get; init; }
 }
 
-/// <summary>A pipeline node (design 5.1).</summary>
+/// <summary>A pipeline node.</summary>
 public sealed class NodeSpec
 {
     /// <summary>Semantic position; required unless <see cref="Role"/> is <c>fallback</c>.</summary>
@@ -98,7 +98,7 @@ public sealed class NodeSpec
 
     public JsonObject? Config { get; init; }
 
-    /// <summary>Request-level condition over <c>ctx.*</c> (design 5.5).</summary>
+    /// <summary>Request-level condition over <c>ctx.*</c>.</summary>
     public string? When { get; init; }
 
     public int? TimeoutMs { get; init; }
@@ -106,7 +106,7 @@ public sealed class NodeSpec
     public int? MinRemainingMs { get; init; }
 
     /// <summary>
-    /// What a failure of this node does (design 5.6): <c>fail_request</c> (default) fails the request, <c>skip</c> goes on
+    /// What a failure of this node does: <c>fail_request</c> (default) fails the request, <c>skip</c> goes on
     /// without the node's writes, <c>fallback</c> runs the node named by <c>fallback</c> in its place.
     /// </summary>
     [AllowedValues("fail_request", "skip", "fallback")]
@@ -134,7 +134,7 @@ public sealed class NodeSpec
     public string? Description { get; init; }
 }
 
-/// <summary>Request-level sampling group shared by taps (design 8.2).</summary>
+/// <summary>Request-level sampling group shared by taps.</summary>
 public sealed class FunnelGroupSpec
 {
     /// <summary>Key expressions; the first non-missing value is the sampling key.</summary>
@@ -143,7 +143,7 @@ public sealed class FunnelGroupSpec
     public required double Rate { get; init; }
 }
 
-/// <summary>Declarative log capture point (design 8.3).</summary>
+/// <summary>Declarative log capture point.</summary>
 public sealed class LogTapSpec
 {
     public required string Group { get; init; }
@@ -185,7 +185,7 @@ public sealed class LogTapRowsSpec
     public int? MaxRows { get; init; }
 }
 
-/// <summary>What the pipeline returns (design 3.4).</summary>
+/// <summary>What the pipeline returns.</summary>
 public sealed class OutputSpec
 {
     /// <summary>Parameter holding the number of results to return.</summary>

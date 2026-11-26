@@ -7,7 +7,7 @@ using StrataRec.Core.Bindings;
 namespace StrataRec.Features.Bindings;
 
 /// <summary>
-/// What a plan needs from one binding instance (design 6.4), of any <see cref="BindingKind"/>, with the
+/// What a plan needs from one binding instance, of any <see cref="BindingKind"/>, with the
 /// <see cref="Identity"/> that decides whether an instance created for an earlier plan can serve this one. The
 /// counterpart of <see cref="Local.LocalTableSpec"/> for everything a binding names that is not a local table.
 /// </summary>
@@ -141,7 +141,7 @@ public readonly struct BindingKey : IEquatable<BindingKey>
 }
 
 /// <summary>
-/// Gives a plan being compiled the instance each binding names (design 6.4). The engine's provider (the binding lease in
+/// Gives a plan being compiled the instance each binding names. The engine's provider (the binding lease in
 /// Hosting) shares instances by <see cref="BindingSpec.Identity"/> across plans, loads them before the plan is served
 /// and disposes them once nothing can call them; a plan compiled without an engine gets instances that are never loaded.
 /// </summary>

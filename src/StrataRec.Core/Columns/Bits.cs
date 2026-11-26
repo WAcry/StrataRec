@@ -5,7 +5,7 @@ namespace StrataRec.Core.Columns;
 
 /// <summary>
 /// Helpers for bitmaps stored as <c>ulong</c> words (bit <c>i</c> lives in word <c>i &gt;&gt; 6</c>, LSB first).
-/// Used for validity, fill state and liveness (design 4.5). A 5,000-row bitmap is 79 words.
+/// Used for validity, fill state and liveness. A 5,000-row bitmap is 79 words.
 /// </summary>
 public static class Bits
 {

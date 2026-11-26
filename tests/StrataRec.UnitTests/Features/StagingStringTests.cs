@@ -8,7 +8,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// Strings a connector writes (design 6.5): <see cref="IFeatureBatchWriter.SetString"/> keeps the connector's instance, and
+/// Strings a connector writes: <see cref="IFeatureBatchWriter.SetString"/> keeps the connector's instance, and
 /// <see cref="IFeatureBatchWriter.Intern"/> / <see cref="IFeatureBatchWriter.InternUtf8"/> give one instance per distinct
 /// value within the call, so a field whose values repeat across keys costs a string per value, not per key.
 /// </summary>

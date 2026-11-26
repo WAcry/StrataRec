@@ -5,7 +5,7 @@ namespace StrataRec.Artifacts.Json;
 
 /// <summary>
 /// <see href="https://www.rfc-editor.org/rfc/rfc7396">RFC 7396</see> JSON Merge Patch, the format of every
-/// experiment patch (design 11.3).
+/// experiment patch.
 /// </summary>
 /// <remarks>
 /// <para>

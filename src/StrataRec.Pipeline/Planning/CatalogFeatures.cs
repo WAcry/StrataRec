@@ -8,7 +8,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
-/// Registers catalog features into a plan schema the first time a name resolves to one (design 6.3), with what each
+/// Registers catalog features into a plan schema the first time a name resolves to one, with what each
 /// needs: a derived feature compiles then, and its own reads register the features it is computed from; a feature of an
 /// entity keyed by features (candidate or context) registers them first; a feature of a <c>cache</c> source registers every feature of its table
 /// (<see cref="FeaturePlan.NeedsWholeTable"/>). The one place that decides what of a catalog a plan holds, and that
@@ -141,7 +141,7 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
 
     public void NoteRead(string name, bool context)
     {
-        // A feature of an entity keyed by features reads its key features too (they are fetched first, design 6.7), and
+        // A feature of an entity keyed by features reads its key features too (they are fetched first), and
         // so on along the chains (review 69: a deprecated key read only through its entity's features did not warn). Each
         // feature once, so a chain that loops (an error reported elsewhere) ends.
         if (_deprecated is null || !_catalog.TryGet(name, out var first) || first.IsContext != context)
@@ -240,7 +240,7 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
     }
 
     /// <summary>A physical feature: its key features first when its entity's key reads features, candidate or context
-    /// (design 6.7: they are fetched first); an entity a key feature of which cannot be registered has no key, and its
+    /// (they are fetched first); an entity a key feature of which cannot be registered has no key, and its
     /// features fail with the key's error.</summary>
     private bool RegisterPhysical(FeatureDefinition feature)
     {

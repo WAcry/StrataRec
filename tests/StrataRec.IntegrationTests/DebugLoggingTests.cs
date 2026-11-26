@@ -6,7 +6,7 @@ using StrataRec.Logging;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Which requests reach the persistent logs (<see cref="DebugOptions"/>, design 8.6 item 6 and 14 item 6), on the home_feed
+/// Which requests reach the persistent logs (<see cref="DebugOptions"/>), on the home_feed
 /// sample with a log sink: traffic does, also with the options that only look at a request (trace, explain, record); a
 /// request whose arms or configuration a debugger forced, or that captures its logs, writes nothing to the sink. Forced
 /// arms used to write their <c>$experiments</c> record and taps as if the platform had assigned them.

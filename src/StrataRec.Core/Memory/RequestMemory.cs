@@ -6,7 +6,7 @@ using StrataRec.Core.Diagnostics;
 namespace StrataRec.Core.Memory;
 
 /// <summary>
-/// Source of large reusable buffers (design 4.8). The engine uses <see cref="SharedArrayBufferPool"/>; another pool is
+/// Source of large reusable buffers. The engine uses <see cref="SharedArrayBufferPool"/>; another pool is
 /// for tests (counting or poisoning what goes back), since hosts run requests through the engine, which takes none.
 /// </summary>
 public interface IBufferPool
@@ -39,7 +39,7 @@ public interface IRequestEndObserver
 
 /// <summary>
 /// Per-request buffer ledger. Operators rent through it and never return what they rent with <see cref="Rent{T}"/>;
-/// everything is returned at once when the request and every external I/O it started have finished (design 4.8). A
+/// everything is returned at once when the request and every external I/O it started have finished. A
 /// temporary that is over before its method returns is rented with <see cref="RentScratch{T}"/> and given back at once.
 /// </summary>
 /// <remarks>
@@ -49,7 +49,7 @@ public interface IRequestEndObserver
 /// <see cref="IRequestEndObserver"/>, if any: the one moment from which nothing of the request can still run.</para>
 /// <para>The ledger is itself a pooled array of struct entries, so renting allocates nothing per buffer.</para>
 /// <para>A buffer the pool will not take back (an <see cref="IBufferPool"/> throws; a test's may) is left to the GC, the others are
-/// still returned, and the failure goes to the event log as <see cref="RequestEvent.BufferReturnFailed"/> (design 13.2).
+/// still returned, and the failure goes to the event log as <see cref="RequestEvent.BufferReturnFailed"/>.
 /// <see cref="Release"/> never throws for the pool: the last release often runs on a client's thread, as the continuation
 /// of a call the request abandoned, where an exception would reach no one.</para>
 /// </remarks>
@@ -57,7 +57,7 @@ public sealed class RequestMemory
 {
     /// <summary>
     /// Whether <see cref="Release"/> fills returned buffers of unmanaged elements with <see cref="PoisonByte"/>, so code
-    /// that keeps using a buffer after its request reads garbage at once instead of another request's data (design 4.8).
+    /// that keeps using a buffer after its request reads garbage at once instead of another request's data.
     /// Set by the <c>StrataRec.PoisonReturnedBuffers</c> runtime switch: every test project turns it on, in Release as in
     /// Debug, since CI tests the Release build; production leaves it off (it writes every returned byte once more).
     /// </summary>
@@ -141,7 +141,7 @@ public sealed class RequestMemory
 
     /// <summary>
     /// Rents a buffer for a computation that is over before the caller returns (a row list, a mask, a selection), given
-    /// back with <see cref="ReturnScratch{T}"/> as soon as it is done (design 4.8). It is not on the ledger and not in
+    /// back with <see cref="ReturnScratch{T}"/> as soon as it is done. It is not on the ledger and not in
     /// <see cref="RentedBytes"/>. Contents are unspecified.
     /// </summary>
     /// <remarks>Held to the request's end, a request's temporaries are all out of the pool at once, and the shared pool

@@ -8,7 +8,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features.Local;
 
 /// <summary>
-/// Binding a feature source with mode <c>local</c> (design 6.6): the settings each mode takes, the diagnostics of a
+/// Binding a feature source with mode <c>local</c>: the settings each mode takes, the diagnostics of a
 /// wrong binding (pointer and hint), and the identity that decides when a plan can reuse a loaded table.
 /// </summary>
 public class LocalBindingTests

@@ -11,7 +11,7 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// How a replay answers a service call about no items, such as a recall's (design 13.4): by the digest of its inputs. The
+/// How a replay answers a service call about no items, such as a recall's: by the digest of its inputs. The
 /// node's own recorded call first, as recorded and consumed; else any successful call with the same inputs, consuming
 /// nothing; else nothing, reported. A recorded answer answers only the inputs it was for.
 /// </summary>

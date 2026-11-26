@@ -8,7 +8,7 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The dense, key-ordered staging area of one fetch (design 4.5, 6.5). Every <c>max_batch</c> chunk of the fetch writes
+/// The dense, key-ordered staging area of one fetch. Every <c>max_batch</c> chunk of the fetch writes
 /// its keys' values here through a <see cref="StagingBuffer"/>; key index k of the fetch is row k − c × ChunkSize of
 /// chunk c = k / ChunkSize.
 /// </summary>
@@ -146,7 +146,7 @@ internal sealed class StagingArea
     /// Copies the staged value of a fetch key (which must be present) into a row of a table column of the field's type.
     /// False, leaving the row untouched, for a list of another length than a <c>list&lt;E,N&gt;</c> column's: staging holds
     /// what the connector wrote (recordings and the cache keep it as written), and the type applies where a value is
-    /// stored, as for every other writer (design 4.3).
+    /// stored, as for every other writer.
     /// </summary>
     public bool TryCopyTo(int fieldIndex, int key, ColumnBuffer target, int row)
     {

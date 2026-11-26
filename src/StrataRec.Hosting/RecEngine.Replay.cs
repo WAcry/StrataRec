@@ -12,11 +12,11 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.Hosting;
 
-/// <summary>Recording requests into replay bundles and replaying them (design 13.4, 10.8).</summary>
+/// <summary>Recording requests into replay bundles and replaying them.</summary>
 public sealed partial class RecEngine
 {
     /// <summary>
-    /// Re-executes a recorded request on the plan this engine currently serves for its pipeline (design 13.4). Recorded
+    /// Re-executes a recorded request on the plan this engine currently serves for its pipeline. Recorded
     /// responses replace every feature, candidate and model call, and recorded timing facts replace the clock, so a call
     /// that timed out times out again and every node makes the same skip, fallback or failure decision, without waiting.
     /// On the recording's own configuration the result is identical; on another, data the bundle lacks is missing and
@@ -211,7 +211,7 @@ public sealed partial class RecEngine
             }
             else if (fallbackRecord is null && primaryRecord is { Result.Succeeded: false })
             {
-                // The recorded request failed too and did not run its fallback pipeline: no time was left (design 5.6).
+                // The recorded request failed too and did not run its fallback pipeline: no time was left.
                 notes.Add($"the recording did not run fallback pipeline '{fallbackId}' (no time was left); neither does the replay");
                 result = ToResult(request, pipeline, executed, ignored, request.PipelineId, merged);
             }

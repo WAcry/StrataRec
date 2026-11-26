@@ -6,7 +6,7 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Features.Catalog;
 
-/// <summary>What one part of an entity key reads (design 6.2).</summary>
+/// <summary>What one part of an entity key reads.</summary>
 public enum EntityKeyPartKind : byte
 {
     /// <summary>A request input, <c>ctx.request.&lt;input&gt;</c>: one value per request, shared by every key of a batch.</summary>
@@ -125,7 +125,7 @@ public sealed class EntityArgDefinition
 public readonly record struct EntityFeatureRead(string Feature, bool Context, string Reference, string Pointer);
 
 /// <summary>
-/// A compiled entity declaration: its name and its key, an ordered tuple of 1 to 8 parts (design 6.2); or, for an entity
+/// A compiled entity declaration: its name and its key, an ordered tuple of 1 to 8 parts; or, for an entity
 /// a service computes, its arguments and no key (IO step 5).
 /// </summary>
 /// <remarks>
@@ -153,7 +153,7 @@ public sealed class EntityDefinition
 
     /// <summary>
     /// The features the key's parts and the arguments read, in declared order: they are fetched before the entity's
-    /// features, whose state they decide (design 6.7), and an entity reached again through them is a cycle.
+    /// features, whose state they decide, and an entity reached again through them is a cycle.
     /// </summary>
     public IReadOnlyList<EntityFeatureRead> FeatureReads => _reads ??= BuildReads();
 
@@ -283,7 +283,7 @@ public sealed class FeatureDefinition
     public ScalarValue Default { get; init; }
 
     /// <summary>
-    /// What a row or request gets when the feature has no value (design 6.7 layer 3): the default, or missing. The one
+    /// What a row or request gets when the feature has no value: the default, or missing. The one
     /// definition every supply path applies — a key a connector did not answer, a key a local table does not hold, a
     /// record without the field, a missing context or foreign key, a non-finite or out-of-range value — so a feature means
     /// the same whether it is fetched, read locally or replayed.
@@ -311,7 +311,7 @@ public sealed class FeatureDefinition
 }
 
 /// <summary>
-/// Validated feature catalog (design 6.3): entities, physical features and derived features, keyed by name.
+/// Validated feature catalog: entities, physical features and derived features, keyed by name.
 /// Pure configuration — no slots or connectors; those are bound when a plan is compiled.
 /// </summary>
 public sealed class FeatureCatalog
@@ -670,7 +670,7 @@ public sealed class FeatureCatalog
     };
 
     /// <summary>
-    /// Types every key part that reads a feature (design 6.3: a key feature's type is the part's). A part whose feature is
+    /// Types every key part that reads a feature (a key feature's type is the part's). A part whose feature is
     /// not declared, is of the other scope than its prefix says (<c>col.</c> a candidate feature, <c>ctx.</c> a context
     /// one) or is of another type than int64 or string is an <c>ENTITY_BAD_KEY</c> at the part; one whose feature was declared
     /// with an error fails silently (reported there). An entity with such a part has no key: it is removed with its features,
@@ -787,7 +787,7 @@ public sealed class FeatureCatalog
     }
 
     /// <summary>
-    /// Key chains must end (design 6.7: cycles are configuration errors): an entity whose key reads a feature of an entity
+    /// Key chains must end (cycles are configuration errors): an entity whose key reads a feature of an entity
     /// whose key leads back to one already on the way is an <c>ENTITY_KEY_CYCLE</c>, at the part that leads into it. Every
     /// feature part is an edge, candidate (<c>col.</c>) or context (<c>ctx.</c>), so a cycle through any part of a composite
     /// key is found. An entity found to lead into no cycle is remembered for the whole catalog and not walked again, whatever

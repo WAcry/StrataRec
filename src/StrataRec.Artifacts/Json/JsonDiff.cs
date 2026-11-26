@@ -24,7 +24,7 @@ public enum JsonChangeKind : byte
 public sealed record JsonChange(string Pointer, JsonChangeKind Kind, JsonNode? Before, JsonNode? After);
 
 /// <summary>
-/// The semantic difference of two JSON documents, leaf by leaf (design 13.4 item 3): what a reviewer needs to see of a
+/// The semantic difference of two JSON documents, leaf by leaf: what a reviewer needs to see of a
 /// configuration change, without the noise of a line diff (member order, whitespace, comments, <c>1</c> vs <c>1.0</c>).
 /// </summary>
 /// <remarks>

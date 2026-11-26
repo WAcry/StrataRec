@@ -6,7 +6,7 @@ using StrataRec.Core.Memory;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>
-/// The two memory events of design 13.2: a buffer pool that will not take a request's buffers back, and buffers still
+/// The two memory events: a buffer pool that will not take a request's buffers back, and buffers still
 /// rented long after their request returned because calls it abandoned have not finished.
 /// </summary>
 public sealed class RequestMemoryEventTests

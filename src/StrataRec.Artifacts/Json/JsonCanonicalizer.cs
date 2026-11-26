@@ -10,7 +10,7 @@ namespace StrataRec.Artifacts.Json;
 /// <summary>
 /// <see href="https://www.rfc-editor.org/rfc/rfc8785">RFC 8785</see> JSON Canonicalization Scheme (JCS): a unique
 /// byte representation of a JSON value, so that the same content always hashes to the same artifact id regardless
-/// of key order, whitespace, comments or number spelling (design 9.1 item 3).
+/// of key order, whitespace, comments or number spelling.
 /// </summary>
 /// <remarks>
 /// <para>The output follows RFC 8785 section 3.2:</para>

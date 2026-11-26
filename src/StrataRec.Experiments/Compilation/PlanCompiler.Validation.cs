@@ -6,7 +6,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
 
-/// <summary>Validation passes over arm combinations (design 11.5, 11.6).</summary>
+/// <summary>Validation passes over arm combinations.</summary>
 internal sealed partial class UnifiedCompilation
 {
     internal sealed class CombinationReport
@@ -17,7 +17,7 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Data-flow check per arm combination (design 11.5 check 3): every non-nullable column read has an unskippable
+    /// Data-flow check per arm combination: every non-nullable column read has an unskippable
     /// producer before it, fixed columns have one producer per path, same-order nodes are independent. All
     /// combinations of the layers that touch nodes are enumerated when there are at most
     /// <see cref="PlanCompileRequest.MaxCombinationsChecked"/>. Otherwise every single arm and every pair, and for each
@@ -92,7 +92,7 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        // Per rule: every combination of the layers that decide it (design 11.5 check 3). A rule depends only on the
+        // Per rule: every combination of the layers that decide it. A rule depends only on the
         // variants of its scope, so this checks it as completely as the whole space would; scopes within two layers are
         // covered by the singles and pairs above.
         var nodes = new Dictionary<string, List<CompiledNode>>(StringComparer.Ordinal);
@@ -159,7 +159,7 @@ internal sealed partial class UnifiedCompilation
                         $"{(product == long.MaxValue ? "too many" : product.ToString(System.Globalization.CultureInfo.InvariantCulture))} combinations, " +
                         $"more than the {_request.MaxCombinationsChecked} that can be checked.",
                         "put experiments that change these nodes into fewer layers (arms of one layer never run together), let one yield to another "
-                        + "where both are assigned (design 11.1), or graduate some of them");
+                        + "where both are assigned, or graduate some of them");
                 }
 
                 continue;
@@ -287,7 +287,7 @@ internal sealed partial class UnifiedCompilation
 
     /// <summary>
     /// Checks every pair of arms that can run together (any two of different layers, unless one's experiment yields to the
-    /// other's) for path conflicts (errors) and interactions (warnings for review), design 11.5. Two arms placing nodes at
+    /// other's) for path conflicts (errors) and interactions (warnings for review). Two arms placing nodes at
     /// the same order are not a conflict: the per-combination data-flow check refuses same-order nodes that depend on each
     /// other (ORDER_DEPENDENCY), and independent ones run in either order with the same result. A pair that never runs
     /// together because of a yield is not reported: what it would be is what the yield resolves (<see cref="ValidateYields"/>).
@@ -335,7 +335,7 @@ internal sealed partial class UnifiedCompilation
                         $"Arms '{a.Id}' and '{b.Id}' (layers '{_layers[a.LayerIndex]}' and '{_layers[b.LayerIndex]}') can be assigned to the same request and both change '{conflict.First.Path}'"
                         + (conflict.First.Path.Equals(conflict.Second.Path) ? "." : $" / '{conflict.Second.Path}'."),
                         "put the experiments in the same layer so their arms exclude each other, combine them into one experiment, "
-                        + $"or let one take the other's traffic where both are assigned: {YieldHint(a, b)} (design 11.1, 11.5)");
+                        + $"or let one take the other's traffic where both are assigned: {YieldHint(a, b)}");
                 }
 
                 Interactions(a, b, writes, addedReads, resolves);
@@ -415,7 +415,7 @@ internal sealed partial class UnifiedCompilation
 
     private string ReviewHint(ArmPatch a, ArmPatch b, string column) =>
         $"if the two may compose, record the review in '{a.ExperimentId}': \"reviewed_interactions\": {{ \"{b.ExperimentId}\": [\"{column}\"] }}; " +
-        $"otherwise put the experiments in the same layer, or let one yield to the other where both are assigned: {YieldHint(a, b)} (design 11.1, 11.5)";
+        $"otherwise put the experiments in the same layer, or let one yield to the other where both are assigned: {YieldHint(a, b)}";
 
     /// <summary>
     /// A yield that resolves nothing is a warning: the arms of the two neither conflict nor interact, so it only costs the
@@ -435,7 +435,7 @@ internal sealed partial class UnifiedCompilation
             {
                 _diagnostics.Warning("YIELD_UNUSED", release, pointer,
                     $"'{_experiments[from].Id}' yields to '{_experiments[to].Id}', but their arms neither conflict nor interact: it only costs '{_experiments[from].Id}' the traffic '{_experiments[to].Id}' runs on.",
-                    "remove the entry (design 11.1)");
+                    "remove the entry");
             }
         }
     }
@@ -499,8 +499,8 @@ internal sealed partial class UnifiedCompilation
                 // A yield between the two keeps them from running together: say which, since they are in different layers
                 // and may still both add nodes on the column.
                 var index = placed[experiment];
-                var hint = _yields.Yields(index, otherIndex) ? $"remove the entry: '{experiment}' yields to '{other}', so the two never run together (design 11.1)"
-                    : _yields.Yields(otherIndex, index) ? $"remove the entry: '{other}' yields to '{experiment}', so the two never run together (design 11.1)"
+                var hint = _yields.Yields(index, otherIndex) ? $"remove the entry: '{experiment}' yields to '{other}', so the two never run together"
+                    : _yields.Yields(otherIndex, index) ? $"remove the entry: '{other}' yields to '{experiment}', so the two never run together"
                     : "remove the entry: the experiments share a layer, or neither adds a node that interacts on the column";
                 for (var i = 0; i < columns.Count; i++)
                 {
@@ -515,7 +515,7 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// The column footprint of an arm (design 11.5 item 2) from its single-arm variants: columns its touched nodes write,
+    /// The column footprint of an arm from its single-arm variants: columns its touched nodes write,
     /// and columns its added nodes read. Request columns are in it as candidate columns are, keyed by their context id
     /// complemented (<see cref="Footprinted"/>).
     /// </summary>
@@ -540,7 +540,7 @@ internal sealed partial class UnifiedCompilation
 
             // What the arm adds to the pipeline's structure: every column of a node it adds, and of a node it changes only the
             // columns the baseline's node did not write or read. Changing an existing node's settings, inline or through a
-            // parameter, changes its values as any parameter does and composes by the structure (design 11.5): counting
+            // parameter, changes its values as any parameter does and composes by the structure: counting
             // every column of a touched node warned for every pair of experiments tuning different multipliers of one flow
             // column. A node whose operator or config now writes or reads another column is a change of structure (review
             // 69: a filter replaced by a writer of score.final, read by another experiment's added node, did not warn). Only
@@ -649,8 +649,8 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Compiles baseline ⊕ arm on its own for every arm (design 11.5 check 1). It sees only the baseline and the arm's
-    /// own additions, which enforces the independence rule (design 11.6).
+    /// Compiles baseline ⊕ arm on its own for every arm. It sees only the baseline and the arm's
+    /// own additions, which enforces the independence rule.
     /// </summary>
     private void ValidateArmsIndependently()
     {
@@ -677,7 +677,7 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Compiles the bare baseline on its own whenever there is an arm (design 11.6): the unified schema has whatever any
+    /// Compiles the bare baseline on its own whenever there is an arm: the unified schema has whatever any
     /// arm declares, so an invalid baseline could resolve there, and removing that experiment (a revocation, which does
     /// not compile again) would publish a release no node can load. Not only when arms add schema entries or parameter
     /// leaves: a node an arm adds declares its outputs implicitly, and listing the ways an arm can declare a name missed

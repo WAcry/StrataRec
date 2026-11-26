@@ -6,7 +6,7 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary><c>list&lt;E&gt;</c> as a type constructor (design 4.3): every element type, one representation per layer.</summary>
+/// <summary><c>list&lt;E&gt;</c> as a type constructor: every element type, one representation per layer.</summary>
 public class ListTypeTests
 {
     [Theory]

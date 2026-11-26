@@ -21,7 +21,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The lifetime of a plan's clients through the engine (design 6.4, 10.3): a client created for one plan is disposed only
+/// The lifetime of a plan's clients through the engine: a client created for one plan is disposed only
 /// once no served plan uses it and nothing of a replaced plan's requests can still call it; a plan is served only after its
 /// clients loaded; and secrets are resolved at load without their values reaching a diagnostic, a log or a recording.
 /// The sample's <c>ctr_model</c> is bound to <see cref="ScriptedModels"/>, whose calls, loads and disposals the tests drive;

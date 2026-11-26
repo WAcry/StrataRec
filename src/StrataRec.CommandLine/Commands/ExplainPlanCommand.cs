@@ -12,7 +12,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec explain-plan</c> (design 13.4): the unified plan's timeline, node variants, experiment sites and
+/// <c>stratarec explain-plan</c>: the unified plan's timeline, node variants, experiment sites and
 /// parameter overrides; with <c>--arms</c>, exactly what a request with those arms executes (<see cref="EffectivePlan"/>,
 /// the view <c>diff</c> compares). Reads a workspace or a release manifest (<see cref="ConfigRef"/>).
 /// </summary>
@@ -160,7 +160,7 @@ internal static class ExplainPlanCommand
                 o.WriteLine($"  {e.Id,-32} layer {plan.Layers[e.LayerIndex].Name,-10} arms {string.Join(", ", arms)}{(owners.Count > 0 ? "  owners " + string.Join(", ", owners) : string.Empty)}");
             }
 
-            // What a yield costs and what it buys (design 11.1): the review that it is meant.
+            // What a yield costs and what it buys: the review that it is meant.
             foreach (var y in report.Yields)
             {
                 o.WriteLine($"  {y.Experiment} yields to {y.To}: does not run on {y.To}'s traffic; keeps apart "
@@ -324,7 +324,7 @@ internal static class ExplainPlanCommand
     /// <summary>
     /// The columns a node reads (but the entity id, which every row has), in name order, and those it writes, as the
     /// compiled node declares them: what the executor fetches before it, and versions after it. Reads are sorted by name,
-    /// not listed by column id: a feature's id is the order the plan first read it in (design 6.3), which says nothing. The
+    /// not listed by column id: a feature's id is the order the plan first read it in, which says nothing. The
     /// request columns it reads and writes follow, as <c>req.&lt;name&gt;</c>, and the pipelines it calls, as
     /// <c>pipeline:&lt;id&gt;</c>.
     /// </summary>
@@ -422,7 +422,7 @@ internal static class ExplainPlanCommand
     }
 
     /// <summary>
-    /// The experiments reaching a position triggers, and when (design 12.6): the OR of the <c>when</c> of each arm's node
+    /// The experiments reaching a position triggers, and when: the OR of the <c>when</c> of each arm's node
     /// there, together with <paramref name="arms"/> in the other layers (the selected combination; none for the overview,
     /// where another layer's arm may still change it). A fallback triggers whenever it is invoked.
     /// </summary>

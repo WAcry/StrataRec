@@ -13,7 +13,7 @@ using StrataRec.Expressions.Ir;
 namespace StrataRec.Expressions.Runtime;
 
 /// <summary>
-/// The scalar semantics of every IR operation (design 7.4, 7.5): one value in, one value out, total for all inputs.
+/// The scalar semantics of every IR operation: one value in, one value out, total for all inputs.
 /// </summary>
 /// <remarks>This is the single definition used by constant folding, the once-per-request scalar program and the
 /// reference interpreter. The vectorized kernels must agree with it (checked by differential tests).</remarks>
@@ -235,7 +235,7 @@ internal static class ScalarOps
 
     public static long AbsInt(long x) => x < 0 ? unchecked(-x) : x;
 
-    /// <summary>Integer remainder of a non-zero divisor, with <c>long.MinValue % -1 = 0</c> (design 7.5); <c>x % 0</c> is missing, decided by the caller.</summary>
+    /// <summary>Integer remainder of a non-zero divisor, with <c>long.MinValue % -1 = 0</c>; <c>x % 0</c> is missing, decided by the caller.</summary>
     public static long Mod(long a, long b) => b == -1 ? 0 : a % b;
 
     private static bool Compare(IrOp op, TypeKind kind, in ScalarValue a, in ScalarValue b)
@@ -417,7 +417,7 @@ internal static class ListOps
         return count;
     }
 
-    // int32 list storage (design 4.3: list<int32> is a storage type, its elements mean int64 values). These overloads
+    // int32 list storage (list<int32> is a storage type, its elements mean int64 values). These overloads
     // compare in place, without widening a list into a temporary buffer.
 
     /// <summary>int64 membership in int32 storage: a value outside the int32 range cannot be an element.</summary>

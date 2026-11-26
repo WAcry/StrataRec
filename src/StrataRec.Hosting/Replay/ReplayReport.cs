@@ -15,7 +15,7 @@ public sealed class ReplayOptions
     public IReadOnlyList<string>? Arms { get; init; }
 
     /// <summary>
-    /// Candidates to explain in the replayed run (design 13.3), as for a request (<see cref="DebugOptions.ExplainIds"/>):
+    /// Candidates to explain in the replayed run, as for a request (<see cref="DebugOptions.ExplainIds"/>):
     /// <see cref="ReplayOutcome.Result"/> then carries the explanations. Ids the replayed plan cannot take (the other key
     /// type, more than <see cref="DebugOptions.MaxExplainIds"/>) reject the replay as an invalid request.
     /// </summary>
@@ -35,7 +35,7 @@ public sealed class ReplayOutcome
 
     /// <summary>
     /// Set when the bundle records an aborted request (cancelled by its caller, or stopped by a defect), which a replay
-    /// does not execute (design 13.4): the request has no result to reproduce, and its recording, a snapshot taken at the
+    /// does not execute: the request has no result to reproduce, and its recording, a snapshot taken at the
     /// abort, holds nothing past the node that was running, so a replay could not reach the point of a defect either.
     /// Nothing ran: <see cref="Result"/> is a placeholder, <see cref="ReplayReport.Nodes"/> holds the recorded node
     /// decisions only, and <see cref="ResultDiff.Identical"/> is false. Null when the request was replayed.
@@ -53,7 +53,7 @@ public sealed class ReplayOutcome
 /// </param>
 public sealed record RecordedAbort(string Reason, string? Node);
 
-/// <summary>What changed between a recording and its replay (design 13.4).</summary>
+/// <summary>What changed between a recording and its replay.</summary>
 public sealed class ReplayReport
 {
     public required string RecordedManifest { get; init; }
@@ -253,7 +253,7 @@ public sealed class ComparableResult
     }
 }
 
-/// <summary>Result comparison and ranking metrics (design 10.8): Top-K overlap, Kendall τ, score distributions.</summary>
+/// <summary>Result comparison and ranking metrics: Top-K overlap, Kendall τ, score distributions.</summary>
 public static class ResultComparison
 {
     public static ResultDiff Diff(ComparableResult left, ComparableResult right)

@@ -4,7 +4,7 @@
     <Using Remove="System.Linq" />
   </ItemGroup>
 
-  <!-- Test runs poison returned buffers (RequestMemory.PoisonReturnedBuffers, design 4.8), in Debug and Release alike: CI
+  <!-- Test runs poison returned buffers (RequestMemory.PoisonReturnedBuffers), in Debug and Release alike: CI
        tests the Release build. Benchmarks measure what production runs, so they do not. -->
   <ItemGroup Condition="'$(IsTestProject)' == 'true'">
     <RuntimeHostConfigurationOption Include="StrataRec.PoisonReturnedBuffers" Value="true" />

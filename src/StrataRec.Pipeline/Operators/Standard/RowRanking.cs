@@ -5,7 +5,7 @@ using StrataRec.Core.Tables;
 namespace StrataRec.Pipeline.Operators.Standard;
 
 /// <summary>
-/// Deterministic ranking of rows by a numeric column (design 5.7): higher scores first (or lower when ascending),
+/// Deterministic ranking of rows by a numeric column: higher scores first (or lower when ascending),
 /// missing and NaN last, ties broken by <c>entity_id</c> ascending.
 /// </summary>
 internal static class RowRanking

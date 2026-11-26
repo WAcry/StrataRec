@@ -4,7 +4,7 @@ using StrataRec.CommandLine.Commands;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>stratarec diff</c> (design 13.4 item 3) on the home_feed sample and modified copies of it: what differs per arm
+/// <c>stratarec diff</c> on the home_feed sample and modified copies of it: what differs per arm
 /// combination, from the compiled plans, with RFC 6901 pointers into the combination's plan.
 /// </summary>
 public sealed class DiffCommandTests

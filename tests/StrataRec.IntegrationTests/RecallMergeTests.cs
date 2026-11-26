@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Execution;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>MultiSourceRecall@1</c> merge semantics (design 5.7): sources merge in the declared order, the first occurrence
+/// <c>MultiSourceRecall@1</c> merge semantics: sources merge in the declared order, the first occurrence
 /// of a key fixes its position and primary source, later ones add their source bit, the best rank and the best score;
 /// a source is truncated at its quota.
 /// </summary>

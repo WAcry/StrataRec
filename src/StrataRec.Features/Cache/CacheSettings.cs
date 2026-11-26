@@ -14,7 +14,7 @@ namespace StrataRec.Features.Cache;
 internal readonly record struct CacheOwner(BindingKind StoreKind, string Name, string Noun, string Origin);
 
 /// <summary>
-/// The one reading of a <c>cache</c> binding (design 6.6): its TTL, its stale window and its distributed tier, each problem
+/// The one reading of a <c>cache</c> binding: its TTL, its stale window and its distributed tier, each problem
 /// reported at its setting. Feature sources and services read their caches here, so the two say the same about the same
 /// mistake.
 /// </summary>

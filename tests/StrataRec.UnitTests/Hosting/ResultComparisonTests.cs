@@ -6,7 +6,7 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>Ranking metrics of the recorded-mode comparison (design 10.8) and the result diff of a replay.</summary>
+/// <summary>Ranking metrics of the recorded-mode comparison and the result diff of a replay.</summary>
 public sealed class ResultComparisonTests
 {
     [Fact]

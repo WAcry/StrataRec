@@ -12,7 +12,7 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Nothing is read that no successful attempt wrote (design 4.6, <c>CandidateTable</c>): a row has no value in a column
+/// Nothing is read that no successful attempt wrote (<c>CandidateTable</c>): a row has no value in a column
 /// until something writes it, even when the column's slot is created after the row was appended (an earlier row source
 /// without the <c>recall.*</c> columns, then <c>MultiSourceRecall@1</c>); and a failed attempt leaves no slot behind, so a
 /// pinned <c>col.x@node</c> of a node that failed reads as missing, live and on replay alike. Configurations that could
@@ -306,7 +306,7 @@ public sealed class UnwrittenAndUncommittedDataTests
     [InlineData("independent fallback", null)]
     public void NodesSharingAnOrder_AreIndependentInEveryBranch_FallbacksIncluded(string scenario, string? expected)
     {
-        // Nodes of one order run in an unspecified relative order (design 5.3), so neither may have row effects or read
+        // Nodes of one order run in an unspecified relative order, so neither may have row effects or read
         // what the other writes. A position runs its node or its fallback: a fallback that appends rows, or reads the other
         // node's column, used to pass because only the node was checked, and the result then depended on node names
         // (review 15).

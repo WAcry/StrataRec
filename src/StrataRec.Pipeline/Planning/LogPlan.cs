@@ -6,14 +6,14 @@ using StrataRec.Logging;
 
 namespace StrataRec.Pipeline.Planning;
 
-/// <summary>A compiled funnel group: one request-level sampling decision shared by its taps (design 8.2).</summary>
+/// <summary>A compiled funnel group: one request-level sampling decision shared by its taps.</summary>
 public sealed class CompiledFunnelGroup
 {
     public required int Index { get; init; }
 
     public required string Name { get; init; }
 
-    /// <summary>Hash seed of the group; also seeds row priorities (design 8.4).</summary>
+    /// <summary>Hash seed of the group; also seeds row priorities.</summary>
     public required long Seed { get; init; }
 
     public required double Rate { get; init; }
@@ -22,7 +22,7 @@ public sealed class CompiledFunnelGroup
     public required ImmutableArray<CompiledExpression> Keys { get; init; }
 }
 
-/// <summary>Which rows a tap records (design 8.3).</summary>
+/// <summary>Which rows a tap records.</summary>
 public enum TapScope : byte
 {
     /// <summary>Rows that entered the node.</summary>
@@ -36,7 +36,7 @@ public enum TapScope : byte
 }
 
 /// <summary>
-/// One compiled variant of a log tap (design 8.3, 8.6): row selection, sampling and column expressions are fixed at
+/// One compiled variant of a log tap: row selection, sampling and column expressions are fixed at
 /// load time, so capture on the request thread is row selection plus copying.
 /// </summary>
 public sealed class CompiledTap
@@ -67,7 +67,7 @@ public sealed class CompiledTap
 
     public required ImmutableArray<(string Name, CompiledExpression Expression)> Columns { get; init; }
 
-    /// <summary>The tap's schema (lineage, design 8.7): its columns and context fields with their types and expressions,
+    /// <summary>The tap's schema (lineage): its columns and context fields with their types and expressions,
     /// and as its id the content id of the definition plus the resolved types. Every batch of the tap shares it.</summary>
     public required Logging.LogSchema Schema { get; init; }
 
@@ -102,7 +102,7 @@ public sealed class CompiledTap
     public ImmutableArray<VersionRead> VersionReads { get; init; } = [];
 }
 
-/// <summary>Variants of one tap per arm combination of the layers that patch it (design 12.3: taps vary on their own).</summary>
+/// <summary>Variants of one tap per arm combination of the layers that patch it (taps vary on their own).</summary>
 public sealed class TapSlot
 {
     public required string TapId { get; init; }

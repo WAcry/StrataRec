@@ -11,7 +11,7 @@ namespace StrataRec.Expressions.Syntax;
 /// (<c>== != &lt; &lt;= &gt; &gt;= in</c>), <c>+ -</c>, <c>* / %</c>, unary <c>! -</c>, member call. <c>??</c> sits
 /// between <c>?:</c> and <c>||</c> (as in C#) and is right-associative, so <c>a ?? b ?? c</c> is
 /// <c>a ?? (b ?? c)</c> and <c>x || y ?? z</c> is <c>(x || y) ?? z</c>.</para>
-/// <para>Depth (design 7.9) is enforced twice: a nesting counter is checked <em>before</em> descending into any
+/// <para>Depth is enforced twice: a nesting counter is checked <em>before</em> descending into any
 /// nested construct, so the parser's own recursion is bounded; and every node's depth is checked when built, which
 /// bounds left-associative chains that the parser builds iteratively.</para>
 /// </remarks>
@@ -433,7 +433,7 @@ internal sealed class Parser
             $"Expression nesting exceeds the maximum depth of {_maxDepth}",
             offset,
             Math.Max(1, length),
-            "split the formula with 'let' bindings or move the logic into an operator (design 7.9)"));
+            "split the formula with 'let' bindings or move the logic into an operator"));
 
     private Token Expect(TokenKind kind, string message, string? hint = null)
     {

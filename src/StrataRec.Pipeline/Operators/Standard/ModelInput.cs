@@ -146,7 +146,7 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         return dst;
     }
 
-    /// <summary>A row of a fixed-length list column, which its writers keep at the declared length (design 4.3).</summary>
+    /// <summary>A row of a fixed-length list column, which its writers keep at the declared length.</summary>
     private ReadOnlySpan<T> Row<T>(ListColumn<T> column, int row, int width)
     {
         var value = column.Get(row);
@@ -156,7 +156,7 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
 
     /// <summary>
     /// The request-level value repeated <paramref name="count"/> times at its declared type. The value is held promoted
-    /// (an int32 as int64, a float32 as float64), exactly: it was checked against its type where it entered (design 4.3),
+    /// (an int32 as int64, a float32 as float64), exactly: it was checked against its type where it entered,
     /// so narrowing it back loses nothing.
     /// </summary>
     private GatheredInput Repeat(OperatorContext context, int count)

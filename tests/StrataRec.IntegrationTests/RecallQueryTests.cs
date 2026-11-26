@@ -17,7 +17,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A recall source's query (design 5.4): the sample's two_tower searches with the user's embedding from the catalog
+/// A recall source's query: the sample's two_tower searches with the user's embedding from the catalog
 /// (<c>"queries": { "two_tower": { "user_embedding": "ctx.user.embedding" } }</c>). Each source waits for the context
 /// features its own query reads and for nothing else, a feature that failed fails only the source that reads it, a
 /// missing value is sent as missing, and a recording keeps the values a replay compares.

@@ -12,7 +12,7 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
-/// <summary>Config of <c>LlmAnnotator@1</c> (design 5.9).</summary>
+/// <summary>Config of <c>LlmAnnotator@1</c>.</summary>
 public sealed class LlmAnnotatorConfig
 {
     /// <summary>Logical model name, bound per environment.</summary>
@@ -50,13 +50,13 @@ public sealed class LlmAnnotatorConfig
     /// <summary>The leading rows annotated, one model call each; the rows after them stay missing.</summary>
     public int Window { get; init; } = 20;
 
-    /// <summary>The most tokens the model may generate per answer (design 5.9 rule 2), passed with each call.</summary>
+    /// <summary>The most tokens the model may generate per answer, passed with each call.</summary>
     public int MaxOutputTokens { get; init; } = 64;
 }
 
 /// <summary>
 /// <c>LlmAnnotator@1</c> (ColumnWriter): writes a generative model's answer for each of the leading <c>window</c> rows into
-/// a column (a recommendation reason, a category, a flag, a number), from prompts rendered per row (design 5.9).
+/// a column (a recommendation reason, a category, a flag, a number), from prompts rendered per row.
 /// </summary>
 /// <remarks>
 /// <para>n = min(window, rows); no call when n is 0. Each row is its own call, all sent at once: batch size 1, the row as the

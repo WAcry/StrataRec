@@ -10,7 +10,7 @@ using StrataRec.Expressions;
 namespace StrataRec.Benchmarks;
 
 /// <summary>
-/// ColumnExpr vectorized backend over 5,000 live candidates (design 7.7 target: a ~20-node formula with two
+/// ColumnExpr vectorized backend over 5,000 live candidates (a ~20-node formula with two
 /// transcendental calls in at most 50 μs, with no steady-state allocation).
 /// </summary>
 /// <remarks>
@@ -24,7 +24,7 @@ namespace StrataRec.Benchmarks;
 [MemoryDiagnoser]
 public class ExpressionBenchmarks
 {
-    /// <summary>The fusion formula of design 7.3, times the log1p popularity factor of design 9.3: exp + log1p.</summary>
+    /// <summary>The fusion formula, times the log1p popularity factor: exp + log1p.</summary>
     public const string FusionFormula = """
         let utility    = param.w_click * col.score.p_click + param.w_like * col.score.p_like;
         let age_hours  = col.item.age_hours ?? 720.0;
@@ -33,10 +33,10 @@ public class ExpressionBenchmarks
         utility * (1.0 + param.w_fresh * freshness) * cold_boost * (1.0 + 0.05 * log1p(col.item.clicks_7d))
         """;
 
-    /// <summary>Exploration noise of design 7.8 (all-int64 hash01 fast path).</summary>
+    /// <summary>Exploration noise (all-int64 hash01 fast path).</summary>
     public const string ExplorationFormula = "param.explore_eps * hash01(ctx.request.seed, col.entity_id)";
 
-    /// <summary>An int64 result written into an <c>int32</c> column: measures the narrowing write (design 4.3).</summary>
+    /// <summary>An int64 result written into an <c>int32</c> column: measures the narrowing write.</summary>
     public const string NarrowFormula = "col.entity_id - 1000000";
 
     /// <summary>The list kernels over a per-candidate topic list stored as <c>list&lt;int32&gt;</c> (read in place, no widening): <c>size</c>, <c>in</c> and <c>overlap_count</c>.</summary>

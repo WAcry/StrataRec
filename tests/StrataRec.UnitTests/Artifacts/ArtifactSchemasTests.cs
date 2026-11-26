@@ -4,7 +4,7 @@ using StrataRec.Artifacts.Model;
 namespace StrataRec.UnitTests.Artifacts;
 
 /// <summary>
-/// The generated schemas (design 9.1): an operator's config chosen by a node's op, configs that repeat or contain a type
+/// The generated schemas: an operator's config chosen by a node's op, configs that repeat or contain a type
 /// made self-contained, an arm as a merge patch that never requires a member and lets any value be null, and the
 /// editor's "$schema" taken out of a document before it is bound and hashed.
 /// </summary>

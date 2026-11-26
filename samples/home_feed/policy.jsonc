@@ -1,4 +1,4 @@
-// Who reviews an experiment that touches what (design 11.4): RFC 6901 prefixes into the patchable view.
+// Who reviews an experiment that touches what: RFC 6901 prefixes into the patchable view.
 // Review only: stratarec explain-plan lists each arm's owners; a release does not carry this file.
 {
   "$schema": "schemas/policy.schema.json",

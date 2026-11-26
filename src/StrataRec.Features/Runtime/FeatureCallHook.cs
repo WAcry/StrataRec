@@ -36,7 +36,7 @@ public interface IStagedFeatureValues
 }
 
 /// <summary>
-/// Per-request hook at the single place feature connectors are called (design 13.4). A recorder sees every call when it
+/// Per-request hook at the single place feature connectors are called. A recorder sees every call when it
 /// finishes; a replayer answers calls from a recording instead of the connector, without waiting. The fetcher gets a hook
 /// only for requests that record or replay, so other requests pay one null check per call.
 /// </summary>

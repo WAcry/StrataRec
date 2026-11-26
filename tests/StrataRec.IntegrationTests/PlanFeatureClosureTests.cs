@@ -7,7 +7,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A plan holds the catalog features it reads and what those are computed from or keyed by (design 6.3), whichever way it
+/// A plan holds the catalog features it reads and what those are computed from or keyed by, whichever way it
 /// reads them: a node, a <c>when</c>, a fallback, an arm's node, a tap, the output, another derived feature, the key of a
 /// foreign-key entity. Each case reads a feature nothing else reads, checks the plan holds it (and not the user features
 /// the sample declares and nothing reads), and that the value arrives where it is read.

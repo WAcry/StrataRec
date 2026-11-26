@@ -30,7 +30,7 @@ public sealed class ExpressionFilterFactory : IOperatorFactory
 
     private sealed class ExpressionFilter(CompiledExpression predicate) : Operator, IExplainableOperator
     {
-        /// <summary>The predicate and its value for each row it tested (design 13.3).</summary>
+        /// <summary>The predicate and its value for each row it tested.</summary>
         public void Explain(ExplainContext context)
         {
             var values = context.Evaluate(predicate);
@@ -116,7 +116,7 @@ public sealed class ExpressionScorerFactory : IOperatorFactory
     }
 
     /// <param name="outOfRange">The column's default: what a row gets when its result does not fit <c>int32</c> or
-    /// <c>list&lt;int32&gt;</c> storage (design 4.3). Missing when none is declared; the row is then missing, which commit
+    /// <c>list&lt;int32&gt;</c> storage. Missing when none is declared; the row is then missing, which commit
     /// rejects for a non-nullable column.</param>
     private sealed class ExpressionScorer(CompiledExpression expression, OutputColumn output, ScalarValue outOfRange) : Operator
     {
@@ -128,7 +128,7 @@ public sealed class ExpressionScorerFactory : IOperatorFactory
     }
 }
 
-/// <summary>Config of <c>CompositeMultiplierScorer@1</c> (design 7.8).</summary>
+/// <summary>Config of <c>CompositeMultiplierScorer@1</c>.</summary>
 public sealed class CompositeMultiplierScorerConfig
 {
     public required string OutputCol { get; init; }
@@ -144,7 +144,7 @@ public sealed class CompositeMultiplierScorerConfig
 }
 
 /// <summary>
-/// <c>CompositeMultiplierScorer@1</c>: <c>score = base × Π multipliers + Σ addends</c> (design 7.8). Terms are evaluated
+/// <c>CompositeMultiplierScorer@1</c>: <c>score = base × Π multipliers + Σ addends</c>. Terms are evaluated
 /// in canonical (ordinal) key order so floating-point results are deterministic.
 /// </summary>
 public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
@@ -204,7 +204,7 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
         OutputColumn output) : Operator, IExplainableOperator
     {
         /// <summary>
-        /// The base utility, each multiplier and each addend for a scored row (design 13.3 item 3), and the score they make
+        /// The base utility, each multiplier and each addend for a scored row, and the score they make
         /// in the operator's order: the base, times each multiplier, plus each addend, in float64.
         /// </summary>
         /// <remarks>

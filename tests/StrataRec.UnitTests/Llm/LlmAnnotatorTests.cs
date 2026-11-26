@@ -7,7 +7,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Llm;
 
 /// <summary>
-/// <c>LlmAnnotator@1</c> (design 5.9): one call per window row, each answer parsed by the column's type and written to the
+/// <c>LlmAnnotator@1</c>: one call per window row, each answer parsed by the column's type and written to the
 /// row or left missing, the node Degraded when some rows have no value and Failed when every call failed, the load-time
 /// checks, and a replay per entity.
 /// </summary>

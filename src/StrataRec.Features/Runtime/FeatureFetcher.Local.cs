@@ -12,7 +12,7 @@ using StrataRec.Features.Local;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The request read path of local groups (design 6.6 "读取路径"): everything a request does with a local table is here.
+/// The request read path of local groups: everything a request does with a local table is here.
 /// </summary>
 /// <remarks>
 /// <para><b>When.</b> A local group is read synchronously by <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/>
@@ -29,11 +29,11 @@ namespace StrataRec.Features.Runtime;
 /// index slot is re-pointed to the new record), so looking a key up twice can give two records. Every consumer of a
 /// read takes the records of its single lookup: rows that share a key (a foreign key) get the same record, and the
 /// recording holds exactly the records the fill used, never a later lookup's.</para>
-/// <para><b>Semantics</b> are the fetched features' (design 6.7): a key the table does not hold, a record without the
+/// <para><b>Semantics</b> are the fetched features': a key the table does not hold, a record without the
 /// field, a missing foreign or context key, and a non-finite value all give <see cref="Catalog.FeatureDefinition.Absent"/>;
 /// a failed key fails the group's features and a degraded one degrades them. A table that is not loaded fails the
 /// features, never serves them as missing.</para>
-/// <para><b>Replay</b> (design 13.4). A recording request records each read as a feature call through the
+/// <para><b>Replay</b>. A recording request records each read as a feature call through the
 /// <see cref="IFeatureCallHook"/>, with the keys and the values it read; a replaying request answers local groups like
 /// fetched ones, from the recording through the staging path, so a replay never reads the table. Both sides take the
 /// keys of the same rows, in live-row order and deduplicated by a <see cref="FetchKeys"/> (first-seen order), so a
@@ -55,11 +55,11 @@ public sealed partial class FeatureFetcher
     };
 
     /// <summary>
-    /// Whether a prefetch (design 5.4) may start the group. A local group is read synchronously by the node that needs
+    /// Whether a prefetch may start the group. A local group is read synchronously by the node that needs
     /// it, for the rows live then, so it is never prefetched; nor under replay, whose answer must take the same rows' keys.
     /// </summary>
     /// <remarks>A cache group is read like a local one (its misses are resolved before the read completes), so the same
-    /// holds for it: never prefetched. Its misses therefore wait for the node that needs them; see design 6.6.</remarks>
+    /// holds for it: never prefetched. Its misses therefore wait for the node that needs them.</remarks>
     private static bool Prefetches(FetchGroup group) => group.Supply.Mode switch
     {
         SupplyMode.Fetch or SupplyMode.Service => true,
@@ -361,7 +361,7 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>Counts what a fill replaced by the absent value: non-finite values, and lists of another length than a
-    /// fixed-length feature's (out of range, as every writer counts them, design 4.3).</summary>
+    /// fixed-length feature's (out of range, as every writer counts them).</summary>
     private void AddReplaced(FeatureRuntimeInfo info, LocalFillCounts replaced)
     {
         AddNonFinite(info, replaced.NonFinite);
@@ -371,7 +371,7 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>The features' state after a read: degraded with a degraded key (design 6.7), otherwise ok.</summary>
+    /// <summary>The features' state after a read: degraded with a degraded key, otherwise ok.</summary>
     private void SetReadState(FetchGroup group, ReadOnlySpan<int> features)
     {
         var error = KeyState(group, out var keyError) == FeatureState.Degraded ? keyError : null;
@@ -459,7 +459,7 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>A table that is not loaded fails the features (design 6.7 layer 2): an empty table would serve every key as missing.</summary>
+    /// <summary>A table that is not loaded fails the features: an empty table would serve every key as missing.</summary>
     private void FailNotLoaded(LocalGroupTable local, ReadOnlySpan<int> features)
     {
         var error = $"local table {local.Spec.Name} (source '{local.Spec.Schema.Source}' in {local.Spec.Artifact}) is not loaded; " +
@@ -471,7 +471,7 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>Read hit ratio (design 13.1): keys the table held, and keys it did not. Not counted by a replay, which never gets here.</summary>
+    /// <summary>Read hit ratio: keys the table held, and keys it did not. Not counted by a replay, which never gets here.</summary>
     private static void CountKeys(LocalFeatureTable table, int hits, int misses)
     {
         if (hits > 0)

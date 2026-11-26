@@ -5,7 +5,7 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The distinct keys of one fetch or read of a candidate-scoped group (design 6.5): each row's key deduplicated as a
+/// The distinct keys of one fetch or read of a candidate-scoped group: each row's key deduplicated as a
 /// tuple, in first-seen order (entry k is the k-th distinct key), and their <see cref="EntityKeyBatch"/> for a connector,
 /// a table or a recording. The one place that knows how a key's parts are deduplicated.
 /// </summary>

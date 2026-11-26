@@ -6,7 +6,7 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.Hosting.Replay;
 
-/// <summary>Reads and writes replay bundles (design 13.4) as JSON files.</summary>
+/// <summary>Reads and writes replay bundles as JSON files.</summary>
 public static class ReplayBundleFile
 {
     /// <summary>Serializes a bundle with the artifact serializer (snake_case, nulls omitted).</summary>

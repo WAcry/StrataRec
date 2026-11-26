@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Candidate explanations end to end (design 13.3): <c>stratarec run --explain</c> on the home_feed sample says where a
+/// Candidate explanations end to end: <c>stratarec run --explain</c> on the home_feed sample says where a
 /// survivor ended and which node dropped an item with the values it read; a replay explains the replayed run; a request its
 /// fallback pipeline served explains that run; the engine rejects ids it cannot explain before anything runs.
 /// </summary>

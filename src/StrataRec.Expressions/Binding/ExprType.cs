@@ -2,7 +2,7 @@ using StrataRec.Core.Types;
 
 namespace StrataRec.Expressions.Binding;
 
-/// <summary>Expression-level type kinds (design 4.3, after promotion).</summary>
+/// <summary>Expression-level type kinds (after promotion).</summary>
 internal enum TypeKind : byte
 {
     /// <summary>Poison type of an ill-typed subexpression; suppresses cascading diagnostics.</summary>
@@ -12,7 +12,7 @@ internal enum TypeKind : byte
     Float,
     String,
 
-    // Lists, by promoted element type (design 4.3: list<int32> reads as list<int64>, list<float32> as list<float64>).
+    // Lists, by promoted element type (list<int32> reads as list<int64>, list<float32> as list<float64>).
     ListBool,
     ListInt,
     ListFloat,

@@ -7,7 +7,7 @@ using StrataRec.Core.Values;
 namespace StrataRec.Logging;
 
 /// <summary>
-/// One logged column of a batch (design 8.7), laid out as Arrow lays out a column: the values of the batch's rows in one
+/// One logged column of a batch, laid out as Arrow lays out a column: the values of the batch's rows in one
 /// typed array, a validity bitmap, and for a list the offsets of each row's elements. A batch owns its columns, so the
 /// request's candidate table can go back to the pool while the batch waits in a queue.
 /// </summary>
@@ -108,7 +108,7 @@ public sealed class LogColumn
     /// The <paramref name="rows"/> of <paramref name="buffer"/> as a column of <paramref name="type"/>, in that order, copied
     /// in the buffer's storage without widening: a candidate column's own storage for a column logged as a reference to
     /// it, an expression's result otherwise. A NaN or ±∞ number and a list with such an element are missing: logs carry
-    /// no non-finite values (design 8.7).
+    /// no non-finite values.
     /// </summary>
     /// <remarks>A row is missing when the buffer's validity says so, whatever the type's nullability: a table slot is
     /// missing until something writes it, and a log records what is there rather than whatever an unwritten row
@@ -367,14 +367,14 @@ public sealed class LogColumn
 }
 
 /// <summary>
-/// What a tap variant logs (design 8.7): its columns and context fields with their types and the expressions that define
+/// What a tap variant logs: its columns and context fields with their types and the expressions that define
 /// them. Built once per plan and shared by every batch of the variant (<see cref="LogBatch.Schema"/>), so a sink can
 /// publish the record a batch's schema id names, once per id, and the engine publishes nothing of its own.
 /// </summary>
 /// <param name="Id">Content id of the record (<see cref="Create"/>): one id names one record.</param>
 public sealed record LogSchema(string Id, string TapId, ImmutableArray<LogField> Columns, ImmutableArray<LogField> Context)
 {
-    /// <summary>The schema of the batches that record a request's experiments when no tap fired (design 11.3).</summary>
+    /// <summary>The schema of the batches that record a request's experiments when no tap fired.</summary>
     public static LogSchema Experiments { get; } = new("$experiments", "$experiments", [], []);
 
     /// <summary>

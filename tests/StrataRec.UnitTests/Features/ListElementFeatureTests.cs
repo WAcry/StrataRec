@@ -12,7 +12,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// Lists of every element type through the feature layer (design 4.3, 6.5): connector staging, the memory connector,
+/// Lists of every element type through the feature layer: connector staging, the memory connector,
 /// backfill and the non-finite rule for float lists, context values, configuration values and type spellings.
 /// </summary>
 public class ListElementFeatureTests
@@ -70,7 +70,7 @@ public class ListElementFeatureTests
     [Fact]
     public async Task Backfill_CopiesFloatAndBoolLists_AndReplacesAFloatListHoldingAnInfinity()
     {
-        // 1e300 does not fit float32: it reads as +inf, and the list it is in takes the default as a whole (design 4.3).
+        // 1e300 does not fit float32: it reads as +inf, and the list it is in takes the default as a whole.
         var rig = new FeatureTestRig().MemorySource("item_store", """
             { "1": { "w": [0.5, 1.5], "clicked": [true] },
               "2": { "w": [1, 1e300] },
@@ -173,7 +173,7 @@ public class ListElementFeatureTests
     [Fact]
     public async Task FixedLengthContextFeatures_OfAnotherLength_TakeTheDefault_OrAreMissing_OrFail_AndAreCounted()
     {
-        // As a candidate column's writers do (design 4.3): a list of another length than list<E,N> is out of range, whatever
+        // As a candidate column's writers do: a list of another length than list<E,N> is out of range, whatever
         // its elements, even a non-finite one.
         var rig = new FeatureTestRig();
         var fits = Derived(rig, "user.fits", "list<float32,2>", ScalarValue.FromFloat64List(new[] { 0.5, 1 }));

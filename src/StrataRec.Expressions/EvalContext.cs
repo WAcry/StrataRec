@@ -34,7 +34,7 @@ public readonly struct EvalContext
     /// <summary>Parameter snapshot indexed by <see cref="SymbolKind.Param"/> symbol id.</summary>
     internal ScalarValue[] Params { get; }
 
-    /// <summary>Optional counters of values that did not fit their storage (design 4.3).</summary>
+    /// <summary>Optional counters of values that did not fit their storage.</summary>
     internal ExpressionCounters? Counters { get; }
 }
 
@@ -45,7 +45,7 @@ public sealed class ExpressionCounters
 
     /// <summary>
     /// Number of values that did not fit the storage they were written to and were replaced by the column's default or
-    /// marked missing (metric <c>column_out_of_range_total</c>, design 4.3): an int64 outside the int32 range written to
+    /// marked missing (metric <c>column_out_of_range_total</c>): an int64 outside the int32 range written to
     /// an <c>int32</c> column, a list with such an element written to a <c>list&lt;int32&gt;</c> column (counted once
     /// per list), or a list of another length written to a <c>list&lt;E,N&gt;</c> column, feature or context value.
     /// </summary>

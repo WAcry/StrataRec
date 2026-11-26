@@ -455,7 +455,7 @@ public sealed class LogPipelineTests
     }
 
     /// <summary>
-    /// Design 8.7: the id a batch records names a schema record. The sink writes each schema's record once, before the
+    /// The id a batch records names a schema record. The sink writes each schema's record once, before the
     /// first batch naming it, with every column's type and expression; it was hashed and never published.
     /// </summary>
     [Fact]

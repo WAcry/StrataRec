@@ -10,17 +10,17 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec build</c> (design 10.1 item 2): validates, uploads canonical artifacts to a content-addressed store and
+/// <c>stratarec build</c>: validates, uploads canonical artifacts to a content-addressed store and
 /// writes the release manifest. Nothing is uploaded when validation fails.
 /// </summary>
 /// <remarks>
-/// <para>Without <c>--seq</c>, the manifest is the next release of its pipeline in its environment (design 10.2): its
+/// <para>Without <c>--seq</c>, the manifest is the next release of its pipeline in its environment: its
 /// <c>seq</c> is one more than that of the manifest the store's pointer names (<c>stratarec publish</c> writes it), and it
 /// names that manifest as <c>previous</c>, which
 /// <c>stratarec diff --to</c> compares with; the first release is 1. So build and publish follow each other without
 /// anyone keeping count. A configuration that is the published one's, but for those fields, is no new release: build
 /// writes the published manifest, which publish then finds published already, so a pipeline can run both again.</para>
-/// <para>An experiment that <c>stratarec revoke</c> removed stays out (design 10.6): while the published manifest lists it
+/// <para>An experiment that <c>stratarec revoke</c> removed stays out: while the published manifest lists it
 /// as revoked (<see cref="ReleaseManifest.Revoked"/>), a build that releases it unchanged fails at the release file's entry,
 /// so a release that follows the stop (a routine one, from CI) does not bring the stopped experiment back. A changed
 /// experiment is the owner's fix and is released; <c>--restore</c> releases one unchanged. A build's manifest lists no
@@ -44,7 +44,7 @@ internal static class BuildCommand
         var manifest = new Option<string?>("--manifest", "-m") { Description = "Write the manifest here instead of stdout." };
         var seq = new Option<long?>("--seq")
         {
-            Description = "The manifest's sequence number (design 10.2), from 1 to 2^53 - 1 (the largest safe integer). By default the next release: one more than the manifest the store's " +
+            Description = "The manifest's sequence number, from 1 to 2^53 - 1 (the largest safe integer). By default the next release: one more than the manifest the store's " +
                           "pointer for the pipeline and environment names ('stratarec publish' writes it); 1 when none is published.",
         };
         seq.Validators.Add(static result =>
@@ -78,7 +78,7 @@ internal static class BuildCommand
     {
         errors ??= Console.Error;
         var diagnostics = new DiagnosticBag();
-        // An expired experiment cannot enter a new release (design 11.7): build compiles with today's date, as validate does.
+        // An expired experiment cannot enter a new release: build compiles with today's date, as validate does.
         var (workspace, request, compilation) = CommonOptions.Compile(provided, config, environment, pipeline, diagnostics, DateOnly.FromDateTime(DateTime.UtcNow));
         if (request is null || compilation is not { Succeeded: true } || diagnostics.HasErrors)
         {

@@ -6,7 +6,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
-/// The model a node calls, bound at compile time from the config keys every model operator shares (design 6.9):
+/// The model a node calls, bound at compile time from the config keys every model operator shares:
 /// <c>model</c>, the logical name of the service bound per environment, and <c>version</c> or <c>version_param</c>, a
 /// string parameter whose <c>enum</c> lists the versions a request may choose. Immutable and shared by every request of
 /// the node.
@@ -15,7 +15,7 @@ namespace StrataRec.Pipeline.Operators;
 /// <para>Every version a request may use is in <see cref="Versions"/>, so the operator checks each one's signature at
 /// load (<see cref="Signature"/>): a version that does not fit would load cleanly and then fail on every request that
 /// chose it. Calls go through <see cref="OperatorContext.CallAsync"/> with the request's seed
-/// (<c>ctx.request.seed</c>, design 5.9 rule 5), so they are bounded, measured, recorded and replayed like every other
+/// (<c>ctx.request.seed</c>), so they are bounded, measured, recorded and replayed like every other
 /// model call.</para>
 /// <para>Public so that operators outside this assembly (the generative ones in StrataRec.Llm) bind and call models with
 /// the same keys, error codes and messages as the built-in model operators, instead of a copy that would drift.</para>
@@ -82,7 +82,7 @@ public sealed class BoundModel
             if (!context.Schema.TryGetParam(p.Name, out var leaf) || leaf.Enum is null)
             {
                 context.Error("/version_param", "MODEL_VERSION_ENUM", $"Parameter '{p.Name}' must declare an enum of allowed model versions.",
-                    "every version is signature-checked at load time (design 6.9)");
+                    "every version is signature-checked at load time");
                 return null;
             }
 

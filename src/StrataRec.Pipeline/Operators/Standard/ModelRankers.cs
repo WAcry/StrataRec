@@ -7,7 +7,7 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
-/// <summary>Config of <c>PairwiseRanker@1</c> (design 5.9).</summary>
+/// <summary>Config of <c>PairwiseRanker@1</c>.</summary>
 public sealed class PairwiseRankerConfig : ModelCallConfig
 {
     /// <summary>
@@ -37,7 +37,7 @@ public sealed class PairwiseRankerConfig : ModelCallConfig
 
 /// <summary>
 /// <c>PairwiseRanker@1</c> (RowOrder; ColumnWriter with <c>score_col</c>): reranks the leading <c>window</c> rows by a
-/// model that compares two rows at a time (design 5.9).
+/// model that compares two rows at a time.
 /// </summary>
 /// <remarks>
 /// <para>Every pair (i, j), i &lt; j, of the first n = min(window, rows) rows is sent once, the higher-ranked row first,
@@ -108,7 +108,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
             context.Error("/window", "RANKER_MAX_PAIRS",
                 $"A window of {config.Window} rows makes {pairs.ToString(CultureInfo.InvariantCulture)} pairs, more than max_pairs ({config.MaxPairs}).",
                 "lower 'window', or raise 'max_pairs' if the model can take that many pairs in one request: every pair in the window is compared, "
-                + "none is dropped at run time (design 5.9)");
+                + "none is dropped at run time");
             return null;
         }
 
@@ -267,7 +267,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
     }
 }
 
-/// <summary>Config of <c>ListwiseReranker@1</c> (design 5.9).</summary>
+/// <summary>Config of <c>ListwiseReranker@1</c>.</summary>
 public sealed class ListwiseRerankerConfig : ModelCallConfig
 {
     /// <summary>The model output read: float32 or float64 <c>[1, -1]</c>, one score per row of the list, higher first.</summary>
@@ -282,7 +282,7 @@ public sealed class ListwiseRerankerConfig : ModelCallConfig
 
 /// <summary>
 /// <c>ListwiseReranker@1</c> (RowOrder; ColumnWriter with <c>score_col</c>): scores the leading <c>window</c> rows in one
-/// model call that sees them together, and reorders them by the scores (design 5.9).
+/// model call that sees them together, and reorders them by the scores.
 /// </summary>
 /// <remarks>
 /// <para>One call per request, batch size 1: a column input whose rows give T <c>[rows]</c> (or <c>[rows, N]</c>) is sent

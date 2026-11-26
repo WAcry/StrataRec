@@ -6,7 +6,7 @@ namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
 /// What a store's pointer publishes for a pipeline in an environment, as <c>build</c>, <c>publish</c> and <c>revoke</c>
-/// read it: the manifest it names, and the experiments the revocations just before it removed (design 10.6). The errors of
+/// read it: the manifest it names, and the experiments the revocations just before it removed. The errors of
 /// a pointer that cannot be read, or that names a manifest the store cannot read or of another pipeline (review 37), are
 /// reported here, once for the three commands.
 /// </summary>

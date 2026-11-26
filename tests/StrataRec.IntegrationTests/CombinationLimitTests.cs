@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The compile-time bounds on arm combinations (design 11.5, 12.3): a space too large to compile or check is a located
+/// The compile-time bounds on arm combinations: a space too large to compile or check is a located
 /// error, never an exception and never a plan that serves unchecked combinations.
 /// </summary>
 public sealed class CombinationLimitTests

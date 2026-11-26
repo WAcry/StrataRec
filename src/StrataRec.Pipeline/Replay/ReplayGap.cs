@@ -1,7 +1,7 @@
 namespace StrataRec.Pipeline.Replay;
 
 /// <summary>
-/// Data a replay needed and the bundle did not have (design 13.4). The replay treated it as missing (a feature value, a
+/// Data a replay needed and the bundle did not have. The replay treated it as missing (a feature value, a
 /// service's answer) and never invented it; this is the list a comparison report shows.
 /// </summary>
 /// <param name="Kind"><c>feature</c>, or the role a service was called in: <c>model</c>, <c>recall</c>, or an operator's own.</param>

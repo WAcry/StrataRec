@@ -4,7 +4,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// The rule of <see cref="ArmYields"/> (design 11.1): an experiment yields in all its arms to an experiment the request is
+/// The rule of <see cref="ArmYields"/>: an experiment yields in all its arms to an experiment the request is
 /// in, judged on the arms as assigned, so no order and no arm of its own decides it.
 /// </summary>
 public sealed class ArmYieldsTests

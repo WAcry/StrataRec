@@ -64,7 +64,7 @@ internal readonly record struct LocalFillCounts(int NonFinite, int OutOfRange);
 
 /// <summary>
 /// One generation of a <see cref="LocalFeatureTable"/>: pages of records, the index over them and the string dictionary
-/// (design 6.6). A request pins the table's current version once and does every lookup against it; a compaction or reload
+///. A request pins the table's current version once and does every lookup against it; a compaction or reload
 /// builds a new version and swaps it in, and the old one is left to the garbage collector.
 /// </summary>
 /// <remarks>
@@ -535,11 +535,11 @@ public sealed class TableVersion
     /// <param name="rows">Physical rows of <paramref name="target"/>, one per record.</param>
     /// <param name="absent">
     /// What a row gets when its key has no record or the record has no value for the field: the feature's default, or
-    /// <see cref="ScalarValue.Missing"/> (validity bit cleared). Never a zero (design 6.7).
+    /// <see cref="ScalarValue.Missing"/> (validity bit cleared). Never a zero.
     /// </param>
     /// <param name="filled">The slot's fill bitmap; when not empty, every row in <paramref name="rows"/> is marked filled.</param>
     /// <returns>
-    /// The values replaced by <paramref name="absent"/>. Like backfill (design 4.3), stored <c>float32</c>/<c>float64</c>
+    /// The values replaced by <paramref name="absent"/>. Like backfill, stored <c>float32</c>/<c>float64</c>
     /// values that are not finite are not served (a float list with such an element as a whole), nor are lists of another
     /// length than a <c>list&lt;E,N&gt;</c> target's: the table stores what its writer wrote, and a read applies the type.
     /// </returns>
@@ -788,7 +788,7 @@ public sealed class TableVersion
 
     /// <summary>
     /// How many of <paramref name="records"/> exist and have a value for the field: what a read of their keys got from the
-    /// table (a source's missing ratio, design 13.1). Reads the validity bits only.
+    /// table (a source's missing ratio). Reads the validity bits only.
     /// </summary>
     internal int CountValues(int field, ReadOnlySpan<LocalRecordRef> records)
     {

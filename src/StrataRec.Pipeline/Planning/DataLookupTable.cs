@@ -8,7 +8,7 @@ using StrataRec.Features.Catalog;
 
 namespace StrataRec.Pipeline.Planning;
 
-/// <summary>An immutable lookup table built from a <see cref="DataTableArtifact"/> (design 7.6).</summary>
+/// <summary>An immutable lookup table built from a <see cref="DataTableArtifact"/>.</summary>
 public sealed class DataLookupTable : ILookupTable
 {
     private readonly Dictionary<ScalarValue, ScalarValue> _entries;

@@ -30,7 +30,7 @@ public sealed record EffectiveParam(ParamLeaf Leaf, ScalarValue Value, bool Over
 public sealed record EffectiveTap(CompiledTap Tap, CompiledFunnelGroup Group);
 
 /// <summary>
-/// What a request with one arm combination executes (design 13.4 items 2 and 3): its nodes with their merged
+/// What a request with one arm combination executes: its nodes with their merged
 /// definitions, its parameter snapshot, the log taps that capture and the funnel groups they sample with, and the output.
 /// </summary>
 /// <remarks>
@@ -74,7 +74,7 @@ public sealed class EffectivePlan
 
     /// <summary>
     /// The plan a request in <paramref name="arms"/> executes: without an arm whose experiment yields to another's of them
-    /// (design 11.1), as the executor runs it, so <see cref="ArmIds"/> are the arms that run. A tool that shows the arms a
+    ///, as the executor runs it, so <see cref="ArmIds"/> are the arms that run. A tool that shows the arms a
     /// user named refuses such a combination first (<see cref="ExecutionPlan.NeverRunTogether"/>).
     /// </summary>
     public static EffectivePlan Create(ExecutionPlan plan, RequestArms arms)

@@ -30,7 +30,7 @@ internal enum SampleTiming
 /// <remarks>
 /// <para>The timing policy of every test of the sample lives here. The sample keeps a realistic budget: ctr_ranker gives
 /// its model 50 ms and falls back to ctr_backup. A cold call takes about 20 ms on a dev box and can take more than 50 ms
-/// on a busy CI runner, and an answer after the budget is a timeout however it arrived (design 4.8), so a test comparing
+/// on a busy CI runner, and an answer after the budget is a timeout however it arrived, so a test comparing
 /// two live runs would sometimes compare the backup's scores with the model's. Tests therefore run on an untimed copy
 /// (<see cref="SampleTiming.Untimed"/>) and ask for <see cref="SampleTiming.AsWritten"/> when the budgets are what they
 /// test. A budget a test writes into its own edits is the test's.</para>

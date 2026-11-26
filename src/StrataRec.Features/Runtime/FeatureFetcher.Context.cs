@@ -13,7 +13,7 @@ using StrataRec.Features.Local;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The context prefetch (design 6.8 item 5): everything a request does to make its context features available is here.
+/// The context prefetch: everything a request does to make its context features available is here.
 /// </summary>
 /// <remarks>
 /// <para><b>Starts.</b> <see cref="StartContextFetch"/> starts, at request start and concurrently with recall, every context
@@ -30,7 +30,7 @@ namespace StrataRec.Features.Runtime;
 /// context feature is computed once every group is stored, and its readers wait for the whole prefetch.</para>
 /// <para><b>Keys.</b> A chained group's key is read from the stored values, as a request input is: a missing one (absent,
 /// failed, not answered) is no key, so nothing is called and the features take their absent values. As for a foreign key
-/// (design 6.7), a failed key feature fails the group's features, without a call, and a degraded one degrades them.</para>
+///, a failed key feature fails the group's features, without a call, and a degraded one degrades them.</para>
 /// <para><b>Lifetime</b> (review 72). The prefetch holds the request memory until every group it started is stored and
 /// every derived feature it computes is computed, however the starts ended; then it rethrows the first failure. A chained
 /// group is not started when what its key reads failed with an exception, and not sent when its key is stored after the
@@ -57,7 +57,7 @@ public sealed partial class FeatureFetcher
     private volatile bool _ended;
 
     /// <summary>
-    /// Starts fetching context features (and computes context-derived ones) concurrently with recall (design 6.8), each group
+    /// Starts fetching context features (and computes context-derived ones) concurrently with recall, each group
     /// once what its key reads is stored.
     /// </summary>
     public void StartContextFetch(ReadOnlySpan<int> features, CancellationToken cancellationToken)
@@ -110,7 +110,7 @@ public sealed partial class FeatureFetcher
     /// The task that has stored context feature <paramref name="feature"/>, one the plan prefetches: its group's, a derived
     /// one's computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>, a key or an operator reads it), or for any
     /// other derived one the whole prefetch's. Features stored together share a task. For an operator that reads context
-    /// features while it runs rather than before it starts (a recall source's query values, design 5.4): it waits for these
+    /// features while it runs rather than before it starts (a recall source's query values): it waits for these
     /// tasks, then reads each feature's state with <see cref="ContextStoredState"/>.
     /// </summary>
     /// <remarks>Call it on the operator's flow while the request runs. An operator that stopped waiting (the node's budget)
@@ -263,7 +263,7 @@ public sealed partial class FeatureFetcher
 
     /// <summary>
     /// Starts one context group for <paramref name="features"/>, the members the prefetch needs, and returns the task that
-    /// has stored them. The key's state rule is a foreign key's (design 6.7): a failed key feature fails the features without
+    /// has stored them. The key's state rule is a foreign key's: a failed key feature fails the features without
     /// a call, a degraded one degrades them; a key of request inputs alone is ok.
     /// </summary>
     private Task StartContextGroup(FetchGroup group, int[] features, CancellationToken cancellationToken)
@@ -628,7 +628,7 @@ public sealed partial class FeatureFetcher
     /// Publishes a context feature value as its storage holds it (<see cref="ColumnValues.AsStored"/>: a float32 feature's
     /// value is rounded to float32): NaN/±∞, including a float beyond the float32 range, an integer (or list element)
     /// outside the int32 range of an <c>int32</c> or <c>list&lt;int32&gt;</c> feature, and a list of another length than a
-    /// <c>list&lt;E,N&gt;</c> feature's, are counted and replaced by the default or missing (design 4.3), and a missing value
+    /// <c>list&lt;E,N&gt;</c> feature's, are counted and replaced by the default or missing, and a missing value
     /// takes the default.
     /// </summary>
     /// <remarks>Context values are held promoted, so an out-of-range value would not wrap here; it is still replaced,

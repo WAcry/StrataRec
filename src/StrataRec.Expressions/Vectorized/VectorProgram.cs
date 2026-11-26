@@ -9,7 +9,7 @@ using StrataRec.Expressions.Runtime;
 namespace StrataRec.Expressions.Vectorized;
 
 /// <summary>
-/// A row-level expression lowered for the column-at-a-time interpreter (design 7.7, backend A): request-level
+/// A row-level expression lowered for the column-at-a-time interpreter (backend A): request-level
 /// subtrees become a <see cref="ScalarProgram"/> evaluated once per call, every row-varying node becomes one
 /// <see cref="Instr"/>, and registers are assigned at compile time by liveness so that temporaries are reused.
 /// </summary>
@@ -327,7 +327,7 @@ internal sealed class VectorProgram
 }
 
 /// <summary>
-/// Writes evaluation results into a destination column (design 4.3): narrowing, validity bits, and the out-of-range
+/// Writes evaluation results into a destination column: narrowing, validity bits, and the out-of-range
 /// rule for int32 storage and fixed-length lists.
 /// </summary>
 /// <remarks>

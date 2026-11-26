@@ -81,7 +81,7 @@ public sealed class RequestColumnEndToEndTests
     }
 
     /// <summary>
-    /// A trigger site's condition may read a request column (design 12.6): evaluated in a request of any arm, it decides
+    /// A trigger site's condition may read a request column: evaluated in a request of any arm, it decides
     /// the same, because an experiment not yet triggered has changed nothing before its site, so the column holds what it
     /// would in every arm. t changes author_cap's <c>when</c> to read the recall's count (47 on explore); the control's
     /// author_cap does not run on explore.
@@ -131,7 +131,7 @@ public sealed class RequestColumnEndToEndTests
     }
 
     /// <summary>
-    /// An arm may declare a request column of its own, as it declares a column (design 11.4: add-only), and its nodes
+    /// An arm may declare a request column of its own, as it declares a column (add-only), and its nodes
     /// write and read it: in a request of the arm the count gates author_cap on explore; the control has neither.
     /// </summary>
     [Fact]
@@ -164,8 +164,7 @@ public sealed class RequestColumnEndToEndTests
 
     /// <summary>
     /// A request column an arm declares exists only where the arm is assigned: a node of another layer's arm reading it is
-    /// refused for the combination without the declaring arm, as that combination's own compile refuses it (design 11.5
-    /// check 3).
+    /// refused for the combination without the declaring arm, as that combination's own compile refuses it.
     /// </summary>
     [Fact]
     public void AReaderOfARequestColumnAnotherLayersArmDeclares_IsRejected_WhereThatArmIsNotAssigned()
@@ -215,7 +214,7 @@ public sealed class RequestColumnEndToEndTests
     }
 
     /// <summary>
-    /// Request columns interact between experiments as columns do (design 11.5; review of 1102725): an added node reading
+    /// Request columns interact between experiments as columns do (review of 1102725): an added node reading
     /// what another layer's added node writes, two added nodes writing one flow column. The review names it req.&lt;name&gt;.
     /// </summary>
     [Fact]

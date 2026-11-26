@@ -2,12 +2,12 @@ using System.Text.Json.Nodes;
 
 namespace StrataRec.Artifacts.Json;
 
-/// <summary>How a merge patch touches one footprint path (design 11.5).</summary>
+/// <summary>How a merge patch touches one footprint path.</summary>
 public enum PatchOpKind
 {
     /// <summary>
     /// The key does not exist in the base document; the whole patch value becomes a new entry. The analyzer does
-    /// not recurse into it: callers validate it as a complete object against the collection's schema (design 11.3).
+    /// not recurse into it: callers validate it as a complete object against the collection's schema.
     /// </summary>
     Add,
 
@@ -23,7 +23,7 @@ public enum PatchOpKind
 
 /// <summary>
 /// One entry of a patch footprint: an RFC 6901 path that a merge patch adds, replaces or deletes as a whole
-/// (design 11.5 item 1). The paths of one footprint never overlap: no path is a prefix of another.
+///. The paths of one footprint never overlap: no path is a prefix of another.
 /// </summary>
 public sealed class PatchOperation
 {
@@ -89,7 +89,7 @@ public sealed record PatchDiagnostic(string Code, string Message, JsonPointer Pa
 }
 
 /// <summary>
-/// Two footprint entries that overlap: equal paths, or one path is a prefix of the other (design 11.5). Whether an
+/// Two footprint entries that overlap: equal paths, or one path is a prefix of the other. Whether an
 /// overlap is acceptable (for example identical additions to an add-only collection) is decided by the caller.
 /// </summary>
 /// <param name="First">The entry from the first footprint.</param>

@@ -3,7 +3,7 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Expressions;
 
-/// <summary>What a name in an expression refers to (design 7.2).</summary>
+/// <summary>What a name in an expression refers to.</summary>
 public enum SymbolKind : byte
 {
     /// <summary><c>col.*</c>: a candidate column. Resolved per request through <see cref="Core.Tables.OutputBindings"/>
@@ -27,7 +27,7 @@ public enum SymbolKind : byte
 /// <c>@node</c> version references); -1 to resolve the committed slot through the request's output bindings.</param>
 public readonly record struct Symbol(SymbolKind Kind, string Name, ColumnType Type, int Id, int FixedSlot = -1);
 
-/// <summary>An immutable lookup table usable through <c>lookup(table_name, key, default)</c> (design 7.6).</summary>
+/// <summary>An immutable lookup table usable through <c>lookup(table_name, key, default)</c>.</summary>
 public interface ILookupTable
 {
     string Name { get; }

@@ -13,7 +13,7 @@ using StrataRec.Pipeline.Execution;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// One experiment yielding to another of a different layer (a release's <c>yields_to</c>, design 11.1, 11.5): on a
+/// One experiment yielding to another of a different layer (a release's <c>yields_to</c>): on a
 /// request in both, the one that yields runs in none of its arms, so a conflict between them is no error, and what a
 /// request in both runs is what the experiment it yields to runs alone.
 /// </summary>
@@ -353,7 +353,7 @@ public sealed class ExperimentYieldTests
     }
 }
 
-/// <summary>What a declared yield may and may not do, compiled from experiments placed in code (design 11.1).</summary>
+/// <summary>What a declared yield may and may not do, compiled from experiments placed in code.</summary>
 public sealed class ExperimentYieldDeclarationTests
 {
     private const string Top5 = """{ "params": { "final_top_k": 5 } }""";
@@ -389,7 +389,7 @@ public sealed class ExperimentYieldDeclarationTests
         Assert.Empty(Assert.Single(unused.Report.Yields).Resolves);
     }
 
-    /// <summary>A yield to an experiment the compile does not have yields nothing: a revocation loads unchecked (design 11.6).</summary>
+    /// <summary>A yield to an experiment the compile does not have yields nothing: a revocation loads unchecked.</summary>
     [Fact]
     public void AYieldToAnExperimentNotCompiled_YieldsNothing()
     {
@@ -400,7 +400,7 @@ public sealed class ExperimentYieldDeclarationTests
         Assert.Empty(compilation.Report.Yields);
     }
 
-    /// <summary>An added name has one meaning everywhere (design 11.4): two definitions are an error even where the two never run together.</summary>
+    /// <summary>An added name has one meaning everywhere: two definitions are an error even where the two never run together.</summary>
     [Fact]
     public void ADifferentDefinitionOfOneAddedName_IsStillAnError()
     {

@@ -5,7 +5,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Llm;
 
 /// <summary>
-/// <c>GenerativeRetriever@1</c> (design 5.9): the one call it sends, how it turns the answer into appended rows (new ids
+/// <c>GenerativeRetriever@1</c>: the one call it sends, how it turns the answer into appended rows (new ids
 /// only, up to <c>max_items</c>, with their features fetched like any appended row), what fails the node, the load-time
 /// checks, and a replay by the whole call.
 /// </summary>

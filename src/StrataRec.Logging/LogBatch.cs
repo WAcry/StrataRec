@@ -4,18 +4,18 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Logging;
 
-/// <summary>Delivery class of a tap (design 8.1). The two classes use separate queues.</summary>
+/// <summary>Delivery class of a tap. The two classes use separate queues.</summary>
 public enum LogDelivery : byte
 {
     /// <summary>Dropped (and counted) when its queue is full; for funnel analysis and debugging.</summary>
     BestEffort = 1,
 
-    /// <summary>At-least-once with gap detection: every batch gets a per-process sequence number (design 8.6).</summary>
+    /// <summary>At-least-once with gap detection: every batch gets a per-process sequence number.</summary>
     Durable,
 }
 
 /// <summary>
-/// One tap firing: a fixed envelope plus a columnar payload (design 8.7). Batches own their data, so the request's
+/// One tap firing: a fixed envelope plus a columnar payload. Batches own their data, so the request's
 /// candidate table can be returned to the pool while the batch waits in a queue.
 /// </summary>
 public sealed class LogBatch
@@ -39,7 +39,7 @@ public sealed class LogBatch
 
     /// <summary>
     /// The tap variant's schema (columns, types, expressions), shared by its batches; its <see cref="LogSchema.Id"/> is what
-    /// a batch records, and a sink that needs the record publishes it once per id (design 8.7).
+    /// a batch records, and a sink that needs the record publishes it once per id.
     /// </summary>
     public required LogSchema Schema { get; init; }
 
@@ -47,7 +47,7 @@ public sealed class LogBatch
 
     public required LogDelivery Delivery { get; init; }
 
-    /// <summary>Request sampling rate of the tap's funnel group (Horvitz–Thompson weight 1/req_prob, design 8.4).</summary>
+    /// <summary>Request sampling rate of the tap's funnel group (Horvitz–Thompson weight 1/req_prob).</summary>
     public required double RequestProbability { get; init; }
 
     /// <summary>Entity ids of the rows (int64 pipelines); null for string keys.</summary>
@@ -63,7 +63,7 @@ public sealed class LogBatch
     public int[]? RanksBefore { get; init; }
 
     /// <summary>
-    /// Inclusion probability of every row given the request was sampled (design 8.4): coordinated sampling keeps each row
+    /// Inclusion probability of every row given the request was sampled: coordinated sampling keeps each row
     /// with the same probability, so the batch holds one number, not one per row.
     /// </summary>
     public required double RowProbability { get; init; }
@@ -88,7 +88,7 @@ public sealed class LogBatch
     /// <summary>Outcome per executed node, e.g. <c>ctr_ranker: Failed</c>, <c>ctr_backup: Succeeded</c>.</summary>
     public IReadOnlyDictionary<string, string> NodeOutcomes { get; set; } = EmptyMap;
 
-    /// <summary>Log column → node that actually produced the underlying column (lineage, design 8.7).</summary>
+    /// <summary>Log column → node that actually produced the underlying column (lineage).</summary>
     public IReadOnlyDictionary<string, string> ColumnProducers { get; set; } = EmptyMap;
 
     /// <summary><c>process/start-time</c> of the producing process.</summary>

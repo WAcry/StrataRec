@@ -34,7 +34,7 @@ public sealed record PlanEnvironment
     public OperatorRegistry Operators { get; init; } = OperatorRegistry.CreateDefault();
 
     /// <summary>
-    /// The binding factories of this binary, of every kind (design 6.4): service clients, feature connectors, update
+    /// The binding factories of this binary, of every kind: service clients, feature connectors, update
     /// sources and distributed cache stores, by the type a binding names. <see cref="DefaultBindings"/>
     /// by default; StrataRec.Redis adds <c>redis@1</c>.
     /// </summary>
@@ -47,7 +47,7 @@ public sealed record PlanEnvironment
     /// against the current directory.</summary>
     public string? BaseDirectory { get; init; }
 
-    /// <summary>Capability ids this binary provides (design 10.4).</summary>
+    /// <summary>Capability ids this binary provides.</summary>
     public List<string> Capabilities()
     {
         // A type a binding can name: its factory has a contract of a kind. Only the contract is asked, not the settings
@@ -127,7 +127,7 @@ public sealed record PlanEnvironment
 
 /// <summary>
 /// The schema-level inputs of a plan: the baseline plus every add-only entry contributed by experiment arms
-/// (design 11.4). Collections are keyed by stable ids.
+///. Collections are keyed by stable ids.
 /// </summary>
 public sealed class SchemaSources
 {
@@ -151,7 +151,7 @@ public sealed class SchemaSources
     /// <summary>Leaves only some arm sets (new keys of map parameters, arm-declared parameters): leaf → map/param name.</summary>
     public IReadOnlyCollection<string> ExtraParamLeaves { get; init; } = Array.Empty<string>();
 
-    /// <summary>Funnel groups declared by arms (add-only, design 8.3).</summary>
+    /// <summary>Funnel groups declared by arms (add-only).</summary>
     public IReadOnlyDictionary<string, FunnelGroupSpec> ExtraFunnelGroups { get; init; } = new Dictionary<string, FunnelGroupSpec>();
 
     /// <summary>
@@ -164,7 +164,7 @@ public sealed class SchemaSources
 /// <summary>
 /// Compiles configuration into the pieces of an <see cref="ExecutionPlan"/>: the schema, node variants, the output
 /// and the feature plan. The unified (multi-experiment) compiler drives it; with no experiments it compiles a plain
-/// pipeline, which also serves as the reference implementation for differential tests (design 16.2).
+/// pipeline, which also serves as the reference implementation for differential tests.
 /// </summary>
 public sealed class PlanBuilder
 {
@@ -194,7 +194,7 @@ public sealed class PlanBuilder
     private FeatureCatalog? _catalog;
     private Dictionary<string, ContextField>? _requestInputs;
 
-    /// <param name="bindings">Where the plan's local tables, clients and connectors come from (design 6.4, 6.6): an
+    /// <param name="bindings">Where the plan's local tables, clients and connectors come from: an
     /// engine's lease shares and loads them; null gives ones that are never loaded, for compiling without serving.</param>
     public PlanBuilder(PlanEnvironment environment, DiagnosticBag diagnostics, IPlanBindings? bindings = null)
     {
@@ -424,7 +424,7 @@ public sealed class PlanBuilder
             {
                 // A parameter an experiment overrides would decide whether the node runs before the experiment's trigger
                 // is recorded (it is recorded when a running node reads it): one arm's requests triggered, another's not
-                // (design 5.5, 12.6).
+                //.
                 _diagnostics.Error("WHEN_READS_PARAM", artifact, pointer + "/when",
                     $"'when' reads 'param.{param}'; a condition reads only request-level values (ctx.*, req.*).",
                     "an experiment changes a node's condition by patching its 'when' (e.g. \"when\": \"ctx.user.tenure_days < 14\")");
@@ -499,13 +499,13 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Compiles one log tap definition (a fully merged <c>/log_taps/&lt;id&gt;</c> object) into a variant (design 8.3).
+    /// Compiles one log tap definition (a fully merged <c>/log_taps/&lt;id&gt;</c> object) into a variant.
     /// Call after the nodes are compiled: <c>columns_from</c> expands a compiled model node's inputs. Returns null
     /// after reporting errors.
     /// </summary>
     /// <param name="resolveNode">
     /// Resolves a node id to the variant in effect where this tap variant runs (the unified plan compiles a tap per arm
-    /// combination, design 12.3); <c>columns_from</c> expands that variant's inputs. Defaults to the only compiled node
+    /// combination); <c>columns_from</c> expands that variant's inputs. Defaults to the only compiled node
     /// with the id.
     /// </param>
     public CompiledTap? CompileTap(string tapId, JsonObject definition, string artifact, Func<string, CompiledNode?>? resolveNode = null)
@@ -594,7 +594,7 @@ public sealed class PlanBuilder
         if (spec.FetchMissing == true)
         {
             _diagnostics.Error("TAP_FETCH_MISSING_UNSUPPORTED", artifact, pointer + "/fetch_missing",
-                "fetch_missing (design 8.5) is not supported by this binary yet.",
+                "fetch_missing is not supported by this binary yet.",
                 "attach the tap after a node that already reads the feature, or log it from a later tap");
             ok = false;
         }
@@ -842,7 +842,7 @@ public sealed class PlanBuilder
                 {
                     if (ReadsFetchedFeature(key) is { } feature)
                     {
-                        // The group decision is made at request start (design 8.2), before any fetch: a fetched key
+                        // The group decision is made at request start, before any fetch: a fetched key
                         // would make every request wait for I/O just to decide whether to log.
                         _diagnostics.Error("FUNNEL_KEY_FETCHED", artifact, pointer + "/key/" + i,
                             $"Funnel group key '{spec.Key[i]}' reads fetched feature '{feature}'; keys are evaluated at request start, before any fetch.",
@@ -862,7 +862,7 @@ public sealed class PlanBuilder
                     if (key.ResultType.Kind is not (StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64 or StorageKind.Float32
                         or StorageKind.Float64 or StorageKind.String))
                     {
-                        // Sampling hashes the key with the canonical scalar encoding (design 5.7, 8.2).
+                        // Sampling hashes the key with the canonical scalar encoding.
                         _diagnostics.Error("FUNNEL_KEY_TYPE", artifact, pointer + "/key/" + i,
                             $"Funnel group key '{spec.Key[i]}' has type {key.ResultType}; a key must be a scalar (bool, integer, float or string).",
                             "key on a scalar request input such as ctx.request.user_id");
@@ -921,7 +921,7 @@ public sealed class PlanBuilder
         return null;
     }
 
-    /// <summary>Compiles the output section (design 3.4).</summary>
+    /// <summary>Compiles the output section.</summary>
     public OutputPlan? CompileOutput()
     {
         var output = _sources!.Pipeline.Output;
@@ -1019,7 +1019,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Static data-flow check of one fully merged node set (design 4.6, 5.3, 11.5): every non-nullable column a node
+    /// Static data-flow check of one fully merged node set: every non-nullable column a node
     /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources keep
     /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent; every
     /// pinned version names a node of this set that writes it (<see cref="ValidateVersionRead"/>); taps attach after a node
@@ -1056,7 +1056,7 @@ public sealed class PlanBuilder
         {
             var node = ordered[i];
 
-            // Same order ⇒ no dependency (design 5.3). A position runs its node or, when that fails, its fallback, so
+            // Same order ⇒ no dependency. A position runs its node or, when that fails, its fallback, so
             // every branch of one position must be independent of every branch of the other (review 15): a fallback that
             // appends rows, filters or reads a column the other writes makes the order matter as much as its node would.
             var branches = Branches(node, fallbacks);
@@ -1246,7 +1246,7 @@ public sealed class PlanBuilder
             }
         }
 
-        // Pinned versions against the nodes of this combination (design 4.6).
+        // Pinned versions against the nodes of this combination.
         foreach (var node in ordered)
         {
             foreach (var read in node.VersionReads)
@@ -1321,7 +1321,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// The data-flow rules of request columns on one path (design 11.5), those of columns for a single value: a node,
+    /// The data-flow rules of request columns on one path, those of columns for a single value: a node,
     /// fallback or <c>when</c> reading a non-nullable one has a producer that cannot be skipped before it; one that is not
     /// a flow column has one producer per path; a tap reads only what a node before its point may have written (it logs
     /// missing when none did); the output's values read a non-nullable one only once it is certain to be written. A
@@ -1445,7 +1445,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// What a tap needs from the nodes of one combination wherever it attaches (design 8.3, 8.5): its attach point is a
+    /// What a tap needs from the nodes of one combination wherever it attaches: its attach point is a
     /// node there, and every context feature it logs is one they or the output read. The engine prefetches the context
     /// features of every variant for every request, but that is how it runs the plan, not what the configuration says: a
     /// tap that logs a feature only an arm's node reads breaks when that experiment ends. So the rule is the one a compile
@@ -1522,7 +1522,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// A pinned version (<c>col.x@node</c>, design 4.6) read where the nodes of one combination run: the pinned node must be
+    /// A pinned version (<c>col.x@node</c>) read where the nodes of one combination run: the pinned node must be
     /// among them and write the column there, into a version of its own. That it may not run in a request (skipped,
     /// failed, after the reader) is the runtime's to handle: the read is missing. That it is not in this combination, or
     /// does not write the column in it, is a configuration mistake, whatever other combinations hold. Row sources write one
@@ -1577,7 +1577,7 @@ public sealed class PlanBuilder
 
     /// <summary>
     /// The scope of every rule <see cref="ValidateDataFlow"/> checks, given every variant each node and tap may take
-    /// (design 11.5 check 3): one rule applied to one subject, and the nodes and taps whose variants decide it. Nothing
+    ///: one rule applied to one subject, and the nodes and taps whose variants decide it. Nothing
     /// else does, so checking every combination of the variants of a scope's nodes and taps checks that rule as
     /// completely as checking every combination at all; a caller that cannot afford the whole space checks scope by scope.
     /// </summary>
@@ -2188,7 +2188,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Checks a row source against the columns around it on one path (design 4.6). A row source writes the rows it appends
+    /// Checks a row source against the columns around it on one path. A row source writes the rows it appends
     /// into the column's current version (the row sources' shared one, or a later node's; see
     /// <c>RequestState.OutputSlot</c>), and a row has no value in a column until something writes it
     /// (<c>CandidateTable</c>). So a row source that appends rows after a non-nullable column exists must write it when
@@ -2240,7 +2240,7 @@ public sealed class PlanBuilder
     private static bool IsRowSource(CompiledNode node) => (node.Effects & Effects.RowSource) != 0;
 
     /// <summary>
-    /// A tap is a passive observer (design 8.3, 8.5): every output column it reads must have a producer before the
+    /// A tap is a passive observer: every output column it reads must have a producer before the
     /// attach point, and every candidate feature must already have been fetched there. A pinned version
     /// (<c>col.x@node</c>) must not be written in the future (<see cref="ValidateVersionRead"/> checks that it is written).
     /// </summary>
@@ -2434,7 +2434,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Marks features as fetched with everything a fill or the prefetch makes available first for them (design 6.7, 6.8):
+    /// Marks features as fetched with everything a fill or the prefetch makes available first for them:
     /// the features a derived one is computed from, and the key features of a physical one's entity, along the chains.
     /// </summary>
     /// <remarks>
@@ -2556,7 +2556,7 @@ public sealed class PlanBuilder
 
         // Context features the serving path reads: nodes of every variant (including fallbacks and `when`, which is all
         // a trigger site evaluates) and the output, with everything they are derived from. Only these are prefetched;
-        // taps are passive observers (design 8.5) and must not add a context fetch to every request, sampled or not.
+        // taps are passive observers and must not add a context fetch to every request, sampled or not.
         var serving = new HashSet<int>();
         foreach (var node in _nodes)
         {
@@ -2617,7 +2617,7 @@ public sealed class PlanBuilder
         if (invalid is not null)
         {
             _diagnostics.Error("PARAM_OUT_OF_RANGE", artifact, pointer, $"Parameter '{leaf.Name}': {invalid}.",
-                "experiments cannot widen a baseline parameter's range (design 11.8)");
+                "experiments cannot widen a baseline parameter's range");
             return false;
         }
 
@@ -2660,7 +2660,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// What the configuration compiled so far needs of a binary (design 10.4): the operator of every node compiled, and
+    /// What the configuration compiled so far needs of a binary: the operator of every node compiled, and
     /// the types of the bindings it bound, the services its nodes resolved and the feature sources of
     /// the catalog features it registered. Taken from the compile rather than from the names the configuration writes, so
     /// an operator's default (a model its config does not name) counts, and a binding nothing uses does not.
@@ -2687,7 +2687,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Warns once for each deprecated catalog feature the plan reads (design 6.3), at its declaration: read directly or
+    /// Warns once for each deprecated catalog feature the plan reads, at its declaration: read directly or
     /// through a derived feature, not when a cache table's whole record registered it unread. Called once, after the
     /// plan's every variant compiled, so a feature read by several nodes, arms or combinations warns once.
     /// </summary>
@@ -2752,7 +2752,7 @@ public sealed class PlanBuilder
             }
 
             // A value the column cannot hold (NaN or ±∞ in float storage, beyond int32 in int32 storage, either in one
-            // element of a list) is replaced on write; a non-nullable column must say with what (design 4.3, 4.6).
+            // element of a list) is replaced on write; a non-nullable column must say with what.
             if (!type.Nullable && (type.IsFloatStorage || type.IsInt32Storage) && !hasDefault)
             {
                 var (replaced, example) = (type.IsFloatStorage, type.IsList) switch
@@ -2763,7 +2763,7 @@ public sealed class PlanBuilder
                     (false, true) => ("a list with an element outside the int32 range", "[]"),
                 };
                 _diagnostics.Error("COLUMN_NEEDS_DEFAULT", artifact, pointer,
-                    $"Non-nullable {what.ToLowerInvariant()} '{name}' of type {type} needs a 'default': it replaces {replaced} (design 4.3).",
+                    $"Non-nullable {what.ToLowerInvariant()} '{name}' of type {type} needs a 'default': it replaces {replaced}.",
                     $"add \"default\": {example}, or declare the type nullable");
                 schema.MarkUnusable(prefix + name);
                 continue;

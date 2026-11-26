@@ -10,7 +10,7 @@ using StrataRec.Testing;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Where a request's arms come from (design 11.1): forced arms, then the platform's answer the caller passed, then the
+/// Where a request's arms come from: forced arms, then the platform's answer the caller passed, then the
 /// assignment provider, otherwise none. A pending provider and the deadline are covered by <see cref="Review4RegressionTests"/>;
 /// the provider is waited for by the framework's one bounded wait, whose rules (who came first, the tokens' lifetime) are
 /// locked in <c>BoundedCallTests</c>.

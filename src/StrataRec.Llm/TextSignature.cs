@@ -7,7 +7,7 @@ namespace StrataRec.Llm;
 
 /// <summary>
 /// The load-time check of a model version that a generative operator calls with rendered prompts and reads text from
-/// (design 6.9): every prompt is a text input of the signature, every input of the signature has a prompt, and every
+///: every prompt is a text input of the signature, every input of the signature has a prompt, and every
 /// output read is text. A version that does not match would load cleanly and then fail on every request, so every version
 /// a node may use is checked, with the codes and hint style of the tensor operators' rule.
 /// </summary>

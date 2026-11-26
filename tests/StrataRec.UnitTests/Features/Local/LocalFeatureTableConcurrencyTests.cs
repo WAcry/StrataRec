@@ -11,7 +11,7 @@ namespace StrataRec.UnitTests.Features.Local;
 
 /// <summary>
 /// One writer thread updates, partially updates, deletes and compacts while reader threads look records up and fill
-/// columns, as requests do (design 6.6 item 3). Every value of a record is derived from a stamp, so a reader can check
+/// columns, as requests do. Every value of a record is derived from a stamp, so a reader can check
 /// that what it read is one complete record of the key it asked for: a torn record, a record of another key, a stale
 /// directory or a half-built index would break an invariant or throw.
 /// </summary>

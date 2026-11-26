@@ -6,7 +6,7 @@ using StrataRec.Core.Types;
 namespace StrataRec.Features.Local;
 
 /// <summary>
-/// Byte layout of one record of a local table (design 6.6, item 1), derived once from the schema.
+/// Byte layout of one record of a local table, derived once from the schema.
 /// </summary>
 /// <remarks>
 /// <para>A record is a fixed part followed by its variable-length data, both in the same page, so the record is one

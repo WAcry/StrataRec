@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A service's cache through the engine (design 6.9, IO step 3): the sample's <c>ctr_model</c> (<c>linear@1</c>) with
+/// A service's cache through the engine (IO step 3): the sample's <c>ctr_model</c> (<c>linear@1</c>) with
 /// <c>cache</c>. Served results are the model's; later requests are answered from its in-process table; a recorded
 /// request replays exactly without the cache. Write-backs run in the background, so the tests wait for a state (a request
 /// read every key from the table), never for a count or a time.

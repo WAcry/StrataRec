@@ -4,13 +4,13 @@ using System.Text.Json.Nodes;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// The strict checks StrataRec layers on top of RFC 7396 (design 11.3) and the path footprint of a patch
-/// (design 11.5 item 1).
+/// The strict checks StrataRec layers on top of RFC 7396 and the path footprint of a patch
+///.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Plain RFC 7396 silently ignores a <c>null</c> for a missing key and silently creates partial objects under a
-/// missing key, so typos vanish. Given the base document (the patchable view, design 11.4) and a patch, the
+/// missing key, so typos vanish. Given the base document (the patchable view) and a patch, the
 /// analyzer classifies every patched path:
 /// </para>
 /// <list type="bullet">
@@ -54,7 +54,7 @@ public static class MergePatchAnalyzer
 
     /// <summary>
     /// True when two footprints overlap: some path of one equals, or is a prefix of, some path of the other
-    /// (design 11.5: both buckets would change the same subtree). <paramref name="conflicts"/> lists every
+    /// (both buckets would change the same subtree). <paramref name="conflicts"/> lists every
     /// overlapping pair, sorted by the first and then the second path.
     /// </summary>
     public static bool FootprintsConflict(

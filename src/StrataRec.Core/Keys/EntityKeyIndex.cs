@@ -7,7 +7,7 @@ namespace StrataRec.Core.Keys;
 /// <summary>
 /// A request-scoped hash index from entity keys to <c>int</c> values (key indices, row numbers). Every array is rented
 /// from the request's <see cref="RequestMemory"/>, so building, probing and growing it allocate nothing per key
-/// (design 4.8); a <see cref="Dictionary{TKey, TValue}"/> over thousands of candidates allocates its entries and
+///; a <see cref="Dictionary{TKey, TValue}"/> over thousands of candidates allocates its entries and
 /// buckets on every request, and above 85 KB on the large object heap.
 /// </summary>
 /// <remarks>
@@ -340,7 +340,7 @@ public sealed class EntityKeyIndex
 
     /// <summary>
     /// Empties the index and readies it for <paramref name="capacity"/> keys of <paramref name="keyType"/> without growing.
-    /// A caller that indexes one batch after another (the local read, design 6.6) keeps one index and costs no object per
+    /// A caller that indexes one batch after another (the local read) keeps one index and costs no object per
     /// batch; arrays are rented again only when the capacity or the key type needs more than the index holds.
     /// </summary>
     public void Reset(EntityKeyType keyType, int capacity)

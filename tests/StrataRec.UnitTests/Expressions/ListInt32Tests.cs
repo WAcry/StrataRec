@@ -6,7 +6,7 @@ using StrataRec.Expressions;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>
-/// <c>list&lt;int32&gt;</c> columns in ColumnExpr (design 4.3): read in place with int64 element semantics, and the
+/// <c>list&lt;int32&gt;</c> columns in ColumnExpr: read in place with int64 element semantics, and the
 /// out-of-range rule for every write into int32 storage (<c>int32</c> and <c>list&lt;int32&gt;</c>).
 /// </summary>
 /// <remarks><see cref="ExprAssert.Rows"/> checks each expected value three ways: full-range (zero-copy column reads),

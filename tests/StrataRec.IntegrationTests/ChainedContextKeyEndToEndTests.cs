@@ -5,7 +5,7 @@ using StrataRec.Hosting.Replay;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The sample's chain of context keys (design 6.2, 6.8 item 5): <c>country</c> is keyed by the request's country and
+/// The sample's chain of context keys: <c>country</c> is keyed by the request's country and
 /// answers its region (geo_store); <c>region</c> is keyed by <c>ctx.country.region</c> and answers the regional weight the
 /// fusion multiplies by (region_store). Fetched, recorded with the key the upstream answered, and replayed with the key
 /// the replayed upstream answers.

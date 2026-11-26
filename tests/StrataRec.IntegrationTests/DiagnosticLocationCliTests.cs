@@ -133,7 +133,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     // An operator's error is at the setting to change, with a hint (they were at the config or the other column, without).
     [InlineData(Pipeline, "\"source_order\": [\"two_tower\", \"popular\"]", "\"source_order\": [\"two_tower\", \"populr\"]",
         "RECALL_UNKNOWN_SOURCE", "/nodes/recall/config/source_order/1", "\"populr\"")]
-    // A recall source's query (design 5.4): a source without a quota, a value without a name, a candidate column.
+    // A recall source's query: a source without a quota, a value without a name, a candidate column.
     [InlineData(Pipeline, "\"queries\": { \"two_tower\": {", "\"queries\": { \"two_towr\": {",
         "RECALL_UNKNOWN_SOURCE", "/nodes/recall/config/queries/two_towr", "\"two_towr\"")]
     [InlineData(Pipeline, "{ \"user_embedding\": \"ctx.user.embedding\" }", "{ \"\": \"ctx.user.embedding\" }",

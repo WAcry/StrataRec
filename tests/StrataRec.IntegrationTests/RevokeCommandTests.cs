@@ -18,7 +18,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>stratarec revoke</c>, the emergency stop of design 10.6, on builds of the home_feed sample: what is published, at
+/// <c>stratarec revoke</c>, the emergency stop, on builds of the home_feed sample: what is published, at
 /// once, without the experiment, as a revocation nodes serve and that refuses every earlier manifest; <c>build</c>
 /// keeping the stopped experiment out of the releases that follow; and <c>status</c> showing the stops in force.
 /// </summary>
@@ -44,7 +44,7 @@ public sealed class RevokeCommandTests
         Assert.Equal(["exp_freshness_calibration", "exp_quality_weight"], revocation.Experiments.Keys.Order(StringComparer.Ordinal));
         Assert.Equal(firstManifest.Artifacts.Pipeline, revocation.Artifacts.Pipeline);
         Assert.Equal(firstManifest.Requires, revocation.Requires);
-        Assert.DoesNotContain("MmrDiversifier@1", ManifestBuilder.RequiredCapabilities(revocation)); // a binary without it takes the revocation (design 10.4)
+        Assert.DoesNotContain("MmrDiversifier@1", ManifestBuilder.RequiredCapabilities(revocation)); // a binary without it takes the revocation
         Assert.Equal(
             $"home_feed (local): revoked exp_mmr_diversity\n  {first} (seq 1) -> {revocationId} (seq 2)\n" +
             $"pointer {Path.Combine(store, "pointers", "local", "home_feed.json")}\n",
@@ -342,7 +342,7 @@ public sealed class RevokeCommandTests
 
     /// <summary>
     /// Each experiment records what its compile needed beyond the baseline, and a revocation drops exactly that, so a binary
-    /// without those types refuses the release and takes the revocation (design 10.4). Inferred from the names the
+    /// without those types refuses the release and takes the revocation. Inferred from the names the
     /// configuration wrote, a revocation kept the connector and store types of feature sources only the revoked experiment
     /// read (review 68), and guessed at models an operator uses by its config's default (reviews 39, 40, 42).
     /// </summary>

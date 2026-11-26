@@ -9,7 +9,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>ModelScorer@1</c> rejects at load time every model version it could not call (design 6.9), at the node's config
+/// <c>ModelScorer@1</c> rejects at load time every model version it could not call, at the node's config
 /// key, rather than loading cleanly and failing or falling back on every request.
 /// </summary>
 public sealed class ModelSignatureTests
@@ -72,7 +72,7 @@ public sealed class ModelSignatureTests
     [Fact]
     public void AnIntColumnMappedToTheFloat32Model_IsAMismatch_WhoseFixIsAFloat32DerivedFeature()
     {
-        // linear@1 declares float32 [-1]; an int64 column is sent as int64 [-1], whatever the model declares (design 6.9).
+        // linear@1 declares float32 [-1]; an int64 column is sent as int64 [-1], whatever the model declares.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"log_followers\": \"col.author.log_followers\"", "\"log_followers\": \"col.entity_id\""));
 

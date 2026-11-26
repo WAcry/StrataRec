@@ -15,7 +15,7 @@ namespace StrataRec.Artifacts.Model;
 /// <summary>An operator as the schemas describe it: the id a node's <c>op</c> names, what it does, and the type of its config.</summary>
 /// <param name="Id"><c>Name@Version</c>, e.g. <c>TopK@1</c>.</param>
 /// <param name="Description">One line, which an editor shows next to the id when it completes <c>op</c>.</param>
-/// <param name="ConfigType">The C# type the operator binds its <c>config</c> to: the single source of the config's schema (design 9.1).</param>
+/// <param name="ConfigType">The C# type the operator binds its <c>config</c> to: the single source of the config's schema.</param>
 public sealed record OperatorSchemaSource(string Id, string Description, Type ConfigType);
 
 /// <summary>A binding type as the bindings schema describes it: where it is named, its id, and the type of its settings.</summary>
@@ -25,7 +25,7 @@ public sealed record OperatorSchemaSource(string Id, string Description, Type Co
 public sealed record BindingSchemaSource(BindingKind Kind, string Type, Type SettingsType);
 
 /// <summary>
-/// JSON Schema (2020-12) of the artifacts and operator configs, generated from the C# types that bind them (design 9.1),
+/// JSON Schema (2020-12) of the artifacts and operator configs, generated from the C# types that bind them,
 /// so that an editor completes and checks a file against exactly what the engine accepts. One place builds them all:
 /// <c>stratarec schema</c> prints them, writes them into a workspace's <c>schemas/</c> and checks that the ones there are
 /// current.
@@ -55,7 +55,7 @@ public static class ArtifactSchemas
     public const string DirectoryName = "schemas";
 
     /// <summary>
-    /// The artifact kinds a workspace holds as files (design 10.1); each may name its schema in <c>$schema</c>, and their
+    /// The artifact kinds a workspace holds as files; each may name its schema in <c>$schema</c>, and their
     /// schemas declare it. Release manifests and replay bundles are written by tools, not by hand, and do not.
     /// </summary>
     public static IReadOnlyList<string> WorkspaceKinds { get; } = new[] { "pipeline", "catalog", "bindings", "experiment", "release", "policy", "table" };
@@ -233,7 +233,7 @@ public static class ArtifactSchemas
     /// they are.
     /// </summary>
     /// <remarks>
-    /// Whether a patched entry is new, and must then be complete (design 11.3), depends on the baseline, which a schema of
+    /// Whether a patched entry is new, and must then be complete, depends on the baseline, which a schema of
     /// a kind does not see: <c>stratarec validate</c> checks that. So a patch schema never rejects a valid patch.
     /// </remarks>
     internal static JsonObject MergePatch(JsonObject schema)
@@ -515,7 +515,7 @@ public static class ArtifactSchemas
         return config;
     }
 
-    /// <summary>The experiment: each arm is a merge patch of the patchable view (design 11.3, 11.4).</summary>
+    /// <summary>The experiment: each arm is a merge patch of the patchable view.</summary>
     private static JsonObject Experiment(OperatorSchemaSource[] operators)
     {
         var experiment = Export(typeof(ExperimentArtifact), Describe, inline: true);

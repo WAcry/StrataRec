@@ -3,12 +3,12 @@ using StrataRec.Core.Memory;
 namespace StrataRec.Core.Tables;
 
 /// <summary>
-/// Per-request map from a logical column to its currently committed physical slot (design 4.6).
+/// Per-request map from a logical column to its currently committed physical slot.
 /// </summary>
 /// <remarks>
 /// A node writes into its own slots; only when it succeeds does the engine <see cref="Commit"/> them, which makes the
 /// new version visible to later readers. Failed or skipped nodes never commit, so half-written data is invisible.
-/// The bindings also record which node produced each committed version, for log lineage (design 8.7).
+/// The bindings also record which node produced each committed version, for log lineage.
 /// </remarks>
 public sealed class OutputBindings
 {

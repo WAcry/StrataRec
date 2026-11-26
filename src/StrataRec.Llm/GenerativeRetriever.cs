@@ -11,7 +11,7 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
-/// <summary>Config of <c>GenerativeRetriever@1</c> (design 5.9).</summary>
+/// <summary>Config of <c>GenerativeRetriever@1</c>.</summary>
 public sealed class GenerativeRetrieverConfig
 {
     /// <summary>Logical model name, bound per environment.</summary>
@@ -37,7 +37,7 @@ public sealed class GenerativeRetrieverConfig
 
     /// <summary>
     /// The most rows the node appends: the first new ids of the answer. Also the node's row limit, which sizes the request's
-    /// candidate table (design 4.8).
+    /// candidate table.
     /// </summary>
     public required int MaxItems { get; init; }
 
@@ -47,13 +47,13 @@ public sealed class GenerativeRetrieverConfig
     /// </summary>
     public string? RankCol { get; init; }
 
-    /// <summary>The most tokens the model may generate (design 5.9 rule 2), passed with the call.</summary>
+    /// <summary>The most tokens the model may generate, passed with the call.</summary>
     public int MaxOutputTokens { get; init; } = 256;
 }
 
 /// <summary>
 /// <c>GenerativeRetriever@1</c> (RowSource): appends the candidates a generative model names, the ones other sources did
-/// not have, from prompts rendered once per request (design 5.9).
+/// not have, from prompts rendered once per request.
 /// </summary>
 /// <remarks>
 /// <para>One call: batch size 1, the request's seed, <c>max_output_tokens</c>, recorded and replayed by the digest of the
@@ -64,10 +64,10 @@ public sealed class GenerativeRetrieverConfig
 /// (<see cref="StrataRecMetrics.ModelAnswerIds"/>). An empty array, or one with nothing new, appends nothing: a valid
 /// answer.</para>
 /// <para>An id already in the table keeps its row, its place and its values: a row source appends rows and writes only
-/// those (design 4.6), so the node neither moves another source's row nor marks it; the count of <c>present</c> ids shows
+/// those, so the node neither moves another source's row nor marks it; the count of <c>present</c> ids shows
 /// how much the model repeats the other sources.</para>
 /// <para>The appended rows have no features yet: the fetch planner fills them before any later node reads one, like the
-/// rows of any row source (design 5.9 rule 4); an id no feature source knows has its features' defaults or missing values.</para>
+/// rows of any row source; an id no feature source knows has its features' defaults or missing values.</para>
 /// <para>The node fails, appending nothing (<c>on_failure</c> decides), when the call fails or when the answer is not such
 /// an array. The message names the model and quotes the start of the answer; when the client said it stopped at
 /// <c>max_output_tokens</c>, it says so, since a cut-off array is the likely cause.</para>

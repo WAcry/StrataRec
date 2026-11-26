@@ -9,7 +9,7 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Cache;
 
-/// <summary>The cache policy of a <c>cache</c> table (design 6.6), from the binding's <c>cache</c> settings.</summary>
+/// <summary>The cache policy of a <c>cache</c> table, from the binding's <c>cache</c> settings.</summary>
 public sealed class CacheTableOptions
 {
     /// <summary><c>cache.ttl_ms</c>: how long a value is served. Each key's lifetime is this ±10%, by the key's hash.</summary>
@@ -54,7 +54,7 @@ public sealed class CacheTableOptions
     }
 }
 
-/// <summary>How a cached record stands at a moment (design 6.6 <c>cache</c> items 1 and 4).</summary>
+/// <summary>How a cached record stands at a moment.</summary>
 internal enum CacheFreshness : byte
 {
     /// <summary>Within its key's lifetime: served.</summary>
@@ -145,7 +145,7 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 }
 
 /// <summary>
-/// The in-process tier of a <c>cache</c> source (design 6.6 <c>cache</c>): one per table, and the one owner of what the
+/// The in-process tier of a <c>cache</c> source: one per table, and the one owner of what the
 /// table's records mean as a cache. The request side asks it how fresh a record is (each key's lifetime is the TTL ±10%
 /// by the key's hash); the write side is its single writer, which applies what reads hand back and keeps the table within
 /// <c>max_bytes</c>.
@@ -236,7 +236,7 @@ public sealed class LocalTableCache
     /// <summary>How long the record of the key with hash <paramref name="keyHash"/> (<see cref="KeyHash(in EntityKeyBatch, int)"/>) is served.</summary>
     internal long LifetimeMs(ulong keyHash) => (long)(Options.TtlMs * (1 - Jitter + (2 * Jitter * StableHash.ToUnit(keyHash))));
 
-    /// <summary>The canonical hash of a one-part key (design 5.7 encoding): what its jitter derives from, so every instance agrees.</summary>
+    /// <summary>The canonical hash of a one-part key: what its jitter derives from, so every instance agrees.</summary>
     internal static ulong KeyHash(in EntityKey key)
     {
         if (key.StringValue is not { } s)
@@ -465,7 +465,7 @@ public sealed class LocalTableCache
     }
 
     /// <summary>
-    /// Makes room (design 6.6 <c>cache</c> item 5): drops the records no reader can use any more, then, while the table is
+    /// Makes room: drops the records no reader can use any more, then, while the table is
     /// still above three quarters of <c>max_bytes</c>, the oldest-written ones, so that eviction does not run again at the
     /// very next write.
     /// </summary>
@@ -598,7 +598,7 @@ public sealed class LocalTableCache
 }
 
 /// <summary>
-/// The writer of a <c>cache</c> table, run by the table host as the table's update source (design 6.6 item 3: one
+/// The writer of a <c>cache</c> table, run by the table host as the table's update source (one
 /// background writer per table): it applies the records reads hand back until it is stopped. Stateless; the queue and
 /// the policy belong to the table (<see cref="LocalFeatureTable.Cache"/>), so whichever plan's spec created the table,
 /// its writer drains the queue every plan's requests write to.

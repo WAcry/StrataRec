@@ -7,7 +7,7 @@ namespace StrataRec.Expressions.Runtime;
 /// <summary>
 /// Request-level IR nodes in topological order, evaluated once per call into value slots. Used for
 /// <see cref="CompiledExpression.EvaluateScalar"/> and for the hoisted loop invariants of row-level expressions
-/// (design 7.7). Evaluation is linear in the DAG size, so shared <c>let</c> chains cannot blow up.
+///. Evaluation is linear in the DAG size, so shared <c>let</c> chains cannot blow up.
 /// </summary>
 internal sealed class ScalarProgram
 {
@@ -104,7 +104,7 @@ internal sealed class ScalarProgram
 
 /// <summary>
 /// Row-at-a-time tree-walking interpreter over the unoptimized typed IR. Deliberately naive and obviously correct:
-/// it is the oracle for the differential tests of the optimizer and the vectorized backend (design 7.7).
+/// it is the oracle for the differential tests of the optimizer and the vectorized backend.
 /// </summary>
 internal static class ReferenceInterpreter
 {

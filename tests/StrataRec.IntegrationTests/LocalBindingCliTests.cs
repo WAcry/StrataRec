@@ -4,7 +4,7 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary><c>stratarec validate</c> and <c>stratarec schema bindings</c> on local feature source bindings (design 6.6).</summary>
+/// <summary><c>stratarec validate</c> and <c>stratarec schema bindings</c> on local feature source bindings.</summary>
 public sealed class LocalBindingCliTests
 {
     [Fact]

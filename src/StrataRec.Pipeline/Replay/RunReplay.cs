@@ -16,7 +16,7 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.Pipeline.Replay;
 
 /// <summary>
-/// Replays one recorded pipeline run (design 13.4): answers feature and service calls from the recording and
+/// Replays one recorded pipeline run: answers feature and service calls from the recording and
 /// supplies the recorded timing facts (time left, budget timeouts) in place of the clock, so the run makes the same
 /// decisions without calling or waiting for anything.
 /// </summary>
@@ -161,7 +161,7 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>Requested and missing values per feature field (the feature-missing rate of design 10.8).</summary>
+    /// <summary>Requested and missing values per feature field (the feature-missing rate).</summary>
     public IReadOnlyList<ReplayFieldStats> FieldStats
     {
         get

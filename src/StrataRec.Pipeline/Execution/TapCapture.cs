@@ -11,14 +11,14 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Pipeline.Execution;
 
 /// <summary>
-/// Hot-path capture of log taps (design 8.6): pick the rows (scope, filter, coordinated sampling), copy the tap's columns
+/// Hot-path capture of log taps: pick the rows (scope, filter, coordinated sampling), copy the tap's columns
 /// for those rows only into a batch the request no longer owns: a column logged as a reference to a candidate column
 /// straight from that column's storage, at its declared width; any other expression evaluated for those rows. Everything
 /// here runs only for requests whose funnel group sampled them.
 /// </summary>
 internal static class TapCapture
 {
-    /// <summary>Selects tap variants and makes each group's request-level sampling decision once (design 8.2).</summary>
+    /// <summary>Selects tap variants and makes each group's request-level sampling decision once.</summary>
     public static async ValueTask SelectAsync(RequestState state, CancellationToken cancellationToken)
     {
         var log = state.Plan.Log;
@@ -95,7 +95,7 @@ internal static class TapCapture
 
     /// <summary>
     /// Fires the taps attached after <paramref name="nodeId"/>, whether its primary or its fallback produced the output
-    /// (design 8.3). Must run before compaction, which renumbers physical rows.
+    ///. Must run before compaction, which renumbers physical rows.
     /// </summary>
     public static async ValueTask AfterNodeAsync(RequestState state, string nodeId, int[]? entered, int enteredCount, CancellationToken cancellationToken)
     {
@@ -122,7 +122,7 @@ internal static class TapCapture
         }
     }
 
-    /// <summary>Fires output taps over the returned rows; ranks are the served positions (design 8.3).</summary>
+    /// <summary>Fires output taps over the returned rows; ranks are the served positions.</summary>
     public static async ValueTask OutputAsync(RequestState state, int[] rows, CancellationToken cancellationToken)
     {
         foreach (var tap in state.Taps)
@@ -202,7 +202,7 @@ internal static class TapCapture
             }
         }
 
-        // Coordinated row sampling: the same priority for an entity in every tap of the group (design 8.4).
+        // Coordinated row sampling: the same priority for an entity in every tap of the group.
         var rowProbability = 1.0;
         if (tap.Rate < 1.0 || (tap.MaxRows is { } max && count > max))
         {
@@ -311,7 +311,7 @@ internal static class TapCapture
         });
     }
 
-    /// <summary>True when <paramref name="nodeId"/> ran and committed its outputs in this request (lineage, design 8.7).</summary>
+    /// <summary>True when <paramref name="nodeId"/> ran and committed its outputs in this request (lineage).</summary>
     internal static bool Produced(RequestState state, string nodeId)
     {
         foreach (var outcome in state.Outcomes)
@@ -326,7 +326,7 @@ internal static class TapCapture
     }
 
     /// <summary>
-    /// Non-finite values are logged as missing, never as NaN (design 4.3, 8.7). A float list with any non-finite element
+    /// Non-finite values are logged as missing, never as NaN. A float list with any non-finite element
     /// is missing as a whole: a partial embedding has no meaning to a training job.
     /// </summary>
     private static ScalarValue Sanitize(ScalarValue value) => !value.IsMissing && ColumnValues.IsNonFinite(value) ? ScalarValue.Missing : value;

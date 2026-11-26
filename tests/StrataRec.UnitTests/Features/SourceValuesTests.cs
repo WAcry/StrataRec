@@ -13,7 +13,7 @@ using StrataRec.UnitTests.Features.Cache;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// <c>stratarec.source.values</c> (design 13.1, a source's missing ratio): what a source had of the values it was asked
+/// <c>stratarec.source.values</c> (a source's missing ratio): what a source had of the values it was asked
 /// for, per feature, in each supply mode. Each test binds sources of its own names and reads only their measurements.
 /// </summary>
 [Collection(MetricMeasurement.Name)]
@@ -268,7 +268,7 @@ public class SourceValuesTests
     [Fact]
     public async Task AReplay_CountsNothing()
     {
-        // A replay is not traffic (design 13.4): neither its fetches nor the local groups it answers through the fetch path.
+        // A replay is not traffic: neither its fetches nor the local groups it answers through the fetch path.
         var rig = new FeatureTestRig()
             .Source("values_replay_fetch", ScriptedConnector.Values((key, _) => key * 1.0))
             .LocalSource("values_replay_local", writer => Write(writer, 1, new() { ["age"] = 2.0 }));

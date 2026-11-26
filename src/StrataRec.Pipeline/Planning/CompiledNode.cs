@@ -6,7 +6,7 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.Pipeline.Planning;
 
-/// <summary>What happens when a node fails (design 5.6).</summary>
+/// <summary>What happens when a node fails.</summary>
 public enum FailurePolicy : byte
 {
     FailRequest = 1,
@@ -14,7 +14,7 @@ public enum FailurePolicy : byte
     Fallback,
 }
 
-/// <summary>When the engine compacts the table after a row-set node (design 4.5).</summary>
+/// <summary>When the engine compacts the table after a row-set node.</summary>
 public enum CompactMode : byte
 {
     Auto = 1,
@@ -23,7 +23,7 @@ public enum CompactMode : byte
 }
 
 /// <summary>
-/// A read of one node's own version of a column, <c>col.x@node</c> (design 4.6). Recorded on each node and tap variant
+/// A read of one node's own version of a column, <c>col.x@node</c>. Recorded on each node and tap variant
 /// that reads it, so the data-flow check judges it against the nodes of every arm combination the reader runs in, as a
 /// compile of that combination alone would, and not against nodes that only other combinations have.
 /// </summary>
@@ -48,7 +48,7 @@ public readonly record struct ColumnDeclaration(int Logical, ColumnType Type);
 
 /// <summary>
 /// One compiled variant of a node: the operator instance plus everything the scheduler needs, all resolved to integer
-/// ids at load time (design 3.3, 12.3). Immutable and shared by all requests of a plan.
+/// ids at load time. Immutable and shared by all requests of a plan.
 /// </summary>
 public sealed class CompiledNode
 {
@@ -91,10 +91,10 @@ public sealed class CompiledNode
     /// <summary>Fallback node id; its variant is selected per request from <see cref="ExecutionPlan.Fallbacks"/>.</summary>
     public string? FallbackNodeId { get; init; }
 
-    /// <summary>Time left to the fallback; null leaves the fallback's own <see cref="TimeoutMs"/> (design 5.7).</summary>
+    /// <summary>Time left to the fallback; null leaves the fallback's own <see cref="TimeoutMs"/>.</summary>
     public int? FallbackReserveMs { get; init; }
 
-    /// <summary>True when the node ends a fetch segment (design 5.4).</summary>
+    /// <summary>True when the node ends a fetch segment.</summary>
     public bool FetchBarrier { get; init; }
 
     public CompactMode Compact { get; init; } = CompactMode.Auto;
@@ -104,7 +104,7 @@ public sealed class CompiledNode
 
     /// <summary>
     /// The columns of <see cref="ReadColumns"/> read at their current version, not only pinned (<c>col.x@node</c>): what
-    /// a writer added before the node changes for it (design 11.5).
+    /// a writer added before the node changes for it.
     /// </summary>
     public ImmutableArray<int> CurrentReads { get; init; } = [];
 
@@ -117,11 +117,11 @@ public sealed class CompiledNode
 
     /// <summary>
     /// The features filled before the node runs: <see cref="ReadFeatures"/> but those only awaited expressions read, which
-    /// the operator waits for call by call while it runs (a recall source's query, design 5.4).
+    /// the operator waits for call by call while it runs (a recall source's query).
     /// </summary>
     public required ImmutableArray<int> FilledFeatures { get; init; }
 
-    /// <summary>Non-nullable output columns read through bindings; must be produced before the node runs (design 11.5 step 4).</summary>
+    /// <summary>Non-nullable output columns read through bindings; must be produced before the node runs.</summary>
     public required ImmutableArray<int> RequiredOutputs { get; init; }
 
     public required ImmutableArray<int> ReadParams { get; init; }
@@ -140,7 +140,7 @@ public sealed class CompiledNode
     /// <summary>
     /// The request columns the node reads (<c>req.*</c>), by <see cref="ContextField.Id"/>, in its config and its
     /// <c>when</c>: each has its value as of the position (a later node's write is not yet there), and a non-nullable one
-    /// must have a producer that cannot be skipped before it (design 11.5).
+    /// must have a producer that cannot be skipped before it.
     /// </summary>
     public ImmutableArray<int> RequestReads { get; init; } = [];
 
@@ -164,7 +164,7 @@ public sealed class CompiledNode
     public ImmutableArray<ColumnDeclaration> Declares { get; init; } = [];
 
     /// <summary>
-    /// Experiments whose arms override a parameter this node reads (trigger sites, design 12.6). Assigned by the experiment
+    /// Experiments whose arms override a parameter this node reads (trigger sites). Assigned by the experiment
     /// compiler once every variant is compiled, before the plan is built.
     /// </summary>
     public ImmutableArray<int> ParamExperiments { get; internal set; } = [];

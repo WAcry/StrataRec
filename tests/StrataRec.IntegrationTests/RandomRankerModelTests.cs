@@ -6,7 +6,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// A <c>ListwiseReranker@1</c> and a <c>PairwiseRanker@1</c> in the sample, their models bound to <c>random@1</c> through
-/// the binding's settings alone (design 6.4 item 1): the stand-in declares the listwise and pairwise signatures, so the
+/// the binding's settings alone: the stand-in declares the listwise and pairwise signatures, so the
 /// plan loads as against the real models, the rankers order the window by the seeded stand-in scores, and a recording
 /// replays identically.
 /// </summary>

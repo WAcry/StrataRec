@@ -65,7 +65,7 @@ public sealed class EntityKeyTests
     }
 
     /// <summary>
-    /// A key part may be a context feature (design 6.2), physical or derived, of type int64 (int32 promoted) or string,
+    /// A key part may be a context feature, physical or derived, of type int64 (int32 promoted) or string,
     /// nullable or not: the whole key of a context-scoped entity (a chain of context lookups), or a shared part of a
     /// candidate-scoped one, beside a request input or a column.
     /// </summary>

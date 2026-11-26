@@ -11,7 +11,7 @@ using StrataRec.Testing;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// The chunks of one fetch share its staging area, its budget and its cancellation source (design 4.8, 6.5): each chunk
+/// The chunks of one fetch share its staging area, its budget and its cancellation source: each chunk
 /// writes only its own region, the source lives until the last connector really completed, and the memory is held once
 /// per call still running. Asynchronous connectors here complete on dedicated threads, released by the test.
 /// </summary>

@@ -10,7 +10,7 @@ using StrataRec.Features.Catalog;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
-/// The inputs a pipeline accepts (its <c>request_schema</c>, design 3.4) and the one set of rules every request's inputs
+/// The inputs a pipeline accepts (its <c>request_schema</c>) and the one set of rules every request's inputs
 /// follow, wherever they come from: a host reads a JSON body with <see cref="TryRead"/>, the engine checks the
 /// <see cref="RequestInputs"/> a host built itself with <see cref="Check"/> before it runs anything, and the executor binds
 /// them with the same rules. So a mistake reads alike, at the same pointer, from a service, the CLI and the engine.
@@ -82,7 +82,7 @@ public sealed class RequestSchema
     public bool Contains(string name) => _index.ContainsKey(name);
 
     /// <summary>
-    /// Warnings for a fallback pipeline that would fail the requests it is there to serve (design 5.6): a request that
+    /// Warnings for a fallback pipeline that would fail the requests it is there to serve: a request that
     /// falls back carries the inputs it was written for, those of <paramref name="primary"/>, and the fallback gets the ones
     /// it declares, each converted to the type it declares as any request's inputs are (<see cref="Bind"/>). So the
     /// fallback fails it when it requires an input the primary does not declare, or declares optional; and when an input's

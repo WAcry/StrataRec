@@ -6,7 +6,7 @@ using StrataRec.Llm;
 
 namespace StrataRec.UnitTests.Llm;
 
-/// <summary>The one parser of generated answers (design 5.9 rule 3): fences, strict JSON, and what each element counts as.</summary>
+/// <summary>The one parser of generated answers: fences, strict JSON, and what each element counts as.</summary>
 public sealed class LlmAnswerTests
 {
     [Theory]

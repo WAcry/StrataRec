@@ -9,7 +9,7 @@ using static StrataRec.UnitTests.Features.Local.LocalTableTestSupport;
 namespace StrataRec.UnitTests.Features.Local;
 
 /// <summary>
-/// Reading a local table on the request path allocates nothing (design 4.8, 6.6): the lookup writes into the caller's
+/// Reading a local table on the request path allocates nothing: the lookup writes into the caller's
 /// span, and filling writes into column buffers whose arrays come from the request memory. Strings included, whatever
 /// their length: a row gets the table's dictionary instance.
 /// </summary>

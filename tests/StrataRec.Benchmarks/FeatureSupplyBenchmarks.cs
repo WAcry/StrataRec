@@ -8,7 +8,7 @@ namespace StrataRec.Benchmarks;
 
 /// <summary>
 /// One home_feed request (no experiments) with its candidate features fetched from <c>memory@1</c> or read from local
-/// tables holding the same records (design 6.6): the cost of the two request paths, not of a remote store. Each fetched
+/// tables holding the same records: the cost of the two request paths, not of a remote store. Each fetched
 /// source answers in one call, so the fetch side pays its per-call work (staging, backfill, the wave's task) once per
 /// source rather than once per chunk.
 /// </summary>

@@ -6,12 +6,12 @@ namespace StrataRec.Artifacts.Json;
 
 /// <summary>
 /// Content ids of artifacts: <c>sha256:</c> followed by the 64 lowercase hex digits of the SHA-256 of the
-/// RFC 8785 canonical bytes (design 9.1 item 3, 9.2). Equal content always yields an equal id, independent of key
+/// RFC 8785 canonical bytes. Equal content always yields an equal id, independent of key
 /// order, whitespace and comments, so manifests reference artifacts by id and nodes cache them by id.
 /// </summary>
 /// <remarks>
 /// Only the lowercase form is valid. Accepting uppercase digits would give one artifact two ids, and the id is
-/// also the blob's file name in <c>blobs/sha256/&lt;hex&gt;</c> (design 10.1).
+/// also the blob's file name in <c>blobs/sha256/&lt;hex&gt;</c>.
 /// </remarks>
 public static class ContentHash
 {

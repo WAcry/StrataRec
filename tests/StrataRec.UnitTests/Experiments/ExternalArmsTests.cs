@@ -4,7 +4,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.UnitTests.Experiments;
 
 /// <summary>
-/// The rules for the arms an experimentation platform sends (design 11.1): unknown ids and same-layer conflicts are
+/// The rules for the arms an experimentation platform sends: unknown ids and same-layer conflicts are
 /// ignored and reported, repeats count once, and nothing depends on the order of the platform's list.
 /// </summary>
 public sealed class ExternalArmsTests

@@ -24,7 +24,7 @@ public sealed class PipelineSourceConfig
     /// <summary>
     /// Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already
     /// there does not use one up. Required, as every row source's limit is: it bounds the rows a request may hold
-    /// (design 4.8). A parameter without a value (a map's key set to null) appends none.
+    ///. A parameter without a value (a map's key set to null) appends none.
     /// </summary>
     public required string LimitParam { get; init; }
 

@@ -66,7 +66,7 @@ public sealed record RequestComparison(
     bool Identical,
     string? Error);
 
-/// <summary>The recorded-mode comparison of design 10.8 over a set of bundles.</summary>
+/// <summary>The recorded-mode comparison over a set of bundles.</summary>
 public sealed class ComparisonReport
 {
     public required int Bundles { get; init; }
@@ -119,7 +119,7 @@ public sealed class ComparisonReport
     public required IReadOnlyList<RequestComparison> Requests { get; init; }
 }
 
-/// <summary>Builds the batch comparison report of design 10.8 (recorded mode).</summary>
+/// <summary>Builds the batch comparison report (recorded mode).</summary>
 public static class ReplayComparison
 {
     /// <param name="topK">K of the Top-K overlap.</param>

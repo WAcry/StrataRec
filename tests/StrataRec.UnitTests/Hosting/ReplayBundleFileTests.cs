@@ -5,7 +5,7 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>Malformed replay bundles are rejected with the JSON pointer of the problem and a hint (design 13.4).</summary>
+/// <summary>Malformed replay bundles are rejected with the JSON pointer of the problem and a hint.</summary>
 public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """

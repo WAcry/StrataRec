@@ -29,7 +29,7 @@ public enum SignatureStatus : byte
     Unchecked,
 }
 
-/// <summary>A model signature as a compile sees it (design 6.9).</summary>
+/// <summary>A model signature as a compile sees it.</summary>
 public readonly record struct SignatureLookup(SignatureStatus Status, ServiceSignature? Signature = null, string? Error = null, string? Hint = null)
 {
     public static SignatureLookup Unchecked => new(SignatureStatus.Unchecked);
@@ -54,7 +54,7 @@ public readonly record struct SignatureLookup(SignatureStatus Status, ServiceSig
 }
 
 /// <summary>
-/// What a plan's compile acquires from its engine (design 6.4, 6.6): its local tables, the instances its bindings name,
+/// What a plan's compile acquires from its engine: its local tables, the instances its bindings name,
 /// and the model signatures its nodes are checked against, which may need those instances loaded. The engine's
 /// implementation is the plan's binding lease (Hosting): it shares tables and instances with the other plans by identity,
 /// loads them, and keeps them until no request of the plan can still use them. <see cref="UnloadedBindings"/> is the one

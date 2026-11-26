@@ -3,7 +3,7 @@ using StrataRec.Hosting.Manifests;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary><c>policy.jsonc</c> owners: review only (design 11.4).</summary>
+/// <summary><c>policy.jsonc</c> owners: review only.</summary>
 public sealed class PolicyOwnersTests
 {
     /// <summary>

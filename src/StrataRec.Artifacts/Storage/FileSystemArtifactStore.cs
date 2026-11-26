@@ -4,7 +4,7 @@ using StrataRec.Artifacts.Json;
 namespace StrataRec.Artifacts.Storage;
 
 /// <summary>
-/// An <see cref="IArtifactStore"/> over a local directory, laid out like the object store of design 10.1:
+/// An <see cref="IArtifactStore"/> over a local directory, laid out like the object store:
 /// <c>&lt;root&gt;/blobs/sha256/&lt;64 hex digits&gt;</c>. Used by <c>stratarec build</c> and as a node's local cache.
 /// </summary>
 /// <remarks>
@@ -17,7 +17,7 @@ namespace StrataRec.Artifacts.Storage;
 /// directory fsync, so after a power loss a just-written blob may be missing, never partial.
 /// </para>
 /// <para>
-/// Blobs are stored uncompressed. The design's zstd compression for transport and storage (design 9.1 item 4) is
+/// Blobs are stored uncompressed. The design's zstd compression for transport and storage is
 /// a planned addition; the content id will stay the hash of the uncompressed canonical bytes.
 /// </para>
 /// </remarks>

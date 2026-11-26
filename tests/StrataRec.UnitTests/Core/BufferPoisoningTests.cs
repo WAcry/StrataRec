@@ -3,7 +3,7 @@ using StrataRec.Core.Memory;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>
-/// Test runs poison returned buffers (design 4.8), in Release as in Debug: the guard against one request reading another's
+/// Test runs poison returned buffers, in Release as in Debug: the guard against one request reading another's
 /// data must run where CI runs, which is the Release build.
 /// </summary>
 public sealed class BufferPoisoningTests

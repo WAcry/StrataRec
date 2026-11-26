@@ -71,7 +71,7 @@ public class LocalFeatureTableTests
     /// The same data served by a connector (staging, then backfill) and by a local table (lookup, then fill) must give
     /// the request identical columns: values, defaults for absent keys and fields, missing values, NaN/±∞ replaced for
     /// float features and float lists (an embedding, list&lt;float32,4&gt;, as a whole), and a list of another length than a
-    /// fixed-length feature's replaced and counted out of range (design 4.3, 6.6, 6.7).
+    /// fixed-length feature's replaced and counted out of range.
     /// </summary>
     [Fact]
     public async Task ServesTheSameColumnsAsTheFetchPath()

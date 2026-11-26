@@ -1,7 +1,7 @@
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Interaction warnings between experiments of different layers (design 11.5): only nodes an arm adds interact, and a
+/// Interaction warnings between experiments of different layers: only nodes an arm adds interact, and a
 /// reviewed interaction recorded in an experiment stops warning, while a review no interaction needs warns.
 /// </summary>
 public sealed class InteractionWarningTests

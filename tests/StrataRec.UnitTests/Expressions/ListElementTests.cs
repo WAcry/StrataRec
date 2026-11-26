@@ -6,7 +6,7 @@ using StrataRec.Expressions;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>
-/// Lists of every element type in ColumnExpr (design 4.3, 7.6): <c>list&lt;float32&gt;</c> and <c>list&lt;float64&gt;</c>
+/// Lists of every element type in ColumnExpr: <c>list&lt;float32&gt;</c> and <c>list&lt;float64&gt;</c>
 /// read as <c>list&lt;float64&gt;</c> (float32 storage in place), <c>list&lt;bool&gt;</c>, and the list functions on each.
 /// </summary>
 /// <remarks><see cref="ExprAssert.Rows"/> checks each expected value three ways: full-range (zero-copy column reads),

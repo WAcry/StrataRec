@@ -282,7 +282,7 @@ public class CandidateTableTests
     }
 
     /// <summary>
-    /// A key whose row a compaction released is still a key the request has seen (design 4.5, invariant 2), across
+    /// A key whose row a compaction released is still a key the request has seen, across
     /// several compactions and both key types; keys a rollback released were never appended (Gemini review 2026-11-14, finding 1).
     /// </summary>
     [Theory]

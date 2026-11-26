@@ -1,4 +1,4 @@
-// The release for local runs (design 10.1), as releases/trending_feed.local.jsonc.
+// The release for local runs, as releases/trending_feed.local.jsonc.
 {
   "$schema": "../schemas/release.schema.json",
   "pipeline_id": "editors_picks",

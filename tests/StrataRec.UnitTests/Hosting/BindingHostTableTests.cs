@@ -13,7 +13,7 @@ using StrataRec.UnitTests.Features;
 namespace StrataRec.UnitTests.Hosting;
 
 /// <summary>
-/// The engine's table lifecycle (design 6.6): sharing by identity and owner, readiness, first-load failures, restarts with
+/// The engine's table lifecycle: sharing by identity and owner, readiness, first-load failures, restarts with
 /// backoff, release and shutdown. Sources are scripted run by run and signal through task completion sources, so nothing here
 /// depends on timing.
 /// </summary>

@@ -7,7 +7,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// A connector's result counts only if the fetch observes it within its bound (design 4.8): a call that completes
+/// A connector's result counts only if the fetch observes it within its bound: a call that completes
 /// without an installed wait to decide it (synchronously, or before the wait is installed) is judged when the fetch sees
 /// it. Every connector here is gated on the fetch's own token, which its budget timer cancels, so nothing sleeps.
 /// </summary>

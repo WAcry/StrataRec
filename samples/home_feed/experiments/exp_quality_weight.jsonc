@@ -1,4 +1,4 @@
-// A parameter-only experiment: no node variants, only a per-request parameter override (design 12.2).
+// A parameter-only experiment: no node variants, only a per-request parameter override.
 {
   "$schema": "../schemas/experiment.schema.json",
   "experiment_id": "exp_quality_weight",

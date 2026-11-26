@@ -12,7 +12,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The engine's lifecycle with local tables (design 6.6, 10.3): loads, publishing and disposal under one lock. The
+/// The engine's lifecycle with local tables: loads, publishing and disposal under one lock. The
 /// sample's <c>author_store</c> is loaded by a source the test drives, so every interleaving here is forced, not timed.
 /// </summary>
 public sealed class EngineLifecycleTests

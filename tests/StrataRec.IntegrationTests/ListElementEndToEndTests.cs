@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>list&lt;float32&gt;</c>, <c>list&lt;float64&gt;</c> and <c>list&lt;bool&gt;</c> end to end (design 4.3): request
+/// <c>list&lt;float32&gt;</c>, <c>list&lt;float64&gt;</c> and <c>list&lt;bool&gt;</c> end to end: request
 /// inputs, node outputs read by later expressions, a float list that does not fit float32 replaced as a whole and
 /// counted in <see cref="PipelineResult.NonFiniteValues"/>, results and log taps.
 /// </summary>

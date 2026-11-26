@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>Side summaries of the recorded-mode comparison (design 10.8): error, degraded and score metrics.</summary>
+/// <summary>Side summaries of the recorded-mode comparison: error, degraded and score metrics.</summary>
 public sealed class ReplayComparisonTests
 {
     [Fact]

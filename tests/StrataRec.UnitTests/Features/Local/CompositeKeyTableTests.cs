@@ -8,7 +8,7 @@ using static StrataRec.UnitTests.Features.Local.LocalTableTestSupport;
 namespace StrataRec.UnitTests.Features.Local;
 
 /// <summary>
-/// Local tables keyed by several parts (design 6.6): a key's parts are encoded canonically, hashed, stored in the record
+/// Local tables keyed by several parts: a key's parts are encoded canonically, hashed, stored in the record
 /// and compared on a lookup, so tuples are told apart whatever their hashes; the one-part forms stay as they were.
 /// </summary>
 public class CompositeKeyTableTests

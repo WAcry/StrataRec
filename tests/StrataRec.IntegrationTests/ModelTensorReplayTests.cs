@@ -9,7 +9,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// The sample's <c>ctr_model</c> also fed an int64 column (<c>col.entity_id</c>) and an embedding (<c>item.embedding</c>, a
 /// <c>list&lt;float32,4&gt;</c>, with a default): <c>ModelScorer@1</c> sends them as int64 <c>[rows]</c> and float32
-/// <c>[rows, 4]</c> (design 6.9), the
+/// <c>[rows, 4]</c>, the
 /// recording digests each row's slice of them, and a replay on the same configuration computes the same digests, so every
 /// call is served from the recording without a gap.
 /// </summary>

@@ -12,7 +12,7 @@ namespace StrataRec.CommandLine.Commands;
 /// <summary>What a <see cref="ConfigRef"/> names.</summary>
 internal enum ConfigRefKind
 {
-    /// <summary>A workspace directory (design 10.1); <c>-e</c> and <c>-p</c> select the release and pipeline in it.</summary>
+    /// <summary>A workspace directory; <c>-e</c> and <c>-p</c> select the release and pipeline in it.</summary>
     Workspace = 1,
 
     /// <summary>A release manifest's content id, <c>sha256:&lt;hex&gt;</c>, read from the artifact store.</summary>
@@ -24,7 +24,7 @@ internal enum ConfigRefKind
 
 /// <summary>
 /// A configuration named on the command line: a workspace directory, the content id of a release manifest in an artifact
-/// store, or a manifest file whose artifacts are in the store (design 10.1, 13.4). <c>run</c>, <c>explain-plan</c>,
+/// store, or a manifest file whose artifacts are in the store. <c>run</c>, <c>explain-plan</c>,
 /// <c>diff</c>, <c>replay</c> and <c>compare</c> resolve every configuration here, so a ref means the same to each of
 /// them, and a manifest compiles to the plan a node loading it would serve, under the manifest's content id.
 /// </summary>
@@ -243,7 +243,7 @@ internal sealed class ConfigRef
             return null;
         }
 
-        // As a node checks it (design 10.4): a manifest that needs what this binary lacks is reported as such, not as the
+        // As a node checks it: a manifest that needs what this binary lacks is reported as such, not as the
         // errors of compiling it without them.
         if (ManifestBuilder.CheckCapabilities(manifest, id, _provided, diagnostics).Count > 0)
         {
@@ -269,7 +269,7 @@ internal sealed class ConfigRef
 
     /// <summary>
     /// An engine for replay, with no pipeline loaded yet (<see cref="LoadIntoAsync"/>). It loads no table and no client,
-    /// since a replay answers every external call and local read from the recording (design 13.4): their model files,
+    /// since a replay answers every external call and local read from the recording: their model files,
     /// snapshot files and secrets are not needed, only the data files of fixtures that read them when created, at paths
     /// that resolve as <see cref="PlanEnvironment"/> says.
     /// </summary>

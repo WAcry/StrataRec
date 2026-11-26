@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Operators.Standard;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// Ranking by a score column (design 5.7) compares the scores exactly: int64 scores beyond 2^53, where a double cannot
+/// Ranking by a score column compares the scores exactly: int64 scores beyond 2^53, where a double cannot
 /// tell neighbours apart, keep their numeric order; missing and NaN go last; ties go to the lower entity id.
 /// </summary>
 public sealed class RowRankingTests

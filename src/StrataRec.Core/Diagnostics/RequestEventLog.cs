@@ -6,7 +6,7 @@ using StrataRec.Core.Memory;
 
 namespace StrataRec.Core.Diagnostics;
 
-/// <summary>Request-level failures that are summarized per time window instead of logged one by one (design 13.2).</summary>
+/// <summary>Request-level failures that are summarized per time window instead of logged one by one.</summary>
 public enum RequestEvent : byte
 {
     /// <summary>
@@ -46,21 +46,20 @@ public enum RequestEvent : byte
     CancellationCallbacksFailed,
 
     /// <summary>
-    /// The host's buffer pool threw while taking back a request's buffers (design 13.2); subject: the pipeline. The
+    /// The host's buffer pool threw while taking back a request's buffers; subject: the pipeline. The
     /// others were returned, these were left to the GC. The request was not affected.
     /// </summary>
     BufferReturnFailed,
 
     /// <summary>
-    /// A request's buffers were still rented <see cref="RequestEventLog.HeldAfter"/> after it returned (design 4.8,
-    /// 13.2); subject: the pipeline. External calls it abandoned at a timeout have not finished: a client or connector
+    /// A request's buffers were still rented <see cref="RequestEventLog.HeldAfter"/> after it returned; subject: the pipeline. External calls it abandoned at a timeout have not finished: a client or connector
     /// that ignores its cancellation token keeps them, and the plan instances the request used, for as long as it runs.
     /// </summary>
     BuffersHeld,
 }
 
 /// <summary>
-/// Turns request-level failures into event logs whose volume does not depend on traffic (design 13.2). Failures are
+/// Turns request-level failures into event logs whose volume does not depend on traffic. Failures are
 /// counted per (event, subject); every window (10 s by default) writes at most one summary line per pair, with the count
 /// and one sample request. External dependencies are also judged per window: a dependency is failing when at least half
 /// of its calls in a window failed, and a line is written only when that verdict flips.
@@ -148,7 +147,7 @@ public sealed partial class RequestEventLog : IDisposable
     }
 
     /// <summary>
-    /// Watches a request that returned while calls it abandoned still hold its memory (design 4.8): if its buffers are still
+    /// Watches a request that returned while calls it abandoned still hold its memory: if its buffers are still
     /// rented <see cref="HeldAfter"/> after now, a flush reports <see cref="RequestEvent.BuffersHeld"/> for it, once.
     /// </summary>
     /// <param name="subject">The pipeline.</param>

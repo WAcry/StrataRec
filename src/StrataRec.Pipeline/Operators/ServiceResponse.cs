@@ -8,7 +8,7 @@ namespace StrataRec.Pipeline.Operators;
 /// <summary>
 /// The response an operator passes to <see cref="OperatorContext.CallAsync"/>: tensor outputs into buffers rented from
 /// the request, of the element type the client asks for; text outputs as the strings it sets; and the items it adds, in
-/// rank order, capped at <see cref="Limit"/> (excess is dropped and counted, design 4.8). Read it only after the call
+/// rank order, capped at <see cref="Limit"/> (excess is dropped and counted). Read it only after the call
 /// succeeded.
 /// </summary>
 /// <remarks>

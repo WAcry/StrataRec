@@ -4,7 +4,7 @@ using StrataRec.Core.Types;
 namespace StrataRec.Core.Columns;
 
 /// <summary>
-/// Base class of every column buffer in a <see cref="Tables.CandidateTable"/> (design 4.4).
+/// Base class of every column buffer in a <see cref="Tables.CandidateTable"/>.
 /// </summary>
 /// <remarks>
 /// <para>Rows are physical row indices in <c>[0, Capacity)</c>. A row's value is meaningful only when the row is
@@ -113,7 +113,7 @@ public abstract class ColumnBuffer
 
     /// <summary>
     /// Rewrites the column into new buffers of <paramref name="newCapacity"/> rows so that new row <c>i</c> holds old
-    /// row <c>rows[i]</c> (used by Compact, design 4.5). Old arrays stay rented until the request ends.
+    /// row <c>rows[i]</c> (used by Compact). Old arrays stay rented until the request ends.
     /// </summary>
     public void Gather(ReadOnlySpan<int> rows, int newCapacity)
     {

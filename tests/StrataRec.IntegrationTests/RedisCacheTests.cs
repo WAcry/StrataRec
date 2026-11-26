@@ -15,7 +15,7 @@ using StrataRec.Redis;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>redis@1</c> against a real Redis (design 6.6 <c>cache</c>, tier 2): the store's records, keys and times to live, and
+/// <c>redis@1</c> against a real Redis: the store's records, keys and times to live, and
 /// two engines sharing it. The server is <c>STRATAREC_REDIS</c> (<c>host:port</c>; CI runs a Redis service) or, without
 /// it, a <c>redis:7</c> container the fixture starts and removes; with neither, the tests are skipped and say why.
 /// </summary>

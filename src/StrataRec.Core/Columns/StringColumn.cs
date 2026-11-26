@@ -4,7 +4,7 @@ using StrataRec.Core.Types;
 namespace StrataRec.Core.Columns;
 
 /// <summary>
-/// A <c>string</c> column: one string reference per row, in an array rented from the request (design 4.4).
+/// A <c>string</c> column: one string reference per row, in an array rented from the request.
 /// </summary>
 /// <remarks>
 /// <para>Plain references rather than dictionary codes. A dictionary per column and request was allocated (a map and a

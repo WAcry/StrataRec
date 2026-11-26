@@ -8,7 +8,7 @@ using StrataRec.Expressions.Runtime;
 
 namespace StrataRec.Expressions.Vectorized;
 
-/// <summary>A compiled expression on backend A (design 7.7). Immutable and safe for concurrent evaluation.</summary>
+/// <summary>A compiled expression on backend A. Immutable and safe for concurrent evaluation.</summary>
 internal sealed class VectorizedExpression : CompiledExpression
 {
     private readonly ExprType _type;

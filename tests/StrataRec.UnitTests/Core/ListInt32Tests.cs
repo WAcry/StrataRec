@@ -7,7 +7,7 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary><c>list&lt;int32&gt;</c> storage (design 4.3): the type, the column, and the int32 range rule.</summary>
+/// <summary><c>list&lt;int32&gt;</c> storage: the type, the column, and the int32 range rule.</summary>
 public class ListInt32Tests
 {
     [Theory]

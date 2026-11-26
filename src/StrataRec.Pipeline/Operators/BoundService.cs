@@ -6,7 +6,7 @@ namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
 /// A service a node calls, bound at compile time (<see cref="OperatorCompileContext.Service"/>): its client, shared with
-/// every plan of the same binding (design 6.4), the role it plays for the node, and its binding's timeout. Immutable and
+/// every plan of the same binding, the role it plays for the node, and its binding's timeout. Immutable and
 /// shared by every request of the node; calls go through <see cref="OperatorContext.CallAsync"/>.
 /// </summary>
 public sealed class BoundService

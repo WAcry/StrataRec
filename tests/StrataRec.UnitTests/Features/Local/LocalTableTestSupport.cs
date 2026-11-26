@@ -10,7 +10,7 @@ namespace StrataRec.UnitTests.Features.Local;
 /// <summary>Schemas, values and read helpers shared by the local feature table tests.</summary>
 internal static class LocalTableTestSupport
 {
-    /// <summary>One field of every storage type a catalog feature can have (design 4.3).</summary>
+    /// <summary>One field of every storage type a catalog feature can have.</summary>
     public static readonly LocalTableField[] AllTypes =
     {
         new("b", ColumnType.Bool),

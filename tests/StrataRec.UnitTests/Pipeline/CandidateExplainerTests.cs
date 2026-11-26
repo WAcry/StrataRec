@@ -12,7 +12,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// Candidate explanations (design 13.3): each target's state after every node (present, live, rank, the values of the
+/// Candidate explanations: each target's state after every node (present, live, rank, the values of the
 /// columns the node read and wrote) through recall, a filter, a skipped node, a score and a truncation, across a
 /// compaction, a rolled-back attempt and a row source's fallback; the reasons of the operators that give one; the bound on
 /// targets; int64 and string keys alike.

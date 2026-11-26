@@ -477,7 +477,7 @@ internal static class ReplayJson
         return keys;
     }
 
-    /// <summary>The status of a call that was still in flight when its request was aborted (design 13.4).</summary>
+    /// <summary>The status of a call that was still in flight when its request was aborted.</summary>
     public const string Outstanding = "outstanding";
 
     /// <summary>The error recorded with an <see cref="Outstanding"/> call.</summary>

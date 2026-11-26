@@ -5,7 +5,7 @@ using StrataRec.Core.Values;
 namespace StrataRec.Logging;
 
 /// <summary>
-/// Request- and row-level sampling for funnel logs (design 8.2, 8.4). Decisions are stable hashes, so every tap of a
+/// Request- and row-level sampling for funnel logs. Decisions are stable hashes, so every tap of a
 /// group sees the same requests and the same row priorities, and sampled candidates keep complete cross-stage traces.
 /// </summary>
 public static class CoordinatedSampling
@@ -44,7 +44,7 @@ public static class CoordinatedSampling
         StableHash.Hash01(groupSeed, requestHash, entityHash);
 
     /// <summary>
-    /// Applies <c>rate</c> then bottom-k by priority (design 8.4). <paramref name="rows"/> and
+    /// Applies <c>rate</c> then bottom-k by priority. <paramref name="rows"/> and
     /// <paramref name="priorities"/> are parallel; the kept entries are moved to the front in their original order and
     /// their count is returned. <paramref name="rowProbability"/> is the inclusion probability of every kept row:
     /// <c>min(rate, τ)</c> where τ is the (k+1)-th smallest priority among eligible rows, or <c>rate</c> when at most k

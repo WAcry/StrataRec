@@ -4,7 +4,7 @@ using StrataRec.Pipeline.Execution;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// Explained candidates (design 13.3) as lines for people: where each ended, then one line per node that did something to
+/// Explained candidates as lines for people: where each ended, then one line per node that did something to
 /// it (or was skipped, or rolled back) with the values it read and wrote and the operator's reason; the nodes that ran while
 /// it was not live are counted in one line. The text formats print this; JSON has
 /// <see cref="Hosting.RecResultJson.WriteExplanation"/>.

@@ -53,7 +53,7 @@ public sealed class FeatureRuntimeInfo
     public int FieldIndex { get; internal set; } = -1;
 
     /// <summary>
-    /// Scheduling wave, derived from the dependency graph (design 6.8 step 3). For a physical candidate feature, the
+    /// Scheduling wave, derived from the dependency graph. For a physical candidate feature, the
     /// wave its fetch runs in: 0 when keyed by <c>entity_id</c>/context, w + 1 when keyed by a feature that becomes
     /// available in wave w. For a derived feature, the wave after whose fetches it is computed: the latest wave of its
     /// inputs, or -1 when it needs no candidate fetch at all (only <c>entity_id</c>, request inputs or context
@@ -123,8 +123,8 @@ internal sealed class SourceValueTags(string source, string feature)
 internal readonly record struct ServiceArgSource(string Name, ColumnType Type, int ContextId, int Feature);
 
 /// <summary>
-/// Features that are supplied together: one source × one entity (design 6.8: same source within a wave is merged).
-/// How is the group's <see cref="Supply"/>: a fetched group calls its connector, a local group reads its table (design 6.6).
+/// Features that are supplied together: one source × one entity (same source within a wave is merged).
+/// How is the group's <see cref="Supply"/>: a fetched group calls its connector, a local group reads its table.
 /// </summary>
 /// <remarks>
 /// A group is the unit of merging, not of fetching: each fetch or read carries only the members the request needs at
@@ -159,7 +159,7 @@ public sealed class FetchGroup
     internal int[] VaryingParts { get; init; } = [];
 
     /// <summary>The features the key (or the arguments) read, each once: fetched before the group, and the group fails
-    /// with any of them (design 6.7).</summary>
+    /// with any of them.</summary>
     public required ImmutableArray<int> KeyFeatures { get; init; }
 
     /// <summary>
@@ -218,7 +218,7 @@ public sealed class FetchGroup
 
     public int Wave { get; internal set; }
 
-    /// <summary>Metric tags and span name of this source (design 13.1), built once per plan on first use.</summary>
+    /// <summary>Metric tags and span name of this source, built once per plan on first use.</summary>
     public IoTarget Io => _io ?? Interlocked.CompareExchange(ref _io, new IoTarget(IoRoles.Fetch, SourceName), null) ?? _io!;
 
     private IoTarget? _io;
@@ -236,7 +236,7 @@ internal readonly record struct KeyPartSource(int Context, int Feature)
 }
 
 /// <summary>
-/// Immutable, plan-level feature layout: runtime info per feature and the fetch groups (design 6.8). Built once when a
+/// Immutable, plan-level feature layout: runtime info per feature and the fetch groups. Built once when a
 /// plan is compiled and shared by all its requests.
 /// </summary>
 public sealed class FeaturePlan
@@ -291,7 +291,7 @@ public sealed class FeaturePlan
     /// <see cref="NeedsWholeTable"/>); null holds the plan's features alone.</param>
     /// <param name="services">The plan's services, for sources in mode <c>service</c> (<see cref="FeatureSourceResolver"/>).</param>
     /// <param name="awaited">The context features operators await while they run rather than before they start (a recall
-    /// source's query, design 5.4), by index in <paramref name="features"/>: a derived one is computed as soon as its inputs
+    /// source's query), by index in <paramref name="features"/>: a derived one is computed as soon as its inputs
     /// are stored (<see cref="FeatureRuntimeInfo.ComputedEarly"/>), so such an operator does not wait for the whole
     /// prefetch; null has none.</param>
     /// <exception cref="ArgumentException">An info of <paramref name="features"/> belongs to a plan already.</exception>
@@ -416,7 +416,7 @@ public sealed class FeaturePlan
     }
 
     /// <summary>
-    /// Where a request reads each part of <paramref name="entity"/>'s key (design 6.8): a request input from the request's
+    /// Where a request reads each part of <paramref name="entity"/>'s key: a request input from the request's
     /// context values, <c>col.entity_id</c>, a candidate key feature's column, or a context key feature's context value; the
     /// group's members then depend on the key features. An entity with args reads each argument as a shared part: a
     /// request input, or a context feature stored first. False (diagnosed) when a key feature is not in the plan.
@@ -550,7 +550,7 @@ public sealed class FeaturePlan
 
     /// <summary>
     /// Whether a plan that reads one feature of <paramref name="source"/> must hold every physical feature of the source's
-    /// tables, as the plan builder registers them (design 6.6). A <c>cache</c> table is filled by the misses of the plans
+    /// tables, as the plan builder registers them. A <c>cache</c> table is filled by the misses of the plans
     /// that read it, and a record written back must be complete, or a later read of another field would take the field
     /// for missing: a miss fetches every member of the group, so every field of the table must be a member. A <c>local</c>
     /// table is loaded whole by its source, whatever the plan reads (<see cref="Create"/> lays it out from the catalog),

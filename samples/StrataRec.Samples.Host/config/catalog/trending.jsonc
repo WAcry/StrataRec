@@ -1,4 +1,4 @@
-// Features of the trending feed (design 6.3). Every physical feature is served by kv_store@1, the sample's own connector
+// Features of the trending feed. Every physical feature is served by kv_store@1, the sample's own connector
 // (bindings/local.jsonc). A feature with "default" is non-nullable; without one it is T? and reads as missing when the
 // store has no value.
 {

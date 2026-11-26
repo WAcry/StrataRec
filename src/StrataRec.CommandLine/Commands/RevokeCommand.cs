@@ -7,7 +7,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec revoke</c>: the emergency stop of design 10.6 for the release controller that <c>stratarec publish</c> is.
+/// <c>stratarec revoke</c>: the emergency stop for the release controller that <c>stratarec publish</c> is.
 /// It publishes, at once, what the pointer publishes without the named experiments, as the next release (<c>seq</c> one
 /// more), which lists them as revoked. Nodes take it as they take any newer release. Nothing is compiled or validated
 /// (<see cref="ManifestBuilder.RevokeAsync"/>), so the stop takes the nodes' polling interval and a compile, and needs
@@ -39,7 +39,7 @@ internal static class RevokeCommand
         var pipeline = new Option<string>("--pipeline", "-p") { Description = "The pipeline whose release to change.", Required = true };
         var environment = CommonOptions.Environment();
         var format = CommonOptions.Format();
-        var command = new Command("revoke", "Emergency stop (design 10.6): publish at once what is published without the experiments, revoking every earlier " +
+        var command = new Command("revoke", "Emergency stop: publish at once what is published without the experiments, revoking every earlier " +
             "manifest, so a node that restarts does not bring them back either. Exits with 1 when nothing is published, an experiment is not released, or the " +
             "store cannot be read or written, and 2 on usage errors.")
         {

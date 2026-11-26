@@ -5,12 +5,12 @@ using StrataRec.Features.Catalog;
 
 namespace StrataRec.Features.Local;
 
-/// <summary>How a local feature table is fed (design 6.6). The table works the same way in both modes; the mode says
+/// <summary>How a local feature table is fed. The table works the same way in both modes; the mode says
 /// what a record's version means and which maintenance applies.</summary>
 public enum LocalTableMode : byte
 {
     /// <summary>Snapshots and an update stream push every entity in. The version is the event version of the update;
-    /// a key that is not in the table has no value (design 6.7, layer 3).</summary>
+    /// a key that is not in the table has no value (layer 3).</summary>
     Local = 1,
 
     /// <summary>Fetched values are written back on a miss. The version is the write time, so records can expire and be
@@ -24,7 +24,7 @@ public readonly record struct LocalTableField(string Name, ColumnType Type);
 
 /// <summary>
 /// What one local feature table holds: the (source, entity) it serves, the key layout and the physical fields bound to it
-/// (design 6.6). The record layout follows from it and is fixed for the life of the table: a catalog that adds or retypes
+///. The record layout follows from it and is fixed for the life of the table: a catalog that adds or retypes
 /// a field of the source, or keys the entity by parts of other types, needs a new table.
 /// </summary>
 /// <remarks>Any key layout: a one-part int64 key is indexed by its value, every other key (a string, several parts) by the

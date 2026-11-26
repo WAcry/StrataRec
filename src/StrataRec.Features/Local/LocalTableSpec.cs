@@ -10,7 +10,7 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Features.Local;
 
 /// <summary>
-/// What a plan needs from one local feature table (design 6.6): the layout, the limits, the source that loads it, and
+/// What a plan needs from one local feature table: the layout, the limits, the source that loads it, and
 /// the <see cref="Key"/> (its <see cref="Identity"/> and its <see cref="Owner"/>) that decides whether a table loaded for
 /// an earlier plan can serve this one.
 /// </summary>
@@ -70,7 +70,7 @@ public sealed class LocalTableSpec
     }
 
     /// <summary>
-    /// The spec of a <c>cache</c> table (design 6.6): fed by the requests that miss it, through its writer, which the
+    /// The spec of a <c>cache</c> table: fed by the requests that miss it, through its writer, which the
     /// table host runs as the table's source (<see cref="Cache.CacheWriterSource"/>). The identity is built by the same rule
     /// as a local table's, so a change of the connector, of the cache settings or of the field set starts a new, empty table.
     /// </summary>
@@ -102,7 +102,7 @@ public sealed class LocalTableSpec
     }
 
     /// <summary>
-    /// The spec of a service's cache table (design 6.9): fed by the calls that miss it, as a source's <c>cache</c> table
+    /// The spec of a service's cache table: fed by the calls that miss it, as a source's <c>cache</c> table
     /// (<see cref="CreateCache"/>), with the identity of the service's binding as written, so a change of the client, its
     /// settings or the cache settings starts a new, empty table.
     /// </summary>
@@ -233,7 +233,7 @@ public readonly struct TableKey : IEquatable<TableKey>
         HashCode.Combine(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Owner), Identity is null ? 0 : StringComparer.Ordinal.GetHashCode(Identity));
 }
 
-/// <summary>Gives a plan being compiled the table of each local (source, entity) it reads (design 6.6).</summary>
+/// <summary>Gives a plan being compiled the table of each local (source, entity) it reads.</summary>
 /// <remarks>The engine's provider (<c>BindingLease</c> in Hosting) shares tables by <see cref="LocalTableSpec.Key"/>
 /// and loads them in the background; a plan is served only once its tables are loaded.</remarks>
 public interface ILocalTableProvider

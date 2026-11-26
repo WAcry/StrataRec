@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Execution;
 namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
-/// An operator that can say why it treated an explained candidate as it did (design 13.3): the expression a filter
+/// An operator that can say why it treated an explained candidate as it did: the expression a filter
 /// tested, the cut a truncation made, the terms of a score. Optional: every node is explained without it, by the
 /// candidate's state and the values of the columns the node read and wrote.
 /// </summary>

@@ -12,7 +12,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// What <c>ModelScorer@1</c> sends (design 6.9): each input as a tensor of the declared type of its column or context
+/// What <c>ModelScorer@1</c> sends: each input as a tensor of the declared type of its column or context
 /// value, nothing converted (int64 values exact beyond 2^53, an int32 as an int32, a float64 as a float64, a bool as a
 /// bool, a string as a string), gathered from the column's storage or broadcast from the request, and sliced into
 /// batches; and which inputs it refuses to compile.
@@ -182,7 +182,7 @@ public sealed class ModelScorerTests
         Assert.Equal("Model 'm' version 'default' declares input 'id' as float32 [-1], but it maps col.entity_id (int64), which ModelScorer@1 sends as int64 [-1].",
             error.Message);
         Assert.Equal("declare input 'id' as int64 [-1] in the model's signature, or map a float32 derived feature of col.entity_id instead "
-            + "(one definition for training and serving, design 6.9)", error.Hint);
+            + "(one definition for training and serving)", error.Hint);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public sealed class ModelScorerTests
         Assert.Equal("Model 'm' version 'default' declares input 'safe' as float32 [-1], but it maps col.item.safe (bool), which ModelScorer@1 sends as bool [-1].",
             error.Message);
         Assert.Equal("declare input 'safe' as bool [-1] in the model's signature, or map a float32 derived feature of col.item.safe instead "
-            + "(one definition for training and serving, design 6.9)", error.Hint);
+            + "(one definition for training and serving)", error.Hint);
     }
 
     [Fact]

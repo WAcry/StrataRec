@@ -495,7 +495,7 @@ public sealed class ManifestRefCliTests
     [Fact]
     public async Task AManifestThatNeedsWhatTheBinaryLacks_IsIncompatible_AsOnANode()
     {
-        // Built by a binary with an operator this one does not register (design 10.4): its requires names it.
+        // Built by a binary with an operator this one does not register: its requires names it.
         var root = ManifestStores.Workspace();
         var store = ManifestStores.NewStore();
         var (_, file) = await ManifestStores.BuildAsync(root, store);

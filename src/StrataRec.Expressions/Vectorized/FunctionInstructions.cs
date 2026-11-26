@@ -15,7 +15,7 @@ namespace StrataRec.Expressions.Vectorized;
 /// <summary>
 /// One lane of an int list operand, viewed in place: int64 elements (<c>list&lt;int64&gt;</c> storage, request-level
 /// values, literals) or int32 elements (<c>list&lt;int32&gt;</c> storage). Either way the elements mean int64 values
-/// (design 4.3), so a kernel branches on the width instead of widening into a buffer per row: once per call for a plain
+///, so a kernel branches on the width instead of widening into a buffer per row: once per call for a plain
 /// column (<see cref="Lanes.DirectIntListColumn"/>), once per lane for selects that may mix widths.
 /// </summary>
 internal readonly ref struct IntListLane

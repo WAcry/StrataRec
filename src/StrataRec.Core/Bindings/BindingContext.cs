@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace StrataRec.Core.Bindings;
 
 /// <summary>
-/// What a factory gets to create the instance one binding names (design 6.4): a service client, a feature connector, a
+/// What a factory gets to create the instance one binding names: a service client, a feature connector, a
 /// distributed cache store or an update source, built in or written by the user. The remarks are the
 /// lifetime contract of every such instance but an update source: what the engine guarantees, and what the
 /// implementation must do.
@@ -105,7 +105,7 @@ public sealed class BindingContext
         string.IsNullOrEmpty(baseDirectory) ? Directory.GetCurrentDirectory() : Path.GetFullPath(baseDirectory);
 
     /// <summary>
-    /// A setting's value as a reference to a secret (<c>"secret://interaction-store-token"</c>, design 6.4 item 4), to
+    /// A setting's value as a reference to a secret (<c>"secret://interaction-store-token"</c>), to
     /// resolve at load: what a <see cref="Bindings.SecretReference"/> member of a factory's settings type is bound with.
     /// Call it for a value a factory reads by hand.
     /// </summary>

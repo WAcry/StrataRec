@@ -7,10 +7,10 @@ using StrataRec.Expressions.Syntax;
 namespace StrataRec.Expressions.Binding;
 
 /// <summary>
-/// Resolves names, checks types and nullability (design 7.4) and lowers the AST into typed IR. Sugar is expanded here
+/// Resolves names, checks types and nullability and lowers the AST into typed IR. Sugar is expanded here
 /// so that both backends only implement primitives: n-ary <c>min</c>/<c>max</c>, <c>clamp</c>, <c>logit</c>,
 /// <c>soft_floor</c>, <c>linear_decay</c> and <c>x in l</c>. <c>let</c> bindings become shared IR nodes.
-/// Built-ins lift every argument (design 7.4 rule 2), so an expansion must not reach a constant through a
+/// Built-ins lift every argument, so an expansion must not reach a constant through a
 /// conditional branch that skips an argument: <c>?:</c> only lifts its condition.
 /// </summary>
 /// <remarks>Errors are collected rather than thrown; an ill-typed subexpression gets the poison type
@@ -431,10 +431,10 @@ internal sealed class Binder
                 if (l.Type.Kind != TypeKind.Int || r.Type.Kind != TypeKind.Int)
                 {
                     return FailAt(Culprit(b, l.Type.Kind != TypeKind.Int, r.Type.Kind != TypeKind.Int), ExpressionErrorCodes.TypeMismatch,
-                        $"'%' needs int64 operands, got {l.Type} and {r.Type}", b, "'%' is integer remainder only (design 7.5)");
+                        $"'%' needs int64 operands, got {l.Type} and {r.Type}", b, "'%' is integer remainder only");
                 }
 
-                // x % 0 has no value (design 7.5): missing, so the result may be missing unless the divisor is a constant
+                // x % 0 has no value: missing, so the result may be missing unless the divisor is a constant
                 // that is not 0. A constant 0 is a mistake, reported here rather than leaving a column always missing.
                 if (r.IsConst && !r.Value.IsMissing && r.Value.AsInt64() == 0)
                 {
@@ -455,7 +455,7 @@ internal sealed class Binder
         string? hint = null;
         if (l.Type.Kind == TypeKind.Bool || r.Type.Kind == TypeKind.Bool)
         {
-            hint = "bool is not a number; write 'cond ? 1.0 : 0.0' (design 7.4)";
+            hint = "bool is not a number; write 'cond ? 1.0 : 0.0'";
         }
         else if (op == "+" && (l.Type.Kind == TypeKind.String || r.Type.Kind == TypeKind.String))
         {
@@ -543,7 +543,7 @@ internal sealed class Binder
             }
 
             Report(ExpressionErrorCodes.UnknownFunction, $"Unknown function '{name}'", call.NameStart, name.Length,
-                NameSuggester.Hint(name, Builtins.FunctionNames) ?? "see the built-in functions of design 7.6");
+                NameSuggester.Hint(name, Builtins.FunctionNames) ?? "the functions are: " + string.Join(", ", Builtins.FunctionNames));
             return Poison(call);
         }
 
@@ -614,7 +614,7 @@ internal sealed class Binder
 
             case "int":
                 // Truncates toward zero. A float64 that is not finite or whose truncation leaves the int64 range has no
-                // int64 value: the result is missing, never a saturated or wrapped number (design 7.5). So int() of a
+                // int64 value: the result is missing, never a saturated or wrapped number. So int() of a
                 // float64 is nullable even when its argument is not; int() of an int64 is that value.
                 if (!AllNumeric(args, call, name, out _))
                 {
@@ -691,7 +691,7 @@ internal sealed class Binder
                 // That form returns 1.0 without looking at end, so a missing end would not make the result missing.
                 // Lowered instead as x >= end ? (x <= start ? 1.0 : 0.0) : (x <= start ? 1.0 : fraction): the same
                 // value for every present input, but every path tests both conditions, so the result is missing
-                // whenever any argument is (design 7.4 rule 2).
+                // whenever any argument is.
                 if (!AllNumeric(args, call, name, out _))
                 {
                     return Poison(call);
@@ -956,7 +956,7 @@ internal sealed class Binder
     }
 
     // ----------------------------------------------------------------------------------------------------------
-    // Result checks (design 7.4 rule 4)
+    // Result checks
 
     /// <summary>Checks the bound result against the site's requirements; returns the result, with an integer list
     /// literal written for a float list site turned into that float list (<see cref="AsFloatList"/>).</summary>
@@ -1002,7 +1002,7 @@ internal sealed class Binder
             return root;
         }
 
-        // A computed value outside the int32 or float32 range is replaced at run time (design 4.3); a constant one can only
+        // A computed value outside the int32 or float32 range is replaced at run time; a constant one can only
         // be a configuration mistake, so it is reported here, where it can be fixed. (A constant list of another length
         // than a fixed-length site's is a type mismatch above: a literal's type has its length.)
         if (_options.ExpectedType is { } narrow && root.IsConst && !ColumnValues.FitsStorage(root.Value, narrow))

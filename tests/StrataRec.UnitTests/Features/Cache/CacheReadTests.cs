@@ -11,7 +11,7 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>The request read path of <c>cache</c> sources (design 6.6 <c>cache</c>): tiers, expiry, failures, write-back.</summary>
+/// <summary>The request read path of <c>cache</c> sources: tiers, expiry, failures, write-back.</summary>
 public class CacheReadTests
 {
     private static readonly long[] Three = [1, 2, 3];

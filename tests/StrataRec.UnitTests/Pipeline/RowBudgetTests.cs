@@ -12,7 +12,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// A row source that finishes below its limit gives the rest back (design 4.8): columns created after it are sized for the
+/// A row source that finishes below its limit gives the rest back: columns created after it are sized for the
 /// rows that exist and the rows later row sources may still append, not for the quota it did not fill.
 /// </summary>
 public sealed class RowBudgetTests

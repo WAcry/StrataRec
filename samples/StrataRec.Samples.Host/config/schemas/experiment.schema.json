@@ -33,7 +33,7 @@
         "type": "object",
         "properties": {
           "params": {
-            "description": "Parameter values; map-typed parameters are nested objects flattened to leaves (design 11.8).",
+            "description": "Parameter values; map-typed parameters are nested objects flattened to leaves.",
             "type": "object"
           },
           "param_schema": {
@@ -82,7 +82,7 @@
             }
           },
           "columns": {
-            "description": "Candidate columns nodes write, one value per candidate, read as col.<name> (design 4.6).",
+            "description": "Candidate columns nodes write, one value per candidate, read as col.<name>.",
             "type": "object",
             "additionalProperties": {
               "type": [
@@ -225,7 +225,7 @@
                   ]
                 },
                 "when": {
-                  "description": "Request-level condition over ctx.* (design 5.5).",
+                  "description": "Request-level condition over ctx.*.",
                   "type": [
                     "string",
                     "null"
@@ -244,7 +244,7 @@
                   ]
                 },
                 "on_failure": {
-                  "description": "What a failure of this node does (design 5.6): fail_request (default) fails the request, skip goes on without the node's writes, fallback runs the node named by fallback in its place.",
+                  "description": "What a failure of this node does: fail_request (default) fails the request, skip goes on without the node's writes, fallback runs the node named by fallback in its place.",
                   "type": [
                     "string",
                     "null"
@@ -905,7 +905,7 @@
                             }
                           },
                           "queries": {
-                            "description": "Per source, the values its query sends, its call's only inputs (design 5.4): value name → a request-level expression over ctx.* and param.*, such as { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } } for a two-tower service that needs the user's features to retrieve. A source waits for the context features its own query reads and for nothing else: one without a query starts at once, one reading the user's embedding as soon as it is stored (a derived feature as soon as it is computed), while the others run; sources whose features are stored together are sent in source order. The wait is within the node's budget. A source whose query reads a feature that failed is not called, as soon as that feature failed, and counts as a failed source; a degraded one degrades the node; a missing value is sent as missing.",
+                            "description": "Per source, the values its query sends, its call's only inputs: value name → a request-level expression over ctx.* and param.*, such as { \"two_tower\": { \"user_embedding\": \"ctx.user.embedding\" } } for a two-tower service that needs the user's features to retrieve. A source waits for the context features its own query reads and for nothing else: one without a query starts at once, one reading the user's embedding as soon as it is stored (a derived feature as soon as it is computed), while the others run; sources whose features are stored together are sent in source order. The wait is within the node's budget. A source whose query reads a feature that failed is not called, as soon as that feature failed, and counts as a failed source; a degraded one degrades the node; a missing value is sent as missing.",
                             "type": [
                               "object",
                               "null"
@@ -1241,7 +1241,7 @@
                             }
                           },
                           "limit_param": {
-                            "description": "Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already there does not use one up. Required, as every row source's limit is: it bounds the rows a request may hold (design 4.8). A parameter without a value (a map's key set to null) appends none.",
+                            "description": "Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already there does not use one up. Required, as every row source's limit is: it bounds the rows a request may hold . A parameter without a value (a map's key set to null) appends none.",
                             "type": [
                               "string",
                               "null"
@@ -1842,7 +1842,7 @@
       }
     },
     "reviewed_interactions": {
-      "description": "Interactions with experiments of other layers that were reviewed and may happen together (design 11.5): experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }, a request column written as req.<name>. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive the interaction it was for. It lives with the experiment, not the release file, because the manifest carries it.",
+      "description": "Interactions with experiments of other layers that were reviewed and may happen together: experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }, a request column written as req.<name>. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive the interaction it was for. It lives with the experiment, not the release file, because the manifest carries it.",
       "type": [
         "object",
         "null"

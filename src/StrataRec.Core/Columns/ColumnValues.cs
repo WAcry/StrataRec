@@ -105,7 +105,7 @@ public static class ColumnValues
     /// <remarks>For trusted values only (validated defaults, engine-produced values): an int64 that does not fit an
     /// <c>int32</c> or <c>list&lt;int32&gt;</c> column, or a list of another length than a <c>list&lt;E,N&gt;</c> column's,
     /// throws <see cref="OverflowException"/> rather than being wrapped or stored. Writers of data apply the out-of-range
-    /// rule instead (<see cref="TrySet"/>, design 4.3).</remarks>
+    /// rule instead (<see cref="TrySet"/>).</remarks>
     public static void Set(ColumnBuffer column, int row, in ScalarValue value)
     {
         if (!TrySet(column, row, value))
@@ -305,7 +305,7 @@ public static class ColumnValues
     /// per row, decided for one value. <see cref="StorageFit.NonFinite"/> is NaN/±∞ in float storage (a float beyond the
     /// float32 range too, which float32 storage rounds to an infinity), or a float list holding one;
     /// <see cref="StorageFit.OutOfRange"/> an integer or list element outside int32 storage, or a list of another length
-    /// than a <c>list&lt;E,N&gt;</c>'s. The caller replaces such a value with its default or missing (design 4.3), and
+    /// than a <c>list&lt;E,N&gt;</c>'s. The caller replaces such a value with its default or missing, and
     /// counts it, so a value of a declared type is the same wherever it is held.
     /// </summary>
     public static StorageFit Store(ref ScalarValue value, ColumnType type)
@@ -325,7 +325,7 @@ public static class ColumnValues
         return FitsStorage(value, type) ? StorageFit.Fits : StorageFit.OutOfRange;
     }
 
-    /// <summary>True for a value the non-finite rule replaces (design 4.3): a float that is NaN or ±∞, or a float list
+    /// <summary>True for a value the non-finite rule replaces: a float that is NaN or ±∞, or a float list
     /// holding one.</summary>
     public static bool IsNonFinite(in ScalarValue value) => value.Kind switch
     {
@@ -334,7 +334,7 @@ public static class ColumnValues
         _ => false,
     };
 
-    /// <summary>True when the column holds floating-point values that must be checked for NaN/±∞ (design 4.3): a float
+    /// <summary>True when the column holds floating-point values that must be checked for NaN/±∞: a float
     /// column or a list of floats.</summary>
     public static bool IsFloat(ColumnBuffer column) => column.Type.IsFloatStorage;
 

@@ -4,7 +4,7 @@ using StrataRec.Core.Types;
 namespace StrataRec.Core.Columns;
 
 /// <summary>
-/// A column of fixed-size native values in one contiguous array (design 4.4). Used for bool, int32, int64,
+/// A column of fixed-size native values in one contiguous array. Used for bool, int32, int64,
 /// float32 and float64.
 /// </summary>
 public sealed class ScalarColumn<T> : ColumnBuffer

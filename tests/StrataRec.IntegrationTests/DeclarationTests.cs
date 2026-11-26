@@ -11,7 +11,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// Every name a node binds must be declared in each arm combination before the node compiles, as a compile of that
-/// combination alone requires (design 11.5 check 3, 16.2): by the baseline, by an arm assigned with it, or, for a column
+/// combination alone requires: by the baseline, by an arm assigned with it, or, for a column
 /// without a declaration, by a node compiled before it that writes it. The unified plan compiles each node once on a
 /// schema holding what any arm declares, so each case here was accepted while the combination's merged config is refused:
 /// a writer another layer's arm takes away (found by <see cref="GeneratedExperimentTests"/>), a node reading its own output

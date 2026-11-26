@@ -15,7 +15,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Requests aborted while recorded (design 13.4): the bundle reaches the host through the recording callback while the
+/// Requests aborted while recorded: the bundle reaches the host through the recording callback while the
 /// cancellation still reaches the caller, calls in flight are outstanding, and a replay reports the recording without
 /// executing it: an aborted request has no result to reproduce.
 /// </summary>
@@ -72,7 +72,7 @@ public sealed class ReplayAbortTests
     /// <summary>
     /// The position running at the abort had already triggered an experiment: through a parameter its node read (the arm
     /// changes the model version) or through its site (the arm patches only the node's timeout). The exposure happened, so
-    /// the recording's experiment record keeps it (design 8.8, 12.6), and a replay does not execute the bundle.
+    /// the recording's experiment record keeps it, and a replay does not execute the bundle.
     /// </summary>
     [Theory]
     [InlineData("param")]

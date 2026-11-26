@@ -13,7 +13,7 @@ namespace StrataRec.Models;
 /// <c>random@1</c>: a stand-in for a real model that scores each element of its outputs (a row, a pair, a row of a list)
 /// with a deterministic pseudo-random value in [0, 1). A dev or test environment binds the real model's logical name
 /// (e.g. <c>ctr_ranker</c>) to it instead of the model service, and the pipelines and experiments that call the model stay
-/// unchanged (design 6.4 item 1).
+/// unchanged.
 /// </summary>
 /// <remarks>
 /// <para>The settings declare the signature it mimics, so the calling operator's load-time signature check passes as it

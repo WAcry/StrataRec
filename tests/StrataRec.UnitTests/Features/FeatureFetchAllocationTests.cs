@@ -10,7 +10,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// A candidate fetch must not allocate per key or per synchronously answered chunk (design 4.8, 15): the key set, its
+/// A candidate fetch must not allocate per key or per synchronously answered chunk: the key set, its
 /// index and the per-chunk arrays are rented from the request memory, the chunks share one staging area and one
 /// cancellation source, and <c>memory@1</c> looks int64 keys up without formatting them.
 /// </summary>
@@ -71,7 +71,7 @@ public class FeatureFetchAllocationTests
     [Fact]
     public void LocalRead_AllocatesNothing_AtAnyKeyCount()
     {
-        // A local read (design 6.6) is one lookup and one multi-field fill into the request's columns, with every buffer
+        // A local read is one lookup and one multi-field fill into the request's columns, with every buffer
         // rented from the request memory: neither the read nor its key count may cost an object. Measured against a
         // second ensure of the same features, which has nothing to read, so the ensure's own cost (in Debug, its async
         // state machine) cancels out. Foreign-key and int64 / float32 / float64 / bool fields, with misses and defaults.

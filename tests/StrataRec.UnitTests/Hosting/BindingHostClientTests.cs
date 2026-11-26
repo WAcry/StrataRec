@@ -11,7 +11,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Hosting;
 
 /// <summary>
-/// The lifetime of the instances bindings name (design 6.4): shared by identity and factory, loaded once before a plan is
+/// The lifetime of the instances bindings name: shared by identity and factory, loaded once before a plan is
 /// served, never handed out again after a failed load, and disposed only once their lease is retired and its last user
 /// (a request, a run, a call the run abandoned) has left, never while their load runs. Loads and disposals signal through
 /// task completion sources, so nothing here depends on timing except the timeouts under test.

@@ -14,7 +14,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// <c>PairwiseRanker@1</c> and <c>ListwiseReranker@1</c> (design 5.9): the pair and list tensors they send for each kind
+/// <c>PairwiseRanker@1</c> and <c>ListwiseReranker@1</c>: the pair and list tensors they send for each kind
 /// of input, how they turn the model's answers into a new order of the window, what fails the node (leaving the order as
 /// it was), and the load-time checks of their config and of every model version's signature.
 /// </summary>
@@ -176,7 +176,7 @@ public sealed class ModelRankerTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(new long[] { 20, 50, 30, 40, 10, 70, 60 }, IdsOf(result));
-        Assert.Equal(new double?[] { 2, 2, 1, null, null, null, null }, ScoresOf(result)); // non-finite scores are missing in the column (design 4.3)
+        Assert.Equal(new double?[] { 2, 2, 1, null, null, null, null }, ScoresOf(result)); // non-finite scores are missing in the column
         Assert.Equal(2, result.NonFiniteValues);
     }
 

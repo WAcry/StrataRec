@@ -15,11 +15,11 @@ using StrataRec.Core.Services;
 namespace StrataRec.Pipeline.Replay;
 
 /// <summary>
-/// Records one pipeline run for a replay bundle (design 13.4) while it executes: every external call at the framework
+/// Records one pipeline run for a replay bundle while it executes: every external call at the framework
 /// call sites, every node decision with the timing facts it depended on, and the effective sampling.
 /// </summary>
 /// <remarks>
-/// <para>Created only for requests that ask to be recorded; it allocates freely (design 4.8 item 3: trace and replay
+/// <para>Created only for requests that ask to be recorded; it allocates freely (trace and replay
 /// capture are normal allocations). Calls finish on connector threads, so call records are added under a lock and
 /// ordered by their start sequence when the run is built; node records come from the request's thread.</para>
 /// <para>A call is registered when it begins, with what is known before it is sent (keys, input digests), and replaced
@@ -179,7 +179,7 @@ internal sealed class RunRecorder : IFeatureCallHook
     /// <param name="response">Closed, and read only when the call answered: an abandoned client may still be writing it.</param>
     /// <param name="status">
     /// The status the client returned (default when it did not answer): its generation details are recorded, so a replay
-    /// returns the same status and the operator reports the same (a truncated answer, design 13.4 item 7).
+    /// returns the same status and the operator reports the same (a truncated answer).
     /// </param>
     /// <param name="degraded">Why the call left its node Degraded, which a replay reports again.</param>
     public void EndCall(
@@ -293,7 +293,7 @@ internal sealed class RunRecorder : IFeatureCallHook
         _remainingMs = null;
     }
 
-    /// <summary>The request-level sampling decisions (design 8.2) and the tap variants they activated.</summary>
+    /// <summary>The request-level sampling decisions and the tap variants they activated.</summary>
     public void Sampling(bool?[] sampled, CompiledTap?[] taps)
     {
         _sampled = sampled;

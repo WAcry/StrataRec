@@ -9,7 +9,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features.Cache;
 
 /// <summary>
-/// What a cache read allocates (design 4.8, 15): a read whose keys are all fresh in the table is a local read and
+/// What a cache read allocates: a read whose keys are all fresh in the table is a local read and
 /// allocates nothing at any key count; a read that misses allocates what resolving the misses needs, measured here.
 /// </summary>
 [Collection(AllocationMeasurement.Name)]

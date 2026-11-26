@@ -15,7 +15,7 @@ namespace StrataRec.Testing;
 /// </summary>
 /// <remarks>
 /// The sample keeps realistic budgets (ctr_ranker gives its model 50 ms), and an answer after a budget is a timeout
-/// however it arrived (design 4.8): on a slow machine, a run of the sample as written sometimes falls back where another
+/// however it arrived: on a slow machine, a run of the sample as written sometimes falls back where another
 /// does not. A relaxed copy has no budget a slow machine can hit, and its fallback wiring is as written.
 /// </remarks>
 internal static class SampleBudgets

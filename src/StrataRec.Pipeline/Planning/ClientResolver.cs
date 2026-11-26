@@ -8,7 +8,7 @@ using StrataRec.Features.Local;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
-/// Binds logical service names to client instances using the environment's bindings (design 6.4). The instances come
+/// Binds logical service names to client instances using the environment's bindings. The instances come
 /// from the plan's <see cref="IPlanBindings"/> through the <see cref="BindingResolver"/>: an engine shares them across
 /// plans by binding identity (<see cref="BindingSpec.Identity"/>), so a plan swap never creates or loads a client again;
 /// each name is resolved once per compile pass and cached here, a failure too, so it is reported once.
@@ -89,7 +89,7 @@ public sealed class ClientResolver
     }
 
     /// <summary>
-    /// The cache a service's binding declares (design 6.9): its table, shared across plans by the binding's identity and
+    /// The cache a service's binding declares: its table, shared across plans by the binding's identity and
     /// the client object, and its distributed tier; every problem reported at its setting. False when any is wrong.
     /// </summary>
     private bool TryCache(string name, ClientBinding binding, ServiceCacheBinding settings, IServiceClient? client, out ServiceCache? cache)

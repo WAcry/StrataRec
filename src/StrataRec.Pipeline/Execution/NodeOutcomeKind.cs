@@ -1,6 +1,6 @@
 namespace StrataRec.Pipeline.Execution;
 
-/// <summary>What happened at one timeline position (design 5.6).</summary>
+/// <summary>What happened at one timeline position.</summary>
 /// <param name="NodeId">Primary node id at the position.</param>
 /// <param name="Kind">Final outcome of the position.</param>
 /// <param name="Detail">Reason for skip/failure/degradation.</param>
@@ -11,7 +11,7 @@ namespace StrataRec.Pipeline.Execution;
 public readonly record struct NodeOutcome(string NodeId, NodeOutcomeKind Kind, string? Detail, string? ProducedBy, double DurationMs, int RowsIn, int RowsOut);
 
 /// <summary>
-/// What happened at one timeline position (design 5.6). One vocabulary everywhere a node outcome appears: results and
+/// What happened at one timeline position. One vocabulary everywhere a node outcome appears: results and
 /// traces, the <c>stratarec.outcome</c> tag of metrics and spans, log envelopes, recordings and replay reports, all spelled
 /// by <see cref="NodeOutcomeNames.Name"/>. It used to be four: these eight categories for metrics and recordings, four
 /// coarser kinds in results and traces, PascalCase kinds in log envelopes with a fallback written as two entries, and a
@@ -22,7 +22,7 @@ public enum NodeOutcomeKind : byte
     /// <summary>The node ran and committed its outputs.</summary>
     Succeeded = 1,
 
-    /// <summary>The node committed its outputs from partial or stale inputs; the detail says which (design 5.6).</summary>
+    /// <summary>The node committed its outputs from partial or stale inputs; the detail says which.</summary>
     Degraded,
 
     /// <summary>The node failed and its fallback node served (<see cref="NodeOutcome.ProducedBy"/>); the detail has both.</summary>

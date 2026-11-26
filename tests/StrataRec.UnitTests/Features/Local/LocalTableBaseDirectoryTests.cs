@@ -14,7 +14,7 @@ public sealed class CurrentDirectoryCollection
 }
 
 /// <summary>
-/// The base directory of a local table (design 6.6) is pinned when its spec is created: the identity names the
+/// The base directory of a local table is pinned when its spec is created: the identity names the
 /// directory the source really reads, whatever the current directory is later.
 /// </summary>
 [Collection(CurrentDirectoryCollection.Name)]

@@ -8,7 +8,7 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Experiments;
 
-/// <summary>What a release needs of a binary, the baseline's and each experiment's (design 10.4).</summary>
+/// <summary>What a release needs of a binary, the baseline's and each experiment's.</summary>
 public sealed class ReleaseRequirementsTests
 {
     /// <summary>

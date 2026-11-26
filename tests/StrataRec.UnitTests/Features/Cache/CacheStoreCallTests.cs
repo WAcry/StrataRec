@@ -10,7 +10,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features.Cache;
 
 /// <summary>
-/// A read of the distributed tier is an optimisation (design 6.6 <c>cache</c>): however it fails, its keys go to the
+/// A read of the distributed tier is an optimisation: however it fails, its keys go to the
 /// connector, the request is not failed, its memory comes back and the call is completed exactly once. Each way the
 /// engine can find the read finished is covered: the store throwing before it returns, a completed task, a pending one,
 /// and one that completed between the engine's check and its wait.

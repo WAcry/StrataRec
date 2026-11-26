@@ -11,7 +11,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Llm;
 
 /// <summary>
-/// <c>LlmReranker@1</c> (design 5.9): the one call it sends, how it turns the answer into a new order of the window, what
+/// <c>LlmReranker@1</c>: the one call it sends, how it turns the answer into a new order of the window, what
 /// fails the node (leaving the order as it was), and the load-time checks of its config and of every model version.
 /// </summary>
 public sealed class LlmRerankerTests
@@ -269,7 +269,7 @@ public sealed class LlmRerankerTests
 }
 
 /// <summary>
-/// What a generative call counts (design 13.1): the tokens and truncations its client reports, for every model call, and
+/// What a generative call counts: the tokens and truncations its client reports, for every model call, and
 /// the fate of each element of an answer the node parses; a replay counts nothing, and answers from the recording with
 /// the same status, so the node decides and reports as the request did.
 /// </summary>

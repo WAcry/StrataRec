@@ -421,7 +421,7 @@ public class FeatureRuntimeReviewRegressionTests
 
         var result = await request.EnsureAsync(score);
 
-        Assert.True(result.Failed); // a source failure never degrades into defaults (design 6.7)
+        Assert.True(result.Failed); // a source failure never degrades into defaults
         Assert.False(request.IsFilled(score, 0));
         Assert.False(request.IsFilled(score, 1));
     }
@@ -548,7 +548,7 @@ public class FeatureRuntimeReviewRegressionTests
 
         var result = await request.EnsureAsync(followers);
 
-        Assert.True(result.Failed); // not silently the default 0 (design 6.7)
+        Assert.True(result.Failed); // not silently the default 0
         Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(creatorId));
         Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(followers));
         Assert.Empty(creators.Calls);

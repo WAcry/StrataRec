@@ -12,7 +12,7 @@ namespace StrataRec.Pipeline.Sources;
 /// <summary>
 /// <c>memory_vectors@1</c>: an in-memory vector index for local runs and tests, the stand-in for a two-tower retrieval
 /// service. It scores every item by the dot product of its vector with the query vector, a value of the source's query
-/// (<c>MultiSourceRecall@1</c>'s <c>queries</c>, design 5.4) such as the user's embedding from the feature catalog, and
+/// (<c>MultiSourceRecall@1</c>'s <c>queries</c>) such as the user's embedding from the feature catalog, and
 /// returns the best, ties by id (int64 ids before strings). A pipeline written against it runs unchanged against the real
 /// service, which gets the same query.
 /// </summary>

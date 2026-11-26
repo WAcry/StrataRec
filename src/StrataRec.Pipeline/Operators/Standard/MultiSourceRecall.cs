@@ -25,7 +25,7 @@ public sealed class MultiSourceRecallConfig
     public List<string>? SourceOrder { get; init; }
 
     /// <summary>
-    /// Per source, the values its query sends, its call's only inputs (design 5.4): value name → a request-level
+    /// Per source, the values its query sends, its call's only inputs: value name → a request-level
     /// expression over <c>ctx.*</c> and <c>param.*</c>, such as <c>{ "two_tower": { "user_embedding": "ctx.user.embedding" } }</c>
     /// for a two-tower service that needs the user's features to retrieve. A source waits for the context features its own
     /// query reads and for nothing else: one without a query starts at once, one reading the user's embedding as soon as
@@ -39,7 +39,7 @@ public sealed class MultiSourceRecallConfig
 
 /// <summary>
 /// <c>MultiSourceRecall@1</c> (RowSource): calls every source with a positive quota concurrently, merges results in
-/// the declared source order (independent of arrival order, design 5.7), deduplicates by <c>entity_id</c> and appends
+/// the declared source order (independent of arrival order), deduplicates by <c>entity_id</c> and appends
 /// the rows with <c>recall.sources_mask</c>, <c>recall.best_rank</c>, <c>recall.best_score</c> and
 /// <c>recall.primary_source</c>. Fails only if every called source fails; otherwise Degraded. Bit <c>i</c> of the mask
 /// is the <c>i</c>-th source in merge order among those the request has a quota for (0 included): a source only an
@@ -48,7 +48,7 @@ public sealed class MultiSourceRecallConfig
 /// <remarks>
 /// A source sees only what its call sends: when the node gives it a query (<see cref="MultiSourceRecallConfig.Queries"/>),
 /// the query's values, evaluated from the request's context (a two-tower service the user's embedding or features, a
-/// request field such as <c>ctx.request.region</c>); without one, no inputs (design 5.4). The features a query reads are not filled before the node runs, as a node's reads are: each source with
+/// request field such as <c>ctx.request.region</c>); without one, no inputs. The features a query reads are not filled before the node runs, as a node's reads are: each source with
 /// a query is sent once its own features are stored (they were prefetched when the request started), so the sources
 /// without one start at once and a slow user feature delays only the sources that read it. A source whose query reads a
 /// feature that failed is not sent, and counts as a failed source.
@@ -161,7 +161,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
 
     /// <summary>
     /// Compiles each source's query (<see cref="MultiSourceRecallConfig.Queries"/>) into its entry: every value's
-    /// expression as awaited, so a source waits for the features its own query reads (design 5.4). Every error is reported.
+    /// expression as awaited, so a source waits for the features its own query reads. Every error is reported.
     /// </summary>
     private static bool CompileQueries(
         OperatorCompileContext context, MultiSourceRecallConfig config, Dictionary<string, ParamRef> quotas, SourceEntry[] sources)
@@ -326,7 +326,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     calls[i] = Send(context, sources[i], buffers[i]!);
                 }
 
-                // The sources whose queries read context features, each sent as soon as its own are stored (design 5.4), while
+                // The sources whose queries read context features, each sent as soon as its own are stored, while
                 // the calls above run: a source reading the user's embedding does not hold back one that needs nothing.
                 // Each round sends, in source order, every source its observation settles, so sources whose features are
                 // stored together are sent in that order; a source whose query reads a failed feature is refused at once.

@@ -3,7 +3,7 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary><c>TopK@1</c> on int64 scores compares them exactly (design 5.7), beyond 2^53 too.</summary>
+/// <summary><c>TopK@1</c> on int64 scores compares them exactly, beyond 2^53 too.</summary>
 public sealed class TopKInt64Tests
 {
     [Theory]

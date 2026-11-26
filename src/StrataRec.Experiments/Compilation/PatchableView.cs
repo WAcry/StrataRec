@@ -6,7 +6,7 @@ using StrataRec.Artifacts.Model;
 namespace StrataRec.Experiments.Compilation;
 
 /// <summary>
-/// The patchable view (design 11.4): the baseline pipeline and feature catalog joined into one JSON document, so that
+/// The patchable view: the baseline pipeline and feature catalog joined into one JSON document, so that
 /// every experiment patch and footprint path is relative to a single document.
 /// </summary>
 /// <remarks>
@@ -128,7 +128,7 @@ public sealed class PatchableView
         }
 
         diagnostics.Error("PATCH_SCHEMA", artifact, pointerPrefix + "/" + section + error.Pointer, error.Message,
-            error.Hint ?? "a new entry must be a complete definition that validates against the collection's schema (design 11.3)");
+            error.Hint ?? "a new entry must be a complete definition that validates against the collection's schema");
         ok = false;
         return null;
     }

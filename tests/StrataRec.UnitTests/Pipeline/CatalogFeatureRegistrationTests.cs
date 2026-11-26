@@ -9,7 +9,7 @@ namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
 /// A plan holds the catalog features it reads, with what they are computed from and keyed by, and nothing else of the
-/// catalog (design 6.3): a catalog is shared by many pipelines, and what a request sizes by feature grew with all of it.
+/// catalog: a catalog is shared by many pipelines, and what a request sizes by feature grew with all of it.
 /// The catalog's content is still checked whole (an error or a cycle in a derived feature nothing reads), a source is
 /// bound only when a feature the plan reads needs it, and a table keeps the layout of the catalog.
 /// </summary>
@@ -90,7 +90,7 @@ public sealed class CatalogFeatureRegistrationTests
     }
 
     /// <summary>
-    /// The same for context keys (design 6.2): an account keyed by a derived user feature computed from the account's own
+    /// The same for context keys: an account keyed by a derived user feature computed from the account's own
     /// feature, directly or through an entity keyed by it, never has a key. Reported once at the key, whatever reads it.
     /// </summary>
     [Theory]
@@ -116,7 +116,7 @@ public sealed class CatalogFeatureRegistrationTests
     }
 
     /// <summary>
-    /// A feature of an entity keyed by a context feature brings the key into the plan (design 6.3), and into the context
+    /// A feature of an entity keyed by a context feature brings the key into the plan, and into the context
     /// prefetch with it: the chain is fetched at request start, each group once what its key reads is stored.
     /// </summary>
     [Fact]
@@ -272,7 +272,7 @@ public sealed class CatalogFeatureRegistrationTests
     }
 
     /// <summary>
-    /// Design 6.10: a plan that reads a deprecated feature warns once, at the feature's declaration, however many reads
+    /// A plan that reads a deprecated feature warns once, at the feature's declaration, however many reads
     /// there are and whether they are direct or through a derived feature. The flag was accepted and never read.
     /// </summary>
     [Fact]

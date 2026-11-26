@@ -5,7 +5,7 @@ namespace StrataRec.UnitTests.Artifacts;
 
 public class MergePatchAnalyzerTests
 {
-    // A trimmed patchable view (design 11.4) of the running example.
+    // A trimmed patchable view of the running example.
     private const string BaseView = """
         {
           "params": { "recall_quotas": { "two_tower": 1000, "cf": 1000 }, "final_top_k": 50 },

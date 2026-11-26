@@ -5,7 +5,7 @@ using StrataRec.Core.Memory;
 namespace StrataRec.Core.Keys;
 
 /// <summary>
-/// <see cref="EntityKeyIndex"/> for keys of several parts (design 6.5): a request-scoped hash index from tuples of
+/// <see cref="EntityKeyIndex"/> for keys of several parts: a request-scoped hash index from tuples of
 /// <see cref="EntityKey"/>s to <c>int</c> values, every array rented from the request's <see cref="RequestMemory"/>, so
 /// deduplicating thousands of tuples allocates nothing per tuple.
 /// </summary>

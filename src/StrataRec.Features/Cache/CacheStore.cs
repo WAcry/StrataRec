@@ -127,7 +127,7 @@ public sealed class CacheKeyspace
 public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> Record, TimeSpan TimeToLive);
 
 /// <summary>
-/// A distributed cache shared by a deployment's instances (design 6.6 <c>cache</c>, tier 2), of a feature source in mode
+/// A distributed cache shared by a deployment's instances, of a feature source in mode
 /// <c>cache</c> or of a service with a <c>cache</c>: the engine reads it for the keys its in-process table misses, before
 /// the connector or the service's client, and writes back what they returned. Records are opaque
 /// bytes the engine encodes (with their write time and a fingerprint of the field set); the store only moves them.

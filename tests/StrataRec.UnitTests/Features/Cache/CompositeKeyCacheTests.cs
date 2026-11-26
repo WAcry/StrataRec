@@ -10,7 +10,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features.Cache;
 
 /// <summary>
-/// Cache sources of entities keyed by several parts (design 6.6 <c>cache</c>): the in-process table keyed by the tuple,
+/// Cache sources of entities keyed by several parts: the in-process table keyed by the tuple,
 /// the distributed tier by the key's text, records fingerprinted with the layout, and eviction as for one-part keys.
 /// </summary>
 [Collection(MetricMeasurement.Name)]

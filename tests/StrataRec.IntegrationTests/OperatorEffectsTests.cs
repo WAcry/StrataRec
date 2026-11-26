@@ -3,7 +3,7 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// An operator's declared effects are what it may do (design 5.2): the data-flow checks trust them, so an operator that
+/// An operator's declared effects are what it may do: the data-flow checks trust them, so an operator that
 /// writes a column without declaring <see cref="Effects.ColumnWriter"/> is refused when it compiles, not trusted.
 /// </summary>
 public sealed class OperatorEffectsTests

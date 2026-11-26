@@ -33,7 +33,7 @@ public readonly record struct AnswerCounts(int Used, int Unknown, int Repeated, 
 }
 
 /// <summary>
-/// Parses generated answers (design 5.9 rule 3). The one place that decides what an answer may look like, so every
+/// Parses generated answers. The one place that decides what an answer may look like, so every
 /// generative operator agrees: a JSON array of window rows (<c>LlmReranker@1</c>) or of new ids
 /// (<c>GenerativeRetriever@1</c>), or one value per row (<c>LlmAnnotator@1</c>).
 /// </summary>

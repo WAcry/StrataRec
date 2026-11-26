@@ -8,7 +8,7 @@ namespace StrataRec.Expressions.Runtime;
 
 /// <summary>
 /// <c>hash01(a, b, ...)</c>: <see cref="StableHash.ToUnit"/> of the XXH3 hash of the canonical encoding of the
-/// arguments in order — exactly what a <see cref="StableHash.Builder"/> fed the same values produces (design 5.7).
+/// arguments in order — exactly what a <see cref="StableHash.Builder"/> fed the same values produces.
 /// </summary>
 /// <remarks>
 /// All-int64 calls with two or three arguments use <see cref="StableHash.Hash01(long, long)"/> directly. Mixed

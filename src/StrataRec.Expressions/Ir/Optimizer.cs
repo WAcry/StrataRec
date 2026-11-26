@@ -5,7 +5,7 @@ using StrataRec.Expressions.Runtime;
 namespace StrataRec.Expressions.Ir;
 
 /// <summary>
-/// IR optimizer (design 7.7): constant folding, value-preserving algebraic simplification and common subexpression
+/// IR optimizer: constant folding, value-preserving algebraic simplification and common subexpression
 /// elimination by hash-consing. Loop-invariant hoisting needs no rewrite: <see cref="IrNode.IsInvariant"/> marks every
 /// subtree that depends only on <c>ctx.*</c>, <c>param.*</c> and constants, and the backend evaluates those once per
 /// call.

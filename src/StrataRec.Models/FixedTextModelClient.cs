@@ -8,7 +8,7 @@ namespace StrataRec.Models;
 /// <c>fixed_text@1</c>: a stand-in for a generative model (an LLM reached through a text-in, text-out client) that answers
 /// every call with the same fixed texts. A dev or test environment binds the real model's logical name to it, and the
 /// pipelines that call the model (<c>LlmReranker@1</c>) stay unchanged, as with <c>random@1</c> for scoring models
-/// (design 6.4 item 1).
+///.
 /// </summary>
 /// <remarks>
 /// <para>The settings declare the text inputs it accepts and each output's fixed text:</para>

@@ -7,7 +7,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The unified plan against the plain compile of each arm combination's merged config (design 16.2), on generated
+/// The unified plan against the plain compile of each arm combination's merged config, on generated
 /// experiments: the unified plan accepts exactly what every combination accepts (it may refuse more only by a rule across
 /// combinations, such as one type per column), and serves each combination as its merged compile does. The fixed
 /// sample's eight combinations did not find that a baseline could read a column only an arm's node declares (removing the
@@ -216,7 +216,7 @@ public sealed class GeneratedExperimentTests
             layerArms.AddRange(armIds);
         }
 
-        // Sometimes one experiment yields to another of a different layer (design 11.1): a combination with both runs, in
+        // Sometimes one experiment yields to another of a different layer: a combination with both runs, in
         // the unified plan as in the merged compile, without the one that yields, and a conflict between them is no error.
         // Drawn last, so the experiments of a seed are those it had before yields were generated.
         if (placements.Count >= 2 && random.Next(3) == 0)

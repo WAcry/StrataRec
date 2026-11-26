@@ -11,7 +11,7 @@ public static partial class ExpressionCompiler
     /// <summary>Longest accepted source text in characters; bounds compile-time work for unreviewed drafts.</summary>
     public const int MaxSourceLength = 64 * 1024;
 
-    /// <summary>Default options when none are given: any non-nullable result (design 7.4 rule 4).</summary>
+    /// <summary>Default options when none are given: any non-nullable result.</summary>
     private static readonly CompileOptions DefaultOptions = new();
 
     /// <summary>
@@ -20,7 +20,7 @@ public static partial class ExpressionCompiler
     /// diagnostic belongs to the declaration.
     /// </summary>
     /// <remarks>
-    /// Pipeline (design 7.7): tokenize → parse (depth-checked while parsing, design 7.9) → bind (names, types,
+    /// Pipeline: tokenize → parse (depth-checked while parsing) → bind (names, types,
     /// nullability; diagnostics are collected, not thrown) → result checks against <paramref name="options"/> →
     /// optimize (constant folding, CSE, invariant marking) → lower to the vectorized backend.
     /// </remarks>

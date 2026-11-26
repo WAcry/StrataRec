@@ -12,7 +12,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// Keys read from context features (design 6.2, 6.8 item 5): a request carries a login key, one source resolves it to a
+/// Keys read from context features: a request carries a login key, one source resolves it to a
 /// user id, another is keyed by the user id. The context prefetch starts each group once what its key reads is stored, and
 /// waits for nothing else; a missing key part is no key, a failed one fails the features as a foreign key does, and the
 /// request memory is held until every group started is stored.
@@ -299,7 +299,7 @@ public class ChainedContextKeyTests
     }
 
     /// <summary>
-    /// A candidate-scoped entity with a shared context-feature part (design 6.8 item 4): fetched once the candidates and the
+    /// A candidate-scoped entity with a shared context-feature part: fetched once the candidates and the
     /// context feature are there, the part carried once per batch; its fetch waits for the group that stores the part, not
     /// for the whole prefetch, and a prefetch before the part is stored does not start it.
     /// </summary>
@@ -415,7 +415,7 @@ public class ChainedContextKeyTests
     }
 
     /// <summary>
-    /// The foreign-key rule (design 6.7): a failed key feature fails the features keyed by it, without a call, and a reader
+    /// The foreign-key rule: a failed key feature fails the features keyed by it, without a call, and a reader
     /// fails; a degraded one degrades them.
     /// </summary>
     [Theory]
@@ -639,7 +639,7 @@ public class ChainedContextKeyTests
         Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(tier));
     }
 
-    /// <summary>Local and cache supply of a chained entity (design 6.6): read once the key is stored, by the same rules.</summary>
+    /// <summary>Local and cache supply of a chained entity: read once the key is stored, by the same rules.</summary>
     [Fact]
     public async Task AChainedEntity_ReadsItsLocalTable_OnceItsKeyIsStored()
     {

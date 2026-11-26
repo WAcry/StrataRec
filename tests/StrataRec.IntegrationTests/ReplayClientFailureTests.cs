@@ -15,7 +15,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A model client that throws gives the operator a failed status naming the exception (design 13.4), live and on replay:
+/// A model client that throws gives the operator a failed status naming the exception, live and on replay:
 /// the recording has the status, so a replay takes the same path without recreating the client's exception type.
 /// </summary>
 public sealed class ReplayClientFailureTests

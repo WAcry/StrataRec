@@ -10,8 +10,7 @@ namespace StrataRec.Artifacts.Json;
 
 /// <summary>
 /// An immutable <see href="https://www.rfc-editor.org/rfc/rfc6901">RFC 6901</see> JSON Pointer, the path syntax
-/// StrataRec uses for patch footprints, policy scopes and the location of every configuration error (design 9.1,
-/// 11.4, 11.5).
+/// StrataRec uses for patch footprints, policy scopes and the location of every configuration error.
 /// </summary>
 /// <remarks>
 /// <para>

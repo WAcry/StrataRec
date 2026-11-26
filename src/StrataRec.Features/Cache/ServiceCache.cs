@@ -8,7 +8,7 @@ using StrataRec.Features.Local;
 namespace StrataRec.Features.Cache;
 
 /// <summary>
-/// The tiers of one service's cache (design 6.9; docs/decisions.md, IO step 3): an in-process <c>cache</c> table, which the
+/// The tiers of one service's cache (docs/decisions.md, IO step 3): an in-process <c>cache</c> table, which the
 /// table host runs like a source's, and optionally the distributed tier the deployment shares. Every service's table has
 /// one layout (<see cref="Schema"/>): a list field per element type, and a list of integers saying what the record holds.
 /// What that is (which outputs of which call, which items) is the call's business: the call primitive writes and reads

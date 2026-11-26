@@ -10,11 +10,11 @@ namespace StrataRec.Core.Diagnostics;
 /// </summary>
 public static class IoRoles
 {
-    /// <summary>Features from a feature source's connector (design 6.5), per <c>max_batch</c> chunk.</summary>
+    /// <summary>Features from a feature source's connector, per <c>max_batch</c> chunk.</summary>
     public const string Fetch = "fetch";
 
     /// <summary>
-    /// A read of a distributed cache (design 6.6 tier 2), before what it caches is asked: of a feature source bound with mode
+    /// A read of a distributed cache, before what it caches is asked: of a feature source bound with mode
     /// <c>cache</c>, before its connector, or of a service bound with a <c>cache</c>, before its client; the target is the
     /// source's or the service's name.
     /// </summary>
@@ -27,7 +27,7 @@ public static class IoRoles
     public const string Model = "model";
 
     /// <summary>
-    /// The experiment assignment provider's answer (design 11.1), per request the caller passed no arms for; its target
+    /// The experiment assignment provider's answer, per request the caller passed no arms for; its target
     /// is <c>provider</c>, the engine's one.
     /// </summary>
     public const string Assignment = "assignment";
@@ -52,7 +52,7 @@ public enum IoOutcome : byte
 
 /// <summary>
 /// One external dependency, by role (<see cref="IoRoles"/>) and binding name, with its metric tags and span name built
-/// once, when the plan or operator is compiled, so recording a call allocates nothing (design 13.1 rule 5). Every role is
+/// once, when the plan or operator is compiled, so recording a call allocates nothing. Every role is
 /// measured by the same instruments (<c>stratarec.io.*</c>), told apart by <see cref="StrataRecTags.IoRole"/>.
 /// </summary>
 public sealed class IoTarget
@@ -289,7 +289,7 @@ public readonly struct IoCall
     }
 
     /// <summary>
-    /// Records the call: health and windowed failure summaries in <paramref name="events"/> (design 13.2); duration, keys
+    /// Records the call: health and windowed failure summaries in <paramref name="events"/>; duration, keys
     /// and errors as metrics; and ends the span. Never throws.
     /// </summary>
     /// <remarks>

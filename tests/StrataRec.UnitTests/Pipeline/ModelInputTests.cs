@@ -138,7 +138,7 @@ public sealed class ModelInputTests
     [Fact]
     public void ARowOfAnotherLength_IsAnEngineDefect_NotATensor()
     {
-        // The column's writers keep every row at the declared length (design 4.3); a row that is not would shift every
+        // The column's writers keep every row at the declared length; a row that is not would shift every
         // later row of the tensor.
         var (input, memory) = Input("list<float32,2>");
         var buffer = (ListColumn<float>)ColumnBuffer.Create(ColumnType.Parse("list<float32,2>"), 4, memory);

@@ -17,7 +17,7 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Runtime;
 
-/// <summary>Per-request availability of a feature (design 6.7).</summary>
+/// <summary>Per-request availability of a feature.</summary>
 public enum FeatureState : byte
 {
     Unrequested = 0,
@@ -37,21 +37,21 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 }
 
 /// <summary>
-/// Request-scoped feature enrichment (design 4.5, 5.4, 6.5–6.8). Fetch results land in key-ordered staging buffers and
+/// Request-scoped feature enrichment (6.5–6.8). Fetch results land in key-ordered staging buffers and
 /// are backfilled into whatever rows are live <em>when a reader needs them</em>, so filters and Compact during in-flight
-/// I/O never misplace values. Local groups (design 6.6) are read synchronously from their tables when a reader needs
+/// I/O never misplace values. Local groups are read synchronously from their tables when a reader needs
 /// them (<c>FeatureFetcher.Local.cs</c>); cache groups the same way, with the keys the table does not have fresh resolved
 /// through the distributed tier and the connector (<c>FeatureFetcher.Cache.cs</c>).
 /// </summary>
 /// <remarks>
 /// <para>Not thread-safe; driven by the request's executor. Connectors and the context prefetch run concurrently
 /// underneath.</para>
-/// <para>Memory (design 4.8): every connector call holds the request's <see cref="RequestMemory"/> until the connector
+/// <para>Memory: every connector call holds the request's <see cref="RequestMemory"/> until the connector
 /// really completes, even when the request stopped waiting for it at the source timeout or deadline; the background
 /// context fetch holds it until its last group is stored and its last derived feature computed
 /// (<c>FeatureFetcher.Context.cs</c>). Buffers therefore never return to the pool while anything may still write or read
 /// them.</para>
-/// <para>Allocation (design 4.8, 15): a fetch is split into <c>max_batch</c> chunks, often hundreds per request, so a
+/// <para>Allocation: a fetch is split into <c>max_batch</c> chunks, often hundreds per request, so a
 /// chunk whose connector answers synchronously allocates nothing: its keys are a struct, its staging is a window of the
 /// fetch's <see cref="StagingArea"/> seen through a reused view, its cancellation is the fetch's, and its status comes
 /// back in a <see cref="ValueTask{TResult}"/>. Only a call that really goes asynchronous allocates what waiting needs.</para>
@@ -80,9 +80,9 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <param name="counters">The request's expression counters, shared with the operators' evaluations so a request
     /// reports one total per event; null gives the fetcher counters of its own.</param>
-    /// <param name="requestId">Sample request id for failure summaries (design 13.2).</param>
+    /// <param name="requestId">Sample request id for failure summaries.</param>
     /// <param name="events">Source health and failure summaries; null when the engine has no logger.</param>
-    /// <param name="hook">Records every connector call, or answers them from a recording (design 13.4); null for ordinary requests.</param>
+    /// <param name="hook">Records every connector call, or answers them from a recording; null for ordinary requests.</param>
     /// <param name="seed">The request's seed, which a source in mode service sends with its call, as a node does.</param>
     public FeatureFetcher(
         FeaturePlan plan,
@@ -120,14 +120,14 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <summary>
     /// Number of feature values (physical or derived, candidate or context) that were NaN/±∞ and were replaced by the
-    /// feature's default or marked missing (design 4.3, metric <c>column_nonfinite_total</c>).
+    /// feature's default or marked missing (metric <c>column_nonfinite_total</c>).
     /// </summary>
     public int NonFiniteReplaced => Volatile.Read(ref _nonFiniteReplaced);
 
     /// <summary>
     /// Counters of derived-feature evaluations. <see cref="ExpressionCounters.OutOfRange"/> includes derived values
     /// (candidate or context) that did not fit an <c>int32</c> or <c>list&lt;int32&gt;</c> feature and were replaced by its
-    /// default or marked missing (design 4.3, metric <c>column_out_of_range_total</c>).
+    /// default or marked missing (metric <c>column_out_of_range_total</c>).
     /// </summary>
     public ExpressionCounters Counters => _counters;
 
@@ -179,8 +179,8 @@ public sealed partial class FeatureFetcher : IIoTracker
     }
 
     /// <summary>
-    /// Starts wave-0 fetches for features the next segment needs (called after each fetch barrier, design 5.4). Only
-    /// the listed features (and their dependencies) are fetched, not every member of their groups (design 6.8).
+    /// Starts wave-0 fetches for features the next segment needs (called after each fetch barrier). Only
+    /// the listed features (and their dependencies) are fetched, not every member of their groups.
     /// </summary>
     public void Prefetch(ReadOnlySpan<int> features, CancellationToken cancellationToken)
     {
@@ -218,8 +218,8 @@ public sealed partial class FeatureFetcher : IIoTracker
     }
 
     /// <summary>
-    /// Ensures every listed feature is filled for every live row (design 5.4, correctness rule). Works through the
-    /// dependency graph wave by wave (design 6.8): derived features needing no fetch first; then, per wave, in-flight
+    /// Ensures every listed feature is filled for every live row (correctness rule). Works through the
+    /// dependency graph wave by wave: derived features needing no fetch first; then, per wave, in-flight
     /// fetches, fetches for whatever is still missing, and the derived features whose inputs are now complete — so a
     /// derived foreign key exists before the groups keyed by it are fetched.
     /// </summary>
@@ -238,7 +238,7 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <summary>
     /// Ensures every listed feature is filled for <paramref name="rows"/> only: distinct live physical rows, the output's
-    /// returned rows (design 3.4), known once the final order is, when no reader is left for the other live rows. The waves
+    /// returned rows, known once the final order is, when no reader is left for the other live rows. The waves
     /// of <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/>, but a fetch or a table read takes the keys of these
     /// rows, a derived feature is computed for them, and only they are marked filled, so a later whole fill fills the
     /// rest. A fetch already in flight (a prefetch) that asked for the key of one of these rows still unfilled on a needed
@@ -276,8 +276,8 @@ public sealed partial class FeatureFetcher : IIoTracker
     }
 
     /// <summary>
-    /// The fill of both <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/> overloads, wave by wave (design 6.8).
-    /// It owns the fill's temporaries, scratch buffers each given back as soon as nothing refers to them (design 4.8): the
+    /// The fill of both <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/> overloads, wave by wave.
+    /// It owns the fill's temporaries, scratch buffers each given back as soon as nothing refers to them: the
     /// closure, its marks and a row-scoped fill's rows when it ends, however it ends; a wave's groups and its started
     /// fetches at the wave's end. What a started fetch keeps (its feature array, keys, staging and calls) is its own, on
     /// the request's ledger, since its connector calls may outlive the fill. One method, so a fill that waits costs one
@@ -502,8 +502,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     }
 
     /// <summary>
-    /// The members of <paramref name="group"/> this request needs now and does not have yet (late materialization,
-    /// design 5.4/6.8): requested (directly or as a dependency), not failed, and unfilled on some row of
+    /// The members of <paramref name="group"/> this request needs now and does not have yet (late materialization): requested (directly or as a dependency), not failed, and unfilled on some row of
     /// <paramref name="scope"/> — optionally excluding members an in-flight fetch already carries. Returned in group order;
     /// <c>null</c> when none.
     /// </summary>
@@ -534,7 +533,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     /// <summary>
     /// Writes the members of <paramref name="group"/> this request needs now and does not have yet into
     /// <paramref name="selected"/> (at least as long as the group), in group order; returns how many. The one rule of
-    /// what a fetch or a local read supplies (late materialization, design 5.4/6.8).
+    /// what a fetch or a local read supplies (late materialization).
     /// </summary>
     private int SelectNeeded(FetchGroup group, bool[] member, bool skipInFlight, RowScope scope, Span<int> selected)
     {
@@ -582,7 +581,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     }
 
     /// <summary>
-    /// A group keyed by a failed feature cannot be fetched; its features fail too (design 6.7: a dependency failure
+    /// A group keyed by a failed feature cannot be fetched; its features fail too (a dependency failure
     /// never degrades into legitimate missing values).
     /// </summary>
     private bool FailIfKeyFailed(FetchGroup group, ReadOnlySpan<int> features)
@@ -602,7 +601,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     }
 
     /// <summary>
-    /// The worst state of the group's key features (design 6.7: the key's state is its parts'), and the error of the first
+    /// The worst state of the group's key features (the key's state is its parts'), and the error of the first
     /// key feature in it; <see cref="FeatureState.Ok"/> for a key that reads no feature.
     /// </summary>
     private FeatureState KeyState(FetchGroup group, out string? error)
@@ -646,7 +645,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     {
         var fields = FieldBindings(group, features);
         // Collect distinct keys of the scope's rows that still miss any of the fetched features. The index, the key array and
-        // the per-chunk arrays are rented from the request memory (design 4.8), so a fetch allocates nothing per key.
+        // the per-chunk arrays are rented from the request memory, so a fetch allocates nothing per key.
         // Lifetimes: the index and the chunk arrays are read only on the request's thread (Backfill, CompleteAsync),
         // before the request releases the memory. The key array is read by connector calls, which may outlive the
         // request, but each call holds the memory from before FetchAsync until the connector really completes and the call
@@ -758,7 +757,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     /// </summary>
     /// <remarks>
     /// The call holds the request memory until the connector really completes, because a connector that ignores
-    /// cancellation may still be writing into <paramref name="writer"/> (design 4.8), and until the call has been
+    /// cancellation may still be writing into <paramref name="writer"/>, and until the call has been
     /// recorded, which reads the keys and the staging. Never throws for a connector failure: failures become
     /// <see cref="FetchOutcome.Failed"/> (<see cref="StatusOf"/>). The returned task is consumed exactly once, or never (a
     /// prefetch nobody awaits): it is a plain result or a task, never a pooled source.
@@ -771,7 +770,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     {
         if (_hook is { Replays: true } replay)
         {
-            // A replayed call answers at once from the recording: no connector, no wait, no metrics or health (design 13.4).
+            // A replayed call answers at once from the recording: no connector, no wait, no metrics or health.
             writerHeld = false;
             return Answered(replay.Replay(group, batch, ImmutableCollectionsMarshal.AsImmutableArray(fields), writer));
         }
@@ -872,7 +871,7 @@ public sealed partial class FeatureFetcher : IIoTracker
             CountFetchedValues(pending, staging);
         }
 
-        // Some chunks failed: the source partially failed (design 6.7) and readers become Degraded. The failed chunks'
+        // Some chunks failed: the source partially failed and readers become Degraded. The failed chunks'
         // keys are treated like keys absent from the response; their staging is never read.
         var degraded = failedChunks > 0 || partial;
         if (!SettleKey(group, pending.Features, failedChunks > 0 && failedChunks == pending.ChunkCount, ref degraded, ref error))
@@ -1020,7 +1019,7 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <summary>
     /// Whether this request counts <see cref="StrataRecMetrics.SourceValues"/>: only while a listener is enabled, so a
-    /// request without one pays this check alone, and never in a replay, which is not traffic (design 13.4).
+    /// request without one pays this check alone, and never in a replay, which is not traffic.
     /// </summary>
     private bool CountsValues => StrataRecMetrics.SourceValues.Enabled && _hook is not { Replays: true };
 
@@ -1043,7 +1042,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     }
 
     /// <summary>
-    /// The first half of the state rule of a fetch or a cache read (design 6.7): a failed source or a failed key fails
+    /// The first half of the state rule of a fetch or a cache read: a failed source or a failed key fails
     /// every feature (set here; returns false, nothing to fill), and a degraded key degrades them. One rule for both,
     /// so a replay, which answers a cache read through the fetch path, ends in the states the live read did.
     /// </summary>
@@ -1086,10 +1085,10 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <summary>
     /// Copies staged values into the rows of the fetch's scope that are still unfilled (the live rows now, for a fetch of
-    /// every live row), matching by key (design 4.5). Key index k belongs to chunk k / the fetch's chunk size (Batching.Size, at most max_batch). A value is read only if
+    /// every live row), matching by key. Key index k belongs to chunk k / the fetch's chunk size (Batching.Size, at most max_batch). A value is read only if
     /// its chunk succeeded and the connector wrote that field for that key; anything else takes the default or becomes
     /// missing, and so does a list of another length than a <c>list&lt;E,N&gt;</c> feature's, counted out of range
-    /// (design 4.3).
+    ///.
     /// </summary>
     private void Backfill(PendingFetch pending, FeatureRuntimeInfo feature, int fieldIndex, ref BackfillScratch scratch)
     {
@@ -1226,13 +1225,13 @@ public sealed partial class FeatureFetcher : IIoTracker
         try
         {
             // A value that does not fit int32 storage takes the default (or becomes missing) at the write and is
-            // counted there (design 4.3): unlike NaN, it cannot be stored and sanitized afterwards.
+            // counted there: unlike NaN, it cannot be stored and sanitized afterwards.
             feature.Expression!.Evaluate(new EvalContext(_table, _bindings, _context, _params, _counters), span, column, definition.Absent);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The backend does not throw for data (errors become missing values); an exception here is a defect in
-            // a function or connector-provided value. Treat it like a failed source (design 6.7): readers of this
+            // a function or connector-provided value. Treat it like a failed source: readers of this
             // feature fail with a clear error, everything else in the request keeps going. Rows stay unfilled.
             _state[feature.Index] = FeatureState.Failed;
             _errors[feature.Index] = $"derived feature '{definition.Name}' failed to evaluate: {ex.Message}";
@@ -1254,7 +1253,7 @@ public sealed partial class FeatureFetcher : IIoTracker
             // A non-nullable expression leaves a row missing only where an out-of-range int32 value, or a list of another
             // length than the feature's fixed one, was replaced at the write. With no default to take, the feature cannot
             // be served as typed: readers compiled against a non-nullable type skip validity checks (same rule as a node
-            // output, design 4.6).
+            // output).
             var missing = 0;
             foreach (var row in span)
             {
@@ -1276,12 +1275,12 @@ public sealed partial class FeatureFetcher : IIoTracker
 
         if (ColumnValues.IsFloat(column))
         {
-            // The expression backend writes NaN/±∞ as-is and leaves sanitizing to the engine (design 4.3).
+            // The expression backend writes NaN/±∞ as-is and leaves sanitizing to the engine.
             var replaced = ColumnValues.SanitizeNonFinite(column, span, definition.Absent);
             AddNonFinite(feature, replaced);
             if (replaced > 0 && !definition.HasDefault && !feature.Type.Nullable)
             {
-                // Same rule as a node output (design 4.6): a non-nullable column cannot hold the replacement "missing".
+                // Same rule as a node output: a non-nullable column cannot hold the replacement "missing".
                 _state[feature.Index] = FeatureState.Failed;
                 _errors[feature.Index] = $"derived feature '{definition.Name}' produced {replaced} non-finite value(s) " +
                     "but is non-nullable and declares no default";
@@ -1317,7 +1316,7 @@ public sealed partial class FeatureFetcher : IIoTracker
             Interlocked.Add(ref _nonFiniteReplaced, count);
             if (_hook is not { Replays: true })
             {
-                // A replay is not traffic: it records no metrics (design 13.4).
+                // A replay is not traffic: it records no metrics.
                 StrataRecMetrics.ColumnNonFinite.Add(count, feature.NonFiniteTags);
             }
         }

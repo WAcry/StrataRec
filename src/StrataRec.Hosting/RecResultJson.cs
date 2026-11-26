@@ -9,7 +9,7 @@ namespace StrataRec.Hosting;
 /// <summary>What a debugging caller gets in addition to the result every caller gets.</summary>
 public sealed class RecResultJsonOptions
 {
-    /// <summary>Write <c>column_producers</c>: the node that produced each output column (lineage, design 8.7).</summary>
+    /// <summary>Write <c>column_producers</c>: the node that produced each output column (lineage).</summary>
     public bool IncludeColumnProducers { get; init; }
 }
 
@@ -149,7 +149,7 @@ public static class RecResultJson
     }
 
     /// <summary>
-    /// Explained candidates (design 13.3) as one JSON object: <c>pipeline</c> (the run explained) and <c>candidates</c>, each
+    /// Explained candidates as one JSON object: <c>pipeline</c> (the run explained) and <c>candidates</c>, each
     /// with <c>id</c>, <c>verdict</c> (<c>returned</c>, <c>beyond_limit</c>, <c>dropped</c>, <c>not_recalled</c>,
     /// <c>no_result</c>), <c>rank</c> or <c>dropped_by</c> where they apply, and <c>steps</c>: per node <c>node</c>,
     /// <c>step</c> (<c>ran</c>, <c>rolled_back</c>, <c>skipped</c>), <c>detail</c>, <c>change</c> (<c>entered</c>,

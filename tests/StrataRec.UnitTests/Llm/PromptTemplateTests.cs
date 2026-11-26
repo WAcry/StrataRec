@@ -7,7 +7,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Llm;
 
 /// <summary>
-/// Prompt templates bound to StrataRec (design 5.9 rule 1), through <c>LlmReranker@1</c> and a model that captures its
+/// Prompt templates bound to StrataRec, through <c>LlmReranker@1</c> and a model that captures its
 /// prompts: names resolved at load and fetched before the node, how every kind of value renders, the sections, and every
 /// load error at the template's pointer with the tag's offset and a hint.
 /// </summary>
@@ -250,7 +250,7 @@ public sealed class PromptTemplateTests
 
 /// <summary>
 /// What rendering a prompt allocates: the prompt string and nothing else, however many rows, lists and sections the
-/// template has (design 5.9; docs/development.md section 4: no per-row allocation on the request path).
+/// template has (docs/development.md section 4: no per-row allocation on the request path).
 /// </summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class PromptTemplateAllocationTests

@@ -24,7 +24,7 @@ internal enum CacheRecordHeader : byte
 }
 
 /// <summary>
-/// The value encoding of a cache record (design 6.6 <c>cache</c>): what the engine stores per (source, entity, key) in a
+/// The value encoding of a cache record: what the engine stores per (source, entity, key) in a
 /// distributed cache, and what it hands its in-process table's writer. The one owner of the format: encoding, the
 /// fingerprint of the field set, and decoding (with every length checked, so bytes from the network never throw).
 /// </summary>

@@ -8,7 +8,7 @@ using StrataRec.Expressions;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>
-/// Differential tests (design 7.7): random well-typed expressions over random tables — missing values, NaN, ±∞,
+/// Differential tests: random well-typed expressions over random tables — missing values, NaN, ±∞,
 /// extreme integers, garbage in dead rows, varying live ratios — must give the same result on the vectorized backend
 /// (optimized IR) as on the row-at-a-time reference interpreter (unoptimized IR) for every listed row.
 /// </summary>
@@ -195,7 +195,7 @@ public class DifferentialTests(ITestOutputHelper output)
         }
 
         // Int and int-list results sometimes go to int32 storage: values outside the int32 range (int results reach
-        // ±2^63) must then be missing, never wrapped (design 4.3). Float lists sometimes go to float32 storage, which
+        // ±2^63) must then be missing, never wrapped. Float lists sometimes go to float32 storage, which
         // rounds each element as a float32 column does.
         var resultType = expression.ResultType.AsNullable();
         var narrow = (resultType.Kind == StorageKind.Int64 || resultType == ColumnType.List(StorageKind.Int64, nullable: true)) && random.Next(3) == 0;
@@ -350,7 +350,7 @@ public class DifferentialTests(ITestOutputHelper output)
             case ScalarColumn<bool> c: c.Set(row, random.Next(2) == 0); break;
             case StringColumn c when kind == K.Text: c.Set(row, Texts[random.Next(Texts.Length)]); break;
             case StringColumn c: c.Set(row, Strings[random.Next(Strings.Length)]); break;
-            // A fixed-length column holds rows of its length, as its writers keep it (design 4.3).
+            // A fixed-length column holds rows of its length, as its writers keep it.
             case ListColumn<float> c when kind == K.Vec: c.Set(row, RandomVector(random, garbage)); break;
             case ListColumn<double> c when kind == K.Vec: c.Set(row, RandomVector(random, garbage).Select(v => (double)v).ToArray()); break;
             case ListColumn<long> c: c.Set(row, RandomLongs(random)); break;
@@ -583,7 +583,7 @@ public class DifferentialTests(ITestOutputHelper output)
         };
 
         /// <summary>
-    /// A divisor the binder knows is 0 (a literal, <c>int(0)</c>, a let of one) is a compile error (design 7.5); a 0 that
+    /// A divisor the binder knows is 0 (a literal, <c>int(0)</c>, a let of one) is a compile error; a 0 that
     /// only folding or the data finds gives missing. So a divisor that is not a non-zero literal is written as
     /// <c>(d + 0)</c>, the same value but never a constant to the binder (review 66: <c>% int(0)</c> stopped seed 88), and
     /// a non-zero literal stays, for the non-nullable path.

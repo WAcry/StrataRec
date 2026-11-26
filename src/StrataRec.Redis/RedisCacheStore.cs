@@ -9,8 +9,7 @@ using StrataRec.Features.Cache;
 namespace StrataRec.Redis;
 
 /// <summary>
-/// <c>redis@1</c>: the distributed tier of <c>cache</c> sources and of services' caches in Redis (design 6.6 <c>cache</c>,
-/// tier 2), through StackExchange.Redis. One string value per (source, entity, key) under
+/// <c>redis@1</c>: the distributed tier of <c>cache</c> sources and of services' caches in Redis, through StackExchange.Redis. One string value per (source, entity, key) under
 /// <c>{key_prefix}{source}:{entity}:{origin}:{key}</c> (<see cref="CacheKeyspace.Prefix"/>, where the origin says which
 /// connector and settings the source's values come from, then the key's text, <see cref="CacheKeyspace.KeyText"/>:
 /// <c>10042</c>, or <c>10042:US</c> for a key of two parts; a service's answers are under

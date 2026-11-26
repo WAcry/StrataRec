@@ -77,7 +77,7 @@ public sealed class TopKFactory : IOperatorFactory
         private int K(ScalarValue parameter) => kParam is null ? fixedK : parameter.IsMissing ? 0 : (int)Math.Clamp(parameter.AsInt64(), 0, int.MaxValue);
 
         /// <summary>
-        /// For each row it ranked: k, the row's key and the last kept row's key (design 13.3), and whether the key, a tie on
+        /// For each row it ranked: k, the row's key and the last kept row's key, and whether the key, a tie on
         /// it (broken by <c>entity_id</c>) or a missing key put the row past the cut.
         /// </summary>
         public void Explain(ExplainContext context)
@@ -150,7 +150,7 @@ public sealed class SlidingWindowQuotaConfig
 
 /// <summary>
 /// <c>SlidingWindowQuota@1</c>: walks the ranking and allows at most <c>max_per_window</c> rows of a group in any
-/// <c>window</c> consecutive ranks; rows over quota move down, rows that cannot be placed are dropped (design 5.1).
+/// <c>window</c> consecutive ranks; rows over quota move down, rows that cannot be placed are dropped.
 /// </summary>
 public sealed class SlidingWindowQuotaFactory : IOperatorFactory
 {

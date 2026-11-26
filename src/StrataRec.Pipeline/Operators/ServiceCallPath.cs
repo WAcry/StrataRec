@@ -80,7 +80,7 @@ internal interface IServiceCallScope
 }
 
 /// <summary>
-/// The one path of a service call (design 6.9, IO steps 2–5), whoever makes it: a replay answers it from the recording;
+/// The one path of a service call (IO steps 2–5), whoever makes it: a replay answers it from the recording;
 /// otherwise its cache, then its client through <see cref="BoundedCall"/>, recorded when the request records. A node's
 /// calls (<see cref="OperatorContext.CallAsync"/>) and a feature source's (<see cref="FeatureServiceSupply"/>) go through
 /// it, so both are bounded, cached, measured, recorded and replayed alike.

@@ -127,7 +127,7 @@ internal sealed class IrNode
 
     public int Depth { get; }
 
-    /// <summary>True when the subtree reads no <c>col.*</c> symbol: evaluated once per request (design 7.7).</summary>
+    /// <summary>True when the subtree reads no <c>col.*</c> symbol: evaluated once per request.</summary>
     public bool IsInvariant { get; }
 
     /// <summary>Name of the <c>let</c> binding this node came from, used by <c>Describe()</c>.</summary>

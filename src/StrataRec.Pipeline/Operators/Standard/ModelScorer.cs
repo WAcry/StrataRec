@@ -7,7 +7,7 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
-/// <summary>Config of <c>ModelScorer@1</c> (design 6.9).</summary>
+/// <summary>Config of <c>ModelScorer@1</c>.</summary>
 public sealed class ModelScorerConfig : ModelCallConfig
 {
     /// <summary>Model output name → column to write, whose declared type is the output's tensor type (as an input's is).</summary>
@@ -19,7 +19,7 @@ public sealed class ModelScorerConfig : ModelCallConfig
 
 /// <summary>
 /// <c>ModelScorer@1</c> (ColumnWriter): pointwise scoring through <see cref="IServiceClient"/>. Rows are split into
-/// batches called concurrently; outputs commit only when every batch succeeds (design 4.6, 6.9).
+/// batches called concurrently; outputs commit only when every batch succeeds.
 /// </summary>
 /// <remarks>
 /// <para>Each batch sends one tensor per mapped input and reads one per mapped output, each of the declared type of its

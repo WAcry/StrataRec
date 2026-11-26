@@ -12,7 +12,7 @@ namespace StrataRec.CommandLine.Commands;
 /// experiments a stop in force removed (<see cref="ReleaseManifest.Revoked"/>), which <c>build</c> keeps out.
 /// </summary>
 /// <remarks>
-/// It reads the store only: what nodes applied is theirs to report (design 10.3 step 5). A pointer that cannot be read is
+/// It reads the store only: what nodes applied is theirs to report. A pointer that cannot be read is
 /// reported and the others are still listed, so one damaged pointer does not hide what the rest publish.
 /// </remarks>
 internal static class StatusCommand

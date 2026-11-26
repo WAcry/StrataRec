@@ -44,7 +44,7 @@ public sealed class BindingException : Exception
 }
 
 /// <summary>
-/// The host's secret store (design 6.4 item 4): bindings name credentials only by reference (<c>secret://name</c>), and
+/// The host's secret store: bindings name credentials only by reference (<c>secret://name</c>), and
 /// instances resolve them through this when they load. Register one in the host's service container, or set
 /// <c>BindingHostOptions.Secrets</c>.
 /// </summary>

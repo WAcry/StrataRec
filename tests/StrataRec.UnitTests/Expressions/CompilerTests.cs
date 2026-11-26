@@ -8,7 +8,7 @@ namespace StrataRec.UnitTests.Expressions;
 /// <summary>Parsing, typing, diagnostics and explain output.</summary>
 public class CompilerTests
 {
-    /// <summary>The home-feed catalog of design 6.3 plus the columns used in 7.3, 7.8 and 9.3.</summary>
+    /// <summary>The home-feed catalog plus the columns used in 7.3, 7.8 and 9.3.</summary>
     internal static ExprFixture HomeFeed()
     {
         var f = new ExprFixture()
@@ -91,25 +91,25 @@ public class CompilerTests
 
     public static TheoryData<string, string> DesignExamples() => new()
     {
-        // design 6.3 derived features
+        // derived features
         { "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)", "float64" },
         { "dot(ctx.user.embedding, col.item.embedding) ?? 0.0", "float64" },
-        // design 7.3
+        // the fusion formula
         { FusionFormula, "float64" },
         { "!contains(ctx.request.recent_item_ids, col.entity_id) && (col.item.is_policy_safe ?? false)", "bool" },
-        // design 7.8
+        // weighted sums of parameters and scores
         { "param.w_click * col.score.p_click + param.w_like * col.score.p_like", "float64" },
         { "1.0 + param.w_fresh * exp(-(col.item.age_hours ?? 720.0) / param.half_life_hours)", "float64" },
         { "col.item.report_rate > 0.05 ? 0.2 : 1.0", "float64" },
         { "param.explore_eps * hash01(ctx.request.seed, col.entity_id)", "float64" },
-        // design 8.3, 9.3, 11.3
+        // predicates of filters, taps and arms
         { "col.score.coarse > 0.35", "bool" },
         { "col.item.is_policy_safe ?? false", "bool" },
         { "col.recall.best_score * (1.0 + 0.05 * log1p(col.item.clicks_7d))", "float64" },
         { "col.score.final * (1.0 + 0.15 * exp(-(col.item.age_hours ?? 720.0) / 24.0))", "float64" },
         { "col.item.bookmarks_7d / (col.item.clicks_7d + 1.0)", "float64" },
         { "(col.item.is_policy_safe ?? false) && col.item.report_rate < 0.05", "bool" },
-        // design 4.4 / 7.2
+        // recall columns and missing values
         { "col.recall.primary_source == 'two_tower'", "bool" },
         { "col.score.final@fusion * 2.0", "float64" },
     };

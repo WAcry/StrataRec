@@ -16,7 +16,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// The waits of the standard <c>ModelScorer@1</c> and <c>MultiSourceRecall@1</c> for their clients are bounded on their
-/// own, by the call's timeout, the node's budget and the caller (design 5.6), whatever the client does with its token:
+/// own, by the call's timeout, the node's budget and the caller, whatever the client does with its token:
 /// the request falls back or fails in time, the abandoned client keeps the request memory until it answers and nothing
 /// it writes is read, the recording has the call as the request saw it, and a replay takes the same path at once. An
 /// operator that returns only after its budget timed out all the same.
@@ -60,7 +60,7 @@ public sealed class BoundedWaitTests
         Assert.Empty(call.Outputs);
         Assert.Equal(ReplayTiming.TimedOut, Assert.Single(run.Nodes.Single(n => n.Node == "ctr_ranker").Attempts, a => a.Node == "ctr_ranker").Timing);
 
-        // Still held when the event log looks (design 13.2): one report for the request, naming the pipeline.
+        // Still held when the event log looks: one report for the request, naming the pipeline.
         events.Flush();
         var held = Assert.Single(logs.Entries, e => e.State.TryGetValue("Event", out var v) && v is RequestEvent.BuffersHeld);
         Assert.Equal(("home_feed", "req-node-timeout"), (held.State["Subject"], held.State["SampleRequestId"]));
@@ -78,7 +78,7 @@ public sealed class BoundedWaitTests
     [Fact]
     public async Task TheRequestDeadline_BoundsTheWaitForAModelIgnoringCancellation()
     {
-        // The untimed node timeout is longer than the request: the node's budget is what is left of it (design 5.6).
+        // The untimed node timeout is longer than the request: the node's budget is what is left of it.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"on_failure\": \"fallback\", \"fallback\": \"ctr_backup\"", "\"on_failure\": \"fail_request\""));
         using var models = new GatedModels();

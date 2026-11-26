@@ -25,7 +25,7 @@ public sealed class LogPipelineOptions
     public long DurableMaxBytes { get; init; } = 256L << 20;
 
     /// <summary>
-    /// Spill hook for durable batches the memory queue cannot take (design 8.6 item 4: the local disk buffer). Called
+    /// Spill hook for durable batches the memory queue cannot take (the local disk buffer). Called
     /// on the request thread with the batch, which already carries its <c>seq</c>; return true when the batch was
     /// persisted and will be delivered later (e.g. appended to a local file replayed at startup). Must be fast.
     /// </summary>
@@ -41,7 +41,7 @@ public sealed class LogPipelineOptions
     public int MaxBatchesPerWrite { get; init; } = 256;
 
     /// <summary>
-    /// How long <see cref="LogPipeline.DisposeAsync"/> keeps draining durable batches (design 8.6 item 4), at most
+    /// How long <see cref="LogPipeline.DisposeAsync"/> keeps draining durable batches, at most
     /// <see cref="MaxDrainTimeout"/>. Disposal returns at most half a second later even if the sink ignores cancellation.
     /// </summary>
     public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
@@ -127,18 +127,18 @@ public sealed class LogBatchRejectedException : Exception
     public IReadOnlyList<LogBatch> Batches { get; }
 }
 
-/// <summary>Delivery counters of one tap (design 8.4: drops are counted so offline weights can be corrected).</summary>
+/// <summary>Delivery counters of one tap (drops are counted so offline weights can be corrected).</summary>
 public readonly record struct TapLogStats(string TapId, long Delivered, long Dropped);
 
 /// <summary>
-/// The asynchronous log pipeline (design 8.6): request threads only enqueue finished batches; background loops write
+/// The asynchronous log pipeline: request threads only enqueue finished batches; background loops write
 /// them to an <see cref="ILogSink"/>. Durable and best-effort batches use separate bounded queues so a burst of
 /// diagnostics never delays training logs. Durable batches get consecutive per-process sequence numbers and are
 /// retried until the sink accepts them (or rejects them permanently); best-effort batches are dropped when their queue
 /// is full or a write fails.
 /// </summary>
 /// <remarks>
-/// Observability (design 13.1, 13.2): queue depth, per-tap delivery, durable overflow and rejections are metrics
+/// Observability: queue depth, per-tap delivery, durable overflow and rejections are metrics
 /// (<see cref="StrataRecMetrics"/>). A failing sink is logged when it starts failing and when it recovers, not per write;
 /// failures of the host's hooks are summarized per window.
 /// </remarks>
@@ -171,7 +171,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     private long _bestEffortBytes;
     private int _disposed;
 
-    /// <param name="loggerFactory">Receives sink failures and recoveries and hook failures (design 13.2); null logs nothing.</param>
+    /// <param name="loggerFactory">Receives sink failures and recoveries and hook failures; null logs nothing.</param>
     public LogPipeline(ILogSink sink, LogPipelineOptions? options = null, string? producerId = null, ILoggerFactory? loggerFactory = null)
     {
         _sink = sink;
@@ -203,7 +203,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
 
     /// <summary>
     /// Enqueues a finished batch. Never blocks the request thread; the result says whether the batch was queued,
-    /// spilled or dropped, so publishers and metrics can see durable loss as it happens (design 8.6).
+    /// spilled or dropped, so publishers and metrics can see durable loss as it happens.
     /// </summary>
     public LogAdmission Submit(LogBatch batch)
     {
@@ -610,7 +610,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     }
 
     /// <summary>
-    /// Logs the first failure of a run of failed writes; later ones are only counted (design 13.2: events, not traffic). A
+    /// Logs the first failure of a run of failed writes; later ones are only counted (events, not traffic). A
     /// logger that throws loses the record and changes nothing else: it threw out of the consumer, which then left the
     /// batches it had taken unsettled (review 78).
     /// </summary>
@@ -689,7 +689,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
         Measure(static () => StrataRecMetrics.LogQueueDepth, delta, durable ? DurableTags : BestEffortTags);
 
     /// <summary>
-    /// Adds to a metric. What a listener throws is lost with its measurement, as for plan loads (design 13.2), and never
+    /// Adds to a metric. What a listener throws is lost with its measurement, as for plan loads, and never
     /// cuts the accounting of a submission or a settlement short: one that threw while the consumer settled a write left
     /// the write's batches pending, so <see cref="FlushAsync"/> never returned and their bytes stayed in the budget (review 78).
     /// The instrument is read inside the isolation too: its first read runs the instruments' initializer, where a listener

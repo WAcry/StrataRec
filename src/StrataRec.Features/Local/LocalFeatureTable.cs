@@ -47,7 +47,7 @@ public sealed class LocalFeatureTableOptions
 }
 
 /// <summary>
-/// The in-process feature table behind the <c>cache</c> and <c>local</c> modes (design 6.6): one per (source, entity),
+/// The in-process feature table behind the <c>cache</c> and <c>local</c> modes: one per (source, entity),
 /// holding one fixed-size record of native values per entity, written by one background writer and read by requests
 /// without locks.
 /// </summary>
@@ -163,7 +163,7 @@ public sealed class LocalFeatureTable
     /// <summary>Completes when <see cref="IsLoaded"/> becomes true (never faults; a failed load is the source's error).</summary>
     public Task WhenLoaded => _loaded.Task;
 
-    /// <summary>Metric tags of the table (design 13.1): <c>stratarec.source</c>, <c>stratarec.entity</c>; built once with the
+    /// <summary>Metric tags of the table: <c>stratarec.source</c>, <c>stratarec.entity</c>; built once with the
     /// table, so recording a measurement allocates nothing. Also for whoever runs the table's source (its failures).</summary>
     public ReadOnlySpan<KeyValuePair<string, object?>> MetricTags => _tags;
 
@@ -183,7 +183,7 @@ public sealed class LocalFeatureTable
 
     /// <summary>
     /// A checkpoint or a completed reload: every update before <paramref name="position"/> is visible. The table counts
-    /// as loaded from the first one; its size and the time are recorded at each (design 13.1), so the age of the data is
+    /// as loaded from the first one; its size and the time are recorded at each, so the age of the data is
     /// the time since the last one.
     /// </summary>
     internal void SetPosition(UpdatePosition position)
@@ -195,7 +195,7 @@ public sealed class LocalFeatureTable
         _loaded.TrySetResult();
     }
 
-    /// <summary>Records the current version's bytes and records (design 13.1): at each checkpoint, and after a cache's writes.</summary>
+    /// <summary>Records the current version's bytes and records: at each checkpoint, and after a cache's writes.</summary>
     internal void RecordSize()
     {
         var version = Pin();

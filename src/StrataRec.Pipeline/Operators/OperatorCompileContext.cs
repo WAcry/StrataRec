@@ -15,7 +15,7 @@ namespace StrataRec.Pipeline.Operators;
 /// <summary>
 /// Everything an <see cref="IOperatorFactory"/> may use while compiling one node variant. Every column, parameter
 /// and expression the operator resolves through this context is recorded as a read or write of the node; those sets
-/// drive fetch planning, data-flow validation and experiment footprints (design 5.2, 6.8, 11.5).
+/// drive fetch planning, data-flow validation and experiment footprints.
 /// </summary>
 public sealed class OperatorCompileContext
 {
@@ -332,7 +332,7 @@ public sealed class OperatorCompileContext
     /// Compiles a request-level expression (<c>ctx.*</c> and <c>param.*</c>; <c>col.*</c> is an error) whose context features
     /// the operator waits for itself while it runs (<see cref="OperatorContext.WhenEachReadyAsync"/>), instead of the executor
     /// filling them before the node starts. For an operator that sends several calls of which only some read context
-    /// features (a recall source's query, design 5.4): each call waits for its own features and the others start at once,
+    /// features (a recall source's query): each call waits for its own features and the others start at once,
     /// where a feature filled before the node would hold back every call. The features remain reads of the node: they are
     /// prefetched with the request's context, and data-flow checks, experiment footprints and taps see them. Returns null
     /// after reporting errors.
@@ -386,7 +386,7 @@ public sealed class OperatorCompileContext
     /// <summary>Resolves a parameter leaf the operator reads.</summary>
     /// <param name="within">A range the operator needs every value in (MMR's λ in [0, 1]): the parameter must be declared
     /// with a min and a max inside it. Values are checked against the declaration, and experiments cannot widen it
-    /// (design 11.8), so every value the operator reads is in range, without a check per request.</param>
+    ///, so every value the operator reads is in range, without a check per request.</param>
     public bool TryParam(string name, string configKey, out ParamRef parameter, StorageKind? expectedKind = null, (double Min, double Max)? within = null)
     {
         parameter = default;
@@ -650,7 +650,7 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
-    /// The service bound to <paramref name="name"/>, shared with every plan of the same binding (design 6.4), for the node
+    /// The service bound to <paramref name="name"/>, shared with every plan of the same binding, for the node
     /// to call in <paramref name="role"/> (<see cref="Core.Diagnostics.IoRoles"/>: <c>model</c>, <c>recall</c>, or a role of its own, which
     /// its calls' telemetry is tagged with). Null after reporting an error at <paramref name="configKey"/>, or at the
     /// binding when the binding is wrong.
@@ -682,7 +682,7 @@ public sealed class OperatorCompileContext
 
     /// <summary>
     /// The signature of one version of a service the node calls (from <see cref="Service"/>), for checking the node's
-    /// config against it at load time (design 6.9). Check the node only when it is <see cref="SignatureStatus.Known"/>.
+    /// config against it at load time. Check the node only when it is <see cref="SignatureStatus.Known"/>.
     /// <see cref="SignatureStatus.Failed"/> (the service has no such version, or does not describe itself) is already
     /// reported at <paramref name="configKey"/>: the node fails. <see cref="SignatureStatus.Pending"/> (the engine is
     /// still loading the client; it compiles the plan again with the answer) and <see cref="SignatureStatus.Unchecked"/>
@@ -725,7 +725,7 @@ public sealed class OperatorCompileContext
     /// Resolves a name the operator reads outside an expression (<c>col.x</c>, <c>ctx.request.y</c>, <c>param.z</c>, as
     /// a prompt template's references are written) and records the read, as <see cref="CompileExpression"/>,
     /// <see cref="TryReadColumn"/> and <see cref="TryParam"/> do for theirs: the fetch planner then fetches a feature before
-    /// the node runs, and data-flow validation and experiment footprints see the read (design 5.2, 6.8). One step, so a
+    /// the node runs, and data-flow validation and experiment footprints see the read. One step, so a
     /// name cannot be read without being recorded (architecture audit: resolving through <see cref="Scope"/> and recording
     /// were two calls, and an operator that forgot the second compiled and ran without its feature fetched).
     /// </summary>

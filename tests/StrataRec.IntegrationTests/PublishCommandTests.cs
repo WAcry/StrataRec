@@ -117,7 +117,7 @@ public sealed class PublishCommandTests
     }
 
     /// <summary>
-    /// Without --seq, build makes the next release of what the store's pointer names (design 10.2): one more seq, and it as
+    /// Without --seq, build makes the next release of what the store's pointer names: one more seq, and it as
     /// previous, which diff compares with; the same configuration is no new release, so build and publish run again change
     /// nothing, and a revocation published stays published, still listing what it revoked. A changed configuration is a
     /// release that lists no revocations. A pointer build cannot read stops it, unless --seq says the number.

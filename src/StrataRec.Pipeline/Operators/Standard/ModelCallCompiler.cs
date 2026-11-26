@@ -8,7 +8,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.Pipeline.Operators.Standard;
 
 /// <summary>
-/// The config keys every model operator shares (design 6.9): which model, which of its versions, and the columns and
+/// The config keys every model operator shares: which model, which of its versions, and the columns and
 /// context values that feed it. One definition, so <c>ModelScorer@1</c>, <c>PairwiseRanker@1</c> and
 /// <c>ListwiseReranker@1</c> accept them with the same meaning, codes and messages. Ordered first in each operator's
 /// JSON Schema, before the operator's own keys.
@@ -97,7 +97,7 @@ internal sealed class ModelCallCompiler
             if (expr.Reference is null)
             {
                 _context.Error(pointer, "MODEL_INPUT_NOT_REFERENCE", $"Model input '{name}' must be a plain column or context reference, not an expression.",
-                    "define the transformation as a derived feature so training and serving share one definition (design 6.9)");
+                    "define the transformation as a derived feature so training and serving share one definition");
                 ok = false;
                 continue;
             }
@@ -121,7 +121,7 @@ internal sealed class ModelCallCompiler
     }
 
     /// <summary>
-    /// Checks the signature of every version against the inputs and <paramref name="outputs"/> (design 6.9), after the
+    /// Checks the signature of every version against the inputs and <paramref name="outputs"/>, after the
     /// operator compiled its own keys without errors. Null after reporting a mismatch.
     /// </summary>
     public CompiledModelCall? Finish(IReadOnlyList<ModelTensorRule.MappedOutput> outputs)
@@ -188,7 +188,7 @@ internal sealed class CompiledModelCall
     /// <summary>In ordinal order of their names.</summary>
     public ModelInput[] Inputs { get; }
 
-    /// <summary>Model input name → source, for log taps' <c>columns_from</c> (design 6.9).</summary>
+    /// <summary>Model input name → source, for log taps' <c>columns_from</c>.</summary>
     public IReadOnlyDictionary<string, string> NamedInputs { get; }
 
     /// <summary>The version this request calls.</summary>

@@ -6,7 +6,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
 
-/// <summary>Everything needed to compile one pipeline's unified plan (design 10.3, 12).</summary>
+/// <summary>Everything needed to compile one pipeline's unified plan.</summary>
 public sealed class PlanCompileRequest
 {
     public required PipelineArtifact Pipeline { get; init; }
@@ -38,26 +38,26 @@ public sealed class PlanCompileRequest
     /// <summary>
     /// Content id of each artifact the request was assembled from (<c>pipeline:&lt;id&gt;</c>, <c>catalog:&lt;id&gt;</c>,
     /// <c>bindings:&lt;env&gt;</c>, <c>policy</c>, <c>table:&lt;id&gt;</c>, <c>experiment:&lt;id&gt;</c>), when the loader knows them.
-    /// Not used by compilation; replay bundles record it (design 13.4) so a replay can say which artifacts changed.
+    /// Not used by compilation; replay bundles record it so a replay can say which artifacts changed.
     /// </summary>
     public IReadOnlyDictionary<string, string> ArtifactIds { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
-    /// Compile baseline ⊕ arm for every arm on its own (design 11.5 check 1). This is what proves the independence
-    /// rule (design 11.6: an arm may only reference the baseline and itself). On by default; hosts that already ran
+    /// Compile baseline ⊕ arm for every arm on its own. This is what proves the independence
+    /// rule (an arm may only reference the baseline and itself). On by default; hosts that already ran
     /// manifest validation in CI may turn it off to shorten load time.
     /// </summary>
     public bool ValidateArmsIndependently { get; init; } = true;
 
-    /// <summary>Upper bound on arm combinations per node, C(n) in design 12.3.</summary>
+    /// <summary>Upper bound on arm combinations per node.</summary>
     public int MaxCombinationsPerNode { get; init; } = 1024;
 
-    /// <summary>Upper bound on arm combinations enumerated by the data-flow check (design 11.5 check 3).</summary>
+    /// <summary>Upper bound on arm combinations enumerated by the data-flow check.</summary>
     public int MaxCombinationsChecked { get; init; } = 4096;
 
     /// <summary>
     /// When set, experiments past <c>expires_at</c> are rejected and those expiring within
-    /// <see cref="ExpiryWarningDays"/> are warned about (design 11.7). Set only where a release is decided
+    /// <see cref="ExpiryWarningDays"/> are warned about. Set only where a release is decided
     /// (<c>validate</c>, <c>build</c>): loading a plan, replaying a recorded request or explaining one must not start
     /// failing on a calendar date.
     /// </summary>
@@ -68,19 +68,19 @@ public sealed class PlanCompileRequest
 }
 
 /// <summary>
-/// What a release needs of a binary (design 10.4): the baseline's capabilities, and each experiment's beyond them, so
+/// What a release needs of a binary: the baseline's capabilities, and each experiment's beyond them, so
 /// removing an experiment removes exactly what it needed.
 /// </summary>
 /// <param name="Baseline">What the pipeline without experiments needs, sorted.</param>
 /// <param name="Experiments">Experiment id → what it needs that the baseline does not, sorted (empty for most).</param>
 public sealed record ReleaseRequirements(IReadOnlyList<string> Baseline, IReadOnlyDictionary<string, IReadOnlyList<string>> Experiments);
 
-/// <summary>An experiment and the layer it runs in (layers come from the manifest, not the artifact, design 11.2).</summary>
+/// <summary>An experiment and the layer it runs in (layers come from the manifest, not the artifact).</summary>
 public sealed record ExperimentPlacement(ExperimentArtifact Experiment, string Layer)
 {
     /// <summary>
     /// The experiments it yields to (<see cref="ManifestExperiment.YieldsTo"/>). One the compile does not have yields
-    /// nothing: a release that stopped the other experiment (design 10.6) loads without being checked again.
+    /// nothing: a release that stopped the other experiment loads without being checked again.
     /// </summary>
     public IReadOnlyList<string> YieldsTo { get; init; } = [];
 
@@ -101,7 +101,7 @@ public sealed class PlanCompilation
     public required PlanReport Report { get; init; }
 
     /// <summary>
-    /// What the compiled configuration needs of a binary (design 10.4), sorted: the operator of every node it compiled
+    /// What the compiled configuration needs of a binary, sorted: the operator of every node it compiled
     /// and the types of the bindings it bound (the client and distributed cache store of every service it calls, the
     /// connector, update source and distributed store of every feature source it reads). Every arm's included; <see cref="PlanCompiler.Requirements"/>
     /// tells the baseline's from each experiment's.
@@ -141,7 +141,7 @@ public sealed class PlanCompilation
     }
 }
 
-/// <summary>What the compiler did, for <c>stratarec explain-plan</c> and load reports (design 12.3, 13.4).</summary>
+/// <summary>What the compiler did, for <c>stratarec explain-plan</c> and load reports.</summary>
 public sealed class PlanReport
 {
     public required IReadOnlyList<NodeVariantReport> Nodes { get; init; }
@@ -154,7 +154,7 @@ public sealed class PlanReport
     /// <summary>False when the combination space exceeded the limit and only targeted combinations were checked.</summary>
     public bool CombinationCheckExhaustive { get; init; } = true;
 
-    /// <summary>Each yield of the release (design 11.1), with what it keeps from running together.</summary>
+    /// <summary>Each yield of the release, with what it keeps from running together.</summary>
     public IReadOnlyList<YieldReport> Yields { get; init; } = [];
 }
 
@@ -168,7 +168,7 @@ public sealed class PlanReport
 /// when there is neither (<c>YIELD_UNUSED</c>).</param>
 public sealed record YieldReport(string Experiment, string To, IReadOnlyList<string> Resolves);
 
-/// <summary>Variants of one node id (design 12.3).</summary>
+/// <summary>Variants of one node id.</summary>
 /// <param name="NodeId">Node id.</param>
 /// <param name="Layers">Layers whose arms modify the node, L(n).</param>
 /// <param name="Combinations">C(n).</param>
@@ -176,7 +176,7 @@ public sealed record YieldReport(string Experiment, string To, IReadOnlyList<str
 /// <param name="Orders">Timeline orders the node occupies across combinations (empty for fallbacks).</param>
 public sealed record NodeVariantReport(string NodeId, IReadOnlyList<string> Layers, int Combinations, int Variants, IReadOnlyList<int> Orders);
 
-/// <summary>Footprint summary of one arm (design 11.5).</summary>
+/// <summary>Footprint summary of one arm.</summary>
 public sealed record ArmReport(
     string Id,
     string Layer,

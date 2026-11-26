@@ -7,7 +7,7 @@ using StrataRec.Core.Values;
 namespace StrataRec.Core.Hashing;
 
 /// <summary>
-/// Stable, cross-platform hashing used by log sampling, request seeds and <c>hash01</c> (design 5.7, 8.4).
+/// Stable, cross-platform hashing used by log sampling, request seeds and <c>hash01</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -23,7 +23,7 @@ namespace StrataRec.Core.Hashing;
 ///   an optimizer or SIMD rewrite may change them; the hash must not.</item>
 ///   <item><c>0x03</c> string: 4-byte little-endian UTF-8 length, then the UTF-8 bytes.</item>
 ///   <item><c>0x04</c> bool: 1 byte (0 or 1).</item>
-///   <item><c>0x05</c> list index: 4 bytes little-endian (which expression in a key list matched, design 8.2).</item>
+///   <item><c>0x05</c> list index: 4 bytes little-endian (which expression in a key list matched).</item>
 /// </list>
 /// <para><c>hash01</c> maps the hash to [0, 1) as <c>(h &gt;&gt; 11) * 2^-53</c>.</para>
 /// </remarks>

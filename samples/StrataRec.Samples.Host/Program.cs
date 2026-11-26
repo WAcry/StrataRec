@@ -5,7 +5,7 @@ using StrataRec.Hosting.Manifests;
 using StrataRec.Samples.Host;
 
 // A web service that embeds the StrataRec engine. The engine is a library: transport, authentication and threading are
-// the host's (design 3.4). What the engine runs is configuration in a workspace (config/), whose bindings and pipeline
+// the host's. What the engine runs is configuration in a workspace (config/), whose bindings and pipeline
 // name this binary's own components by type next to the built-in ones (SampleEnvironment).
 
 // The stratarec commands, run with this binary's components: the stock tool does not know them, so it rejects this
@@ -33,7 +33,7 @@ builder.Services.AddStrataRec(options =>
     // A production host also sends the funnel logs its pipelines' log_taps capture somewhere durable:
     //   options.LogSink = new KafkaLogSink(...);   // an ILogSink; batches are written off the request path
 
-    // Releases (design 10.1, 10.3): with StrataRec:Store set, the service serves what is published to that store, as a
+    // Releases: with StrataRec:Store set, the service serves what is published to that store, as a
     // production node does, and polls for what is published next; config/ is then only where the bindings' relative
     // paths resolve. Try the whole loop from this directory:
     //   dotnet run -- stratarec build -c config -s store -p <id>    validates, uploads, and prints the publish command;

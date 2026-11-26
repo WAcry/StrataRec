@@ -4,7 +4,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Pipeline.Execution;
 
 /// <summary>
-/// Metric tags of one plan, built once per compiled plan (design 13.1 rule 5) so recording a node outcome passes cached
+/// Metric tags of one plan, built once per compiled plan so recording a node outcome passes cached
 /// arrays and allocates nothing.
 /// </summary>
 internal sealed class PlanTelemetry

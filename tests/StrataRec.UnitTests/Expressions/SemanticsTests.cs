@@ -8,7 +8,7 @@ using StrataRec.Expressions;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>Language semantics (design 7.4–7.6), checked on the vectorized paths and the reference interpreter.</summary>
+/// <summary>Language semantics, checked on the vectorized paths and the reference interpreter.</summary>
 public class SemanticsTests
 {
     private static readonly bool?[] As = { true, true, true, false, false, false, null, null, null };
@@ -171,7 +171,7 @@ public class SemanticsTests
     }
 
     /// <summary>
-    /// <c>x % 0</c> has no value, so it is missing (design 7.5), never a silent 0: the result is nullable unless the
+    /// <c>x % 0</c> has no value, so it is missing, never a silent 0: the result is nullable unless the
     /// divisor is a non-zero constant, and a constant 0 divisor is a compile error. It used to be 0, counted in a metric
     /// that was never exported.
     /// </summary>

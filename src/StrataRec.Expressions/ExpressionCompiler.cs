@@ -2,7 +2,7 @@ using StrataRec.Core.Types;
 
 namespace StrataRec.Expressions;
 
-/// <summary>Where an expression is used; determines what its result may be (design 7.4).</summary>
+/// <summary>Where an expression is used; determines what its result may be.</summary>
 public sealed record CompileOptions
 {
     /// <summary>
@@ -18,7 +18,7 @@ public sealed record CompileOptions
     /// <summary>True for request-level sites (<c>when</c>, funnel keys, context-only values): <c>col.*</c> is an error.</summary>
     public bool RequestLevelOnly { get; init; }
 
-    /// <summary>Maximum nesting depth, checked while parsing (design 7.9).</summary>
+    /// <summary>Maximum nesting depth, checked while parsing.</summary>
     public int MaxDepth { get; init; } = 32;
 
     public static CompileOptions Any { get; } = new() { AllowNullableResult = true };

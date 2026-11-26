@@ -11,7 +11,7 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
-/// The arm a request is assigned in each layer (design 11.1). Index i is the layer index; -1 means no arm.
+/// The arm a request is assigned in each layer. Index i is the layer index; -1 means no arm.
 /// </summary>
 public readonly struct RequestArms
 {
@@ -34,8 +34,8 @@ public readonly struct RequestArms
 }
 
 /// <summary>
-/// An experiment layer (design 11.1): a request is in at most one arm per layer, so the arms of one layer never run
-/// together, and arms of different layers may (every such combination is validated, design 11.5).
+/// An experiment layer: a request is in at most one arm per layer, so the arms of one layer never run
+/// together, and arms of different layers may (every such combination is validated).
 /// </summary>
 /// <param name="Index">Layer index.</param>
 /// <param name="Name">Layer name.</param>
@@ -55,7 +55,7 @@ public sealed record ExperimentInfo(int Index, string Id, int LayerIndex, Immuta
 public sealed record ArmInfo(int Index, string Id, string ArmName, int ExperimentIndex, int LayerIndex);
 
 /// <summary>
-/// A position on the timeline (design 12.4): one node id at one order, with a variant per combination of arms in the
+/// A position on the timeline: one node id at one order, with a variant per combination of arms in the
 /// layers that touch it. A null variant means the node does not exist for that combination.
 /// </summary>
 public sealed class TimelineSlot
@@ -64,7 +64,7 @@ public sealed class TimelineSlot
 
     public required string NodeId { get; init; }
 
-    /// <summary>Layers with at least one arm that modifies this node (L(n), design 12.3).</summary>
+    /// <summary>Layers with at least one arm that modifies this node (L(n)).</summary>
     public required ImmutableArray<int> TouchingLayers { get; init; }
 
     /// <summary>Per touching layer: global arm index → local index (0 = the layer does not modify the node).</summary>
@@ -76,16 +76,16 @@ public sealed class TimelineSlot
     /// <summary>Mixed-radix indexed variants; deduplicated variants are shared.</summary>
     public required ImmutableArray<CompiledNode?> Variants { get; init; }
 
-    /// <summary>Experiments whose site includes this position (design 12.6); assigned by the experiment compiler.</summary>
+    /// <summary>Experiments whose site includes this position; assigned by the experiment compiler.</summary>
     public ImmutableArray<int> SiteExperiments { get; internal set; } = [];
 
-    /// <summary>Selects this request's variant: one mixed-radix index computation (design 12.3).</summary>
+    /// <summary>Selects this request's variant: one mixed-radix index computation.</summary>
     public CompiledNode? Select(in RequestArms arms) => Variants[IndexWith(arms, -1, -1)];
 
     /// <summary>
     /// The variant <paramref name="arm"/> (of <paramref name="layer"/>) has here together with the request's arms in the
     /// other layers: the node it would run in this request's place, which decides whether reaching this position triggers
-    /// its experiment (design 12.6). Another layer may change the node's <c>when</c> or remove it.
+    /// its experiment. Another layer may change the node's <c>when</c> or remove it.
     /// </summary>
     public CompiledNode? SelectWith(in RequestArms arms, int layer, int arm) => Variants[IndexWith(arms, layer, arm)];
 
@@ -103,7 +103,7 @@ public sealed class TimelineSlot
     }
 }
 
-/// <summary>Baseline parameter values plus per-arm overrides (design 12.2).</summary>
+/// <summary>Baseline parameter values plus per-arm overrides.</summary>
 public sealed class ParamTable
 {
     public ParamTable(ImmutableArray<ScalarValue> baseline, ImmutableArray<ImmutableArray<(int Param, ScalarValue Value)>> overridesByArm)
@@ -138,7 +138,7 @@ public sealed class ParamTable
     }
 }
 
-/// <summary>What the pipeline returns (design 3.4).</summary>
+/// <summary>What the pipeline returns.</summary>
 public sealed class OutputPlan
 {
     public required ParamRef Limit { get; init; }
@@ -175,13 +175,13 @@ public sealed class OutputPlan
 
     /// <summary>
     /// Experiments overriding a parameter the output reads (<c>limit_param</c>, or a parameter in an output column or value);
-    /// a parameter trigger site (design 12.6). Assigned by the experiment compiler.
+    /// a parameter trigger site. Assigned by the experiment compiler.
     /// </summary>
     public ImmutableArray<int> ParamExperiments { get; internal set; } = [];
 }
 
 /// <summary>
-/// The immutable unified execution plan (design 12): schema, feature plan, timeline of node variants, parameters and
+/// The immutable unified execution plan: schema, feature plan, timeline of node variants, parameters and
 /// experiment metadata. Compiled once per manifest in the background and swapped atomically.
 /// </summary>
 /// <remarks>
@@ -217,7 +217,7 @@ public sealed class ExecutionPlan
 
     public required OutputPlan Output { get; init; }
 
-    /// <summary>Funnel groups and log taps (design 8).</summary>
+    /// <summary>Funnel groups and log taps.</summary>
     public LogPlan Log { get; init; } = LogPlan.Empty;
 
     public required ParamTable Params { get; init; }
@@ -250,7 +250,7 @@ public sealed class ExecutionPlan
     /// <summary>The inputs the pipeline accepts (<c>request_schema</c>) and the rules a request's inputs follow.</summary>
     public required RequestSchema RequestSchema { get; init; }
 
-    /// <summary>Metric tags of the plan's nodes, built once per plan (design 13.1 rule 5).</summary>
+    /// <summary>Metric tags of the plan's nodes, built once per plan.</summary>
     internal Execution.PlanTelemetry Telemetry =>
         _telemetry ?? Interlocked.CompareExchange(ref _telemetry, Execution.PlanTelemetry.Create(this), null) ?? _telemetry!;
 

@@ -78,7 +78,7 @@ curl -s -X POST localhost:5000/recommend/trending_feed \
 
 ## 服务发布（manifest）
 
-上面的服务在启动时读一次工作区。生产节点服务的是发布出来的 manifest（设计 10.1、10.3）：设置 `StrataRec:Store` 为一个 artifact store 目录，服务就从那里读每条流水线（`StrataRec:Pipelines`，默认是示例的全部五条）的指针，启动前加载好，之后按 `StrataRec:ReleasePollMs`（示例默认 2 秒，生产用引擎默认的 10 秒）轮询新的发布。`config/` 这时只是绑定里相对路径的基准目录。在本目录里走一遍完整流程：
+上面的服务在启动时读一次工作区。生产节点服务的是发布出来的 manifest：设置 `StrataRec:Store` 为一个 artifact store 目录，服务就从那里读每条流水线（`StrataRec:Pipelines`，默认是示例的全部五条）的指针，启动前加载好，之后按 `StrataRec:ReleasePollMs`（示例默认 2 秒，生产用引擎默认的 10 秒）轮询新的发布。`config/` 这时只是绑定里相对路径的基准目录。在本目录里走一遍完整流程：
 
 ```sh
 for p in trending_feed sponsored home editors_picks shelves; do   # 每条流水线各自发布；服务的每一条、它们调用的每一条都要有

@@ -6,7 +6,7 @@ namespace StrataRec.Hosting.Manifests;
 
 /// <summary>
 /// Manifest pointers as files in a directory, next to the blobs of a <see cref="Artifacts.Storage.FileSystemArtifactStore"/>
-/// with the same root (design 10.1): <c>&lt;root&gt;/pointers/&lt;environment&gt;/&lt;pipeline_id&gt;.json</c>, holding
+/// with the same root: <c>&lt;root&gt;/pointers/&lt;environment&gt;/&lt;pipeline_id&gt;.json</c>, holding
 /// <c>{ "manifest": "sha256:…" }</c>. <c>stratarec publish</c> writes them (<see cref="WritePointerAsync"/>); a node reads
 /// them (<see cref="GetManifestIdAsync"/>). The format is read and written here only.
 /// </summary>

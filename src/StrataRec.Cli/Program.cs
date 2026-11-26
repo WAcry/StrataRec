@@ -8,7 +8,7 @@ using StrataRec.Redis;
 namespace StrataRec.Cli;
 
 /// <summary>
-/// <c>stratarec</c>: create, validate, build, explain, diff and run configurations locally (design 10.1, 13.4), with the
+/// <c>stratarec</c>: create, validate, build, explain, diff and run configurations locally, with the
 /// components this tool ships. The commands are <see cref="StrataRecCommandLine"/>'s; a binary with components of its
 /// own runs the same commands with them.
 /// </summary>

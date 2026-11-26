@@ -7,7 +7,7 @@ using StrataRec.Core.Values;
 namespace StrataRec.Logging;
 
 /// <summary>
-/// The JSON debug encoding of a batch (design 8.7): envelope, then columns grouped by kind with a per-column list of
+/// The JSON debug encoding of a batch: envelope, then columns grouped by kind with a per-column list of
 /// missing row indices. Production sinks should prefer Arrow IPC or Parquet; the envelope fields are the same.
 /// </summary>
 /// <remarks>Numbers are written as the field's type (<see cref="LogField.Type"/>) holds them: an <c>int32</c> as the
@@ -176,7 +176,7 @@ public static class LogBatchJson
     /// it is held as, exact in both encodings; a batch writes its float32 fields as floats (<see cref="Write"/>).</summary>
     /// <param name="nonFiniteAsStrings">
     /// False for logs: a NaN or ±∞ float, and a float list with such an element, is written as null like a missing value
-    /// (design 8.7). True for replay bundles, which must keep what the request observed: such values are written as the
+    ///. True for replay bundles, which must keep what the request observed: such values are written as the
     /// strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, per element in lists.
     /// </param>
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value, bool nonFiniteAsStrings = false)
@@ -278,7 +278,7 @@ public static class LogBatchJson
     /// accepted too), an <c>int32</c> value or <c>list&lt;int32&gt;</c> element must fit int32. The encoding carries no
     /// type, so the reader supplies it, as a log consumer does from the batch's schema.
     /// </summary>
-    /// <remarks>Non-finite floats were written as null, so they read back as missing (design 8.7); a number outside the
+    /// <remarks>Non-finite floats were written as null, so they read back as missing; a number outside the
     /// type's range is not a value of it.</remarks>
     /// <param name="nonFiniteAsStrings">
     /// The replay-bundle encoding rather than the log's. A bundle accepts the strings <c>"NaN"</c>, <c>"Infinity"</c> and
@@ -524,7 +524,7 @@ public static class LogBatchJson
     }
 
     /// <summary>
-    /// The record a batch's <c>schema</c> id names (design 8.7): <c>{"log_schema": {"id", "tap_id", "columns", "context"}}</c>,
+    /// The record a batch's <c>schema</c> id names: <c>{"log_schema": {"id", "tap_id", "columns", "context"}}</c>,
     /// each field with its name, type and expression. A sink writes it once per id, before the first batch that names it
     /// (<see cref="JsonLinesLogSink"/> does), so a reader of the log knows each column's type and definition.
     /// </summary>

@@ -136,7 +136,7 @@ internal static class CommonOptions
 
     /// <summary>
     /// The compile request of <paramref name="pipeline"/> (or the workspace's only pipeline); null after reporting errors.
-    /// Without an expiry check (design 11.7): <c>run</c>, <c>explain-plan</c>, <c>diff</c>, <c>replay</c> and <c>compare</c>
+    /// Without an expiry check: <c>run</c>, <c>explain-plan</c>, <c>diff</c>, <c>replay</c> and <c>compare</c>
     /// look at configurations as they are, including last week's; only <c>validate</c> and <c>build</c> decide releases.
     /// </summary>
     public static PlanCompileRequest? CreateRequest(ConfigWorkspace workspace, string environment, string? pipeline, DiagnosticBag diagnostics, DateOnly? today = null)

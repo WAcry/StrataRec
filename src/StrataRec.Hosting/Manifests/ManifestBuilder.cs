@@ -10,7 +10,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Hosting.Manifests;
 
 /// <summary>
-/// Builds release manifests from a workspace and turns manifests back into compile requests (design 10.1–10.3).
+/// Builds release manifests from a workspace and turns manifests back into compile requests.
 /// Artifacts are stored by content id, so a manifest pins exactly what runs.
 /// </summary>
 public static class ManifestBuilder
@@ -95,12 +95,12 @@ public static class ManifestBuilder
     }
 
     /// <summary>
-    /// The emergency stop of design 10.6: <paramref name="manifest"/> without <paramref name="experiments"/>, as the next
+    /// The emergency stop: <paramref name="manifest"/> without <paramref name="experiments"/>, as the next
     /// release (its <c>seq</c> one more, <paramref name="manifestId"/> its <c>previous</c>), listing them in
-    /// <see cref="ReleaseManifest.Revoked"/> with what the manifest revoked before. Nothing is compiled or validated: removing experiments keeps a valid release valid (design 11.6), which is
+    /// <see cref="ReleaseManifest.Revoked"/> with what the manifest revoked before. Nothing is compiled or validated: removing experiments keeps a valid release valid, which is
     /// what makes the stop take seconds. The artifacts are read as a node reads them. What the release requires loses what
     /// the removed experiments required (<see cref="ManifestExperiment.Requires"/>), so removing the experiment that needs a
-    /// capability a rolled-back binary lacks makes the release one it serves (design 10.4). Null after reporting errors.
+    /// capability a rolled-back binary lacks makes the release one it serves. Null after reporting errors.
     /// </summary>
     /// <param name="experiments">Experiments of the manifest; a name it does not release changes nothing.</param>
     public static async ValueTask<ReleaseManifest?> RevokeAsync(
@@ -160,7 +160,7 @@ public static class ManifestBuilder
     }
 
     /// <summary>
-    /// Downloads a manifest's artifacts and assembles the compile request (design 10.3 step 1). Missing or corrupt
+    /// Downloads a manifest's artifacts and assembles the compile request. Missing or corrupt
     /// blobs are errors; nothing is half-loaded.
     /// </summary>
     public static async ValueTask<PlanCompileRequest?> LoadAsync(
@@ -256,7 +256,7 @@ public static class ManifestBuilder
     }
 
     /// <summary>
-    /// Reads the manifest stored under <paramref name="manifestId"/> (design 10.3 step 1): what a node does with the id a
+    /// Reads the manifest stored under <paramref name="manifestId"/>: what a node does with the id a
     /// pointer names. Returns null after reporting <c>MANIFEST_ID_INVALID</c>, <c>MANIFEST_UNREADABLE</c> (the store
     /// failed, or the blob is damaged), <c>MANIFEST_UNKNOWN</c> (the store does not have it) or <c>MANIFEST_SCHEMA</c>, at
     /// the artifact <c>manifest:&lt;id&gt;</c>. Cancellation and failures of the store other than I/O propagate.
@@ -314,13 +314,13 @@ public static class ManifestBuilder
         catch (ArtifactFormatException ex)
         {
             diagnostics.Error("MANIFEST_SCHEMA", source, ex.Pointer, ex.Reason,
-                ex.Hint ?? "a release manifest has pipeline_id, environment, artifacts and experiments, as 'stratarec build' writes it (design 10.2)");
+                ex.Hint ?? "a release manifest has pipeline_id, environment, artifacts and experiments, as 'stratarec build' writes it");
             return null;
         }
     }
 
     /// <summary>
-    /// The capabilities a manifest requires that <paramref name="environment"/> does not provide (design 10.4 item 2),
+    /// The capabilities a manifest requires that <paramref name="environment"/> does not provide,
     /// sorted (ordinal) and without duplicates; empty when the binary can serve it.
     /// </summary>
     public static List<string> MissingCapabilities(ReleaseManifest manifest, PlanEnvironment environment)
@@ -341,7 +341,7 @@ public static class ManifestBuilder
     }
 
     /// <summary>Every capability a manifest requires, the baseline's and each experiment's, sorted (ordinal) and without
-    /// duplicates (design 10.4).</summary>
+    /// duplicates.</summary>
     public static SortedSet<string> RequiredCapabilities(ReleaseManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
@@ -368,7 +368,7 @@ public static class ManifestBuilder
         {
             diagnostics.Error("MANIFEST_INCOMPATIBLE", Label(manifestId), "/requires",
                 $"The manifest requires {(missing.Count == 1 ? "a capability" : "capabilities")} this binary does not provide: {string.Join(", ", missing)}.",
-                "serve it with a binary that registers them ('stratarec operators' lists what a binary provides), or release a manifest built without them (design 10.4)");
+                "serve it with a binary that registers them ('stratarec operators' lists what a binary provides), or release a manifest built without them");
         }
 
         return missing;

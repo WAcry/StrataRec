@@ -72,9 +72,9 @@ public abstract class CompiledExpression
     /// it, since a partial list would be wrong data) is out of range, and so is a list of another length than a
     /// <c>list&lt;E,N&gt;</c> destination's: the row is marked missing and counted in
     /// <see cref="ExpressionCounters.OutOfRange"/>. Use the overload with a replacement value to write the column's
-    /// default instead (design 4.3).</para>
+    /// default instead.</para>
     /// <para>Non-finite values are written as-is; the engine applies column defaults and counting at commit
-    /// (design 4.3). Request-level expressions broadcast their value to every listed row.</para>
+    ///. Request-level expressions broadcast their value to every listed row.</para>
     /// <para>The destination may be a column the expression reads (an in-place update such as <c>col.a ?? [7]</c>
     /// written into <c>col.a</c>): every listed row's result is computed from the values and validity the column had
     /// when the call started.</para>

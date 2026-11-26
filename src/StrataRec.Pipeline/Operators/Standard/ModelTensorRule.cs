@@ -6,8 +6,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.Pipeline.Operators.Standard;
 
 /// <summary>
-/// How a model operator lays out a call's batch, which gives every tensor of the call its leading dimensions (design 5.9,
-/// 6.9). The value a row contributes (one element of the column's declared type, or N of them for a
+/// How a model operator lays out a call's batch, which gives every tensor of the call its leading dimensions. The value a row contributes (one element of the column's declared type, or N of them for a
 /// <c>list&lt;E,N&gt;</c>) follows its column type in every layout.
 /// </summary>
 internal enum TensorLayout
@@ -27,7 +26,7 @@ internal enum TensorLayout
 
 /// <summary>
 /// The one rule for which tensors the model operators send and read, and so which model signatures they can call
-/// (design 6.9). A version that does not match would load cleanly and then fail (or fall back) on every request, so every
+///. A version that does not match would load cleanly and then fail (or fall back) on every request, so every
 /// version a node may use is checked, and a mismatch is a load error.
 /// </summary>
 /// <remarks>
@@ -36,7 +35,7 @@ internal enum TensorLayout
 /// string tensor, and a fixed-length list <c>list&lt;E,N&gt;</c> (an embedding, a window of ids) a tensor of E with a
 /// trailing dimension N, row-major. Nothing is converted: the model client gets the values at the width they were
 /// declared and fetched with, which is what a feature store, a model server and a feature log that agree on a type need
-/// (design 6.9). A model that takes another type is fed a derived feature of that type. Nullable types and lists of any
+///. A model that takes another type is fed a derived feature of that type. Nullable types and lists of any
 /// length cannot be sent: a model needs a value in every row, and a tensor's trailing dimension is the same in every
 /// row. The layout (<see cref="TensorLayout"/>) adds the leading dimensions: <c>[rows]</c>, <c>[pairs, 2]</c> or
 /// <c>[1, rows]</c> for a column, <c>[rows]</c>, <c>[pairs]</c> or <c>[1]</c> for a context value, which is broadcast to
@@ -51,7 +50,7 @@ internal enum TensorLayout
 /// type of the column it is written to, or, for a score the operator ranks by, float32 or float64. A dynamic dimension
 /// (rows, pairs, the list's length) must be declared <c>-1</c>; a fixed one (the pair's 2, the list batch's 1, a list's
 /// N) as that size or <c>-1</c>, which a signature uses for "any". A model that declares float32 for an int column is
-/// fed a float32 derived feature, which design 6.9 rule 2 prefers anyway: one definition for training and serving.</para>
+/// fed a float32 derived feature, which is preferable anyway: one definition for training and serving.</para>
 /// </remarks>
 internal static class ModelTensorRule
 {
@@ -185,7 +184,7 @@ internal static class ModelTensorRule
         {
             return new Problem(pointer, "MODEL_INPUT_TYPE", $"Model input '{name}' maps {source}, which is nullable ({type}): a model needs a value in every row.",
                 $"make {source} non-nullable (a feature with a default, a request input declared without '?'), or map a derived feature "
-                + "that settles the missing case with '??' (design 6.9)");
+                + "that settles the missing case with '??'");
         }
 
         if (type.IsList && !type.IsFixedLength)
@@ -193,7 +192,7 @@ internal static class ModelTensorRule
             return new Problem(pointer, "MODEL_INPUT_TYPE",
                 $"Model input '{name}' maps {source} ({type}), a list of any length: a tensor's trailing dimension is the same in every row.",
                 $"declare the length of {source}, e.g. {ColumnType.List(type.Element, fixedLength: 64)}; a feature or column of that type keeps "
-                + "every row at that length (a row of another length takes the default or is missing, design 4.3)");
+                + "every row at that length (a row of another length takes the default or is missing)");
         }
 
         throw new ArgumentException($"{type} has a tensor: {source} is sendable.", nameof(type));
@@ -305,7 +304,7 @@ internal static class ModelTensorRule
         var fix = $"declare input '{input.Name}' as {sent} in the model's signature";
         if (ReferenceTypeFor(layout, input.Broadcast, declared) is { } type)
         {
-            return $"{fix}, or map {Article(type)} {type} derived feature of {input.Source} instead (one definition for training and serving, design 6.9)";
+            return $"{fix}, or map {Article(type)} {type} derived feature of {input.Source} instead (one definition for training and serving)";
         }
 
         if (layout != TensorLayout.Rows && ReferenceTypeFor(layout, !input.Broadcast, declared) is { } other)

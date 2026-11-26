@@ -9,7 +9,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// Fetches and local reads of entities keyed by several parts (design 6.2, 6.5): each row's key deduplicated as a tuple, a
+/// Fetches and local reads of entities keyed by several parts: each row's key deduplicated as a tuple, a
 /// request part handed over once per batch, a missing part leaving the row (or, for a request part, the whole fetch)
 /// without a key, and the same values whether the records are fetched or read from a local table.
 /// </summary>

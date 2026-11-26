@@ -7,7 +7,7 @@ using StrataRec.Core.Bindings;
 namespace StrataRec.UnitTests.Artifacts;
 
 /// <summary>
-/// A binding's own settings bind to the type its factory declares (design 6.4) as strictly, and with the same words, as
+/// A binding's own settings bind to the type its factory declares as strictly, and with the same words, as
 /// an operator's config: every mistake is a <see cref="BindingException"/> at its pointer within the binding, with a hint;
 /// local files and secret references are typed members that know their pointer; and the schema of the settings is
 /// generated from the same type.

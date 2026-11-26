@@ -10,7 +10,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Pipeline.Execution;
 
 /// <summary>
-/// Records, for the candidates a request asks to explain, their state after every node (design 13.3): whether they are
+/// Records, for the candidates a request asks to explain, their state after every node: whether they are
 /// in the table and live, their rank, and the values of the columns the node read and wrote, plus what an
 /// <see cref="IExplainableOperator"/> adds. Exists only for such requests; the executor holds none otherwise.
 /// </summary>
@@ -96,7 +96,7 @@ internal sealed class CandidateExplainer
     /// <summary>A node that did not run: every target is as it was.</summary>
     public void Skipped(string nodeId, string? detail) => Unchanged(nodeId, ExplainStepKind.Skipped, detail);
 
-    /// <summary>A failed attempt: the table is back where it was before it (design 4.6), and so is every target.</summary>
+    /// <summary>A failed attempt: the table is back where it was before it, and so is every target.</summary>
     public void RolledBack(string nodeId, string? detail)
     {
         _observed = false;
@@ -197,7 +197,7 @@ internal sealed class CandidateExplainer
     }
 
     /// <summary>
-    /// The table was compacted (design 4.5): live rows moved to their rank's position, dropped rows were released. A
+    /// The table was compacted: live rows moved to their rank's position, dropped rows were released. A
     /// released target stays present and dropped, with no row; a row source that brings it back gives it a new one, which
     /// <see cref="Observe"/> finds.
     /// </summary>

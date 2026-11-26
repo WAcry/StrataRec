@@ -13,7 +13,7 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec replay</c> (design 13.4): re-executes recorded requests with their recorded external responses and timing
+/// <c>stratarec replay</c>: re-executes recorded requests with their recorded external responses and timing
 /// decisions, and prints each result with its diff against the recorded one, the node decisions and parameters that
 /// changed, and every piece of data the bundle lacked. It replays on a workspace (<c>-c</c>), on a release manifest
 /// (<c>--manifest</c>), or, given only <c>--store</c>, each bundle on the manifest it recorded (<see cref="ReplayEngines"/>).
@@ -42,7 +42,7 @@ internal static class ReplayCommand
         var explain = new Option<string[]>("--explain")
         {
             Description = $"Explain these candidates in each replayed run (entity ids of the pipeline's key type, comma or space separated, at most " +
-                          $"{DebugOptions.MaxExplainIds}; design 13.3).",
+                          $"{DebugOptions.MaxExplainIds}).",
             AllowMultipleArgumentsPerToken = true,
         };
         var command = new Command("replay", "Replay recorded requests on a workspace, a release manifest, or (with only --store) the manifest each bundle " +

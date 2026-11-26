@@ -4,7 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace StrataRec.Core.Values;
 
 /// <summary>
-/// Typed request inputs supplied by the host (design 3.4), validated against the pipeline's <c>request_schema</c>.
+/// Typed request inputs supplied by the host, validated against the pipeline's <c>request_schema</c>.
 /// Appear in expressions as <c>ctx.request.&lt;name&gt;</c>.
 /// </summary>
 public sealed class RequestInputs : IReadOnlyDictionary<string, ScalarValue>

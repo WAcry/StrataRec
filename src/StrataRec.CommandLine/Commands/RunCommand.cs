@@ -17,7 +17,7 @@ namespace StrataRec.CommandLine.Commands;
 /// <c>stratarec run</c>: executes a request locally against a workspace (fixtures via <c>memory@1</c> and friends) or a
 /// release manifest, and prints the result as JSON (<see cref="RecResultJson"/>, the document a service answers with):
 /// items, assignment and trigger record, with <c>--trace</c> every node's outcome and the node that produced each output
-/// column, and with <c>--explain</c> the explained candidates (design 13.3). <c>--format text</c> prints the same for
+/// column, and with <c>--explain</c> the explained candidates. <c>--format text</c> prints the same for
 /// reading (<see cref="ResultText"/>).
 /// </summary>
 /// <remarks>
@@ -52,7 +52,7 @@ internal static class RunCommand
         var logs = new Option<bool>("--logs", "-l") { Description = "Include the log batches the request's taps captured (nothing is written)." };
         var record = new Option<string?>("--record")
         {
-            Description = "Also write a replay bundle of the request to this file (design 13.4); the command that replays it is printed.",
+            Description = "Also write a replay bundle of the request to this file; the command that replays it is printed.",
         };
         var deadline = new Option<int?>("--deadline-ms")
         {
@@ -70,7 +70,7 @@ internal static class RunCommand
         var explain = new Option<string[]>("--explain")
         {
             Description = $"Explain these candidates (entity ids of the pipeline's key type, comma or space separated, at most {DebugOptions.MaxExplainIds}): " +
-                          "the result's 'explanation' says where each ended and its state after every node (design 13.3).",
+                          "the result's 'explanation' says where each ended and its state after every node.",
             AllowMultipleArgumentsPerToken = true,
         };
         var format = CommonOptions.Format();
@@ -165,7 +165,7 @@ internal static class RunCommand
             }
         }
 
-        // The engine loads the local feature tables (design 6.6) and instances the plan binds before it serves; disposing
+        // The engine loads the local feature tables and instances the plan binds before it serves; disposing
         // it stops their sources.
         await using var engine = new RecEngine(reference.PlanEnvironment());
         var (diagnostics, notices) = await LoadAsync(engine, reference, release, environment, pipelineId, cancellationToken).ConfigureAwait(false);

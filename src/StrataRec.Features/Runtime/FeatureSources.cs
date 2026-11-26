@@ -14,7 +14,7 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Runtime;
 
-/// <summary>How a feature source's values reach a request (design 6.6); chosen by the binding's <c>mode</c>.</summary>
+/// <summary>How a feature source's values reach a request; chosen by the binding's <c>mode</c>.</summary>
 public enum SupplyMode : byte
 {
     /// <summary>Fetched from the source's connector by every request that needs them (the default).</summary>
@@ -24,7 +24,7 @@ public enum SupplyMode : byte
     Local,
 
     /// <summary>
-    /// Read through two cache tiers in front of the connector (design 6.6 <c>cache</c>): an in-process table that the
+    /// Read through two cache tiers in front of the connector: an in-process table that the
     /// misses are written back to, then optionally a distributed cache shared by the instances; I/O only on a miss.
     /// </summary>
     Cache,
@@ -98,7 +98,7 @@ public sealed class GroupSupply
 }
 
 /// <summary>
-/// What a <see cref="SupplyMode.Cache"/> group has besides its connector and table (design 6.6 <c>cache</c>): its policy
+/// What a <see cref="SupplyMode.Cache"/> group has besides its connector and table: its policy
 /// (the table's <see cref="LocalTableCache"/>), the distributed tier if any, and how its misses are chunked and bounded.
 /// </summary>
 public sealed class CacheSupply
@@ -131,7 +131,7 @@ public sealed class CacheSupply
     public IoTarget Io { get; }
 }
 
-/// <summary>The local table a <see cref="FetchGroup"/> reads (design 6.6), and where each of the group's fields is in it.</summary>
+/// <summary>The local table a <see cref="FetchGroup"/> reads, and where each of the group's fields is in it.</summary>
 public sealed class LocalGroupTable
 {
     internal LocalGroupTable(LocalTableSpec spec, LocalFeatureTable table, int[] tableFields)
@@ -151,7 +151,7 @@ public sealed class LocalGroupTable
 }
 
 /// <summary>
-/// Turns the bindings of a plan's feature sources into how each (source, entity) group is supplied (design 6.4, 6.6):
+/// Turns the bindings of a plan's feature sources into how each (source, entity) group is supplied:
 /// one <see cref="GroupSupply"/> per group. The one place that knows what each supply mode needs: which binding settings
 /// belong to it, what it requires, and what it takes from the binary (a connector; an update source and a local table).
 /// </summary>
@@ -240,7 +240,7 @@ internal sealed class FeatureSourceResolver
     /// <summary>
     /// The supply of one (source, entity) group of <paramref name="supply"/>'s source; null (diagnosed) when the group
     /// cannot be supplied that way: a connector that does not support the entity's key layout, fields a table cannot hold.
-    /// A table holds any key layout (design 6.6): <c>max_bytes</c> bounds its memory, and a cache's TTL and eviction its churn.
+    /// A table holds any key layout: <c>max_bytes</c> bounds its memory, and a cache's TTL and eviction its churn.
     /// </summary>
     public GroupSupply? Group(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members) => !Pairs(supply, entity) ? null : supply.Mode switch
     {
@@ -570,7 +570,7 @@ internal sealed class FeatureSourceResolver
         _resolver.Acquire<IFeatureSourceConnector>(BindingKind.Connector, sourceName, binding.Connector, binding.Settings);
 
     /// <summary>
-    /// A cache binding (design 6.6 <c>cache</c>): the connector it is in front of, <c>max_bytes</c> of its tables, and its
+    /// A cache binding: the connector it is in front of, <c>max_bytes</c> of its tables, and its
     /// <c>cache</c> settings, the distributed tier included. Every problem of the binding is reported at once.
     /// </summary>
     private SourceSupply? ResolveCache(string sourceName, FeatureSourceBinding binding, string pointer)

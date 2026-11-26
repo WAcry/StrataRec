@@ -9,7 +9,7 @@ using StrataRec.Redis;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>The checks of a <c>cache</c> binding (design 6.4, 6.6): every problem at its pointer, with a hint.</summary>
+/// <summary>The checks of a <c>cache</c> binding: every problem at its pointer, with a hint.</summary>
 public class CacheBindingTests
 {
     [Fact]

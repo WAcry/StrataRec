@@ -11,7 +11,7 @@ using JsonSchema = global::Json.Schema.JsonSchema;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The schemas editors check workspace files with (design 9.1), checked as an editor checks them: by a JSON Schema
+/// The schemas editors check workspace files with, checked as an editor checks them: by a JSON Schema
 /// 2020-12 validator (JsonSchema.Net) against real documents. Every file of the samples and of <c>init</c> validates
 /// against the schema it names in <c>$schema</c>; a misspelled config key, a value of the wrong type, a missing required
 /// member and an unknown operator are rejected, as the engine rejects them; an experiment's arms are accepted as merge
@@ -250,7 +250,7 @@ public sealed class EditorSchemaTests
     [Fact]
     public void TheBindingsSchema_ListsTheTypesThisBinaryHas_WithoutRejectingOthers()
     {
-        // A binding of a type the binary lacks is valid while no pipeline uses it (design 6.4): the types are suggestions.
+        // A binding of a type the binary lacks is valid while no pipeline uses it: the types are suggestions.
         var path = Path.Combine(Samples, "home_feed", "bindings", "local.jsonc");
         var bindings = Assert.IsType<JsonObject>(Jsonc.Parse(File.ReadAllText(path), path));
         bindings["services"]!["remote"] = new JsonObject { ["client"] = "triton@1", ["endpoint"] = "triton:8001" };

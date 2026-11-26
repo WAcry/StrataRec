@@ -7,7 +7,7 @@ namespace StrataRec.CommandLine;
 
 /// <summary>
 /// The <c>stratarec</c> commands (init, validate, build, publish, explain-plan, run, replay, compare, diff, schema,
-/// operators; design 10.1, 13.4), run with the components of the binary that calls them. The <c>stratarec</c> tool is one caller,
+/// operators), run with the components of the binary that calls them. The <c>stratarec</c> tool is one caller,
 /// with the components it ships; a host binary is another, with its own, so a workspace that names the host's operators,
 /// connectors or clients is validated, explained, run and replayed by the binary that serves it, and <c>schema</c>,
 /// <c>operators</c> and the schemas <c>init</c> writes describe that binary's components.

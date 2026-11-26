@@ -18,7 +18,7 @@ internal enum RegFile : byte
 }
 
 /// <summary>
-/// One vectorized operation computing a whole column of one IR node (design 7.7, backend A). Instructions are
+/// One vectorized operation computing a whole column of one IR node (backend A). Instructions are
 /// immutable after lowering and shared by concurrent evaluations; all per-call state lives in the <see cref="Frame"/>.
 /// </summary>
 /// <remarks>
@@ -570,7 +570,7 @@ internal sealed class IntBinaryInstr(IrOp op, ExprType type, Opnd left, Opnd rig
         }
     }
 
-    /// <summary>Integer remainder (design 7.5): a lane with a zero divisor is missing (the binder made the node nullable).</summary>
+    /// <summary>Integer remainder: a lane with a zero divisor is missing (the binder made the node nullable).</summary>
     private void Mod(scoped ref Frame f, Span<long> dst)
     {
         Opnd a = Operands[0], b = Operands[1];
@@ -802,7 +802,7 @@ internal sealed class CompareInstr(IrOp op, TypeKind operandKind, ExprType type,
     }
 }
 
-/// <summary>Kleene <c>&amp;&amp;</c> / <c>||</c> on packed bits (design 7.4: false &amp;&amp; missing = false).</summary>
+/// <summary>Kleene <c>&amp;&amp;</c> / <c>||</c> on packed bits (false &amp;&amp; missing = false).</summary>
 internal sealed class LogicInstr(IrOp op, ExprType type, Opnd left, Opnd right) : Instr(type, left, right)
 {
     public override void Execute(ref Frame f)
@@ -872,7 +872,7 @@ internal sealed class HasInstr(ExprType type, Opnd operand) : Instr(type, operan
 }
 
 /// <summary><c>c ? a : b</c> for value kinds: both branches are computed and selected by the condition mask
-/// (design 7.7); a missing condition gives a missing result.</summary>
+///; a missing condition gives a missing result.</summary>
 internal sealed class SelectInstr(ExprType type, Opnd condition, Opnd then, Opnd otherwise) : Instr(type, condition, then, otherwise)
 {
     public override void Execute(ref Frame f)

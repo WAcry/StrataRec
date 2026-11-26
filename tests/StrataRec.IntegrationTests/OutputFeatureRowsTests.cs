@@ -13,7 +13,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The features an output column reads are filled for the returned rows only (design 3.4): the first <c>limit</c> rows of
+/// The features an output column reads are filled for the returned rows only: the first <c>limit</c> rows of
 /// the final order. A row that is not returned is read by nobody, so nothing is fetched or computed for it, and a value of
 /// it that cannot be served does not fail the request (external assessment: with candidates 1 and 2 and a limit of 1, item
 /// 2's derived value failed the request although only item 1 was returned).

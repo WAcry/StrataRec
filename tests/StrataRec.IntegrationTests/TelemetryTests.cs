@@ -15,13 +15,13 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Metrics (design 13.1) recorded by a home_feed request, read back through a <c>MeterListener</c>.</summary>
+/// <summary>Metrics recorded by a home_feed request, read back through a <c>MeterListener</c>.</summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class MetricsTests
 {
     internal static readonly string[] Arms = { "exp_quality_weight/strong", "exp_mmr_diversity/mmr" };
 
-    /// <summary>Every tag key a metric may carry (design 13.1 rule 1); ids are never among them.</summary>
+    /// <summary>Every tag key a metric may carry; ids are never among them.</summary>
     private static readonly HashSet<string> BoundedTagKeys = new(StringComparer.Ordinal)
     {
         StrataRecTags.Pipeline, StrataRecTags.Node, StrataRecTags.Source, StrataRecTags.IoRole, StrataRecTags.IoTarget,
@@ -436,7 +436,7 @@ public sealed class MetricsTests
     internal static void FailAuthorStore(string root) =>
         SampleBindings.Rebind(root, "author_store", $$"""{ "connector": "memory@1", "data": {}, "fail": true, "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
 
-    /// <summary>Design 13.1 label rules: bounded string tags only; durations never carry outcomes; arms only on request-level instruments.</summary>
+    /// <summary>The label rules: bounded string tags only; durations never carry outcomes; arms only on request-level instruments.</summary>
     private static void AssertTagRules(IEnumerable<Measured> measurements)
     {
         foreach (var m in measurements)
@@ -462,7 +462,7 @@ public sealed class MetricsTests
         m.Tags.Count == expected.Count && expected.All(e => m.Tags.TryGetValue(e.Key, out var v) && Equals(v, e.Value));
 }
 
-/// <summary>Spans (design 13.2): node and I/O children exist only for recorded requests.</summary>
+/// <summary>Spans: node and I/O children exist only for recorded requests.</summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class TracingTests
 {
@@ -607,7 +607,7 @@ public sealed class TracingTests
     }
 }
 
-/// <summary>Event logs (design 13.2): request-level failures become one summary per (event, subject) and window.</summary>
+/// <summary>Event logs: request-level failures become one summary per (event, subject) and window.</summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class EventLogTests
 {

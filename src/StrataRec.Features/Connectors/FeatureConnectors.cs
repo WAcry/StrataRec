@@ -7,7 +7,7 @@ using StrataRec.Core.Types;
 namespace StrataRec.Features.Connectors;
 
 /// <summary>
-/// The keys of one fetch (design 6.5): <see cref="Count"/> keys, each a tuple of <see cref="PartCount"/> parts in the
+/// The keys of one fetch: <see cref="Count"/> keys, each a tuple of <see cref="PartCount"/> parts in the
 /// entity's declared order, deduplicated as tuples. Key i is staging row i.
 /// </summary>
 /// <remarks>
@@ -20,7 +20,7 @@ namespace StrataRec.Features.Connectors;
 /// buffer (each varying part a run of <c>stride</c> keys, then one entry per shared part), and a chunk is a window of
 /// it. Pass it on by <c>in</c> where the signature allows (async methods cannot take <c>in</c> parameters); a copy is four
 /// words.</para>
-/// <para>The keys live in the request's pooled buffers (design 4.8): they stay valid until the connector call completes,
+/// <para>The keys live in the request's pooled buffers: they stay valid until the connector call completes,
 /// even past the request's own timeout, and not after. A connector that needs keys later must copy them.</para>
 /// </remarks>
 public readonly struct EntityKeyBatch
@@ -230,7 +230,7 @@ public readonly record struct CompiledFieldBinding(string Field, int FieldIndex,
 
 /// <summary>
 /// Dense staging area the connector decodes into, ordered by the batch's keys and independent of table rows
-/// (design 6.5).
+///.
 /// </summary>
 /// <remarks>
 /// <para>Validity is tracked per field and key, and every (field, key) starts as missing: only values the connector
@@ -298,7 +298,7 @@ public interface IFeatureBatchWriter
     /// with no widened copy. A setter for another element type than the field's is a connector bug and throws. A
     /// fixed-length field (<c>list&lt;float32,64&gt;</c>, an embedding) takes the same setter; a value of another length is
     /// data, not a bug: the engine replaces it with the feature's default (or missing) where it stores it, and counts it
-    /// (<c>column_out_of_range_total</c>, design 4.3), while recordings and the cache keep what the connector wrote.</remarks>
+    /// (<c>column_out_of_range_total</c>), while recordings and the cache keep what the connector wrote.</remarks>
     void SetBoolList(int fieldIndex, int keyIndex, ReadOnlySpan<bool> value);
 
     /// <summary>Writes a <c>list&lt;int32&gt;</c> field value.</summary>
@@ -329,7 +329,7 @@ public enum FetchOutcome : byte
     /// <summary>Some keys failed (e.g. one of several batched commands timed out); readers become Degraded.</summary>
     Partial,
 
-    /// <summary>The source failed; nodes reading its features fail (design 6.7, layer 2).</summary>
+    /// <summary>The source failed; nodes reading its features fail (layer 2).</summary>
     Failed,
 }
 
@@ -340,7 +340,7 @@ public readonly record struct FetchStatus(FetchOutcome Outcome, int FailedKeys =
     public static FetchStatus Failed(string error) => new(FetchOutcome.Failed, 0, error);
 }
 
-/// <summary>A storage-specific feature fetcher (design 6.5). Implementations must be thread-safe.</summary>
+/// <summary>A storage-specific feature fetcher. Implementations must be thread-safe.</summary>
 public interface IFeatureSourceConnector
 {
     /// <summary>Connector type and version, e.g. <c>redis_hash@1</c>.</summary>
@@ -358,10 +358,9 @@ public interface IFeatureSourceConnector
     /// <paramref name="writer"/>. Must not write after it returns or after cancellation is acknowledged.
     /// </summary>
     /// <remarks>
-    /// <paramref name="fields"/> holds only the fields the request needs at this point (late materialization,
-    /// design 6.8), so the same source may be called again later for other fields of the same keys. The engine stops
+    /// <paramref name="fields"/> holds only the fields the request needs at this point (late materialization), so the same source may be called again later for other fields of the same keys. The engine stops
     /// waiting at the source timeout or the request deadline, whichever comes first, and discards whatever the call
-    /// writes afterwards; the writer's buffers stay rented until the call actually completes (design 4.8). The same
+    /// writes afterwards; the writer's buffers stay rented until the call actually completes. The same
     /// holds for the keys of <paramref name="keys"/>: neither may be kept past completion.
     /// </remarks>
     ValueTask<FetchStatus> FetchAsync(

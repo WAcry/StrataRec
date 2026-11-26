@@ -13,7 +13,7 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A request's configuration override (<see cref="DebugOptions.ConfigOverride"/>, design 13.3): a merge patch of the pipeline
+/// A request's configuration override (<see cref="DebugOptions.ConfigOverride"/>): a merge patch of the pipeline
 /// applied after the request's arms, compiled for that request alone, on the home_feed sample.
 /// </summary>
 public sealed class ConfigOverrideTests

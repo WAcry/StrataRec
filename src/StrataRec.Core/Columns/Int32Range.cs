@@ -2,7 +2,7 @@ namespace StrataRec.Core.Columns;
 
 /// <summary>
 /// Range checks and conversions between int64 values (the expression type of every integer) and int32 storage
-/// (<c>int32</c>, <c>list&lt;int32&gt;</c>, design 4.3).
+/// (<c>int32</c>, <c>list&lt;int32&gt;</c>).
 /// </summary>
 /// <remarks>
 /// Narrowing never wraps: a writer first checks that the value fits and otherwise applies the out-of-range rule

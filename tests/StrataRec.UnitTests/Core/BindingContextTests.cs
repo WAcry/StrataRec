@@ -6,7 +6,7 @@ using StrataRec.Core.Memory;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>
-/// What a factory gets for a binding (design 6.4): local file settings resolved by one rule, credentials only by
+/// What a factory gets for a binding: local file settings resolved by one rule, credentials only by
 /// reference, and secret values that never show in a message. Settings members of type <see cref="LocalFile"/> and
 /// <see cref="SecretReference"/> are bound by the context (<see cref="BindingSettings"/>).
 /// </summary>

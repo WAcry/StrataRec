@@ -4,7 +4,7 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Pipeline.Operators;
 
-/// <summary>What a node may do to the candidate table and the request's columns (design 5.2). An operator declares a set.</summary>
+/// <summary>What a node may do to the candidate table and the request's columns. An operator declares a set.</summary>
 [Flags]
 public enum Effects : byte
 {
@@ -26,16 +26,16 @@ public enum Effects : byte
     RequestWriter = 16,
 }
 
-/// <summary>Static description of an operator type and version (design 5.2, 10.4).</summary>
+/// <summary>Static description of an operator type and version.</summary>
 /// <param name="Name">Operator name, e.g. <c>TopK</c>.</param>
-/// <param name="Version">Major version; breaking config changes bump it (design 10.4).</param>
+/// <param name="Version">Major version; breaking config changes bump it.</param>
 /// <param name="Effects">
 /// Effects the operator may exercise, enforced: row changes at run time by <see cref="OperatorContext"/>, column writes at
 /// compile time by <see cref="OperatorCompileContext.TryWriteColumn"/> (<see cref="Effects.ColumnWriter"/>, or
 /// <see cref="Effects.RowSource"/> for the columns of the rows it appends), request column writes at compile time by
 /// <see cref="OperatorCompileContext.TryWriteRequestColumn"/> (<see cref="Effects.RequestWriter"/>).
 /// </param>
-/// <param name="ConfigType">C# type of the node's <c>config</c>; the single source of its JSON Schema (design 9.1).</param>
+/// <param name="ConfigType">C# type of the node's <c>config</c>; the single source of its JSON Schema.</param>
 /// <param name="Description">One-line description for docs and tooling.</param>
 public sealed record OperatorDescriptor(string Name, int Version, Effects Effects, Type ConfigType, string Description)
 {
@@ -50,7 +50,7 @@ public sealed record OperatorDescriptor(string Name, int Version, Effects Effect
 /// <param name="Name">Column name without the <c>col.</c> prefix.</param>
 public readonly record struct ColumnRef(int LogicalId, int FixedSlot, ColumnType Type, string Name);
 
-/// <summary>A column an operator writes: a slot owned by its node, committed on success (design 4.6).</summary>
+/// <summary>A column an operator writes: a slot owned by its node, committed on success.</summary>
 public readonly record struct OutputColumn(int LogicalId, int Slot, ColumnType Type, string Name);
 
 /// <summary>
@@ -78,13 +78,13 @@ public abstract class Operator
 
     /// <summary>
     /// Maximum rows a <see cref="Effects.RowSource"/> operator may append for a request with these parameters
-    /// (design 4.8: row limits bound per-request memory). Other operators return 0.
+    /// (row limits bound per-request memory). Other operators return 0.
     /// </summary>
     public virtual int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => 0;
 
     /// <summary>
     /// The named inputs an operator sends (input name → the expression it evaluates for it), for log taps'
-    /// <c>columns_from</c> (design 6.9, 8.5): a tap's <c>columns_from</c> expands to these expressions, evaluated where the
+    /// <c>columns_from</c>: a tap's <c>columns_from</c> expands to these expressions, evaluated where the
     /// tap is, so it logs what they read at the tap's point, not a copy of what the calls were sent (a node after the model
     /// that rewrites a column it reads changes what an output tap logs). The model operators give theirs; a custom
     /// operator that maps expressions to a service's inputs may too.
@@ -107,7 +107,7 @@ public interface IOperatorFactory
     Operator? Compile(OperatorCompileContext context);
 }
 
-/// <summary>Operators available in this binary, keyed by <c>Name@Version</c> (design 10.4 capabilities).</summary>
+/// <summary>Operators available in this binary, keyed by <c>Name@Version</c>.</summary>
 public sealed class OperatorRegistry
 {
     private readonly Dictionary<string, IOperatorFactory> _factories = new(StringComparer.Ordinal);
@@ -132,7 +132,7 @@ public sealed class OperatorRegistry
         }
     }
 
-    /// <summary>A registry with the core standard operator library (design 16.1).</summary>
+    /// <summary>A registry with the core standard operator library.</summary>
     public static OperatorRegistry CreateDefault() => new OperatorRegistry()
         .Add(new Standard.MultiSourceRecallFactory())
         .Add(new Standard.PipelineSourceFactory())

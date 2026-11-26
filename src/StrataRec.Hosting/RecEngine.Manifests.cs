@@ -6,7 +6,7 @@ using StrataRec.Hosting.Manifests;
 namespace StrataRec.Hosting;
 
 /// <summary>
-/// What became of a release manifest a node tried to load (design 10.3 item 5): the status a node reports to the release
+/// What became of a release manifest a node tried to load: the status a node reports to the release
 /// controller, which decides from it whether to go on.
 /// </summary>
 public enum ManifestLoadStatus
@@ -21,7 +21,7 @@ public enum ManifestLoadStatus
     Stale,
 
     /// <summary>
-    /// It requires capabilities this binary does not provide (design 10.4 item 2), listed in
+    /// It requires capabilities this binary does not provide, listed in
     /// <see cref="ManifestLoadResult.MissingCapabilities"/>. The current plan stays, and the node does not look for an older
     /// manifest itself: which release to serve instead is the controller's decision.
     /// </summary>
@@ -29,7 +29,7 @@ public enum ManifestLoadStatus
 
     /// <summary>
     /// It, or an artifact it names, could not be read, or its plan does not compile, or what the plan binds failed to load
-    /// (design 10.3 item 4): the diagnostics say which. The current plan stays. Unlike the other statuses, retrying may
+    ///: the diagnostics say which. The current plan stays. Unlike the other statuses, retrying may
     /// succeed (a store not yet consistent, a table source that was down).
     /// </summary>
     Rejected,
@@ -37,7 +37,7 @@ public enum ManifestLoadStatus
 
 /// <summary>
 /// The outcome of <see cref="RecEngine.LoadManifestAsync"/>: what a node logs and reports to the release controller
-/// (design 10.3 item 5, <see cref="IReleaseStatusReporter"/>).
+/// (<see cref="IReleaseStatusReporter"/>).
 /// </summary>
 /// <param name="PipelineId">The manifest's pipeline.</param>
 /// <param name="ManifestId">The manifest's content id.</param>
@@ -100,7 +100,7 @@ public sealed record ManifestLoadResult(
 public sealed partial class RecEngine
 {
     /// <summary>
-    /// Loads a release manifest by the rules of a serving node (design 10.3, 10.4), in this order: one not newer than what its pipeline serves
+    /// Loads a release manifest by the rules of a serving node, in this order: one not newer than what its pipeline serves
     /// (the same manifest included) is <see cref="ManifestLoadStatus.Stale"/>; one that requires capabilities the binary
     /// lacks is <see cref="ManifestLoadStatus.Incompatible"/>. None of these downloads or compiles anything. Otherwise the
     /// artifacts are read from <paramref name="store"/> and the plan is loaded as by <see cref="LoadAsync"/> at the

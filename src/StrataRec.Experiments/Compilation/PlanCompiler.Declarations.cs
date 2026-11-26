@@ -5,7 +5,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
 
-/// <summary>Whether the names the nodes of an arm combination bind are declared there, and as the unified schema declares them (design 11.5 check 3, 16.2).</summary>
+/// <summary>Whether the names the nodes of an arm combination bind are declared there, and as the unified schema declares them.</summary>
 internal sealed partial class UnifiedCompilation
 {
     private HashSet<string>? _extraLeaves;

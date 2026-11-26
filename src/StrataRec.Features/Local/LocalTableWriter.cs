@@ -10,7 +10,7 @@ using StrataRec.Core.Types;
 namespace StrataRec.Features.Local;
 
 /// <summary>
-/// The single writer of a <see cref="LocalFeatureTable"/> (design 6.6, item 3): applies updates, deletes, checkpoints
+/// The single writer of a <see cref="LocalFeatureTable"/>: applies updates, deletes, checkpoints
 /// and reloads, and compacts. Every call must come from one thread at a time (the update source's consumer, or the cache's
 /// background writer); readers never wait for it.
 /// </summary>
@@ -371,7 +371,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         ReprobeIfMoved(newKey);
         var oldPage = OldRecord(out oldOffset);
 
-        // Unwritten fields keep their old values (design 6.6 local item 3). String codes are copied as they are: the old
+        // Unwritten fields keep their old values. String codes are copied as they are: the old
         // record is in this version, so its codes belong to this version's dictionary.
         if (oldPage is not null)
         {
@@ -752,7 +752,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// The automatic compaction (design 6.6 local item 4): when what a compaction would free, superseded records and the
+    /// The automatic compaction: when what a compaction would free, superseded records and the
     /// dictionary strings only they referenced, is more than half of the records and strings. Strings count because a string
     /// costs its record only a 4-byte code: a field rewritten with long new values (a description) supersedes small records
     /// and leaves its old values in the dictionary, which the records alone would not show. It runs after a write that
@@ -778,7 +778,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// The one compaction routine (design 6.6, item 4): builds, aside, a version holding the current record (or
+    /// The one compaction routine: builds, aside, a version holding the current record (or
     /// tombstone) of every key, and returns it unpublished. Nothing else changes, so a caller that finds the result too
     /// large just drops it; <see cref="Install"/> makes it current.
     /// </summary>
@@ -1122,7 +1122,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 }
 
 /// <summary>
-/// One update being built (design 6.6): the source decodes each field straight into it, then commits. Unwritten fields
+/// One update being built: the source decodes each field straight into it, then commits. Unwritten fields
 /// keep the key's old values. A value-type handle, so building a record allocates nothing.
 /// </summary>
 /// <remarks>
@@ -1176,7 +1176,7 @@ public readonly struct RecordBuilder
     /// <remarks>One setter per element type, as for scalars: the field's declared element type decides, and a setter of
     /// another element type throws and names the right one. A fixed-length field (<c>list&lt;float32,64&gt;</c>) is set
     /// the same way; a list of another length is stored as given, and a read replaces it like a request's other writers
-    /// do (design 4.3), so one bad record of a load does not stop the load.</remarks>
+    /// do, so one bad record of a load does not stop the load.</remarks>
     public void SetBoolList(int field, ReadOnlySpan<bool> value) => Writer.SetList(_token, field, value, nameof(SetBoolList));
 
     /// <summary>A <c>list&lt;int32&gt;</c> value.</summary>

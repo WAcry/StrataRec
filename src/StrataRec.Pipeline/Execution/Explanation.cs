@@ -4,7 +4,7 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Pipeline.Execution;
 
-/// <summary>What one node did with an explained candidate (design 13.3).</summary>
+/// <summary>What one node did with an explained candidate.</summary>
 public enum ExplainStepKind : byte
 {
     /// <summary>The node ran and succeeded; the step has the candidate's state after it.</summary>
@@ -12,7 +12,7 @@ public enum ExplainStepKind : byte
 
     /// <summary>
     /// The node's attempt failed (<see cref="ExplainStep.Detail"/> says why), so the table is as it was before the attempt
-    /// (design 4.6): nothing it did to the candidate stays. A fallback that then ran has a step of its own.
+    ///: nothing it did to the candidate stays. A fallback that then ran has a step of its own.
     /// </summary>
     RolledBack,
 
@@ -36,7 +36,7 @@ public enum ExplainChange : byte
     Dropped,
 }
 
-/// <summary>Where an explained candidate ended (design 13.3), so "why is it not in the result" has a one-word answer.</summary>
+/// <summary>Where an explained candidate ended, so "why is it not in the result" has a one-word answer.</summary>
 public enum ExplainVerdict : byte
 {
     /// <summary>In the result, at <see cref="CandidateExplanation.Rank"/>.</summary>
@@ -58,7 +58,7 @@ public enum ExplainVerdict : byte
 /// <summary>A named value in an explanation: a column's value for the candidate, or a term an operator reports.</summary>
 public readonly record struct ExplainValue(string Name, ScalarValue Value);
 
-/// <summary>An explained candidate's state after one node (design 13.3 items 1–3).</summary>
+/// <summary>An explained candidate's state after one node.</summary>
 public sealed class ExplainStep
 {
     /// <summary>The node that ran (or was skipped): a position's node, or the fallback node that ran in its place.</summary>
@@ -116,7 +116,7 @@ public sealed class CandidateExplanation
 /// <summary>The explanations of one run, in the order the ids were asked for (each id once).</summary>
 public sealed class RunExplanation
 {
-    /// <summary>The pipeline whose run is explained: the requested one, or the fallback pipeline that served (design 5.6).</summary>
+    /// <summary>The pipeline whose run is explained: the requested one, or the fallback pipeline that served.</summary>
     public required string PipelineId { get; init; }
 
     public required IReadOnlyList<CandidateExplanation> Candidates { get; init; }

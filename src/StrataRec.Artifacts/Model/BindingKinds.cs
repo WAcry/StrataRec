@@ -2,7 +2,7 @@ using StrataRec.Artifacts.Json;
 
 namespace StrataRec.Artifacts.Model;
 
-/// <summary>The kinds of instance a bindings artifact names (design 6.4): each is one contract, named by one selector in one place.</summary>
+/// <summary>The kinds of instance a bindings artifact names: each is one contract, named by one selector in one place.</summary>
 public enum BindingKind : byte
 {
     /// <summary><c>services.*.client</c>: a service client (a model, a recall source, any service); the settings are the entry's other members.</summary>

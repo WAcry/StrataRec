@@ -17,7 +17,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The sample's local <c>author_store</c> (design 6.6) through the engine: readiness and plan swaps, load failures,
+/// The sample's local <c>author_store</c> through the engine: readiness and plan swaps, load failures,
 /// restarts, replay, and the same results as fetching the same records.
 /// </summary>
 public sealed class LocalTableEngineTests
@@ -290,7 +290,7 @@ public sealed class LocalTableEngineTests
 }
 
 /// <summary>
-/// A local read's recording holds the records the read used (design 13.4), also when the table's writer updates them in
+/// A local read's recording holds the records the read used, also when the table's writer updates them in
 /// place while the request runs: a pinned version sees such an update on its next lookup.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]

@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec diff</c> (design 13.4 item 3): the semantic difference of two configurations by arm combination, from
+/// <c>stratarec diff</c>: the semantic difference of two configurations by arm combination, from
 /// their compiled plans (<see cref="PlanDiff"/>), instead of a line diff of their JSON. Exit codes follow diff(1).
 /// </summary>
 internal static class DiffCommand
@@ -134,7 +134,7 @@ internal static class DiffCommand
         return diff.HasDifferences ? 1 : 0;
     }
 
-    /// <summary>The manifest <paramref name="to"/> names as <c>previous</c> (design 10.2: kept for audit and diff), in the same store.</summary>
+    /// <summary>The manifest <paramref name="to"/> names as <c>previous</c> (kept for audit and diff), in the same store.</summary>
     private static async Task<ConfigRef?> PreviousAsync(PlanEnvironment provided, ConfigRef to, string? store, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
         if (!to.IsManifest)

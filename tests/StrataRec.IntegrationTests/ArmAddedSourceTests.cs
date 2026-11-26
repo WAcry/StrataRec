@@ -8,9 +8,9 @@ using static StrataRec.IntegrationTests.CombinationLimitTests;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A recall source an arm adds with its quota alone (<c>params.recall_quotas.aaa</c>, design 11.8): the unified plan's
+/// A recall source an arm adds with its quota alone (<c>params.recall_quotas.aaa</c>): the unified plan's
 /// recall knows every source any arm gives a quota, and a request without the arm has no quota for it. It must serve each
-/// combination as a compile of that combination does, which has never heard of the source (design 16.2, review 52).
+/// combination as a compile of that combination does, which has never heard of the source (review 52).
 /// </summary>
 public sealed class ArmAddedSourceTests
 {

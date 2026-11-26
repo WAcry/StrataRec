@@ -10,8 +10,8 @@ using StrataRec.Core.Bindings;
 namespace StrataRec.Artifacts.Model;
 
 /// <summary>
-/// Binds a binding's own settings to the C# type its factory declares (design 6.4), as an operator's config is bound
-/// (design 9.1): snake_case, strict, and every mistake worded by <see cref="JsonBindingErrors"/> (an unknown member with
+/// Binds a binding's own settings to the C# type its factory declares, as an operator's config is bound
+///: snake_case, strict, and every mistake worded by <see cref="JsonBindingErrors"/> (an unknown member with
 /// the one it resembles, a value of the wrong kind, a missing required member with what it means), here as a
 /// <see cref="BindingException"/> at its pointer within the binding, with a hint. The settings type is also the single
 /// source of the settings' JSON Schema (<see cref="ArtifactSchemas"/>): what an editor checks is what binds, and no

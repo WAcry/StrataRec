@@ -232,7 +232,7 @@ public sealed class RequestColumnTests
     }
 
     /// <summary>
-    /// A node's <c>when</c> reads no parameter (design 5.5, review of 1102725): an experiment overriding it would decide
+    /// A node's <c>when</c> reads no parameter (review of 1102725): an experiment overriding it would decide
     /// whether the node runs before its trigger is recorded, which only a running node's read records.
     /// </summary>
     [Fact]

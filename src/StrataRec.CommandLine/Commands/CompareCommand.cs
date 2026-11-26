@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec compare</c>: the recorded-mode comparison of design 10.8. Replays every bundle on a baseline and a
+/// <c>stratarec compare</c>: the recorded-mode comparison. Replays every bundle on a baseline and a
 /// candidate configuration (workspaces or release manifests, <see cref="ConfigRef"/>) and reports latency, error and
 /// empty rates, Top-K overlap, Kendall τ, the score distribution change and the feature-missing rate, plus every gap the
 /// candidate hit. Bundles of aborted requests are not replayed: they are counted apart, outside both sides' metrics.
@@ -36,7 +36,7 @@ internal static class CompareCommand
         };
         var topK = new Option<int>("--top-k", "-k") { Description = "K of the Top-K overlap.", DefaultValueFactory = _ => 10 };
         var score = new Option<string>("--score") { Description = "Output column whose distribution is compared.", DefaultValueFactory = _ => "score" };
-        var command = new Command("compare", "Replay recorded requests on a baseline and a candidate configuration and compare the results (design 10.8). " +
+        var command = new Command("compare", "Replay recorded requests on a baseline and a candidate configuration and compare the results. " +
             "Bundles of aborted requests are not replayed, since they have no result to compare: they are counted apart and left out of both sides' " +
             "metrics. Exits with 2 when a bundle could not be compared (unreadable, or no configuration to replay it on) or no bundle was compared; " +
             "the report is printed either way.")
@@ -262,7 +262,7 @@ internal static class CompareCommand
 
     private static void WriteText(TextWriter output, ComparisonReport report, string baseline, string candidate)
     {
-        output.WriteLine($"Recorded-mode comparison of {Output.Count(report.Bundles, "bundle")} (design 10.8); I/O is answered from the recordings.");
+        output.WriteLine($"Recorded-mode comparison of {Output.Count(report.Bundles, "bundle")}; I/O is answered from the recordings.");
         output.WriteLine(report.Status switch
         {
             "ok" => $"status: ok, {report.Compared} compared",

@@ -16,7 +16,7 @@ namespace StrataRec.Hosting.Bindings;
 public sealed record BindingLoadFailure(string Code, string Artifact, string Pointer, string Message, string? Hint, Exception Exception);
 
 /// <summary>
-/// Everything one plan binds (design 6.4, 6.6), taken from its <see cref="BindingHost"/>: the plan compiles with it
+/// Everything one plan binds, taken from its <see cref="BindingHost"/>: the plan compiles with it
 /// (<see cref="IPlanBindings"/>), the engine waits for its loads before serving the plan, and each request of the plan
 /// enters it, so the plan's instances outlive the plan by as long as anything of its requests can still call them.
 /// </summary>
@@ -31,7 +31,7 @@ public sealed record BindingLoadFailure(string Code, string Artifact, string Poi
 /// returns. A signature lookup is a user too, from the moment it is asked until the client answered, so retiring the
 /// lease (which cancels the lookup) never disposes a client inside its <see cref="IServiceClient.DescribeAsync"/>. One
 /// count holds them all, so no order of these events releases an instance a user still holds.</para>
-/// <para><b>Model signatures</b> (design 6.9). <see cref="Signature"/> asks a client once per (model, version) and keeps
+/// <para><b>Model signatures</b>. <see cref="Signature"/> asks a client once per (model, version) and keeps
 /// the answer for the lease's compiles. An answer that needs the client loaded or I/O is pending during the first compile;
 /// <see cref="CompileAsync{T}"/> then waits for every pending answer, concurrently and within
 /// <see cref="BindingHostOptions.LoadTimeout"/>, and compiles the plan again, which counts.</para>

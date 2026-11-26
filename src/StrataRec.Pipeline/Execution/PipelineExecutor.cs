@@ -42,7 +42,7 @@ internal sealed class PipelineRequest
 
     public required TimeSpan Deadline { get; init; }
 
-    /// <summary>Request seed; defaults to a hash of the request id (design 3.4).</summary>
+    /// <summary>Request seed; defaults to a hash of the request id.</summary>
     public long? Seed { get; init; }
 
     /// <summary>Request time in Unix milliseconds; defaults to now.</summary>
@@ -57,7 +57,7 @@ internal sealed class PipelineRequest
     /// <summary>
     /// Whether the run may send its log batches (taps and the <c>$experiments</c> record) to the log pipeline, the
     /// persistent logs: the engine sets it for traffic, and not for a run whose arms or configuration a debugger forced,
-    /// whose logs are captured, or that replays (design 8.6 item 6, 14 item 6), since what they log is not what the
+    /// whose logs are captured, or that replays, since what they log is not what the
     /// served configuration did for the request and must not reach experiment analysis or training data. Separate from
     /// <see cref="CaptureLogs"/>: a forced run that captures nothing writes nothing either. False by default, so a run
     /// writes only when asked to; a replay never writes.
@@ -65,14 +65,14 @@ internal sealed class PipelineRequest
     public bool WriteLogs { get; init; }
 
     /// <summary>
-    /// Record the run for a replay bundle (design 13.4): <see cref="PipelineResult.Recording"/> then holds every external
+    /// Record the run for a replay bundle: <see cref="PipelineResult.Recording"/> then holds every external
     /// call, node decision and the sampling. Requests that do not record pay nothing for the feature but a null check per
     /// external call and node.
     /// </summary>
     public bool Record { get; init; }
 
     /// <summary>
-    /// Receives the run's recording on every exit (design 13.4): with the result when the run returns, and before the
+    /// Receives the run's recording on every exit: with the result when the run returns, and before the
     /// exception propagates when it is aborted (cancelled by the caller, or a defect), so the engine can still deliver the
     /// request's bundle (<c>DebugOptions.OnRecording</c>). Setting it records the run. Called once, on the request's
     /// thread; an exception it throws is reported as an event and does not change the run's outcome.
@@ -84,7 +84,7 @@ internal sealed class PipelineRequest
     public Action<ReplayRunRecord>? OnRecording { get; init; }
 
     /// <summary>
-    /// Replay a recorded run instead of calling sources and models (design 13.4): external calls are answered from the
+    /// Replay a recorded run instead of calling sources and models: external calls are answered from the
     /// recording and timing decisions come from it, not from the clock. A replay never writes persistent logs and records
     /// no metrics, event logs or spans. Use <see cref="RunReplay.Deadline"/> as <see cref="Deadline"/>.
     /// </summary>
@@ -99,7 +99,7 @@ internal sealed class PipelineRequest
     public IRequestEndObserver? OnEnd { get; init; }
 
     /// <summary>
-    /// Candidates to explain (design 13.3): <see cref="PipelineResult.Explanation"/> then has, for each, its state after
+    /// Candidates to explain: <see cref="PipelineResult.Explanation"/> then has, for each, its state after
     /// every node. At most <see cref="ExplainTargets.MaxCount"/>, or the run fails as with invalid inputs; repeated ids are
     /// explained once, and an id of the other key type is never found (a host checks ids first with
     /// <see cref="ExplainTargets.Check"/>). Null, the default, costs nothing but a null check per node.
@@ -115,7 +115,7 @@ internal sealed class PipelineRequest
     /// <summary>For a run a node of another pipeline called: who called, for its log batches (<see cref="Logging.LogBatch.CalledBy"/>).</summary>
     public string? CalledBy { get; init; }
 
-    /// <summary>The seed of a request that does not set one: a hash of its id (design 3.4).</summary>
+    /// <summary>The seed of a request that does not set one: a hash of its id.</summary>
     public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
 
@@ -140,10 +140,10 @@ internal sealed class PipelineResult
     /// <summary>Assigned arms as <c>experiment/arm</c>.</summary>
     public required IReadOnlyList<string> AssignedArms { get; init; }
 
-    /// <summary>Experiments whose modifications were actually reached (design 12.6).</summary>
+    /// <summary>Experiments whose modifications were actually reached.</summary>
     public required IReadOnlyList<string> TriggeredExperiments { get; init; }
 
-    /// <summary>Output column → node that produced it (lineage, design 8.7).</summary>
+    /// <summary>Output column → node that produced it (lineage).</summary>
     public required IReadOnlyDictionary<string, string> ColumnProducers { get; init; }
 
     public double ElapsedMs { get; init; }
@@ -153,7 +153,7 @@ internal sealed class PipelineResult
 
     /// <summary>
     /// Number of values that did not fit the int32 storage of an <c>int32</c> or <c>list&lt;int32&gt;</c> column or feature
-    /// and were replaced by its default or marked missing (metric <c>stratarec.column.out_of_range</c>, design 4.3).
+    /// and were replaced by its default or marked missing (metric <c>stratarec.column.out_of_range</c>).
     /// Counted where the value is written, so it includes writes of nodes that later failed.
     /// </summary>
     public long OutOfRangeValues { get; init; }
@@ -167,10 +167,10 @@ internal sealed class PipelineResult
     /// <summary>Log batches of the request when <see cref="PipelineRequest.CaptureLogs"/> was set.</summary>
     public IReadOnlyList<Logging.LogBatch> LogBatches { get; set; } = Array.Empty<Logging.LogBatch>();
 
-    /// <summary>The run's recording when <see cref="PipelineRequest.Record"/> was set (design 13.4).</summary>
+    /// <summary>The run's recording when <see cref="PipelineRequest.Record"/> was set.</summary>
     public ReplayRunRecord? Recording { get; set; }
 
-    /// <summary>The explained candidates when <see cref="PipelineRequest.ExplainIds"/> was set (design 13.3); null otherwise.</summary>
+    /// <summary>The explained candidates when <see cref="PipelineRequest.ExplainIds"/> was set; null otherwise.</summary>
     public RunExplanation? Explanation { get; set; }
 }
 
@@ -221,7 +221,7 @@ internal sealed class RequestState
     /// <summary>Batches captured so far; null when no tap is active for the request.</summary>
     public List<Logging.LogBatch>? Batches { get; set; }
 
-    /// <summary>Request hash shared by all row priorities (design 8.4).</summary>
+    /// <summary>Request hash shared by all row priorities.</summary>
     public long RequestHash => Logging.CoordinatedSampling.RequestHash(RequestId);
 
     public List<NodeOutcome> Outcomes { get; } = new();
@@ -234,7 +234,7 @@ internal sealed class RequestState
     /// <summary>Windowed failure summaries and source health; null when the executor has no logger.</summary>
     public RequestEventLog? Events { get; init; }
 
-    /// <summary>The request span is recorded: create node spans (design 13.2).</summary>
+    /// <summary>The request span is recorded: create node spans.</summary>
     public bool TraceNodes { get; init; }
 
     /// <summary>Span of the position being run, when <see cref="TraceNodes"/>.</summary>
@@ -253,13 +253,13 @@ internal sealed class RequestState
     /// <summary>The fallback node run for the current position, for its span's variant and experiment attribution.</summary>
     public CompiledNode? PositionFallback { get; set; }
 
-    /// <summary>Records the run for a replay bundle; null unless the request asked for it (design 13.4).</summary>
+    /// <summary>Records the run for a replay bundle; null unless the request asked for it.</summary>
     public RunRecorder? Recorder { get; init; }
 
     /// <summary>Answers external calls and timing decisions from a recording; null unless the request is a replay.</summary>
     public RunReplay? Replay { get; init; }
 
-    /// <summary>Follows the candidates the request explains; null unless it asked to (design 13.3).</summary>
+    /// <summary>Follows the candidates the request explains; null unless it asked to.</summary>
     public CandidateExplainer? Explainer { get; init; }
 
     /// <summary>Runs the pipelines the run's nodes call (<see cref="PipelineRequest.Calls"/>); null when nothing does.</summary>
@@ -323,7 +323,7 @@ internal sealed class RequestState
     }
 
     /// <summary>
-    /// The slot a node writes an output into now (design 4.6): its own, except that a row source writes the rows it
+    /// The slot a node writes an output into now: its own, except that a row source writes the rows it
     /// appends into the column's current version once a node has committed one. Its rows then join the values readers
     /// already see, and nothing is committed for the column: a row source after a scorer can give the rows it injects a
     /// score in the same column. Before any version, and after a row source's, this is the row sources' shared version.
@@ -335,16 +335,16 @@ internal sealed class RequestState
 }
 
 /// <summary>
-/// Executes an <see cref="ExecutionPlan"/> for one request (design 3.3): walk the timeline in order, pick each
+/// Executes an <see cref="ExecutionPlan"/> for one request: walk the timeline in order, pick each
 /// position's variant, make its features available, run it with its time budget, and commit outputs only on success.
-/// CPU work runs on the request's logical thread; concurrency comes from overlapping I/O (design 5.4).
+/// CPU work runs on the request's logical thread; concurrency comes from overlapping I/O.
 /// </summary>
 /// <remarks>
-/// <para>Internal: <c>RecEngine</c> is the one host API (design 3.4). It owns what a run needs around it (the plan's
+/// <para>Internal: <c>RecEngine</c> is the one host API. It owns what a run needs around it (the plan's
 /// binding lease, assignment, the fallback pipeline, bundles, the request span and request-level metrics), which a
 /// second, lower-level way to run plans would have had to repeat or leave out. Tests reach the executor through
 /// <c>InternalsVisibleTo</c>.</para>
-/// <para>Observability (design 13): node, source, model, column and memory metrics go to <see cref="StrataRecMetrics"/>.
+/// <para>Observability: node, source, model, column and memory metrics go to <see cref="StrataRecMetrics"/>.
 /// Node and I/O spans are created only under a recorded request span (<see cref="StrataRecTracing.IsRecording"/>),
 /// which <c>RecEngine</c> starts; request-level metrics are recorded there too.</para>
 /// </remarks>
@@ -357,7 +357,7 @@ internal sealed class PipelineExecutor
     /// <param name="pool">Buffer pool for request memory.</param>
     /// <param name="logs">Where tap batches and trigger records go; null disables persistent logging.</param>
     /// <param name="loggerFactory">
-    /// Receives windowed summaries of request-level failures and source health changes (design 13.2); null logs nothing.
+    /// Receives windowed summaries of request-level failures and source health changes; null logs nothing.
     /// </param>
     public PipelineExecutor(IBufferPool? pool = null, Logging.LogPipeline? logs = null, ILoggerFactory? loggerFactory = null)
         : this(pool, logs, loggerFactory is null ? null : new RequestEventLog(loggerFactory.CreateLogger<PipelineExecutor>()))
@@ -391,7 +391,7 @@ internal sealed class PipelineExecutor
         }
 
         // A replay is not traffic: no metrics, event logs or spans (its timings are not real, and the recorded request
-        // was already counted), and never a persistent log (design 8.6 item 6).
+        // was already counted), and never a persistent log.
         var replay = request.Replay;
         var events = replay is null ? _events : null;
         var memory = new RequestMemory(_pool, request.OnEnd, events, plan.PipelineId, request.RequestId); // from here the run owns telling OnEnd
@@ -432,7 +432,7 @@ internal sealed class PipelineExecutor
                 }
 
                 // Only one of a position's primary and fallback appends rows that stay: a failed attempt gives its rows back
-                // (CandidateTable.Rollback), so the fallback reuses them (design 4.8, 5.6).
+                // (CandidateTable.Rollback), so the fallback reuses them.
                 var limit = RowLimit(node, parameters);
                 if (node.OnFailure == FailurePolicy.Fallback && plan.SelectFallback(node, request.Arms) is { } fallback)
                 {
@@ -528,7 +528,7 @@ internal sealed class PipelineExecutor
         {
             // Cancelled by the caller (or a defect): nobody receives a result, but the request was assigned, may have
             // been exposed, and may have captured taps. Dropping those records would remove slow or failing requests
-            // from experiment analysis, biased by arm (design 8.8, 12.6). Request memory is still held here.
+            // from experiment analysis, biased by arm. Request memory is still held here.
             var reason = ex switch
             {
                 OperationCanceledException => "cancelled by the caller",
@@ -577,7 +577,7 @@ internal sealed class PipelineExecutor
             fetcher?.EndRequest();
 
             // In-flight connector calls hold the memory themselves; buffers return when the last one finishes. Those
-            // still running now outlive the request (design 4.8).
+            // still running now outlive the request.
             var rented = memory.RentedBytes;
             var abandoned = memory.Release();
             if (replay is null)
@@ -635,7 +635,7 @@ internal sealed class PipelineExecutor
 
         if (node.MinRemainingMs is not null || state.Recorder is not null)
         {
-            // A replay compares with the time that was left in the recording, not with its own clock (design 5.7 item 5).
+            // A replay compares with the time that was left in the recording, not with its own clock.
             var remainingMs = state.Replay?.RemainingMs(node.NodeId) ?? state.Remaining.TotalMilliseconds;
             state.Recorder?.Remaining(remainingMs);
             if (node.MinRemainingMs is { } minRemaining && remainingMs < minRemaining)
@@ -653,7 +653,7 @@ internal sealed class PipelineExecutor
             state.Table.Rows.Capture(entered);
         }
 
-        // Unless the node says otherwise, it leaves its fallback the time the fallback may take (design 5.7).
+        // Unless the node says otherwise, it leaves its fallback the time the fallback may take.
         var reserve = node.OnFailure == FailurePolicy.Fallback
             ? node.FallbackReserveMs ?? state.Plan.SelectFallback(node, state.Arms)?.TimeoutMs ?? 0
             : 0;
@@ -677,14 +677,14 @@ internal sealed class PipelineExecutor
             return null;
         }
 
-        // Failed: apply on_failure (design 5.6).
+        // Failed: apply on_failure.
         switch (node.OnFailure)
         {
             case FailurePolicy.Skip:
                 Record(state, node, NodeOutcomeKind.Failed, attempt.Detail + " (skipped)", null, started, rowsIn);
                 return null;
             case FailurePolicy.Fallback when state.Plan.SelectFallback(node, state.Arms) is { } fallback:
-                // A fallback site triggers only when the fallback is invoked, which is independent of the arm (design 12.6).
+                // A fallback site triggers only when the fallback is invoked, which is independent of the arm.
                 state.PositionFallback = fallback;
                 if (state.Plan.Fallbacks.TryGetValue(fallback.NodeId, out var fallbackSlot))
                 {
@@ -729,7 +729,7 @@ internal sealed class PipelineExecutor
         Failed,
     }
 
-    /// <summary>Runs one attempt of a node; for a request that explains candidates, also records the attempt's step (design 13.3).</summary>
+    /// <summary>Runs one attempt of a node; for a request that explains candidates, also records the attempt's step.</summary>
     private static ValueTask<Attempt> RunNodeAsync(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
     {
         return state.Explainer is null ? AttemptAsync(state, node, reserveMs, cancellationToken) : Explained(state, node, reserveMs, cancellationToken);
@@ -757,7 +757,7 @@ internal sealed class PipelineExecutor
 
     private static async ValueTask<Attempt> AttemptAsync(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
     {
-        // Runtime protection (design 11.5 step 4): a required input with no producer skips the node.
+        // Runtime protection: a required input with no producer skips the node.
         foreach (var logical in node.RequiredOutputs)
         {
             if (!state.Bindings.IsProduced(logical))
@@ -771,7 +771,7 @@ internal sealed class PipelineExecutor
             return new Attempt(AttemptKind.Skipped, $"input request column '{unwritten}' was not written");
         }
 
-        // What the node reads but waits for itself (a recall source's query, design 5.4) is not filled here.
+        // What the node reads but waits for itself (a recall source's query) is not filled here.
         var fill = await state.Features.EnsureAsync(node.FilledFeatures.AsSpan(), cancellationToken).ConfigureAwait(false);
         if (fill.Failed)
         {
@@ -783,7 +783,7 @@ internal sealed class PipelineExecutor
         if (state.Replay is { } replay)
         {
             // Whether the attempt had time to start, and whether it ran out of time, comes from the recording: the replay
-            // makes the same timeout, fallback and skip decisions without waiting (design 5.7 item 5, 13.4).
+            // makes the same timeout, fallback and skip decisions without waiting.
             var recorded = replay.NextAttempt(node.NodeId);
             if (recorded?.Timing == ReplayTiming.DeadlineExceeded)
             {
@@ -809,7 +809,7 @@ internal sealed class PipelineExecutor
             return new Attempt(AttemptKind.Failed, "deadline exceeded");
         }
 
-        // A failed attempt leaves the table exactly as it was (design 4.6): the ranking, no rows and no slots of its own, so
+        // A failed attempt leaves the table exactly as it was: the ranking, no rows and no slots of its own, so
         // nothing that runs or reads later (the fallback, a pinned col.x@node, the output) sees what it wrote, just as in a
         // replay, which skips a recorded timeout instead of running it.
         var checkpoint = state.Table.Checkpoint();
@@ -843,7 +843,7 @@ internal sealed class PipelineExecutor
             try
             {
                 // The operator is about to read its parameters: that is exposure, whether it then succeeds or fails
-                // (design 12.6). Recording only successes would bias triggered analysis against arms that fail more.
+                //. Recording only successes would bias triggered analysis against arms that fail more.
                 MarkParamTriggers(state, node);
                 await node.Operator.ExecuteAsync(context).ConfigureAwait(false);
                 if (budget.RanOut)
@@ -899,14 +899,14 @@ internal sealed class PipelineExecutor
     private static string ExceptionName(Exception ex) => ex.GetType().Name;
 
     /// <summary>
-    /// Validates and publishes a successful node's outputs (design 4.3, 4.6): non-finite values take the column default
+    /// Validates and publishes a successful node's outputs: non-finite values take the column default
     /// or become missing; non-nullable columns must then have a value on every live row.
     /// </summary>
     /// <remarks>
     /// A row nobody wrote is missing (<see cref="CandidateTable"/>), so a row the node skipped, a column it never wrote,
     /// and a row an earlier row source appended without this column all fail the node here. The default does not fill
     /// them: it replaces only values that cannot be stored (non-finite, out of int32 range), which the writer and the
-    /// sanitizing above already did, so a missing producer never turns into the default (design 4.6).
+    /// sanitizing above already did, so a missing producer never turns into the default.
     /// </remarks>
     /// <remarks>
     /// A request column the node writes is published the same way, as one value (<see cref="CommitRequestColumns"/>): every
@@ -1012,8 +1012,8 @@ internal sealed class PipelineExecutor
     /// checks rule it out for every arm combination. A trigger site evaluates another arm's condition in a request of
     /// this arm, which they do not check, but there too the column has been written: when the arms differ in its
     /// producer (one adds, deletes or moves it), the producer's position is an earlier site of the experiment, which
-    /// triggered it already, and a triggered experiment's conditions are not evaluated (design 12.6). Like the skip of a
-    /// node whose input column was not produced (design 11.5 step 4), this is the runtime's own protection: a defect skips
+    /// triggered it already, and a triggered experiment's conditions are not evaluated. Like the skip of a
+    /// node whose input column was not produced, this is the runtime's own protection: a defect skips
     /// a node rather than aborting the request. A tap reading such a column logs it missing.
     /// </summary>
     internal static string? MissingRequestColumn(RequestState state, ReadOnlySpan<int> reads)
@@ -1067,7 +1067,7 @@ internal sealed class PipelineExecutor
 
     /// <summary>
     /// After a fetch barrier, starts fetches for every node up to and including the next barrier, plus their fallbacks
-    /// (design 5.4, 6.8). Nodes already known to be skipped by <c>when</c> are left out; a <c>when</c> that reads a request
+    ///. Nodes already known to be skipped by <c>when</c> are left out; a <c>when</c> that reads a request
     /// column is not known yet (the nodes before its own may still write it), so its node's features are prefetched.
     /// </summary>
     private static async ValueTask PrefetchSegmentAsync(RequestState state, int position, CancellationToken cancellationToken)
@@ -1137,7 +1137,7 @@ internal sealed class PipelineExecutor
         return !value.IsMissing && value.AsBool();
     }
 
-    /// <summary>`when` and site conditions read request-level values only; make sure the context features they read are present (design 5.5).</summary>
+    /// <summary>`when` and site conditions read request-level values only; make sure the context features they read are present.</summary>
     private static ValueTask EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)
     {
         List<int>? contextFeatures = null;
@@ -1158,7 +1158,7 @@ internal sealed class PipelineExecutor
     }
 
     /// <summary>
-    /// Records the experiments reaching this position triggers (design 12.6): an assigned experiment is triggered when one
+    /// Records the experiments reaching this position triggers: an assigned experiment is triggered when one
     /// of its arms, together with the request's arms in the other layers, has a node here whose <c>when</c> holds (or that
     /// has none, or is the fallback being invoked). Every arm is looked at, whichever the request has, so the decision is
     /// the same for all of them, control included; the other layers' arms are the request's own, since another layer may
@@ -1225,8 +1225,8 @@ internal sealed class PipelineExecutor
     }
 
     /// <summary>
-    /// Records a position's outcome: in the result, as node metrics (design 13.1: duration and rows by node only, the
-    /// category on a counter), in the windowed failure summaries (design 13.2), and on the node span.
+    /// Records a position's outcome: in the result, as node metrics (duration and rows by node only, the
+    /// category on a counter), in the windowed failure summaries, and on the node span.
     /// </summary>
     private static void Record(RequestState state, CompiledNode node, NodeOutcomeKind category, string? detail, string? producedBy, long started, int rowsIn)
     {
@@ -1320,7 +1320,7 @@ internal sealed class PipelineExecutor
             AddTriggered(state, node.ParamExperiments, ref triggered);
 
             // A fallback that served (or was tried) carries its own variant and experiments: an arm may change only the
-            // fallback's definition, and its trigger must show on the position that ran it (design 12.6).
+            // fallback's definition, and its trigger must show on the position that ran it.
             if (state.PositionFallback is { } fallback)
             {
                 span.SetTag(StrataRecTags.FallbackVariant, fallback.DefinitionHash);
@@ -1404,7 +1404,7 @@ internal sealed class PipelineExecutor
         var rows = FirstRows(state.Table, limit);
         var count = rows.Length;
 
-        // Output expressions may read features (design 3.4); make sure they are present for the returned rows, and for
+        // Output expressions may read features; make sure they are present for the returned rows, and for
         // those only: no one reads the others, so nothing is fetched or computed for them, and a value of theirs that
         // cannot be served does not fail the request. A feature that failed on a returned row (a source failure, or a
         // non-nullable derived int32 that did not fit) cannot be served as typed: expressions compiled against it skip
@@ -1595,12 +1595,12 @@ internal sealed class PipelineExecutor
     /// <summary>
     /// Completes every batch with the request's final record (assignment, triggers, node outcomes) and either returns
     /// them with the result (<see cref="Returns"/>) or hands them to the log pipeline (<see cref="Writes"/>), or neither.
-    /// Experiment requests also emit a durable trigger record (design 8.8, 12.6).
+    /// Experiment requests also emit a durable trigger record.
     /// </summary>
     private void PublishLogs(RequestState state, PipelineRequest request, PipelineResult result, bool returned)
     {
         // Only a run the engine lets write reaches the persistent logs, also when it is aborted and nobody receives a
-        // capture (design 8.6 item 6): forced arms and configurations must not contaminate experiment data.
+        // capture: forced arms and configurations must not contaminate experiment data.
         var capture = returned && Returns(request);
         if (!capture && !Writes(request))
         {

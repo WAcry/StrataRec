@@ -7,7 +7,7 @@ using StrataRec.Hosting.Replay;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The sample's <c>item_country</c> entity (design 6.2), keyed by <c>["col.entity_id", "ctx.request.country"]</c>: a local
+/// The sample's <c>item_country</c> entity, keyed by <c>["col.entity_id", "ctx.request.country"]</c>: a local
 /// table loaded from a snapshot whose keys are arrays, read by the fusion multiplier, recorded with its keys' parts and
 /// replayed by tuple.
 /// </summary>

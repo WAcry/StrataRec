@@ -10,8 +10,7 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A failed row-source attempt leaves the candidate table as it was before the attempt (design 4.6,
-/// <c>CandidateTable.Rollback</c>): the rows the primary appended are gone, so the fallback may append the same ids and
+/// A failed row-source attempt leaves the candidate table as it was before the attempt (<c>CandidateTable.Rollback</c>): the rows the primary appended are gone, so the fallback may append the same ids and
 /// gets their capacity back (the table reserves max(primary, fallback) per position), and a replay, which skips a primary
 /// recorded as timed out instead of running it, serves the same result. Rows filtered out earlier stay known, so no row
 /// source revives them.

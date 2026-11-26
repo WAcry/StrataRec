@@ -394,7 +394,7 @@ public sealed class PipelineCallResult
 internal readonly record struct PipelineCallRequest(
     PipelineCall Call, RequestInputs? Given, RequestInputs CallerInputs, int Sequence, long Seed, long TimeMs, TimeSpan Budget);
 
-/// <summary>Runs the pipelines a run's nodes call: the engine's, since it serves them (design 3.4).</summary>
+/// <summary>Runs the pipelines a run's nodes call: the engine's, since it serves them.</summary>
 internal interface IPipelineCalls
 {
     /// <summary>

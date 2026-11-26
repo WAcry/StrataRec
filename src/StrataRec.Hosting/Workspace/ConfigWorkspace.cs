@@ -10,11 +10,11 @@ namespace StrataRec.Hosting.Workspace;
 /// <param name="Value">The strictly deserialized model.</param>
 /// <param name="Document">The parsed JSON (comments and the editor's top-level <c>$schema</c> stripped); what is canonicalized and hashed.</param>
 /// <param name="Path">Path relative to the workspace root, used as the diagnostic artifact name.</param>
-/// <param name="ContentId">RFC 8785 + sha256 content id (design 9.1).</param>
+/// <param name="ContentId">RFC 8785 + sha256 content id.</param>
 public sealed record LoadedArtifact<T>(T Value, JsonNode Document, string Path, string ContentId);
 
 /// <summary>
-/// A configuration repository checked out on disk (design 10.1): the source of truth that CI validates and builds,
+/// A configuration repository checked out on disk: the source of truth that CI validates and builds,
 /// and what <c>stratarec run</c> executes locally.
 /// </summary>
 /// <remarks>
@@ -177,7 +177,7 @@ public sealed class ConfigWorkspace
 
     /// <summary>
     /// The pipelines to compile or load for <paramref name="ids"/>: those, then the <c>fallback_pipeline</c> of each that is
-    /// not among them, since a fallback that is not served silently never happens (design 5.6). A fallback not in the
+    /// not among them, since a fallback that is not served silently never happens. A fallback not in the
     /// workspace is an error at the pipeline's <c>/fallback_pipeline</c>, and the pipeline is added to
     /// <paramref name="unresolved"/>. Loading and <c>validate</c> both use it, so they agree on what is served.
     /// </summary>
@@ -231,7 +231,7 @@ public sealed class ConfigWorkspace
     /// bindings, tables and which experiments run in which layer. Without a release file the baseline is
     /// compiled alone against <c>bindings/&lt;environment&gt;.jsonc</c>.
     /// </summary>
-    /// <param name="extraExperiments">Experiments to include although the release file does not list them (draft preview, design 10.7), as id → layer.</param>
+    /// <param name="extraExperiments">Experiments to include although the release file does not list them (draft preview), as id → layer.</param>
     public PlanCompileRequest? CreateCompileRequest(
         string pipelineId,
         string environment,

@@ -5,7 +5,7 @@ namespace StrataRec.Core.Diagnostics;
 
 /// <summary>
 /// The engine's one <see cref="System.Diagnostics.Metrics.Meter"/> and one
-/// <see cref="System.Diagnostics.ActivitySource"/>, both named <see cref="Name"/> (design 13.1, 13.2). Hosts subscribe
+/// <see cref="System.Diagnostics.ActivitySource"/>, both named <see cref="Name"/>. Hosts subscribe
 /// by name (OpenTelemetry: <c>AddMeter("StrataRec")</c>, <c>AddSource("StrataRec")</c>); the engine references no
 /// exporter.
 /// </summary>
@@ -26,7 +26,7 @@ public static class StrataRecTelemetry
 }
 
 /// <summary>
-/// Tag (attribute) keys. Metric tags take only bounded values (design 13.1 rule 1); span-only keys may carry ids.
+/// Tag (attribute) keys. Metric tags take only bounded values; span-only keys may carry ids.
 /// </summary>
 /// <remarks>
 /// Keys are namespaced with <c>stratarec.</c> so they cannot collide with labels the collection pipeline adds itself
@@ -65,13 +65,13 @@ public static class StrataRecTags
     /// <summary>Entity of a local feature table (with <see cref="Source"/>: one table per source and entity).</summary>
     public const string Entity = "stratarec.entity";
 
-    /// <summary>Tier of a <c>cache</c> source (design 6.6): <c>local</c> (the in-process table) or <c>distributed</c>.</summary>
+    /// <summary>Tier of a <c>cache</c> source: <c>local</c> (the in-process table) or <c>distributed</c>.</summary>
     public const string CacheTier = "stratarec.cache.tier";
 
-    /// <summary>Outcome category; only on counters, never on durations (design 13.1 rule 2).</summary>
+    /// <summary>Outcome category; only on counters, never on durations.</summary>
     public const string Outcome = "stratarec.outcome";
 
-    /// <summary>Experiment arm (<c>experiment/arm</c>); only on request-level metrics (design 13.1 rule 4).</summary>
+    /// <summary>Experiment arm (<c>experiment/arm</c>); only on request-level metrics.</summary>
     public const string Arm = "stratarec.arm";
 
     public const string Column = "stratarec.column";
@@ -93,7 +93,7 @@ public static class StrataRecTags
     /// <summary>Pipeline that served the result: the requested one or its fallback pipeline.</summary>
     public const string ServedBy = "stratarec.served_by";
 
-    /// <summary>Content hash of the selected node variant's merged definition (design 12.3).</summary>
+    /// <summary>Content hash of the selected node variant's merged definition.</summary>
     public const string Variant = "stratarec.node.variant";
 
     /// <summary>On a node span: the fallback node that served the position.</summary>
@@ -107,7 +107,7 @@ public static class StrataRecTags
     /// </summary>
     public const string OutcomeDetail = "stratarec.outcome.detail";
 
-    /// <summary>Content hash of the fallback node variant that served (design 12.3).</summary>
+    /// <summary>Content hash of the fallback node variant that served.</summary>
     public const string FallbackVariant = "stratarec.node.fallback.variant";
 
     public const string ArmsAssigned = "stratarec.arms.assigned";
@@ -126,7 +126,7 @@ public static class StrataRecTags
 }
 
 /// <summary>
-/// Span helpers (design 13.2). A request gets one span; node and external-I/O child spans exist only while that span is
+/// Span helpers. A request gets one span; node and external-I/O child spans exist only while that span is
 /// recorded (<see cref="Activity.Recorded"/>), so a request the host's sampler drops creates no node-level objects.
 /// </summary>
 public static class StrataRecTracing

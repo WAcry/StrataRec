@@ -4,7 +4,7 @@ using StrataRec.Features.Bindings;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>The one rule for sharing an instance across plans (design 6.4): what is part of a binding's identity.</summary>
+/// <summary>The one rule for sharing an instance across plans: what is part of a binding's identity.</summary>
 public sealed class BindingSpecTests
 {
     private static readonly object Factory = new();

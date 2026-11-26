@@ -8,7 +8,7 @@ using StrataRec.Hosting.Manifests;
 namespace StrataRec.UnitTests.Hosting;
 
 /// <summary>
-/// <see cref="RecEngine.LoadManifestAsync"/>: a node's rules for a release manifest (design 10.3, 10.4), each status, what
+/// <see cref="RecEngine.LoadManifestAsync"/>: a node's rules for a release manifest, each status, what
 /// is downloaded for it, and that whatever is not applied leaves the current plan serving.
 /// </summary>
 public sealed class ManifestLoadTests : IDisposable

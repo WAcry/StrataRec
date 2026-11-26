@@ -14,7 +14,7 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Recording requests into replay bundles and replaying them on the home_feed sample (design 13.4).</summary>
+/// <summary>Recording requests into replay bundles and replaying them on the home_feed sample.</summary>
 public sealed class ReplayTests
 {
     internal static readonly string[] ControlArms = { "exp_freshness_calibration/control", "exp_mmr_diversity/control", "exp_quality_weight/control" };
@@ -77,7 +77,7 @@ public sealed class ReplayTests
         Assert.Equal(ReplayTiming.Ran, Assert.Single(recall.Attempts).Timing);
 
         // Candidate calls with the returned candidates, feature calls with the values per key, model outputs per row.
-        // popular is sent at once; two_tower once the user's embedding its query reads is stored (design 5.4), with it.
+        // popular is sent at once; two_tower once the user's embedding its query reads is stored, with it.
         var recalls = run.ServiceCalls.FindAll(c => c.Role == "recall");
         Assert.Equal(new[] { ("popular", 19), ("two_tower", 40) }, recalls.Select(c => (c.Service, c.Ids!.Value.GetArrayLength())));
         Assert.All(recalls, c => Assert.Equal(("ok", 1, null), (c.Status, c.InputDigests.Count, c.Keys))); // a query is its digest; no items sent
@@ -194,7 +194,7 @@ public sealed class ReplayTests
     public async Task NonFiniteValues_TheRequestObserved_AreRecorded_AndReplayExactly()
     {
         // Item 1's embedding has a component beyond float32: memory@1 stages it as +∞, and the bundle records it so; the
-        // stored feature, a float list holding a non-finite element, is missing as a whole (design 4.3), in the replay too.
+        // stored feature, a float list holding a non-finite element, is missing as a whole, in the replay too.
         // An output expression divides zero by zero, which is not sanitized on the way to the caller, so a bundle that
         // wrote it as null would replay another value.
         var host = HomeFeedTestHost.LoadModified(root =>

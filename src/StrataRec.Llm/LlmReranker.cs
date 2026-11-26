@@ -8,7 +8,7 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
-/// <summary>Config of <c>LlmReranker@1</c> (design 5.9).</summary>
+/// <summary>Config of <c>LlmReranker@1</c>.</summary>
 public sealed class LlmRerankerConfig
 {
     /// <summary>Logical model name, bound per environment.</summary>
@@ -49,13 +49,13 @@ public sealed class LlmRerankerConfig
     [AllowedValues("keep", "drop")]
     public string Unlisted { get; init; } = "keep";
 
-    /// <summary>The most tokens the model may generate (design 5.9 rule 2), passed with the call.</summary>
+    /// <summary>The most tokens the model may generate, passed with the call.</summary>
     public int MaxOutputTokens { get; init; } = 256;
 }
 
 /// <summary>
 /// <c>LlmReranker@1</c> (RowOrder; RowFilter with <c>"unlisted": "drop"</c>): reranks the leading <c>window</c> rows in
-/// the order a generative model lists them, from prompts rendered with Mustache templates (design 5.9).
+/// the order a generative model lists them, from prompts rendered with Mustache templates.
 /// </summary>
 /// <remarks>
 /// <para>n = min(window, rows); no call when n is 0. Each prompt is rendered once with the first n rows, and the model is

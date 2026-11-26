@@ -8,7 +8,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// The fetcher's call-site hook (design 13.4): any connector is recorded with the values it wrote per key, and a
+/// The fetcher's call-site hook: any connector is recorded with the values it wrote per key, and a
 /// replaying hook answers calls without the connector being called.
 /// </summary>
 public class FeatureCallHookTests

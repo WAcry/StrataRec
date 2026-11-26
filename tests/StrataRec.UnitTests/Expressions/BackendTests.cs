@@ -7,7 +7,7 @@ using StrataRec.Expressions.Vectorized;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>The vectorized backend: row domains, reads, destinations, allocation and thread safety (design 7.7).</summary>
+/// <summary>The vectorized backend: row domains, reads, destinations, allocation and thread safety.</summary>
 [Collection(AllocationMeasurement.Name)]
 public class BackendTests
 {

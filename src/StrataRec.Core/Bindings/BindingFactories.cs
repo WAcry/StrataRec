@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace StrataRec.Core.Bindings;
 
 /// <summary>
-/// Creates the instances a binding of one type names (design 6.4): a binding's selector (<c>client</c>, <c>connector</c>,
+/// Creates the instances a binding of one type names: a binding's selector (<c>client</c>, <c>connector</c>,
 /// <c>store</c>, <c>source</c>) names <see cref="Type"/>, and the factory turns the binding's own settings into an instance
 /// of <typeparamref name="TInstance"/>, the contract its section serves. Every kind of binding has this one factory shape,
 /// so adding a kind adds no factory interface, base class or registry.
@@ -25,7 +25,7 @@ public interface IBindingFactory<out TInstance>
     string Type { get; }
 
     /// <summary>
-    /// The C# type the binding's own settings bind to: the single source of their JSON Schema (design 9.1);
+    /// The C# type the binding's own settings bind to: the single source of their JSON Schema;
     /// <see cref="NoSettings"/> for a type that takes none.
     /// </summary>
     Type SettingsType { get; }

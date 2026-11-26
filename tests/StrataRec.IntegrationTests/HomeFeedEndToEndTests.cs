@@ -22,7 +22,7 @@ public sealed class HomeFeedEndToEndTests
     {
         var compilation = HomeFeedTestHost.Load(SampleTiming.AsWritten).Compile();
 
-        // Its one interaction (calibration writes score.final at 470, MMR's added node reads it at 550, design 11.5) is
+        // Its one interaction (calibration writes score.final at 470, MMR's added node reads it at 550) is
         // recorded as reviewed in exp_mmr_diversity: InteractionWarningTests has the warning without it.
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         Assert.Empty(compilation.Diagnostics);
@@ -87,7 +87,7 @@ public sealed class HomeFeedEndToEndTests
     [Fact]
     public async Task UnifiedPlanMatchesThePlainCompileOfTheMergedConfigForEveryArmCombination()
     {
-        // The differential anchor of design 16.2.
+        // The differential anchor.
         var host = HomeFeedTestHost.Load();
         var unified = host.Plan();
         var executor = new PipelineExecutor();
@@ -125,7 +125,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.Equal(8, strong.Items.Count);
         Assert.Equal(10, control.Items.Count);
         Assert.Contains("exp_quality_weight", strong.TriggeredExperiments);
-        Assert.Contains("exp_quality_weight", control.TriggeredExperiments); // symmetric across arms (design 12.6)
+        Assert.Contains("exp_quality_weight", control.TriggeredExperiments); // symmetric across arms
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public sealed class HomeFeedEndToEndTests
     {
         var host = HomeFeedTestHost.LoadModified(root =>
         {
-            // Reads mmr_lambda, which only exp_mmr_diversity/mmr declares (design 11.6).
+            // Reads mmr_lambda, which only exp_mmr_diversity/mmr declares.
             File.WriteAllText(Path.Combine(root, "experiments", "exp_borrow.jsonc"), """
                 { "experiment_id": "exp_borrow", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
                   "arms": { "control": {}, "borrow": { "nodes": { "fusion": { "config": { "multipliers": { "lambda": "param.mmr_lambda" } } } } } } }

@@ -21,10 +21,10 @@ namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
 /// The runtime view one node attempt gets of its request. Row-set operations are available only for the effects the
-/// operator declared (design 5.2), so declarations and behavior cannot drift apart.
+/// operator declared, so declarations and behavior cannot drift apart.
 /// </summary>
 /// <remarks>
-/// <para>The attempt has an absolute deadline, its time budget (design 5.6), and <see cref="CancellationToken"/> is
+/// <para>The attempt has an absolute deadline, its time budget, and <see cref="CancellationToken"/> is
 /// cancelled at it or with the caller's token. Cancellation is cooperative, so the framework does not rely on it at its
 /// I/O boundary: <see cref="CallAsync"/> waits for a service no longer than the deadline (or the call's own timeout) and
 /// the caller allow, whether or not the client honours its token. A client still running then is abandoned: it keeps the
@@ -33,7 +33,7 @@ namespace StrataRec.Pipeline.Operators;
 /// <para>Custom operators doing their own I/O outside <see cref="CallAsync"/> are responsible for bounding it: by
 /// <see cref="CancellationToken"/> when the client honours it, or by waiting no longer than <see cref="BudgetRemaining"/>
 /// and keeping every buffer the client may still write alive (through <see cref="RequestMemory.Hold"/>) until it completes.
-/// Such I/O is also not recorded or replayed (design 13.4).</para>
+/// Such I/O is also not recorded or replayed.</para>
 /// <para>Nothing may write into <see cref="Table"/> once the attempt has returned: a failed attempt's appended rows are
 /// rolled back and reused by the fallback (<see cref="CandidateTable.Rollback"/>), so a late write would land on the
 /// fallback's rows. Clients called through this context write into rented buffers, never into the table.</para>
@@ -89,7 +89,7 @@ public sealed class OperatorContext : IServiceCallScope
 
     public string RequestId => _state.RequestId;
 
-    /// <summary>Request seed for deterministic randomness (design 5.7).</summary>
+    /// <summary>Request seed for deterministic randomness.</summary>
     public long Seed => _state.Seed;
 
     public RequestInputs Inputs => _state.Inputs;
@@ -99,7 +99,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>Time left before the request deadline.</summary>
     public TimeSpan Remaining => _state.Remaining;
 
-    /// <summary>Health and windowed failure summaries of external calls (design 13.2); null without a logger.</summary>
+    /// <summary>Health and windowed failure summaries of external calls; null without a logger.</summary>
     internal RequestEventLog? Events => _state.Events;
 
     /// <summary>
@@ -109,7 +109,7 @@ public sealed class OperatorContext : IServiceCallScope
     internal CancellationToken CallerCancellation => _state.CallerCancellation;
 
     /// <summary>
-    /// True while the request replays a recording: it is not traffic, so traffic metrics are not counted (design 13.4).
+    /// True while the request replays a recording: it is not traffic, so traffic metrics are not counted.
     /// Public for operators outside this assembly that count metrics of their own (<c>stratarec.model.answer_ids</c>).
     /// </summary>
     public bool Replays => _state.Replay is not null;
@@ -124,7 +124,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>
     /// This node's buffer for an output column. Written values become visible only if the node succeeds. A row source
     /// writes only the rows it appended; after a node has written its own version of the column, the buffer is that
-    /// version, so the appended rows get their values in the column readers see (a score for injected rows, design 4.6).
+    /// version, so the appended rows get their values in the column readers see (a score for injected rows).
     /// </summary>
     /// <remarks>
     /// Every attempt writes a version of its own. A node that runs again in a request (a fallback node shared by several
@@ -243,7 +243,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// feature is the operator's to handle, as it handles a failed call: its value is missing.
     /// </summary>
     /// <remarks>
-    /// <para>For an operator sending several calls (a recall source's query, design 5.4), each as soon as its own features
+    /// <para>For an operator sending several calls (a recall source's query), each as soon as its own features
     /// are stored; a call with no awaited reads is settled at once. The features were prefetched when the request started, so
     /// only what is still in flight is waited for.</para>
     /// <para>Each round observes the prefetch once, then settles, in the order of <paramref name="reads"/>, every read that
@@ -438,7 +438,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>
     /// Appends rows. Requires <see cref="Effects.RowSource"/>. A key is appended only while it is not live: skip the keys
     /// <see cref="CandidateTableView.FindRow"/> finds at a live row, or every key the request has seen
-    /// (<see cref="CandidateTableView.ContainsKey"/>), as the built-in row sources do (design 4.5).
+    /// (<see cref="CandidateTableView.ContainsKey"/>), as the built-in row sources do.
     /// </summary>
     public int AppendRows(ReadOnlySpan<long> keys)
     {
@@ -553,11 +553,11 @@ public sealed class OperatorContext : IServiceCallScope
 
     /// <summary>
     /// Calls a service for this node the way the framework calls every external dependency (through
-    /// <see cref="BoundedCall"/>): holds the request memory until the client completes (design 4.8), waits for it no
+    /// <see cref="BoundedCall"/>): holds the request memory until the client completes, waits for it no
     /// longer than the binding's <c>timeout_ms</c> and the node's budget allow, records duration, errors, health and a span
-    /// through the service's <see cref="BoundService.Target"/> (design 13.1, 13.2), counts the tokens a generative client
+    /// through the service's <see cref="BoundService.Target"/>, counts the tokens a generative client
     /// reports, closes <paramref name="response"/>, and records the call or answers it from a recording when the request
-    /// records or replays (design 13.4). Custom operators that call services through it are bounded, measured, recorded
+    /// records or replays. Custom operators that call services through it are bounded, measured, recorded
     /// and replayed like the built-in ones.
     /// </summary>
     /// <param name="call">
@@ -758,7 +758,7 @@ public sealed class OperatorContext : IServiceCallScope
     {
     }
 
-    /// <summary>Marks the result as Degraded (completed with partial or stale inputs, design 5.6).</summary>
+    /// <summary>Marks the result as Degraded (completed with partial or stale inputs).</summary>
     public void ReportDegraded(string reason) => DegradedReason ??= reason;
 
     /// <summary>Fails the node without throwing; the engine applies <c>on_failure</c>.</summary>

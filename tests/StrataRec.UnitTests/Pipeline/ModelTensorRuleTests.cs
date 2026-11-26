@@ -5,7 +5,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// The one rule for which tensors the model operators send and which model signatures they accept (design 6.9): the
+/// The one rule for which tensors the model operators send and which model signatures they accept: the
 /// tensor of an input has the declared type of the column it maps, the operator's layout adds the leading dimensions, and a
 /// model must declare exactly the mapped inputs, each as that tensor, and every read output with the layout's shape (of
 /// the type of the column it is written to, or float32 or float64 for a ranker's score). A

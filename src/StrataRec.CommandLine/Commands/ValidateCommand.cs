@@ -7,7 +7,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// <c>stratarec validate</c>: every static check CI runs (design 10.1 item 1) — schemas, types, data flow, patch
+/// <c>stratarec validate</c>: every static check CI runs — schemas, types, data flow, patch
 /// footprints and conflicts, per-arm and combination checks — for every pipeline in an environment, and that the
 /// workspace's <c>schemas/</c> are the ones this binary writes (<see cref="SchemaFiles.Check"/>).
 /// </summary>

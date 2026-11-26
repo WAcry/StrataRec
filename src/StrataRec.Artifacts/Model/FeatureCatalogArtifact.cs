@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 
 namespace StrataRec.Artifacts.Model;
 
-/// <summary>Feature catalog (design 6.3): entities, physical features and derived features.</summary>
+/// <summary>Feature catalog: entities, physical features and derived features.</summary>
 public sealed class FeatureCatalogArtifact
 {
     public required string CatalogId { get; init; }
@@ -16,7 +16,7 @@ public sealed class FeatureCatalogArtifact
     public Dictionary<string, DerivedFeatureSpec> DerivedFeatures { get; init; } = new();
 }
 
-/// <summary>An entity that features hang off (design 6.2): keyed by <see cref="Key"/>, or computed from <see cref="Args"/>.</summary>
+/// <summary>An entity that features hang off: keyed by <see cref="Key"/>, or computed from <see cref="Args"/>.</summary>
 /// <remarks>
 /// A keyed entity declares only the key, an ordered tuple of parts. Whether the entity is per request or per candidate, and each
 /// part's type, follow from it: a request input (<c>ctx.request.user_id</c>) has its declared type; <c>col.entity_id</c>
@@ -49,7 +49,7 @@ public sealed class EntitySpec
     public string? Description { get; init; }
 }
 
-/// <summary>A physical feature served by a data source (design 6.3).</summary>
+/// <summary>A physical feature served by a data source.</summary>
 public sealed class FeatureSpec
 {
     public required string Type { get; init; }
@@ -70,7 +70,7 @@ public sealed class FeatureSpec
     public bool? Deprecated { get; init; }
 }
 
-/// <summary>A feature computed by a ColumnExpr from other features (design 6.3).</summary>
+/// <summary>A feature computed by a ColumnExpr from other features.</summary>
 public sealed class DerivedFeatureSpec
 {
     public required string Type { get; init; }

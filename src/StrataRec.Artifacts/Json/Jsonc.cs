@@ -7,7 +7,7 @@ using System.Text.Unicode;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// Strict reader for JSONC, the authoring format of every StrataRec artifact (design 9.1): JSON
+/// Strict reader for JSONC, the authoring format of every StrataRec artifact: JSON
 /// (<see href="https://www.rfc-editor.org/rfc/rfc8259">RFC 8259</see>) plus <c>//</c> and <c>/* */</c> comments and
 /// trailing commas in objects and arrays.
 /// </summary>

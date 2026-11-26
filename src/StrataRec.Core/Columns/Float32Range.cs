@@ -1,7 +1,7 @@
 namespace StrataRec.Core.Columns;
 
 /// <summary>
-/// The range of float32 storage (<c>float32</c>, <c>list&lt;float32&gt;</c>, design 4.3) for float64 values, the expression
+/// The range of float32 storage (<c>float32</c>, <c>list&lt;float32&gt;</c>) for float64 values, the expression
 /// type of every float.
 /// </summary>
 /// <remarks>

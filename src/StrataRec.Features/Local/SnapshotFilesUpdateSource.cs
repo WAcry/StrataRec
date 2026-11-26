@@ -14,7 +14,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.Features.Local;
 
 /// <summary>
-/// <c>snapshot_files@1</c>: loads a table snapshot from local files (design 6.6 local items 1 and 5), and with
+/// <c>snapshot_files@1</c>: loads a table snapshot from local files, and with
 /// <c>reload</c> loads it again periodically, swapping each complete load in whole.
 /// </summary>
 /// <remarks>
@@ -893,7 +893,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
         return value;
     }
 
-    /// <summary>The spellings of non-finite values, as replay bundles write them (design 13.4).</summary>
+    /// <summary>The spellings of non-finite values, as replay bundles write them.</summary>
     private double NonFinite(ref Utf8JsonReader reader, int field, int element, ColumnType type)
     {
         if (reader.ValueTextEquals("NaN"u8))

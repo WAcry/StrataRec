@@ -15,7 +15,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// How a replay answers calls from a recorded run (design 13.4): exact calls first, then values synthesized from the
+/// How a replay answers calls from a recorded run: exact calls first, then values synthesized from the
 /// successful calls, with whatever the recording lacks reported as a gap.
 /// </summary>
 public sealed class RunReplayTests

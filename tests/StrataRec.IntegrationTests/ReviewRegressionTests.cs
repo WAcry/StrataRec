@@ -99,7 +99,7 @@ public sealed class ReviewRegressionTests
     }
 
     /// <summary>
-    /// A trigger follows the node each arm has together with the request's arms in the other layers (design 12.6; Gemini
+    /// A trigger follows the node each arm has together with the request's arms in the other layers (Gemini
     /// review 2026-11-14, finding 2): exp_cap_limit changes author_cap's predicate, exp_cap_search (another layer) moves it
     /// from the home surface to search. With search's treatment, exp_cap_limit's node runs on search, not home, and its
     /// trigger says so in both of its arms; it was taken with the other layers unassigned (home), so it was recorded

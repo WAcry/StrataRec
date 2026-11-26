@@ -6,7 +6,7 @@ using StrataRec.Core.Diagnostics;
 namespace StrataRec.Features.Bindings;
 
 /// <summary>
-/// The one path from a bindings entry to what it names (design 6.4), for every <see cref="BindingKind"/>: the factory of
+/// The one path from a bindings entry to what it names, for every <see cref="BindingKind"/>: the factory of
 /// the type the entry names, the instance shared by identity, and every error at the entry, with the same codes and
 /// words whatever the kind.
 /// </summary>

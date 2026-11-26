@@ -26,7 +26,7 @@ public class SnapshotFilesUpdateSourceTests
             """{"key": 3, "version": 8, "fields": {"i64": 1}}""" + "\n" +
             """{"key": 4, "version": 1, "fields": {"i64": 4}}""" + "\n" +
             """{"key": 4, "version": 2, "deleted": true}""");
-        // A number beyond float32 reads as +∞, exactly as memory@1 reads it; the read path replaces it (design 4.3).
+        // A number beyond float32 reads as +∞, exactly as memory@1 reads it; the read path replaces it.
         dir.Write("more/part-1.jsonl", """{"key": 5, "version": 1, "fields": {"i64": 5, "t": "😀", "f32": 1e39}}""");
         dir.Write("snapshot.json", """{"format": "jsonl", "position": {"0": 120, "3": 7}, "files": ["part-0.jsonl", "more/part-1.jsonl"]}""");
 

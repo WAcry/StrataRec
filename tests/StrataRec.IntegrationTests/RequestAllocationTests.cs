@@ -11,9 +11,9 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Managed allocation on the request path must not grow with the number of candidates (design 4.8, 15): recall
+/// Managed allocation on the request path must not grow with the number of candidates: recall
 /// merge, key lookups, feature fetches and operator scratch all use the request's pooled buffers. Metrics are recorded
-/// with tags cached per plan, so an attached <see cref="MeterListener"/> adds nothing either (design 13.1 rule 5).
+/// with tags cached per plan, so an attached <see cref="MeterListener"/> adds nothing either.
 /// </summary>
 /// <remarks>In the listener collection: another test's listener would run its callbacks on the measuring thread.</remarks>
 [Collection(ProcessWideListenersCollection.Name)]
@@ -33,7 +33,7 @@ public sealed class RequestAllocationTests
     [Fact]
     public void HomeFeedRequest_CostsWhatItReads_NotWhatTheCatalogDeclares()
     {
-        // Design 6.3: a catalog is shared by many pipelines, and a plan holds only the features it reads. 2,000 features
+        // A catalog is shared by many pipelines, and a plan holds only the features it reads. 2,000 features
         // this pipeline does not read (physical and derived, candidate and context, of a fetched and a local source) used to
         // cost about 25 B each per request (slots, fill state, the fetcher's per-feature state, output bindings, context
         // values) and 40% more time; now the plan, and so the request, is the same.
@@ -55,7 +55,7 @@ public sealed class RequestAllocationTests
     [Fact]
     public void AnExplainedRequest_CostsWhatItsTargetsAndNodesCost_NotWhatItsCandidatesCost()
     {
-        // Design 13.3: targets are found by key once and followed, so explaining three ids allocates the same at 250 and at
+        // Targets are found by key once and followed, so explaining three ids allocates the same at 250 and at
         // 4,000 candidates (steps, values and reasons: targets × nodes). The ids are early in both recall lists.
         var smallPlan = Plan(250);
         var largePlan = Plan(4_000);

@@ -76,7 +76,7 @@ public readonly struct TableCheckpoint
 }
 
 /// <summary>
-/// Columnar storage of every candidate in one request (design 4.4, 4.5).
+/// Columnar storage of every candidate in one request.
 /// </summary>
 /// <remarks>
 /// <para>Slots are allocated lazily on first write. Each slot has a fill bitmap marking which physical rows have been
@@ -309,7 +309,7 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Appends rows with the given int64 keys at the end of the ranking. Returns the first new physical row. A key is
-    /// appended only while it is not live, once (design 4.5): a row source that may bring back a dropped key skips the live
+    /// appended only while it is not live, once: a row source that may bring back a dropped key skips the live
     /// ones (<see cref="FindRow"/> and <see cref="RowSelection.IsAlive"/>), and the built-in ones skip every key the request
     /// has seen (<see cref="ContainsKey"/>). The table does not check it, which would hash every appended key.
     /// </summary>
@@ -372,7 +372,7 @@ public sealed class CandidateTable
     /// Whether the key was appended in this request: a live or a dropped row, or a row a <see cref="Compact"/> released
     /// (rows a <see cref="Rollback"/> released were never appended). The built-in row sources test this, not
     /// <see cref="FindRow"/>, so that they never append a key a filter dropped, whether or not the table was compacted
-    /// since (design 4.5, invariant 2): compaction changes where rows are, never which entities the request has seen.
+    /// since: compaction changes where rows are, never which entities the request has seen.
     /// </summary>
     /// <remarks>
     /// Compact copies the released keys aside; they are indexed on the first call that does not find the key in a row, so
@@ -480,7 +480,7 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Rewrites every slot so that live rows occupy physical rows 0..n-1 in rank order and dropped rows are released
-    /// (design 4.5). Fill state moves with the values. Old arrays are returned when the request ends. The released keys
+    ///. Fill state moves with the values. Old arrays are returned when the request ends. The released keys
     /// are kept: <see cref="ContainsKey"/> still finds them, so the built-in row sources do not append them again.
     /// </summary>
     public void Compact()
@@ -525,7 +525,7 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// Remembers the table as it is before a node attempt, for <see cref="Rollback"/> if the attempt fails (design 4.6).
+    /// Remembers the table as it is before a node attempt, for <see cref="Rollback"/> if the attempt fails.
     /// The ranking is copied into a scratch array of the request memory, given back by <see cref="Discard"/> once the
     /// attempt is settled.
     /// </summary>
@@ -549,7 +549,7 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// Leaves the table as it was at <paramref name="checkpoint"/>, which a failed node attempt must (design 4.6). Slots
+    /// Leaves the table as it was at <paramref name="checkpoint"/>, which a failed node attempt must. Slots
     /// created since are dropped: they read as never written again, whoever reads them, and the next write creates them
     /// anew. The ranking is restored, and the rows appended since are released as if never appended. They are no longer
     /// found by <see cref="FindRow"/>, so a later row source may append the same keys; they hold nothing in any remaining

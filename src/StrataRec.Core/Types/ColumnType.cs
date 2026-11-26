@@ -3,7 +3,7 @@ using System.Globalization;
 
 namespace StrataRec.Core.Types;
 
-/// <summary>Physical storage kind of a column or value (design 4.3).</summary>
+/// <summary>Physical storage kind of a column or value.</summary>
 public enum StorageKind : byte
 {
     Bool = 1,
@@ -41,7 +41,7 @@ public enum StorageKind : byte
 /// then holds exactly that many elements, which is what a model input's tensor shape, <c>dot</c> between two embeddings and
 /// an MMR similarity need to know before a request runs. The storage is the same as a list of any length's; writers check
 /// the length instead, and a value of another length is replaced as a whole, like a list with an element outside int32
-/// storage (design 4.3).</para>
+/// storage.</para>
 /// </remarks>
 public readonly struct ColumnType : IEquatable<ColumnType>
 {
@@ -103,11 +103,11 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     public StorageKind ValueKind => IsList ? Element : Kind;
 
     /// <summary>True for storage that holds int32 values (<c>int32</c>, <c>list&lt;int32&gt;</c>): writing an int64 into it
-    /// narrows, and a value outside the int32 range cannot be stored (design 4.3).</summary>
+    /// narrows, and a value outside the int32 range cannot be stored.</summary>
     public bool IsInt32Storage => ValueKind == StorageKind.Int32;
 
     /// <summary>True for storage that holds floating-point values (<c>float32</c>, <c>float64</c> and lists of them),
-    /// whose non-finite values a writer replaces (design 4.3).</summary>
+    /// whose non-finite values a writer replaces.</summary>
     public bool IsFloatStorage => ValueKind is StorageKind.Float32 or StorageKind.Float64;
 
     /// <summary>The kinds a list may hold: the fixed-size scalars and <c>string</c>. Not lists, which would make every layer
@@ -278,7 +278,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     /// The spelling meant by a type written with <c>text</c> (<c>text</c>, <c>text?</c>, <c>list&lt;text&gt;</c>,
     /// <c>list&lt;text,4&gt;?</c>): the same with <c>string</c>; null when <paramref name="written"/> does not use it. There is
     /// one string type: a separate long-text type differed only in how a request stored it, and nothing it stored differently
-    /// was worth a second type (design 4.3).
+    /// was worth a second type.
     /// </summary>
     public static string? TextAsString(string written)
     {

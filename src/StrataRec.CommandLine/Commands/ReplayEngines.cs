@@ -6,7 +6,7 @@ using StrataRec.Hosting.Replay;
 namespace StrataRec.CommandLine.Commands;
 
 /// <summary>
-/// The engines bundles replay on (design 13.4). A bundle's runs name every pipeline its request ran, the primary and, when
+/// The engines bundles replay on. A bundle's runs name every pipeline its request ran, the primary and, when
 /// it failed over, the fallback pipeline, each on the manifest it recorded (<see cref="ReplayRunRecord.ManifestId"/>); a
 /// replay needs a configuration for each of them, or it does not replay what happened.
 /// </summary>

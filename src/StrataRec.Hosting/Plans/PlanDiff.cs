@@ -10,12 +10,12 @@ public enum StructureChangeKind : byte
     Added = 1,
     Removed,
 
-    /// <summary>An experiment that runs in another layer: its arms are validated with a different set of others (design 11.5).</summary>
+    /// <summary>An experiment that runs in another layer: its arms are validated with a different set of others.</summary>
     Moved,
 }
 
 /// <summary>
-/// A layer, experiment, arm or yield present on one side only, or an experiment in another layer. A yield (design 11.1)
+/// A layer, experiment, arm or yield present on one side only, or an experiment in another layer. A yield
 /// changes no combination the comparison runs (the baseline and each arm alone) but what a request in both experiments
 /// runs, so it is reported here; a reversed one is one removed and one added.
 /// </summary>
@@ -64,7 +64,7 @@ public sealed class PlanDiffCanonicalizationException : Exception
 }
 
 /// <summary>
-/// The semantic difference of two compiled configurations by arm combination (design 13.4 item 3): per combination, the
+/// The semantic difference of two compiled configurations by arm combination: per combination, the
 /// nodes, parameters, taps, funnel groups and output a request with it executes, compared leaf by leaf
 /// (<see cref="EffectivePlan"/>, <see cref="JsonDiff"/>); and the layers, experiments and arms either side lacks.
 /// </summary>

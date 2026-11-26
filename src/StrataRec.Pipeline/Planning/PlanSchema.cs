@@ -15,11 +15,11 @@ public enum ColumnKind : byte
     /// <summary>A catalog feature (physical or derived) with a single fixed slot.</summary>
     Feature,
 
-    /// <summary>A node-produced column: one slot per producer, resolved through output bindings (design 4.6).</summary>
+    /// <summary>A node-produced column: one slot per producer, resolved through output bindings.</summary>
     Output,
 }
 
-/// <summary>A logical column of a plan (design 4.2).</summary>
+/// <summary>A logical column of a plan.</summary>
 public sealed class LogicalColumn
 {
     public required int Id { get; init; }
@@ -61,7 +61,7 @@ public enum ContextFieldKind : byte
 }
 
 /// <summary>
-/// A request-level value: one addressable as <c>ctx.&lt;name&gt;</c> (design 7.2), or a request column, <c>req.&lt;name&gt;</c>.
+/// A request-level value: one addressable as <c>ctx.&lt;name&gt;</c>, or a request column, <c>req.&lt;name&gt;</c>.
 /// Expressions read both alike (<see cref="SymbolKind.Context"/>), from the request's one array of request-level values.
 /// </summary>
 public sealed class ContextField
@@ -114,7 +114,7 @@ public sealed class ContextField
     public string? Pointer { get; init; }
 }
 
-/// <summary>A flattened parameter leaf (design 11.8), e.g. <c>w_click</c> or <c>recall_quotas.cf</c>.</summary>
+/// <summary>A flattened parameter leaf, e.g. <c>w_click</c> or <c>recall_quotas.cf</c>.</summary>
 public sealed class ParamLeaf
 {
     public required int Id { get; init; }
@@ -188,7 +188,7 @@ public sealed class ParamLeaf
 }
 
 /// <summary>
-/// Adds a catalog feature to a plan schema the first time a name resolves to it (design 6.3): a plan holds only the
+/// Adds a catalog feature to a plan schema the first time a name resolves to it: a plan holds only the
 /// features it reads, so what a request sizes by feature, slot or context field does not grow with a shared catalog.
 /// </summary>
 internal interface IFeatureRegistrar
@@ -214,7 +214,7 @@ internal interface IFeatureRegistrar
 }
 
 /// <summary>
-/// The name → id/slot layout of a compiled plan (design 4.2): logical columns, physical slots, context fields and
+/// The name → id/slot layout of a compiled plan: logical columns, physical slots, context fields and
 /// parameter leaves. Built once per plan; all requests share it.
 /// </summary>
 /// <remarks>
@@ -542,7 +542,7 @@ public sealed class PlanSchema
     }
 
     /// <summary>
-    /// The shared slot written by row sources: each row source writes the rows it appends (design 4.6), so all of them
+    /// The shared slot written by row sources: each row source writes the rows it appends, so all of them
     /// share one slot per column.
     /// </summary>
     internal int GetRowSourceSlot(LogicalColumn column)

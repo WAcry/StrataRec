@@ -12,7 +12,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// The request read path of local feature sources (design 6.6): the same values, defaults, missing values and states as
+/// The request read path of local feature sources: the same values, defaults, missing values and states as
 /// a fetch of the same records, one pinned table version per request, and record/replay through the call hook.
 /// </summary>
 public class LocalFeatureReadTests

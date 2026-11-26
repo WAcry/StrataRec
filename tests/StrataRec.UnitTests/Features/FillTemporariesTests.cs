@@ -6,7 +6,7 @@ namespace StrataRec.UnitTests.Features;
 
 /// <summary>
 /// A fill's temporaries (its closure and marks, a wave's groups and started fetches, a local read's rows, keys, records
-/// and masks) are scratch, given back to the pool as soon as the fill or the read is over (design 4.8), not left on the
+/// and masks) are scratch, given back to the pool as soon as the fill or the read is over, not left on the
 /// request's ledger until the request ends: a request runs a fill per node, and held to its end they were all out of the
 /// pool at once. What a fetch keeps (its keys, staging and calls, which a connector may read after the fill) stays on the
 /// ledger. <see cref="StrataRec.Core.Memory.RequestMemory.RentedBytes"/> counts the ledger only.

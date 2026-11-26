@@ -7,20 +7,20 @@ using System.Text.Json.Serialization;
 namespace StrataRec.Artifacts.Model;
 
 /// <summary>
-/// Everything needed to re-execute one request deterministically (design 13.4): the request, its assignment, every
+/// Everything needed to re-execute one request deterministically: the request, its assignment, every
 /// external response with its completion status and duration, every node's execution decision, the effective sampling
 /// and the original result to diff against.
 /// </summary>
 /// <remarks>
 /// <para>A plain JSON document with the same strict serializer as artifacts, so its JSON Schema comes from these types
 /// (<c>stratarec schema replay_bundle</c>) and a malformed bundle is reported with a JSON pointer.</para>
-/// <para>Values use the log encoding (design 8.7: missing is null, bool is 0 or 1) and are decoded with the type recorded
+/// <para>Values use the log encoding (missing is null, bool is 0 or 1) and are decoded with the type recorded
 /// next to them, never with the type of whatever configuration replays the bundle. Unlike logs, a bundle keeps the NaN
 /// and ±∞ the request observed, as the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> (per element in
 /// float lists): a replay must see the same values to make the same decisions. Bundles contain request inputs and feature
-/// values; who may read them is the environment's business (design 8.9).</para>
+/// values; who may read them is the environment's business.</para>
 /// </remarks>
-[Description("A recorded request for deterministic replay (StrataRec design 13.4).")]
+[Description("A recorded request for deterministic replay.")]
 public sealed class ReplayBundle
 {
     /// <summary>The format this build reads and writes.</summary>
@@ -30,15 +30,15 @@ public sealed class ReplayBundle
     /// records means something else for the same layout: 2026-11-20.2 batches calls evenly (Batching.Size), so a bundle
     /// recorded before holds calls cut at other boundaries, which a replay could not answer as recorded: a model call is
     /// matched as a whole and a recorded timeout belongs to its batch (review 86). 2026-11-20.3 adds the ignored arm's
-    /// reason <c>yielded</c> (design 11.1): a build before cannot read it, and refuses such a bundle at its format, with
+    /// reason <c>yielded</c>: a build before cannot read it, and refuses such a bundle at its format, with
     /// a hint to record again, instead of at a reason it does not know (review 96). 2026-11-21.1 records each model output
     /// with its element type, and model inputs of every declared type (their digests include it): tensors follow the
-    /// declared column types (design 6.9). 2026-11-21.2 records the result's columns at their declared types, and a
+    /// declared column types. 2026-11-21.2 records the result's columns at their declared types, and a
     /// float32 request input recorded as the host gave it now replays as the nearest float, as it is served: the same
     /// bundle would replay to other values in a build before. 2026-11-21.3 records each request input at the type of the
     /// value the host gave (a fallback pipeline may declare it otherwise), and a computation the binder folds to a name
     /// (<c>max(col.x)</c>) is no longer a reference: result types and model input digests of a bundle before can differ.
-    /// 2026-11-21.4 records every call but a feature fetch as one service call (<c>service_calls</c>, design 6.9), a
+    /// 2026-11-21.4 records every call but a feature fetch as one service call (<c>service_calls</c>), a
     /// model's and a recall's alike: a recall's query is a digest of its inputs, as a model's, and only the outputs the
     /// operator reads are recorded. 2026-11-21.5 has the same layout, but a service sees only its call's inputs: in a bundle
     /// before, a recall service could pick its answer by a request field that no digest covers, and a replay that no longer
@@ -74,7 +74,7 @@ public sealed class ReplayBundle
 
     public required ReplayManifestRecord Manifest { get; init; }
 
-    [Description("Pipeline executions of the request: the primary pipeline, then its fallback_pipeline if that ran (design 5.6).")]
+    [Description("Pipeline executions of the request: the primary pipeline, then its fallback_pipeline if that ran.")]
     public required List<ReplayRunRecord> Runs { get; init; }
 
     [Description("What the caller received.")]
@@ -112,7 +112,7 @@ public sealed class ReplayTypedValue
     [Description("Type spelling, e.g. \"int64?\" or \"list<float32,4>\".")]
     public required string Type { get; init; }
 
-    [Description("Log encoding (design 8.7): null is missing, bool is 0 or 1, lists are arrays; NaN and ±∞ floats (and float list elements) are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
+    [Description("Log encoding: null is missing, bool is 0 or 1, lists are arrays; NaN and ±∞ floats (and float list elements) are the strings \"NaN\", \"Infinity\" and \"-Infinity\".")]
     public JsonElement? Value { get; init; }
 }
 
@@ -166,7 +166,7 @@ public sealed class ReplayRunRecord
     [Description("Arms this execution ran with (a fallback pipeline runs without experiments).")]
     public List<string> Arms { get; init; } = new();
 
-    [Description("The request's parameter snapshot: baseline plus the assigned arms' overrides (design 12.2).")]
+    [Description("The request's parameter snapshot: baseline plus the assigned arms' overrides.")]
     public Dictionary<string, ReplayTypedValue> Params { get; init; } = new();
 
     [Description("One entry per timeline position that had a node, in execution order.")]
@@ -185,7 +185,7 @@ public sealed class ReplayRunRecord
     public required ReplayResultRecord Result { get; init; }
 }
 
-/// <summary>The execution decision at one timeline position (design 5.6).</summary>
+/// <summary>The execution decision at one timeline position.</summary>
 public sealed class ReplayPipelineCall
 {
     [Description("The node that called.")]
@@ -276,7 +276,7 @@ public sealed class ReplayFeatureCall
 
     public required string Entity { get; init; }
 
-    [Description("The call's keys in staging order (design 6.5): each an int64 number or a string for a one-part key, or an array of its parts in the entity's key order (a shared part, a request input or a context feature, repeated in every key).")]
+    [Description("The call's keys in staging order: each an int64 number or a string for a one-part key, or an array of its parts in the entity's key order (a shared part, a request input or a context feature, repeated in every key).")]
     public required JsonElement Keys { get; init; }
 
     [Description("False when the request had no time left to send the call.")]
@@ -316,7 +316,7 @@ public sealed class ReplayOutput
     public required JsonElement Values { get; init; }
 }
 
-/// <summary>One service call (one batch): a model's, a recall source's, any other service's (design 6.9).</summary>
+/// <summary>One service call (one batch): a model's, a recall source's, any other service's.</summary>
 public sealed class ReplayServiceCall
 {
     [Description("Start order of the call within its run, across all calls.")]
@@ -369,7 +369,7 @@ public sealed class ReplayServiceCall
     [Description("Output → the tensor the service returned, of the outputs the call asked for (requested).")]
     public Dictionary<string, ReplayOutput> Outputs { get; init; } = new();
 
-    [Description("Output → text, for services that generate text (a recorded answer is replayed as it was, design 13.4 item 7).")]
+    [Description("Output → text, for services that generate text (a recorded answer is replayed as it was).")]
     public Dictionary<string, string> Texts { get; init; } = new();
 
     [Description("Items the service added, in rank order (int64 numbers or strings), as accepted (at most limit).")]
@@ -392,7 +392,7 @@ public sealed class ReplayServiceCall
     public int? Dropped { get; init; }
 }
 
-/// <summary>Effective log sampling of the run (design 8.2, 8.4).</summary>
+/// <summary>Effective log sampling of the run.</summary>
 public sealed class ReplaySamplingRecord
 {
     [Description("Where the run's log batches went: none (neither written nor returned: no log consumer, so nothing was sampled, or a request that " +

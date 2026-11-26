@@ -4,14 +4,14 @@ using System.Text;
 
 namespace StrataRec.Core.Keys;
 
-/// <summary>Type of an entity key part (design 6.3: <c>int64</c> or <c>string</c>).</summary>
+/// <summary>Type of an entity key part (<c>int64</c> or <c>string</c>).</summary>
 public enum EntityKeyType : byte
 {
     Int64 = 1,
     String = 2,
 }
 
-/// <summary>One part of an entity key: an int64 or a string (design 6.5). A key of one part is one of these.</summary>
+/// <summary>One part of an entity key: an int64 or a string. A key of one part is one of these.</summary>
 public readonly record struct EntityKey(long Int64Value, string? StringValue)
 {
     public static EntityKey FromInt64(long value) => new(value, null);
@@ -24,7 +24,7 @@ public readonly record struct EntityKey(long Int64Value, string? StringValue)
 }
 
 /// <summary>
-/// One part of an entity's key (design 6.2): where a request reads it, its type, and whether every key of a batch shares it.
+/// One part of an entity's key: where a request reads it, its type, and whether every key of a batch shares it.
 /// </summary>
 /// <param name="Reference">What the catalog keys the entity by: <c>ctx.request.country</c>, <c>col.entity_id</c>,
 /// <c>col.item.author_id</c>.</param>
@@ -34,7 +34,7 @@ public readonly record struct EntityKey(long Int64Value, string? StringValue)
 public readonly record struct EntityKeyPart(string Reference, EntityKeyType Type, bool IsShared);
 
 /// <summary>
-/// The layout of an entity's key (design 6.2, 6.5): an ordered tuple of 1 to <see cref="MaxParts"/> parts, in the order
+/// The layout of an entity's key: an ordered tuple of 1 to <see cref="MaxParts"/> parts, in the order
 /// the catalog declares them. What a connector is asked to support (<c>IFeatureSourceConnector.Supports</c>), what a local
 /// table and a cache record are keyed by, and what a fetch's keys are deduplicated as.
 /// </summary>

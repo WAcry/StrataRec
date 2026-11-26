@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>list&lt;E,N&gt;</c> derived features and node outputs end to end (design 4.3, 4.6): a list of another length takes
+/// <c>list&lt;E,N&gt;</c> derived features and node outputs end to end: a list of another length takes
 /// the declared default, or becomes missing, and is counted as an int32 overflow is, in
 /// <see cref="PipelineResult.OutOfRangeValues"/> and the out-of-range metric; a non-nullable one without a default fails;
 /// a default or a constant of another length is a configuration error at its pointer. In the listener collection: one test

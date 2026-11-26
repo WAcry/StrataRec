@@ -15,7 +15,7 @@ public enum IgnoredArmReason
     LayerConflict,
 
     /// <summary>
-    /// Its experiment yields to an experiment the request is also in (a release's <c>yields_to</c>, design 11.1), so its
+    /// Its experiment yields to an experiment the request is also in (a release's <c>yields_to</c>), so its
     /// layer runs its baseline. Every arm of the experiment yields alike, its control included.
     /// </summary>
     Yielded,
@@ -57,7 +57,7 @@ public readonly record struct IgnoredArm(string Id, IgnoredArmReason Reason)
 }
 
 /// <summary>
-/// The rules for the arms an experimentation platform sends for a request (design 11.1), the caller's
+/// The rules for the arms an experimentation platform sends for a request, the caller's
 /// <c>RecRequest.Assignment</c> or an <see cref="IAssignmentProvider"/>'s answer, in one place.
 /// </summary>
 /// <remarks>
@@ -69,7 +69,7 @@ public readonly record struct IgnoredArm(string Id, IgnoredArmReason Reason)
 ///   <item>The same id twice counts once.</item>
 ///   <item>Two different arms of one layer: that layer gets no arm and runs its baseline, and every arm of it that was
 ///   sent is ignored as <see cref="IgnoredArmReason.LayerConflict"/>. Not "first wins": the arms of one layer are never
-///   validated together (design 11.5), and picking one would depend on the list order.</item>
+///   validated together, and picking one would depend on the list order.</item>
 ///   <item>An arm whose experiment yields to an experiment the request is also in does not run, ignored as
 ///   <see cref="IgnoredArmReason.Yielded"/> (<see cref="Yield"/>, applied to every source of arms).</item>
 /// </list>

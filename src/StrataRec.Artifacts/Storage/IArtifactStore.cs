@@ -4,7 +4,7 @@ using StrataRec.Artifacts.Json;
 namespace StrataRec.Artifacts.Storage;
 
 /// <summary>
-/// Content-addressed storage for artifacts (design 9.2, 10.1): blobs are immutable and named by their
+/// Content-addressed storage for artifacts: blobs are immutable and named by their
 /// <see cref="ContentHash"/>, so a node downloads each artifact once and any copy can be verified against its name.
 /// </summary>
 /// <remarks>
@@ -16,7 +16,7 @@ namespace StrataRec.Artifacts.Storage;
 /// </para>
 /// <para>
 /// Teams on other configuration systems integrate by implementing this interface (local files, S3-compatible
-/// storage, HTTP; design 10.1 item 4).
+/// storage, HTTP).
 /// </para>
 /// </remarks>
 public interface IArtifactStore

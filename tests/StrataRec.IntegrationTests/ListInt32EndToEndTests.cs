@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>int32</c> and <c>list&lt;int32&gt;</c> node outputs end to end (design 4.3, 4.6): a value that does not fit int32
+/// <c>int32</c> and <c>list&lt;int32&gt;</c> node outputs end to end: a value that does not fit int32
 /// storage takes the column's declared default, or becomes missing, and is counted in
 /// <see cref="PipelineResult.OutOfRangeValues"/>; it is never wrapped. In the listener collection: one test reads the
 /// out-of-range metric.

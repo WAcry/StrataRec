@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace StrataRec.Artifacts.Model;
 
 /// <summary>
-/// Per-environment bindings of logical feature sources and services to concrete clients (design 6.4). Experiments cannot
+/// Per-environment bindings of logical feature sources and services to concrete clients. Experiments cannot
 /// patch this artifact.
 /// </summary>
 public sealed class SourceBindingArtifact
@@ -16,14 +16,14 @@ public sealed class SourceBindingArtifact
     public Dictionary<string, FeatureSourceBinding> Sources { get; init; } = new();
 
     /// <summary>
-    /// The services the pipeline calls (design 6.9), by logical name: model servers, recall sources, any external
+    /// The services the pipeline calls, by logical name: model servers, recall sources, any external
     /// service. A model operator's <c>model</c> and a recall's sources name them.
     /// </summary>
     public Dictionary<string, ClientBinding> Services { get; init; } = new();
 
     /// <summary>
     /// Adds to <paramref name="types"/> the client, connector, update-source and cache-store types the named bindings use
-    /// (design 10.4): a binary that lacks one cannot serve them. The one place that knows which binding settings name a
+    ///: a binary that lacks one cannot serve them. The one place that knows which binding settings name a
     /// type, so a new kind of setting is added here. A name without a binding adds nothing (it is an error where it is used).
     /// </summary>
     /// <param name="featureSources">Feature sources a plan reads: their connector, bootstrap source and distributed store.</param>
@@ -68,7 +68,7 @@ public sealed class SourceBindingArtifact
     }
 }
 
-/// <summary>Binding of a logical feature source (design 6.4, 6.6).</summary>
+/// <summary>Binding of a logical feature source.</summary>
 /// <remarks>
 /// <c>mode</c> selects which of the other settings apply: <c>fetch</c> uses <c>connector</c>, <c>timeout_ms</c>,
 /// <c>max_batch</c> and connector settings; <c>local</c> uses <c>max_bytes</c> and <c>bootstrap</c>;
@@ -80,7 +80,7 @@ public sealed class SourceBindingArtifact
 public sealed class FeatureSourceBinding
 {
     /// <summary><c>fetch</c> (default), <c>local</c>, <c>cache</c> or <c>service</c>.</summary>
-    [Description("Supply mode (design 6.6): 'fetch' (default) fetches from the connector on every request; 'local' serves the " +
+    [Description("Supply mode: 'fetch' (default) fetches from the connector on every request; 'local' serves the " +
         "features from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'cache' " +
         "keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'; " +
         "'service' asks the service named by 'service' once per request, for the features of an entity with args. " +
@@ -137,7 +137,7 @@ public sealed class FeatureSourceBinding
     public const string ByteSizePattern = "^[0-9]+(B|KiB|MiB|GiB|TiB)$";
 }
 
-/// <summary>An update source of a <c>local</c> feature source (design 6.6): its type and its own settings.</summary>
+/// <summary>An update source of a <c>local</c> feature source: its type and its own settings.</summary>
 public sealed class UpdateSourceBinding
 {
     /// <summary>Update-source type and version, e.g. <c>snapshot_files@1</c>.</summary>
@@ -151,7 +151,7 @@ public sealed class UpdateSourceBinding
 }
 
 /// <summary>
-/// The cache policy of a source bound with mode <c>cache</c> (design 6.6), or of a service (<see cref="ServiceCacheBinding"/>):
+/// The cache policy of a source bound with mode <c>cache</c>, or of a service (<see cref="ServiceCacheBinding"/>):
 /// the in-process table serves each value for <see cref="TtlMs"/> (RFC 9111 <c>max-age</c>), may serve it
 /// <see cref="StaleIfErrorMs"/> longer when the origin (the connector, the service) fails (RFC 5861 <c>stale-if-error</c>),
 /// and <see cref="Distributed"/> optionally shares values between the deployment's instances.
@@ -173,7 +173,7 @@ public class CacheBinding
 }
 
 /// <summary>
-/// The cache of a service's calls (design 6.9): as a <c>cache</c> source's (<see cref="CacheBinding"/>), and the most memory
+/// The cache of a service's calls: as a <c>cache</c> source's (<see cref="CacheBinding"/>), and the most memory
 /// its in-process table may take. A call about no items is cached whole, one about items item by item.
 /// </summary>
 public sealed class ServiceCacheBinding : CacheBinding

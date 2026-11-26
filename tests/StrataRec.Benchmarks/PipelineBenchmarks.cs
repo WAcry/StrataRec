@@ -19,8 +19,8 @@ namespace StrataRec.Benchmarks;
 /// (<see cref="HomeFeedBenchWorkspace"/>), with the sample's bindings: items fetched, authors a local table.</para>
 /// <para><c>Baseline</c> runs without experiments; <c>AllArms</c> forces every treatment arm (MMR re-rank, an extra
 /// calibration node, parameter overrides); <c>AllArmsWithLogs</c> also captures the funnel log taps.
-/// <c>BaselineMetered</c> attaches a <see cref="MeterListener"/> to every StrataRec instrument (design 13.1);
-/// <c>BaselineTraced</c> records the request span and its node and I/O spans (design 13.2).</para>
+/// <c>BaselineMetered</c> attaches a <see cref="MeterListener"/> to every StrataRec instrument;
+/// <c>BaselineTraced</c> records the request span and its node and I/O spans.</para>
 /// <para>Run: <c>dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*PipelineBenchmarks*'</c>.</para>
 /// </remarks>
 [MemoryDiagnoser]

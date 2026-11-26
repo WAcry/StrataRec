@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Hosting;
 
 /// <summary>
-/// Request-level metric tags of one served plan (design 13.1): the pipeline, pipeline × arm for every arm of the plan,
+/// Request-level metric tags of one served plan: the pipeline, pipeline × arm for every arm of the plan,
 /// and pipeline × reason for ignored arms. Built once when the plan is loaded, so recording a request passes cached
 /// arrays.
 /// </summary>
@@ -167,7 +167,7 @@ internal sealed class RequestTelemetry
 }
 
 /// <summary>
-/// Plan lifecycle metrics and event logs (design 13.1 "plan", 13.2): loads are rare, so tags are built per load. None of
+/// Plan lifecycle metrics and event logs: loads are rare, so tags are built per load. None of
 /// it throws: a metric listener or a logger that throws loses its record, and a load's outcome (a plan published, a
 /// release's status and retries) never depends on it.
 /// </summary>

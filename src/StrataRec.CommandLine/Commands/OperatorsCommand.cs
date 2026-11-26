@@ -4,7 +4,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary><c>stratarec operators</c>: the operators, connectors and clients this binary provides (design 10.4).</summary>
+/// <summary><c>stratarec operators</c>: the operators, connectors and clients this binary provides.</summary>
 internal static class OperatorsCommand
 {
     public static Command Create(PlanEnvironment provided)

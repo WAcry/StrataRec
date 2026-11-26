@@ -4,14 +4,14 @@ using StrataRec.Artifacts.Model;
 
 namespace StrataRec.Experiments.Compilation;
 
-/// <summary>A parameter leaf an arm overrides (design 11.8, 12.2).</summary>
+/// <summary>A parameter leaf an arm overrides.</summary>
 /// <param name="Leaf">Flattened leaf name, e.g. <c>recall_quotas.cf</c>.</param>
 /// <param name="Value">The patch value.</param>
 /// <param name="Pointer">Where the value is written in the experiment artifact.</param>
 internal readonly record struct ParamOverride(string Leaf, JsonNode? Value, string Pointer);
 
 /// <summary>
-/// One experiment arm after strict analysis of its patch against the patchable view (design 11.3–11.5): its path
+/// One experiment arm after strict analysis of its patch against the patchable view: its path
 /// footprint (without add-only no-ops), parameter overrides, add-only additions and the nodes it touches.
 /// </summary>
 internal sealed class ArmPatch
@@ -37,7 +37,7 @@ internal sealed class ArmPatch
     /// <summary>Pointer of the arm's patch inside the experiment artifact, e.g. <c>/arms/mmr</c>.</summary>
     public required string PointerPrefix { get; init; }
 
-    /// <summary>Path footprint (design 11.5 item 1) with add-only no-ops removed.</summary>
+    /// <summary>Path footprint with add-only no-ops removed.</summary>
     public List<PatchOperation> Footprint { get; } = new();
 
     public List<ParamOverride> ParamOverrides { get; } = new();
@@ -48,7 +48,7 @@ internal sealed class ArmPatch
     /// <summary>Parameter leaves that exist only because of this arm (new map keys, arm-declared parameters).</summary>
     public List<string> ExtraParamLeaves { get; } = new();
 
-    /// <summary>Nodes with a footprint path under <c>/nodes/&lt;id&gt;</c> (they get variants, design 12.3).</summary>
+    /// <summary>Nodes with a footprint path under <c>/nodes/&lt;id&gt;</c> (they get variants).</summary>
     public SortedSet<string> TouchedNodes { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Nodes the arm adds (absent from the baseline).</summary>
@@ -80,7 +80,7 @@ internal sealed class ArmPatch
     }
 }
 
-/// <summary>Strict analysis of one arm's patch (design 11.3, 11.4, 11.8).</summary>
+/// <summary>Strict analysis of one arm's patch.</summary>
 internal static class ArmAnalyzer
 {
     /// <summary>Stable ids of nodes, columns and parameters: they appear in pointers, expressions and logs.</summary>
@@ -141,7 +141,7 @@ internal static class ArmAnalyzer
             var pointer = arm.PointerPrefix + op.Path;
             var tokens = op.Path.Tokens;
 
-            // 1. Schema sections only take new entries: one schema is compiled for every arm (design 11.4 reason 2).
+            // 1. Schema sections only take new entries: one schema is compiled for every arm.
             if (tokens.Length >= 1 && Array.IndexOf(SchemaSections, tokens[0]) >= 0)
             {
                 if (op.Kind != PatchOpKind.Add || tokens.Length != 2)
@@ -215,7 +215,7 @@ internal static class ArmAnalyzer
     /// <summary>Sections compiled once into the shared plan schema; experiments may only add to them.</summary>
     internal static readonly string[] SchemaSections = { "columns", "request_columns", "param_schema", "features", "derived_features", "funnel_groups" };
 
-    /// <summary>Re-adding an entry identical to the baseline is a no-op (design 11.4), e.g. after a graduation.</summary>
+    /// <summary>Re-adding an entry identical to the baseline is a no-op, e.g. after a graduation.</summary>
     private static bool IsNoOp(PatchOperation op, PatchableView view) =>
         op.Kind == PatchOpKind.Replace && op.Path.TryEvaluate(view.Document, out var existing) && JsonEquals(existing, op.Value);
 
@@ -223,12 +223,12 @@ internal static class ArmAnalyzer
     {
         diagnostics.Error("PATCH_ADD_ONLY", arm.Artifact, pointer,
             $"'{root}' is add-only for experiments; this patch {(op.Kind == PatchOpKind.Delete ? "deletes" : "changes")} an existing entry.",
-            "add an entry under a new name instead; one name has one meaning in logs and models (design 11.4)");
+            "add an entry under a new name instead; one name has one meaning in logs and models");
         arm.Valid = false;
     }
 
     /// <summary>
-    /// Flattens parameter patches to leaf overrides (design 11.8). A leaf must be declared by the baseline schema or by
+    /// Flattens parameter patches to leaf overrides. A leaf must be declared by the baseline schema or by
     /// a <c>param_schema</c> entry this arm adds; map parameters take new keys.
     /// </summary>
     private static void AnalyzeParams(ArmPatch arm, PatchableView view, List<PatchOperation> ops, DiagnosticBag diagnostics)

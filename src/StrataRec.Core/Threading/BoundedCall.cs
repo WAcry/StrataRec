@@ -5,7 +5,7 @@ using StrataRec.Core.Memory;
 namespace StrataRec.Core.Threading;
 
 /// <summary>
-/// The bound the external calls of one scope share (design 4.8, 5.6): a node attempt's budget, a feature fetch's, a cache
+/// The bound the external calls of one scope share: a node attempt's budget, a feature fetch's, a cache
 /// read's. Its absolute deadline, the token handed to the calls (linked to the caller's token and cancelled at the
 /// deadline), and the caller's token itself.
 /// </summary>
@@ -232,7 +232,7 @@ internal interface IBoundedCall<T>
 }
 
 /// <summary>
-/// The framework's one I/O boundary (design 4.8, 5.6, 13.1): an external call, bounded whether or not the client honours
+/// The framework's one I/O boundary: an external call, bounded whether or not the client honours
 /// cancellation. Service calls (<c>OperatorContext.CallAsync</c>), feature connector calls and distributed cache reads all
 /// go through it; each call site only says how to send, judge and record its call.
 /// </summary>

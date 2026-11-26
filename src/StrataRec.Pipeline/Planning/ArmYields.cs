@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
-/// Which experiments yield to which (a release's <c>yields_to</c>, design 11.1): an experiment that yields to another
+/// Which experiments yield to which (a release's <c>yields_to</c>): an experiment that yields to another
 /// runs in none of its arms on a request that is also in an arm of the other. The one rule for the arms a request is
 /// assigned and for the combinations the experiment compiler validates, so what is validated is what runs.
 /// </summary>
@@ -13,7 +13,7 @@ namespace StrataRec.Pipeline.Planning;
 /// (the control yields as the treatment does), and the experiment it yields to never runs beside it. A request in arms of
 /// A, B and C where C yields to B and B to A runs A only.</para>
 /// <para>Two experiments one of which yields to the other never run together, as two of one layer do not: the compiler
-/// neither checks the pair for conflicts nor compiles their combinations (design 11.5).</para>
+/// neither checks the pair for conflicts nor compiles their combinations.</para>
 /// </remarks>
 public sealed class ArmYields
 {
