@@ -44,10 +44,12 @@ dotnet build StrataRec.sln -c Release                         # 警告视为错�
 dotnet test --project tests/StrataRec.UnitTests -c Release    # 内环，约 10 秒；只跑一类加 --filter-class <类的全名>
 scripts/check.sh                                              # 交付之前：构建、门禁、全部测试、慢测试检查，约 1 分钟
 scripts/red-on-base.sh HEAD -- --project tests/StrataRec.UnitTests --filter-class <类>   # 证明新测试在改动之前的代码上失败
+scripts/mutate.sh                                             # 按需：改动过的 src 文件被改坏时有没有测试发现；每个项目几分钟
 ```
 
 - 修缺陷先有一个失败的测试，并用 `scripts/red-on-base.sh` 确认它在修复之前的代码上失败；在旧代码上也通过的测试证明不了什么。
 - 测不变量和边界，不照着实现抄一遍期望值。编译和表达式这类复杂逻辑用生成式的差分测试（`GeneratedExperimentTests`、`DifferentialTests`，种子数由 `STRATAREC_GENERATED_SEEDS`、`STRATAREC_DIFF_SEEDS` 加大）。
+- 改了容易错得很隐蔽的逻辑（候选表、列缓冲、有界等待、编译和校验）之后跑 `scripts/mutate.sh`。存活的变异体逐个判断：补一个断言那个行为的测试，或者它确实无关紧要；不照着变异体的形状凑测试。
 - 测试控制调用何时返回，不和时钟赛跑：不新增 `Thread.Sleep`、`Task.Delay`（门禁按存量计数，只许减少）。新的边界情况优先加进已有的 `[Theory]`，不复制一套夹具。
 - 测试放在被改动代码旁边：`tests/StrataRec.UnitTests/<Area>/`；基于 `samples/` 的端到端测试在 `tests/StrataRec.IntegrationTests`；宿主示例的在 `tests/StrataRec.Samples.Host.Tests`。
 - 改了配置类型或它们的 XML 注释，重新生成两个示例的 Schema（测试失败的信息里有命令）。改引擎的公开 API 时，`samples/StrataRec.Samples.Host` 和 `docs/guide/` 一起改。
