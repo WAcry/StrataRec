@@ -2013,7 +2013,7 @@ public sealed class PlanBuilder
                 // Only one that may run before the tap is captured (review 90: one after it made a scope of more layers,
                 // which past the combination limit rejects the plan). Orders and attach points are taken across variants,
                 // not paired by combination: an arm moving both, or a fallback a later node also falls back to, still
-                // counts (see docs/decisions.md).
+                // counts (see docs/decisions/experiments.md).
                 foreach (var rowSource in rowSources)
                 {
                     if (Earliest(rowSource) is { } earliest && earliest <= latest)

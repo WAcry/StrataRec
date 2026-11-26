@@ -35,6 +35,8 @@
 
   <ItemGroup>
     <None Include="Llm\MustacheSpec\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The page ExpressionGuideTests runs the examples of. -->
+    <None Include="..\..\docs\guide\expressions.md" Link="Guide\expressions.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

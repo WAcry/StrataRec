@@ -86,7 +86,7 @@ internal static class ServiceInputDigest
     }
 
     /// <summary>
-    /// The format of service cache keys (docs/decisions.md, IO step 3). A change of what a record holds or of how a key is
+    /// The format of service cache keys (docs/decisions/external-calls.md). A change of what a record holds or of how a key is
     /// built changes it: the records another build wrote are then misses, never misread.
     /// </summary>
     private const string CacheFormat = "stratarec.service_cache/2026-11-21.7";

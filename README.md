@@ -149,6 +149,9 @@ dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*Pipelin
 
 ## 文档
 
-- [`AGENTS.md`](AGENTS.md)：在这个仓库里开发要知道的：目标、不变量、术语、验证命令。
+- [`docs/guide/`](docs/guide/README.md)：使用指南：从哪里开始、想知道一件事时问哪个命令、[表达式语言](docs/guide/expressions.md)。
+- [`docs/glossary.md`](docs/glossary.md)：术语。
+- [`AGENTS.md`](AGENTS.md)：在这个仓库里开发要知道的：目标、不变量、验证命令。
+- [`docs/architecture.md`](docs/architecture.md)：一次请求经过哪些部分、项目的依赖方向、全局不变量。
 - [`docs/development.md`](docs/development.md)：开发理念、判断标准和取舍的方向。
 - [`docs/decisions/`](docs/decisions/README.md)：读代码看不出来的决定和理由，按领域分文件；不做的和暂时不做的在 `scope.md`。

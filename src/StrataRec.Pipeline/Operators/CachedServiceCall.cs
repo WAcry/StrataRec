@@ -13,7 +13,7 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
-/// One call of a service whose binding declares a cache (docs/decisions.md, IO step 3): the in-process tier,
+/// One call of a service whose binding declares a cache (docs/decisions/external-calls.md): the in-process tier,
 /// then the distributed one, then the service for what is left, within the service's <c>timeout_ms</c>. The answer is put
 /// together in the caller's response, written back for the next calls, and recorded as the node got it. A call about no
 /// items is cached whole; a call about items item by item, the items it misses sent to the service in one call of their
