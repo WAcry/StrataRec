@@ -7,7 +7,7 @@ namespace StrataRec.CommandLine.Commands;
 /// <summary>
 /// What a store's pointer publishes for a pipeline in an environment, as <c>build</c>, <c>publish</c> and <c>revoke</c>
 /// read it: the manifest it names, and the experiments the revocations just before it removed. The errors of
-/// a pointer that cannot be read, or that names a manifest the store cannot read or of another pipeline (review 37), are
+/// a pointer that cannot be read, or that names a manifest the store cannot read or of another pipeline, are
 /// reported here, once for the three commands.
 /// </summary>
 internal static class PublishedRelease
@@ -50,7 +50,7 @@ internal static class PublishedRelease
             return (false, null);
         }
 
-        // Its sequence, floor and experiments say nothing of this pipeline's releases when it is another's (review 37).
+        // Its sequence, floor and experiments say nothing of this pipeline's releases when it is another's.
         if (!ManifestBuilder.CheckIdentity(published, current, pipelineId, environment, diagnostics))
         {
             diagnostics.Error("POINTER_MANIFEST_FOREIGN", path, string.Empty,

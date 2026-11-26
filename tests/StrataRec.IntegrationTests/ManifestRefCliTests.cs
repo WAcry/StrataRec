@@ -101,7 +101,7 @@ public sealed class ManifestRefCliTests
     [Fact]
     public async Task Replay_OfARequestThatFailedOver_RunsTheFallbackPipelineOnTheManifestItRecorded()
     {
-        // Two pipelines released separately: 'primary' (its source fails) falls back to 'backup' (review 24 P2).
+        // Two pipelines released separately: 'primary' (its source fails) falls back to 'backup'.
         var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"fixtures/recall_popular.json\"",
@@ -154,7 +154,7 @@ public sealed class ManifestRefCliTests
             CancellationToken.None, candidateManifest: manifests[0].Id, store: store));
 
         // A bundle cut down to its fallback run still replays its primary pipeline, on the named manifest, every one of its
-        // calls a gap (review 25), as on a workspace.
+        // calls a gap, as on a workspace.
         var cut = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
         var withoutPrimary = ReplayBundleFile.Load(Path.Combine(bundles, "failed-over.json"));
         withoutPrimary.Runs.RemoveAt(0);
@@ -279,7 +279,7 @@ public sealed class ManifestRefCliTests
     }
 
     /// <summary>
-    /// Review 91: the engines a bundle replays on are found only for a bundle of this format, whoever read it: an object
+    /// The engines a bundle replays on are found only for a bundle of this format, whoever read it: an object
     /// deserialized without <see cref="ReplayBundleFile"/> is refused at /format before its runs are read.
     /// </summary>
     [Fact]
@@ -345,7 +345,7 @@ public sealed class ManifestRefCliTests
         Assert.True(0 == await ReplayCommand.RunAsync(Tool.Environment, null, "local", [bundle], Array.Empty<string>(), "json", true, TextWriter.Null,
             CancellationToken.None, store: store, errors: replayErrors), replayErrors.ToString());
 
-        // A manifest named by its file need not be in the store: the command names the file (review 37).
+        // A manifest named by its file need not be in the store: the command names the file.
         var copy = Path.Combine(ManifestStores.NewStore(), "release.json");
         File.Copy(manifestFile, copy);
         var fileBundle = Path.Combine(store, "recorded-file.json");
@@ -371,7 +371,7 @@ public sealed class ManifestRefCliTests
         File.WriteAllText(other, File.ReadAllText(Path.Combine(root, "requests", "user_1001.json")).Replace("\"home_feed\"", "\"other_feed\"", StringComparison.Ordinal));
 
         var (code, _, errors) = await Run(other, manifest: id, store: store);
-        Assert.Equal(2, code); // the request's mistake, as help says (review 37)
+        Assert.Equal(2, code); // the request's mistake, as help says
         Assert.Contains("REQUEST_INVALID", errors);
         Assert.Contains("The request runs pipeline 'other_feed', and the manifest releases pipeline 'home_feed'.", errors);
 
@@ -471,7 +471,7 @@ public sealed class ManifestRefCliTests
         File.WriteAllText(notAManifest, """{ "pipeline_id": "home_feed", "environment": "local", "artifacts": {} }""");
         await Expect(1, "MANIFEST_SCHEMA", notAManifest, "release manifest", manifest: notAManifest, store: store, pointer: "/artifacts");
 
-        // A manifest file whose seq canonical JSON cannot hold exactly has no content id (review 38: an unhandled exception).
+        // A manifest file whose seq canonical JSON cannot hold exactly has no content id (an unhandled exception).
         var beyond = Path.Combine(store, "beyond-2-53.json");
         File.WriteAllText(beyond, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(file), "\"seq\": \\d+", "\"seq\": 9007199254740993"));
         await Expect(1, "MANIFEST_NOT_CANONICAL", beyond, "write integers of at most 9007199254740991", manifest: beyond, store: store, pointer: "/seq");
@@ -535,7 +535,7 @@ public sealed class ManifestRefCliTests
         Assert.Contains(hint, error.Hint);
     }
     /// <summary>
-    /// Review 67: a plan binds only the feature sources it reads, so the manifest requires only their connector types. A
+    /// A plan binds only the feature sources it reads, so the manifest requires only their connector types. A
     /// catalog shared with another pipeline may name a source whose connector this binary lacks; it validated, built and
     /// ran from the workspace, but the manifest required the connector, and the same binary refused to load it.
     /// </summary>

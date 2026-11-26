@@ -38,7 +38,7 @@ public class CacheTableTests
     /// <summary>
     /// Pre-release assessment: a write-back is charged what it holds while it waits, its keys' strings with its records.
     /// A 10,000-char key with an 18-byte record held 20 KB against a queue that counted 18 B, in either tier. Each queue
-    /// holds a small batch here, since an empty one takes even a batch over its limit (review 78).
+    /// holds a small batch here, since an empty one takes even a batch over its limit.
     /// </summary>
     [Fact]
     public async Task AWriteBack_IsChargedItsKeys_NotOnlyItsRecords_InEitherTier()
@@ -76,7 +76,7 @@ public class CacheTableTests
     }
 
     /// <summary>
-    /// Review 78: a key part several keys share, the same string object (a request input's or a context feature's part
+    /// A key part several keys share, the same string object (a request input's or a context feature's part
     /// of a composite key), is one string held, charged once. 4,096 candidates sharing a 128-char part were charged that
     /// string 4,096 times, about 1.44 MiB, and an empty 1 MiB queue dropped the batch. An equal string that is another
     /// object for each key is held, and charged, once per key.
@@ -106,7 +106,7 @@ public class CacheTableTests
     }
 
     /// <summary>
-    /// Review 78: one request's misses make one write-back, whatever max_batch split its calls into, so a batch larger
+    /// One request's misses make one write-back, whatever max_batch split its calls into, so a batch larger
     /// than the whole queue limit was dropped by an idle queue on every request. An empty queue takes it (as the log
     /// pipeline takes a batch larger than its budget); one that holds some takes nothing over its limit, so it holds at
     /// most that one batch over it.
@@ -135,7 +135,7 @@ public class CacheTableTests
     [Fact]
     public void Eviction_CountsASharedStringAsFreed_OnlyWhenItsLastRecordGoes()
     {
-        // Review 75: ten records share one 25,000-char string. Each record's share of it was counted as freed, so the
+        // Ten records share one 25,000-char string. Each record's share of it was counted as freed, so the
         // eviction for a 10,000-char write-back dropped one record, the shared string stayed whole, and the write-back
         // still did not fit and was dropped.
         var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("name", ColumnType.String)]);

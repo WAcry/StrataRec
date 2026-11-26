@@ -141,8 +141,8 @@ public sealed partial class FeatureFetcher : IIoTracker
     /// </summary>
     /// <remarks>
     /// The set of operations can grow while this waits: a chained context group starts where its key was stored, on a
-    /// connector's thread, and registers its call then, possibly after this was called (review 77); a cache read sends its
-    /// origin calls once its distributed tier answered, possibly after the request stopped reading it (review 78). Each
+    /// connector's thread, and registers its call then, possibly after this was called; a cache read sends its
+    /// origin calls once its distributed tier answered, possibly after the request stopped reading it. Each
     /// registers before its parent, which is tracked (the context fetch, the read's resolution), completes, so a wait
     /// that finds nothing registered since it began has seen everything: this waits round after round until one finds
     /// nothing new, and every round to its end before it rethrows the first failure.
@@ -255,8 +255,8 @@ public sealed partial class FeatureFetcher : IIoTracker
     /// <para>A prefetch these rows need nothing from is left in flight, settled as an unread one when the request ends (or
     /// completed by a later whole fill). Waiting for one that failed for all its keys set the feature failed and failed
     /// the output: one started for rows not returned (a fallback's declared reads, say) when the returned rows were filled
-    /// already (review 79), or when their keys were not among its keys, the rows having been appended after it started,
-    /// so that the connector was never asked for them (review 80). Need is judged by key, as the prefetch's backfill
+    /// already, or when their keys were not among its keys, the rows having been appended after it started,
+    /// so that the connector was never asked for them. Need is judged by key, as the prefetch's backfill
     /// matches rows: a row of these still unfilled on a feature it carries, whose key is one of its keys. One such row is
     /// enough: the prefetch is completed, its failure recorded, as before, and the rows whose keys it lacks are fetched
     /// by this fill.</para>
@@ -429,7 +429,7 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <summary>
     /// Whether a row of <paramref name="scope"/> needs what <paramref name="pending"/> fetches: a feature of it in
-    /// <paramref name="member"/> is unfilled on the row, and the row's key is one of the fetch's keys (review 80). The key
+    /// <paramref name="member"/> is unfilled on the row, and the row's key is one of the fetch's keys. The key
     /// is looked up as the fetch's backfill looks it up (<see cref="FetchKeyOf"/>: its varying parts, composite or read from
     /// a key feature this fill filled in an earlier wave; the shared parts are the request's, the same for every fetch),
     /// so a fetch this finds no row for would have filled none of them. Allocates nothing.
@@ -979,7 +979,7 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <summary>
     /// Counts the fetches no reader took (<see cref="StrataRecMetrics.SourceValues"/>): a prefetch whose features only a
-    /// node that did not run needed (a fallback, review 25), or one the request ended before reading. A source that
+    /// node that did not run needed (a fallback), or one the request ended before reading. A source that
     /// answered was asked whether or not the request used the answer. Only chunks whose calls completed within their
     /// budget count, as for a fetch that was read; a chunk still running when the request ends is abandoned. Called once, by
     /// <see cref="EndRequest"/>, before the request's memory is released (the staging lives in it).
@@ -1547,7 +1547,7 @@ public sealed partial class FeatureFetcher : IIoTracker
             return OutcomeOf(value);
         }
 
-        public void Pending(Task done) => fetcher.TrackIo(done); // done once the connector and this call site both are (review 78)
+        public void Pending(Task done) => fetcher.TrackIo(done); // done once the connector and this call site both are
 
         public void Ended(in CallResult<FetchStatus> result, TimeSpan duration)
         {

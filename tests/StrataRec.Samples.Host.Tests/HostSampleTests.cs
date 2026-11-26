@@ -480,7 +480,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     [InlineData("""{ "request_id": "" }""", "/request_id", "request_id must be a non-empty string")]
     [InlineData("""{ "inputs": """, "", "not JSON")]
     [InlineData("""[]""", "", "must be a JSON object")]
-    // Review 32: a JsonObject throws on a duplicate name only when its members are enumerated, which gave an empty 500.
+    // A JsonObject throws on a duplicate name only when its members are enumerated, which gave an empty 500.
     [InlineData("""{ "inputs": {}, "inputs": {} }""", "/inputs", "Member 'inputs' is given more than once.")]
     [InlineData("""{ "inputs": { "user_id": 1001, "user_id": 1002 } }""", "/inputs/user_id", "Member 'user_id' is given more than once.")]
     [InlineData("""{ "assignment": [], "inputs": { "region": { "a": 1, "a": 2 } } }""", "/inputs/region/a", "Member 'a' is given more than once.")]
@@ -497,7 +497,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     }
 
     /// <summary>
-    /// Review 33: bytes that are not UTF-8 parse, and threw when the name or string was read, which gave a 500. <c>#</c>
+    /// Bytes that are not UTF-8 parse, and threw when the name or string was read, which gave a 500. <c>#</c>
     /// stands for a raw <c>0xFF</c>.
     /// </summary>
     [Theory]
@@ -544,7 +544,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
     /// <summary>
     /// The engine's answer decides the status, also when it differs from what the host read: a plan loaded between reading
-    /// the inputs and running them (review 32) is the engine's InvalidRequest, a 400 at the input's pointer, not a 500.
+    /// the inputs and running them is the engine's InvalidRequest, a 400 at the input's pointer, not a 500.
     /// </summary>
     [Theory]
     [InlineData(RecErrorKind.InvalidRequest, HttpStatusCode.BadRequest, "/inputs/tenant_id")]

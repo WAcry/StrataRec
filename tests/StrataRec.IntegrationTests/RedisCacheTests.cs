@@ -97,7 +97,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     }
 
     /// <summary>
-    /// Review 19: credentials the server refuses are a wrong setting, unlike a server that is down. A dedicated ACL user on
+    /// Credentials the server refuses are a wrong setting, unlike a server that is down. A dedicated ACL user on
     /// the test's Redis (so that a shared server needs no restart): its wrong password fails the load at the setting,
     /// never quoting the secret; its right one loads and serves.
     /// </summary>
@@ -136,7 +136,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     }
 
     /// <summary>
-    /// Review 19: a server whose default user needs a password refuses the connection itself. A wrong password fails the
+    /// A server whose default user needs a password refuses the connection itself. A wrong password fails the
     /// load at the setting, none at all fails it at the binding (the hint says to add one), the right one loads. A server
     /// that is down still loads (<see cref="RedisDownTests"/>).
     /// </summary>
@@ -171,7 +171,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     /// The CI flake's first cause (an investigation reproduced it): StackExchange.Redis tells the connect that its
     /// connection ended before it publishes the refusal that ended it. Holding that publication (the client logs it as
     /// event 89 just before) until the load has decided made a refused load succeed, every time. The first connect must
-    /// succeed now: when it gives up, it reads the refusal the client recorded, not the published one (review 24, 35).
+    /// succeed now: when it gives up, it reads the refusal the client recorded, not the published one.
     /// </summary>
     [DockerRedisFact]
     public async Task ARefusalTheClientHasNotPublishedYet_StillFailsTheLoad()
@@ -184,7 +184,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     }
 
     /// <summary>
-    /// Investigation 3 and review 35: the connection that saw the refusal had not published it, and the next connection
+    /// The connection that saw the refusal had not published it, and the next connection
     /// failed before it saw one of its own (here a proxy resets it; in CI a timeout). With the store's connection made
     /// first and a probe after it, both said nothing and the load succeeded. The connection that sees the refusal now
     /// reports it itself, whatever the connections after it do.
@@ -224,7 +224,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         BindingException error;
 
         // Each hold blocks a pool thread, and the connect reads the refusal on the pool: without spare threads the test's
-        // own holds could starve it until its timeout (investigation 3).
+        // own holds could starve it until its timeout.
         ThreadPool.GetMinThreads(out var workers, out var completionPorts);
         ThreadPool.SetMinThreads(Math.Max(workers, 64), completionPorts);
         try
@@ -297,7 +297,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
             + (state is null ? string.Empty : "; " + state()));
     }
 
-    /// <summary>Review 19: through the engine, refused credentials reject the plan at the binding's password setting.</summary>
+    /// <summary>through the engine, refused credentials reject the plan at the binding's password setting.</summary>
     [RedisFact]
     public async Task AnEngineWhoseRedisRefusesItsCredentials_RejectsThePlanAtThePassword()
     {

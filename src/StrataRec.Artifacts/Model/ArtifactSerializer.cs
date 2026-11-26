@@ -265,7 +265,7 @@ public static class ArtifactSerializer
             WriteIndented = true,
 
             // null where a member is not nullable is an error at its pointer, as the generated JSON Schema says: bound,
-            // it was a null an operator or loader dereferenced (review 44). Elements of collections are not covered.
+            // it was a null an operator or loader dereferenced. Elements of collections are not covered.
             RespectNullableAnnotations = true,
 
             // A key written twice is an error, as the JSONC reader says (Deserialize checks the text first, with a line and

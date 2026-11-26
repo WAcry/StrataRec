@@ -10,7 +10,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Review 79: the log batches of a request whose fallback pipeline served. Pipeline <c>primary</c> recalls (tap
+/// The log batches of a request whose fallback pipeline served. Pipeline <c>primary</c> recalls (tap
 /// <c>recalled</c> captures after it), then a node whose source fails fails it; <c>backup</c> serves, with an output tap.
 /// A request that captures its logs gets both runs' batches; one whose fallback is cancelled records that the batches it
 /// captured went nowhere.

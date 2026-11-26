@@ -12,7 +12,7 @@ public sealed class ComponentTests
     [Fact]
     public async Task Logistic_LargeCoefficientsThatCancel_GiveTheirProbability_NotNaN()
     {
-        // Review 32: the factory accepts any finite double, and the call computed in float, where 1e40 is infinite: the
+        // The factory accepts any finite double, and the call computed in float, where 1e40 is infinite: the
         // logit was inf - inf, and the call returned NaN as a success.
         var client = new LogisticModelClient("m", "v1", "p", bias: -1e40, inputs: new[] { "x" }, weights: new[] { 1e40 });
         var outputs = new Outputs();
@@ -39,7 +39,7 @@ public sealed class ComponentTests
     [Fact]
     public async Task KeyValueStore_AStringKey_IsALoadErrorAtItsLine()
     {
-        // Review 32: TryGetInt64 throws on a string, so the record's line and the binding's pointer were lost.
+        // TryGetInt64 throws on a string, so the record's line and the binding's pointer were lost.
         var file = Path.GetTempFileName();
         try
         {
@@ -65,7 +65,7 @@ public sealed class ComponentTests
     [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": 1 }, "bais": 1 }""", "/bais", "did you mean 'bias'?")]
     [InlineData("logistic@1", """{ "weights": { "ctr": 1 } }""", "", "'version': ")]
     [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": "high" } }""", "/weights/ctr", "'stratarec schema bindings'")]
-    [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": 1e400 } }""", "/weights/ctr", "use a smaller magnitude")] // review 32: finite only
+    [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": 1e400 } }""", "/weights/ctr", "use a smaller magnitude")] // Finite only
     [InlineData("logistic@1", """{ "version": "v3", "weights": {} }""", "/weights", "e.g. { \"ctr\": 20.0")]
     [InlineData("trending@1", """{ "items": [{ "id": 7 }] }""", "/items/0", "'score': ")]
     [InlineData("trending@1", """{ "items": [{ "id": "7", "score": 1 }] }""", "/items/0/id", "'stratarec schema bindings'")]

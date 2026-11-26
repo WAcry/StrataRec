@@ -237,7 +237,7 @@ public sealed class EntityKeyTests
     [Fact]
     public void AChainOfEightPartKeys_IsCheckedForCyclesOnce_NotOncePerPath()
     {
-        // Review 76: each entity's eight parts read eight features of the entity before it, and the cycle check walked
+        // Each entity's eight parts read eight features of the entity before it, and the cycle check walked
         // the parent's chain once per part: ten entities took 6 s, fourteen would take hours. Remembering the entities
         // found acyclic makes it linear.
         var entities = new JsonObject { ["e00"] = new JsonObject { ["key"] = "col.entity_id" } };
@@ -273,7 +273,7 @@ public sealed class EntityKeyTests
     [Fact]
     public void AChainOfEightPartContextKeys_IsCheckedForCyclesOnce_NotOncePerPath()
     {
-        // Review 76 for context keys: each entity keyed by eight context features of the entity before it. The memo of
+        // For context keys: each entity keyed by eight context features of the entity before it. The memo of
         // entities found acyclic holds for every kind of edge.
         var entities = new JsonObject { ["e00"] = new JsonObject { ["key"] = "ctx.request.user_id" } };
         var features = new JsonObject();

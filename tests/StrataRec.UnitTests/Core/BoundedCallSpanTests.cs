@@ -7,7 +7,7 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>
-/// Review 83: two bounded calls in one traced flow, the first answering at once. A host's activity listener that threw
+/// Two bounded calls in one traced flow, the first answering at once. A host's activity listener that threw
 /// when the first call's span started or stopped left that span current: both calls answered, and the second call's
 /// client was sent under the first call's span, not the request's.
 /// </summary>

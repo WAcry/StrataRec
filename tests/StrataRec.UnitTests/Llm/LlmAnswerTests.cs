@@ -17,7 +17,7 @@ public sealed class LlmAnswerTests
     [InlineData("```js\n[1]\n```", "```js\n[1]\n```")] // another language: not unwrapped
     [InlineData("```[1]```", "```[1]```")] // no line for the opening fence
     [InlineData("```json\n[1]\n```\n```json\n[2]\n```", "[1]\n```\n```json\n[2]")] // two fences: the outer one only, the rest fails the parse
-    [InlineData("```json\n[2,\"```\",1]\n```", "[2,\"```\",1]")] // backticks in a JSON string are content (review 29)
+    [InlineData("```json\n[2,\"```\",1]\n```", "[2,\"```\",1]")] // backticks in a JSON string are content
     [InlineData("[1]", "[1]")]
     [InlineData("```", "```")]
     public void OneFenceAroundTheWholeAnswer_IsRemoved(string text, string inside)
@@ -58,7 +58,7 @@ public sealed class LlmAnswerTests
     [Fact]
     public void BackticksInAFencedAnswer_AreContent_NotASecondFence()
     {
-        // Review 29: the whole inside was scanned for another fence, so a string holding ``` failed a valid answer.
+        // The whole inside was scanned for another fence, so a string holding ``` failed a valid answer.
         var (ranks, rankCounts, rankError) = Parse("```json\n[2,\"```\",1]\n```", AnswerKind.Rank, 10, 20, 30);
         var (ids, idCounts, idError) = Parse("```json\n[\"code```id\"]\n```", AnswerKind.EntityId, "a", "code```id");
         var (_, _, twoBlocks) = Parse("```json\n[1]\n```\n```json\n[2]\n```", AnswerKind.Rank, 10, 20, 30);
@@ -75,7 +75,7 @@ public sealed class LlmAnswerTests
     [Fact]
     public void AStringThatIsNotValidUnicode_IsAnUnknownElement()
     {
-        // Review 29: an unpaired surrogate escape is valid JSON but cannot equal an id; it threw instead.
+        // An unpaired surrogate escape is valid JSON but cannot equal an id; it threw instead.
         var (positions, counts, error) = Parse("""["\uD800", "b", "\uDC00x"]""", AnswerKind.EntityId, "a", "b");
 
         Assert.Null(error);
@@ -88,7 +88,7 @@ public sealed class LlmAnswerTests
     [InlineData('\uDC00')]
     public void ARawUnpairedSurrogate_IsAnUnknownElement_NeverTheReplacementCharacter(char lone)
     {
-        // Review 30: a client's string can hold an unpaired surrogate itself, not only its JSON escape. UTF-8 encoding
+        // A client's string can hold an unpaired surrogate itself, not only its JSON escape. UTF-8 encoding
         // replaced it with U+FFFD, which matched an entity whose id is U+FFFD.
         var answer = "[\"" + lone + "\", \"a\", \"x\uD83D\uDE00\"]";
         var (positions, counts, error) = Parse(answer, AnswerKind.EntityId, "\uFFFD", "a", "x\uD83D\uDE00");
@@ -105,7 +105,7 @@ public sealed class LlmAnswerTests
     [InlineData('\uDC00')]
     public void ARawUnpairedSurrogate_AfterAnOddRunOfBackslashes_LeavesTheAnswerInvalid(char lone)
     {
-        // Review 31: the surrogate is the character of an escape, which makes the answer invalid JSON. Written as its own
+        // The surrogate is the character of an escape, which makes the answer invalid JSON. Written as its own
         // escape it made "\\uD800" (an escaped backslash and five letters), a valid string that matched that entity.
         var escaped = "\\u" + ((int)lone).ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
         var (_, _, one) = Parse("[\"\\" + lone + "\", \"a\"]", AnswerKind.EntityId, escaped, "a");
@@ -161,7 +161,7 @@ public sealed class LlmAnswerTests
         Assert.Equal(new AnswerCounts(1, 2, 0), counts);
     }
 
-    /// <summary>An id a filter dropped is present, also once a compaction released its row (Gemini review 2026-11-14, finding 1).</summary>
+    /// <summary>An id a filter dropped is present, also once a compaction released its row.</summary>
     [Fact]
     public void AnIdWhoseRowACompactionReleased_IsPresent_NotNew()
     {

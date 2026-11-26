@@ -7,7 +7,7 @@ using StrataRec.Logging;
 namespace StrataRec.UnitTests.Logging;
 
 /// <summary>
-/// Review 78: what the log pipeline's options allow and its accounting of each batch (pending count, queue bytes, the
+/// What the log pipeline's options allow and its accounting of each batch (pending count, queue bytes, the
 /// queue-depth series, per-tap counters) when the host's diagnostics misbehave or a consumer is quick.
 /// </summary>
 /// <remarks>
@@ -197,7 +197,7 @@ public sealed class LogPipelineAccountingTests
     }
 
     /// <summary>
-    /// Review 81: the sink wrote one batch of a write and rejected the other, and the host's rejection callback threw an
+    /// The sink wrote one batch of a write and rejected the other, and the host's rejection callback threw an
     /// exception whose message threw as well. Describing it threw out of the write, which was then settled as a failure:
     /// both batches counted as dropped, the one the sink had written among them. The outcome is settled before the
     /// callback runs, and the exception is described by its type.
@@ -239,7 +239,7 @@ public sealed class LogPipelineAccountingTests
     }
 
     /// <summary>
-    /// Review 81: the logger threw when disposal logged the drain timeout (3003), a sink that did not stop (3004), or the
+    /// The logger threw when disposal logged the drain timeout (3003), a sink that did not stop (3004), or the
     /// last window's summaries (2001): the exception left <see cref="LogPipeline.DisposeAsync"/> and the rest of its
     /// cleanup was skipped, the summaries among it. The logger loses that record; disposal completes, and writes the
     /// summaries.

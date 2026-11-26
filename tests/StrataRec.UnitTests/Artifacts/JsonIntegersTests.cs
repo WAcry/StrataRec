@@ -5,7 +5,7 @@ namespace StrataRec.UnitTests.Artifacts;
 
 /// <summary>
 /// <see cref="JsonIntegers"/>: an integer is read from the number's text exactly, whatever form JSON writes it in; a
-/// number with a fraction, or one a long cannot hold, is not one. Review 32 #1: through a double,
+/// number with a fraction, or one a long cannot hold, is not one. Through a double,
 /// <c>9007199254740993.0</c> and <c>9007199254740992.5</c> both became 9007199254740992.
 /// </summary>
 public class JsonIntegersTests
@@ -66,7 +66,7 @@ public class JsonIntegersTests
     [InlineData("1e")]
     [InlineData(".5")]
     [InlineData("abc")]
-    [InlineData("01")] // review 33: JSON allows no leading zeros
+    [InlineData("01")] // JSON allows no leading zeros
     [InlineData("-01")]
     [InlineData("00e2")]
     [InlineData("1.")] // nor a point without a digit after it
@@ -94,7 +94,7 @@ public class JsonIntegersTests
     [Fact]
     public void ALongRunOfZeros_OffsetByAnExponent_IsReadExactly()
     {
-        // Review 33: the exponent saturated at a fixed 1e9, which zeros enough to offset it would turn into another number.
+        // The exponent saturated at a fixed 1e9, which zeros enough to offset it would turn into another number.
         // The cap now grows with the text; a short case checks the arithmetic the long one relies on.
         var zeros = new string('0', 2_000);
         Assert.True(JsonIntegers.TryParse("1" + zeros + "e-2000", out var one));

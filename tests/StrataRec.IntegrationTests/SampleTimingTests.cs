@@ -79,7 +79,7 @@ public sealed class SampleTimingTests
     public async Task ATracedRunAndARecordedRun_CompareByTheirDecisions()
     {
         // A trace reports kinds (Degraded by ctr_backup), a recording categories (fallback by ctr_backup): the same
-        // decisions compare equal across the two, both when the ranker serves and when its fallback does (review 14).
+        // decisions compare equal across the two, both when the ranker serves and when its fallback does.
         var (serving, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var (fallingBack, _) = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(MetricsTests.FailModel));
         var servedTrace = await serving.ExecuteAsync(Traced("req-trace"), TestContext.Current.CancellationToken);
@@ -117,7 +117,7 @@ public sealed class SampleTimingTests
     public async Task ATracedAndARecordedRun_ServedByTheFallbackPipeline_CompareByTheServedRun()
     {
         // A trace has only the run that served; a recording has the primary's too. Both compare by the served pipeline and
-        // its run, and a request the primary served differs in which pipeline served (review 15).
+        // its run, and a request the primary served differs in which pipeline served.
         var failing = Engine(ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0));
         var healthyRoot = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         ReplayTests.Edit(healthyRoot, "bindings/local.jsonc", "\"fail\": true", "\"fail\": false");

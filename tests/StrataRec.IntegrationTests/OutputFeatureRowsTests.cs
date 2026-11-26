@@ -74,7 +74,7 @@ public class OutputFeatureRowsTests
     }
 
     /// <summary>
-    /// Review 79: the first recall appends item 1 and a scorer fills its <c>item.base</c>; a second recall appends item 2,
+    /// The first recall appends item 1 and a scorer fills its <c>item.base</c>; a second recall appends item 2,
     /// and the next node's fallback declares <c>item.base</c>, so a prefetch of key 2 starts, which fails. The node itself
     /// succeeds and the fallback never runs. The output returns item 1 alone: its features were filled, and the prefetch
     /// for item 2 is not waited for (waiting set <c>item.base</c> failed and failed the request). When item 2 is returned
@@ -106,7 +106,7 @@ public class OutputFeatureRowsTests
     }
 
     /// <summary>
-    /// Review 80: the first recall appends item 1; the second (no fetch barrier) appends item 2 after the prefetch of the
+    /// The first recall appends item 1; the second (no fetch barrier) appends item 2 after the prefetch of the
     /// next node's fallback's <c>item.base</c> started, for key 1, which fails. The node succeeds, the fallback never runs,
     /// and a filter keeps item 2 alone. The output fills item 2, which the prefetch never asked for: it is not waited for
     /// (waiting failed the request with key 1's failure, the connector never asked for key 2), and key 2 is fetched.
@@ -167,7 +167,7 @@ public class OutputFeatureRowsTests
             """);
 
     /// <summary>
-    /// Review 79's pipeline: recall of item 1, a scorer reading <c>item.base</c>, recall of item 2, then a node whose
+    /// The pipeline: recall of item 1, a scorer reading <c>item.base</c>, recall of item 2, then a node whose
     /// fallback reads <c>item.base</c>; the output of <paramref name="limit"/> rows reads <c>item.narrow</c>. The source
     /// fails every call for key 2.
     /// </summary>

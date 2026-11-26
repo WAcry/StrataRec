@@ -38,7 +38,7 @@ public static class PlanCompiler
     /// (<c>/request/config_override</c>) in a file written and read at most <see cref="Jsonc.MaxDepth"/> levels deep, as
     /// every configuration file is: so every override that runs can be recorded and replayed from its file, and a request
     /// file (<c>stratarec run</c>, one level down) holds any. Before the limit, a host's override nested deeper than a
-    /// reader's default depth threw out of the request where it was checked (review 81).
+    /// reader's default depth threw out of the request where it was checked.
     /// </summary>
     public const int OverrideMaxDepth = Jsonc.MaxDepth - 2;
 
@@ -151,7 +151,7 @@ public static class PlanCompiler
             // A host may build the override from text that repeats a member (JsonNode.Parse keeps both, and the object throws
             // when it is first enumerated, also under a case-insensitive comparison), nest it as deep as it likes, or wrap a
             // CLR object that writes either (JsonValue.Create): the override's mistake, at its pointer, found before anything
-            // else reads it, not an exception out of the request (reviews 79, 81 and 83). Everything below reads the copy the
+            // else reads it, not an exception out of the request. Everything below reads the copy the
             // check made, never the host's tree, which would write its CLR values again, perhaps differently.
             if (StrictJson.Check(configOverride, OverrideMaxDepth, out var read) is { } invalid)
             {
@@ -220,10 +220,10 @@ public static class PlanCompiler
     /// pipeline's or catalog's pointer, though the value came from the override: an integer the canonical form cannot tell
     /// from a float (<c>-90071992547409930E-1</c>) passed the override's own checks and was refused by the parameter's
     /// binding at <c>pipeline:home_feed/params/big</c>, with no pointer for the caller, while the same integer written as
-    /// digits was refused at <c>/config_override/params/big</c> (review 81). Such a diagnostic keeps its code, message and
+    /// digits was refused at <c>/config_override/params/big</c>. Such a diagnostic keeps its code, message and
     /// hint and moves to the override, as an arm's moves to the arm whose patch touches it. Names are compared by ordinal,
     /// as RFC 7396 merging compares them (<see cref="JsonMergePatch"/>): a <c>FINAL_TOP_K</c> the override sets is another
-    /// parameter than the baseline's <c>final_top_k</c>, whatever the host's object compares (review 83: one parsed with
+    /// parameter than the baseline's <c>final_top_k</c>, whatever the host's object compares (one parsed with
     /// <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/> moved the baseline's error to the override).
     /// </summary>
     private static bool InOverride(JsonObject configOverride, string pointer)
@@ -275,10 +275,10 @@ public static class PlanCompiler
     /// <remarks>
     /// <para>Recording each experiment's needs is what lets a revocation, which compiles nothing, require what is left:
     /// inferring them back from the configuration's names kept what an operator used by default and freed nothing a feature
-    /// source needed (reviews 39, 40, 42, 68).</para>
+    /// source needed.</para>
     /// <para>A combination can need what no experiment needs alone: one arm points recall at a quota map, an arm of another
-    /// layer adds a source of a new client type to that map (review 69); and what one experiment needs alone, another pair
-    /// can need too (review 70). So each capability the release needs beyond the baseline goes to: the experiments that need
+    /// layer adds a source of a new client type to that map; and what one experiment needs alone, another pair
+    /// can need too. So each capability the release needs beyond the baseline goes to: the experiments that need
     /// it alone (O); and, if the release without O still needs it, each remaining experiment without which those remaining
     /// no longer need it (one compile without each). If none such exists, it stays with the baseline. Compiling more
     /// experiments never needs less (every arm's variant joins the baseline's), so a set without a holder needs it no more
@@ -1127,7 +1127,7 @@ internal sealed partial class UnifiedCompilation
 
             radix[li] = arms.Count + 1;
 
-            // Saturates before it could overflow (review 18 #5): a wrapped product would slip under the limit.
+            // Saturates before it could overflow: a wrapped product would slip under the limit.
             combinations = combinations > long.MaxValue / radix[li] ? long.MaxValue : combinations * radix[li];
             li++;
         }
@@ -1221,7 +1221,7 @@ internal sealed partial class UnifiedCompilation
     /// <summary>
     /// A node definition's order as it binds (<see cref="NodeSpec.Order"/>): an integer JSON number, however the tree holds
     /// it. A tree built in code holds an <c>int</c> where a parsed one holds a JSON element, and reading only one CLR type
-    /// put a moved writer last on the timeline, after the reader it declares a column for (review 49).
+    /// put a moved writer last on the timeline, after the reader it declares a column for.
     /// </summary>
     internal static int? OrderOf(JsonNode? node) =>
         node is JsonObject definition && definition["order"] is JsonValue value

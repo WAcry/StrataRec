@@ -62,7 +62,7 @@ public class CacheBindingTests
     }
 
     /// <summary>
-    /// Review 19: the distributed tier keeps a record for up to ttl_ms × 1.1 + stale_if_error_ms, given to the store as a
+    /// The distributed tier keeps a record for up to ttl_ms × 1.1 + stale_if_error_ms, given to the store as a
     /// <see cref="TimeSpan"/>. Exactly what one holds is accepted and written back with it; a millisecond more is an error
     /// at the setting, not an overflow on the first write-back.
     /// </summary>
@@ -92,7 +92,7 @@ public class CacheBindingTests
     }
 
     /// <summary>
-    /// Review 21 #1: at the longest retention the binding accepts, the clock steps back during the fetch, so the record's
+    /// At the longest retention the binding accepts, the clock steps back during the fetch, so the record's
     /// write time is ahead of the clock when it is written back. It counts as written now, as when it is read: the time to
     /// live is the retention, where it used to be a millisecond more, overflowing to a negative one the store rejects.
     /// </summary>

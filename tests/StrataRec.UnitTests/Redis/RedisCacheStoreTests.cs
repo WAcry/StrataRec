@@ -19,7 +19,7 @@ public class RedisCacheStoreTests
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Review 19: a cancelled load stops waiting for the connect, which goes on; the connection it makes later is the
+    /// A cancelled load stops waiting for the connect, which goes on; the connection it makes later is the
     /// store's, and its disposal waits for it and disposes it.
     /// </summary>
     [Fact]
@@ -65,7 +65,7 @@ public class RedisCacheStoreTests
     }
 
     /// <summary>
-    /// Review 35 #6: a server certificate this host does not trust fails the load at <c>/tls</c>, not as a missing
+    /// A server certificate this host does not trust fails the load at <c>/tls</c>, not as a missing
     /// password. The client reports a failed handshake as an authentication failure too, so the TLS failure is looked for
     /// first, wherever the failure is read; a command's failure on the connection used to be read as refused credentials.
     /// </summary>

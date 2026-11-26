@@ -10,14 +10,14 @@ namespace StrataRec.UnitTests.Features;
 /// <summary>
 /// The request's I/O drain (<see cref="FeatureFetcher.WhenIoCompleteAsync"/>) promises that every operation the request
 /// started has really finished, and the request memory is back once the request released it: here, operations that go on
-/// after the request stopped reading them (review 78).
+/// after the request stopped reading them.
 /// </summary>
 public class IoDrainTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Review 78: a candidate cache read the request stopped reading (another source's call failed the fill first) sends
+    /// A candidate cache read the request stopped reading (another source's call failed the fill first) sends
     /// its origin call once its distributed tier answered, after every call the request had sent completed. The drain
     /// tracked the calls only, so it returned while the origin call was being sent, the memory still held. The read's
     /// resolution, which starts it, is tracked now.
@@ -74,7 +74,7 @@ public class IoDrainTests
     }
 
     /// <summary>
-    /// Review 78: the drain tracked a call's connector, not its call site. A prefetch nobody read is recorded where its
+    /// The drain tracked a call's connector, not its call site. A prefetch nobody read is recorded where its
     /// connector's answer is observed; the drain returned once the connector completed, while the recording still read the
     /// call's keys and staging and the memory was held. A call is done when both are.
     /// </summary>

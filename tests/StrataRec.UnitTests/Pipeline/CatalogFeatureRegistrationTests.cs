@@ -292,7 +292,7 @@ public sealed class CatalogFeatureRegistrationTests
     }
 
     /// <summary>
-    /// Review 69: a feature keyed by a deprecated key reads the key (it is fetched first), so the key warns though no
+    /// A feature keyed by a deprecated key reads the key (it is fetched first), so the key warns though no
     /// expression names it.
     /// </summary>
     [Fact]
@@ -326,7 +326,7 @@ public sealed class CatalogFeatureRegistrationTests
     }
 
     /// <summary>
-    /// Review 67: reading one feature of a cache source registers its whole table once. Each member used to expand the
+    /// Reading one feature of a cache source registers its whole table once. Each member used to expand the
     /// table again, so a table of N features took N² registrations: 40,000 features compiled in 40 s, where the whole
     /// catalog used to take 1 s. The bound is far above the linear time and far below the quadratic one.
     /// </summary>

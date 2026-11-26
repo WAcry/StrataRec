@@ -127,7 +127,7 @@ public class CandidateTableTests
     public void StringIds_AppendedInBatches_AllocateNothingOnceThePoolIsWarm(int batch)
     {
         // String ids are distinct, so they are stored one string per row in pooled arrays: as a dictionary they took about
-        // 200 KB a request for 5,000 ids that were not pooled (583 KB grown step by step; review 44), and duplicated the
+        // 200 KB a request for 5,000 ids that were not pooled (583 KB grown step by step), and duplicated the
         // key index. Measured on this thread, which runs the code under test alone; the first round warms the pools.
         var ids = Enumerable.Range(0, 5000).Select(i => "id-" + i).ToArray();
         var batches = Enumerable.Range(0, (ids.Length + batch - 1) / batch)
@@ -283,7 +283,7 @@ public class CandidateTableTests
 
     /// <summary>
     /// A key whose row a compaction released is still a key the request has seen, across
-    /// several compactions and both key types; keys a rollback released were never appended (Gemini review 2026-11-14, finding 1).
+    /// several compactions and both key types; keys a rollback released were never appended.
     /// </summary>
     [Theory]
     [InlineData(EntityKeyType.Int64)]

@@ -9,8 +9,8 @@ namespace StrataRec.UnitTests.Artifacts;
 
 /// <summary>
 /// A null element where the model says a value is required is a binding error at the element's own pointer, for any
-/// config an extension binds; what the document did not write (a computed property) is not walked (review 45), nor what the
-/// serializer does not read (review 47).
+/// config an extension binds; what the document did not write (a computed property) is not walked, nor what the
+/// serializer does not read.
 /// </summary>
 public sealed class NullElementsTests
 {
@@ -36,7 +36,7 @@ public sealed class NullElementsTests
     [InlineData("""{ "pair": { "items": [null] } }""", "/pair/items/0", "Item 0 of 'items' must be a string, got null.")]
     [InlineData("""{ "by_date": { "2024-01-02T03:04:05": [null] } }""", "/by_date/2024-01-02T03:04:05/0", "Item 0 of '2024-01-02T03:04:05' must be a string, got null.")]
     [InlineData("""{ "other": null }""", "/other", "'other' must be a JSON value, got null.")] // extension data: at the object's level, not under the member's name
-    // Review 46: the position is where the document writes the null, not where the bound collection holds it.
+    // The position is where the document writes the null, not where the bound collection holds it.
     [InlineData("""{ "by_kind": { "One": [null] } }""", "/by_kind/One/0", "Item 0 of 'One' must be a string, got null.")]
     [InlineData("""{ "by_number": { "01": [null] } }""", "/by_number/01/0", "Item 0 of '01' must be a string, got null.")]
     [InlineData("""{ "by_date": { "2024-01-02T03:04:05.0000000": [null] } }""", "/by_date/2024-01-02T03:04:05.0000000/0", "Item 0 of '2024-01-02T03:04:05.0000000' must be a string, got null.")]
@@ -48,7 +48,7 @@ public sealed class NullElementsTests
         AssertBinds<Collections>(json, pointer, message);
 
     [Theory]
-    // Review 47: only what the serializer reads is checked. An ignored member and a computed one are skipped (the
+    // Only what the serializer reads is checked. An ignored member and a computed one are skipped (the
     // document's value is not read); one populated, or filled through a constructor parameter, is read.
     [InlineData("""{ "ignored": [null] }""", null, null)]
     [InlineData("""{ "computed": [null] }""", null, null)]
@@ -73,7 +73,7 @@ public sealed class NullElementsTests
     [Fact]
     public void APopulatePreference_IsReadOnlyWhereTheSerializerPopulates()
     {
-        // Review 48: a type's preference falls back to replacing where a member's value cannot be populated (an array,
+        // A type's preference falls back to replacing where a member's value cannot be populated (an array,
         // an immutable or read-only collection, a struct); without a setter, the serializer then skips the value.
         AssertCheckedAsRead<PopulatedList>(read: true);
         AssertCheckedAsRead<PopulatedSet>(read: true);
@@ -85,7 +85,7 @@ public sealed class NullElementsTests
         AssertCheckedAsRead<PopulatedQueue>(read: true);
         AssertCheckedAsRead<PopulatedBag>(read: false);
 
-        // Review 49: filled, though the serializer cannot create one (no constructor without arguments).
+        // Filled, though the serializer cannot create one (no constructor without arguments).
         AssertCheckedAsRead<PopulatedListWithoutDefaultConstructor>(read: true);
         AssertCheckedAsRead<PopulatedCollectionWithoutDefaultConstructor>(read: true);
         AssertCheckedAsRead<PopulatedMapWithoutDefaultConstructor>(read: true, map: true);

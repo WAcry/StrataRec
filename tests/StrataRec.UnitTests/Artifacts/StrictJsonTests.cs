@@ -8,7 +8,7 @@ using StrataRec.Artifacts.Json;
 namespace StrataRec.UnitTests.Artifacts;
 
 /// <summary>
-/// <see cref="StrictJson"/>: what System.Text.Json parses but a request must not hold (reviews 32 and 33): a member given
+/// <see cref="StrictJson"/>: what System.Text.Json parses but a request must not hold: a member given
 /// twice, an escape that is not Unicode, and bytes that are not UTF-8, each at its pointer, nothing thrown.
 /// </summary>
 public sealed class StrictJsonTests
@@ -47,7 +47,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 79: a node tree a host parsed (<c>JsonNode.Parse</c> keeps a repeated member; the object throws when it is
+    /// A node tree a host parsed (<c>JsonNode.Parse</c> keeps a repeated member; the object throws when it is
     /// first enumerated) is reported at the repeated member, also when an outer object was enumerated already and the
     /// repeated member is in one of its values, not yet read. A tree built in code has no repeated member. Once checked,
     /// a tree reads without throwing.
@@ -78,7 +78,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 81: the check wrote the tree and read the text back by ordinal names, so two names that differ only in case
+    /// The check wrote the tree and read the text back by ordinal names, so two names that differ only in case
     /// passed, and the object, parsed with <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/>, threw when first
     /// enumerated. The object's own comparison of names decides.
     /// </summary>
@@ -98,7 +98,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 81: a tree JSON cannot write (a NaN) was not checked at all, since the check wrote the tree; an object it
+    /// A tree JSON cannot write (a NaN) was not checked at all, since the check wrote the tree; an object it
     /// held that repeats a member then threw when it was first enumerated. The NaN is not this check's (the canonical
     /// form reports it); the repeated member is, wherever it is.
     /// </summary>
@@ -132,7 +132,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 81: the check wrote the tree and read it back at the reader's default depth, which threw for a deeper tree.
+    /// The check wrote the tree and read it back at the reader's default depth, which threw for a deeper tree.
     /// A tree as deep as the limit passes; one level more is reported at the first object or array past it, nothing
     /// deeper read.
     /// </summary>
@@ -172,7 +172,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 83: a CLR value the host wraps (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is JSON only once it
+    /// A CLR value the host wraps (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is JSON only once it
     /// is written, and the check passed it as a leaf. It is checked as the JSON it writes, at pointers into it: an object
     /// holding one name twice (a property and extension data) at the second, by ordinal comparison as the merge compares
     /// names, so two names that differ in case are two.
@@ -191,7 +191,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 83: a wrapped CLR <c>object[]</c> nested past the limit passed. Its depth counts from its place in the tree:
+    /// A wrapped CLR <c>object[]</c> nested past the limit passed. Its depth counts from its place in the tree:
     /// it is reported where the same arrays built of <see cref="JsonArray"/> are, and as deep as the limit it passes.
     /// </summary>
     [Theory]
@@ -214,7 +214,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 83: a wrapped CLR value JSON cannot write (a cycle, a NaN inside it) threw out of the request where it was
+    /// A wrapped CLR value JSON cannot write (a cycle, a NaN inside it) threw out of the request where it was
     /// first written. It is reported at its pointer, in the words of what threw. A lone NaN is still the canonical form's.
     /// </summary>
     [Fact]
@@ -244,7 +244,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 83: a lone number JSON cannot write is the canonical form's, as a NaN double is, whatever its CLR type. A
+    /// A lone number JSON cannot write is the canonical form's, as a NaN double is, whatever its CLR type. A
     /// Half NaN passed the check and threw JsonReaderException where the canonical form wrote it; a boxed NaN was written
     /// by the check, which reported it as a value that cannot be written. Each passes, and its copy is refused by the
     /// canonical form at its pointer.
@@ -274,7 +274,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 87: a value holding a <see cref="JsonElement"/> is the JSON of the element, whatever converter it was given.
+    /// A value holding a <see cref="JsonElement"/> is the JSON of the element, whatever converter it was given.
     /// It was checked as the element and copied by DeepClone, which ran a converter of the host's outside the check: what
     /// that wrote was used unchecked (a tree too deep to record), and what it threw went out of the request. An object or
     /// array element gets the checks of one, its depth counted from its place in the tree.
@@ -299,7 +299,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 88: a wrapped element is walked, not read back from its text. Its text kept the comments and trailing commas
+    /// A wrapped element is walked, not read back from its text. Its text kept the comments and trailing commas
     /// of JSONC (refused), went past the reader's depth for one read with a larger limit (refused at the member, not at the
     /// first container too deep), and threw out of the check when it held bytes that are not UTF-8. A default element holds
     /// no JSON: it is reported, not cloned (which threw).
@@ -330,7 +330,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 90: a wrapped element's depth was checked by the copy, after its text check had walked all of it; one a host
+    /// A wrapped element's depth was checked by the copy, after its text check had walked all of it; one a host
     /// built many levels deep took that walk past the stack. One walk checks both and stops at the first container too deep.
     /// </summary>
     [Fact]
@@ -378,7 +378,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Review 83: what is read after the check is what the check read. The copy holds what a wrapped CLR value wrote when
+    /// What is read after the check is what the check read. The copy holds what a wrapped CLR value wrote when
     /// it was checked, read back as JSON, however it writes later; it shares no node with the host's tree, and its objects
     /// compare names by ordinal, whatever the host's compared.
     /// </summary>
@@ -470,7 +470,7 @@ public sealed class StrictJsonTests
     }
 
     /// <summary>
-    /// Bytes that are not UTF-8 (review 33): <see cref="JsonDocument"/> parses them and throws only when the text is read;
+    /// Bytes that are not UTF-8: <see cref="JsonDocument"/> parses them and throws only when the text is read;
     /// a string at its pointer, a member name at its object. <c>#</c> stands for the bytes.
     /// </summary>
     [Theory]

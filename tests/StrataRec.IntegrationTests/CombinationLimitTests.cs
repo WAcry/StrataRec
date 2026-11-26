@@ -16,7 +16,7 @@ public sealed class CombinationLimitTests
     [Fact]
     public void ANodeSpaceFarBeyondTheLimit_IsReportedAtTheNode_NotAnArithmeticOverflow()
     {
-        // Review 18 #5: ten layers of 100 arms each modify fusion, 101^10 combinations at the default limit of 1024.
+        // Ten layers of 100 arms each modify fusion, 101^10 combinations at the default limit of 1024.
         var host = HomeFeedTestHost.Load();
         var placements = new List<ExperimentPlacement>();
         for (var layer = 0; layer < 10; layer++)
@@ -44,7 +44,7 @@ public sealed class CombinationLimitTests
     [Fact]
     public void PastTheLimit_ANullableColumnsSecondProducer_ThatOnlyThreeArmsTogetherCreate_IsFound()
     {
-        // Review 18 #1: joint writes the nullable, non-flow column x only when arms of layers a and b both switch it on;
+        // Joint writes the nullable, non-flow column x only when arms of layers a and b both switch it on;
         // c adds another writer of x. Every arm and every pair is legal, the three together give x two producers. Ten
         // more layers, each adding a harmless filter, make 2^13 combinations: past the default limit of 4096.
         var (request, environment) = JointWriterRequest(extraLayers: 10);
@@ -126,7 +126,7 @@ public sealed class CombinationLimitTests
         Assert.Equal("ORDER_DEPENDENCY", Assert.Single(unified.Diagnostics, d => d.IsError).Code);
     }
 
-    /// <summary>The joint-writer space of review 18 #1, with <paramref name="extraLayers"/> independent filter layers.</summary>
+    /// <summary>A joint-writer space, with <paramref name="extraLayers"/> independent filter layers.</summary>
     private static (PlanCompileRequest Request, PlanEnvironment Environment) JointWriterRequest(int extraLayers, int? maxCombinationsChecked = null)
     {
         var host = HomeFeedTestHost.Load();

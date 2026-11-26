@@ -98,7 +98,7 @@ public class ConfigTypesTests
     [InlineData("map<string,int32>", "'int32' is not a parameter type.", "write 'map<string,int64>'; parameter types: ")]
     [InlineData("list<int64>", "'list<int64>' is not a parameter type.", "parameter types: ")]
     [InlineData("int64?", "Parameter types are written without '?': a parameter always has a value (got 'int64?').", "write 'int64'; parameter types: ")]
-    // Review 32 #8: both mistakes at once were answered with "write 'int32'", which parameters do not take either.
+    // Both mistakes at once were answered with "write 'int32'", which parameters do not take either.
     [InlineData("int32?", "Parameter types are written without '?': a parameter always has a value (got 'int32?').", "write 'int64'; parameter types: ")]
     [InlineData("float32?", "Parameter types are written without '?': a parameter always has a value (got 'float32?').", "write 'float64'; parameter types: ")]
     [InlineData("map<string,int32?>", "Parameter types are written without '?': a parameter always has a value (got 'map<string,int32?>').",

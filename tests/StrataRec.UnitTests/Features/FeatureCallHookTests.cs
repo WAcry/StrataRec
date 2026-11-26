@@ -119,7 +119,7 @@ public class FeatureCallHookTests
     public async Task AHookThatThrowsWhileRecording_SeesTheCallOnce()
     {
         // The call is completed once, after the wait decided it: a completion that throws (here the hook) is not run again
-        // from the failure path, which would record a successful call a second time as an error (review 14 follow-up).
+        // from the failure path, which would record a successful call a second time as an error.
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
         {
@@ -153,7 +153,7 @@ public class FeatureCallHookTests
     public async Task AFailureWhoseDescriptionThrows_StillReturnsTheMemory()
     {
         // The wait, the classification of a failure and the completion all end in the call site's one finally: an exception
-        // whose Message throws fails the fetch, but never keeps the request memory held (review 15).
+        // whose Message throws fails the fetch, but never keeps the request memory held.
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector(async (_, _, _, _) =>
         {

@@ -29,9 +29,9 @@ public sealed class ReplayBundle
     /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text. It changes also when what a bundle
     /// records means something else for the same layout: 2026-11-20.2 batches calls evenly (Batching.Size), so a bundle
     /// recorded before holds calls cut at other boundaries, which a replay could not answer as recorded: a model call is
-    /// matched as a whole and a recorded timeout belongs to its batch (review 86). 2026-11-20.3 adds the ignored arm's
+    /// matched as a whole and a recorded timeout belongs to its batch. 2026-11-20.3 adds the ignored arm's
     /// reason <c>yielded</c>: a build before cannot read it, and refuses such a bundle at its format, with
-    /// a hint to record again, instead of at a reason it does not know (review 96). 2026-11-21.1 records each model output
+    /// a hint to record again, instead of at a reason it does not know. 2026-11-21.1 records each model output
     /// with its element type, and model inputs of every declared type (their digests include it): tensors follow the
     /// declared column types. 2026-11-21.2 records the result's columns at their declared types, and a
     /// float32 request input recorded as the host gave it now replays as the nearest float, as it is served: the same

@@ -39,10 +39,10 @@ public sealed class BuiltInClientSettingsTests
         { "memory@1", """{ "data_file": "missing.json" }""", "/data_file", "missing.json' cannot be read", "a relative path resolves against" },
         { "memory@1", """{ "data": [1, 2] }""", "/data", "The records must be a JSON object, by entity key.", null },
         { "memory_list@1", """{ "itmes": [1, 2] }""", "/itmes", "Unknown key 'itmes' in the settings of memory_list@1.", "did you mean 'items'?" },
-        { "memory_list@1", """{ "it/em~s": [1, 2] }""", "/it~1em~0s", "Unknown key 'it/em~s' in the settings of memory_list@1.", "did you mean 'items'?" }, // review 54
+        { "memory_list@1", """{ "it/em~s": [1, 2] }""", "/it~1em~0s", "Unknown key 'it/em~s' in the settings of memory_list@1.", "did you mean 'items'?" },
         { "memory_list@1", """{ "items": [1, { "id": 2, "scroe": 0.5 }] }""", "/items/1/scroe", "Unknown key 'scroe' in an item of memory_list@1.", "did you mean 'score'?" },
         { "memory_list@1", """{ "items": [1.5] }""", "/items/0", "An id must be a string or an int64; got 1.5.", null },
-        { "memory_list@1", """{ "items": [{ "id": 1, "s/co~re": 1 }] }""", "/items/0/s~1co~0re", "Unknown key 's/co~re' in an item of memory_list@1.", null }, // review 41
+        { "memory_list@1", """{ "items": [{ "id": 1, "s/co~re": 1 }] }""", "/items/0/s~1co~0re", "Unknown key 's/co~re' in an item of memory_list@1.", null },
         { "memory_list@1", """{ "items": [{ "score": 1 }] }""", "/items/0", "'id' is required in an item of memory_list@1.", "'id': " },
         { "memory_list@1", """{ "by_input": "user_id", "lists": { "7": 7 } }""", "/lists/7", "Entry '7' of 'lists' must be an array, got the number 7.", null },
         { "memory_list@1", """{ "by_input": "", "lists": {} }""", "/by_input", "'by_input' must name an input of the call.", "e.g. \"by_input\": \"user_id\"" },
@@ -52,7 +52,7 @@ public sealed class BuiltInClientSettingsTests
         // A fixture is read as strictly as a workspace file: a key written twice was its last value.
         { "memory@1", """{ "data_file": "twice.json" }""", "/data_file", "Duplicate key '1'", "remove or merge one of the definitions" },
         { "memory_list@1", """{ "data_file": "twice.json" }""", "/data_file", "Duplicate key '1'", "remove or merge one of the definitions" },
-        // Review 46: read as text first, an invalid byte became U+FFFD, and the id it was in another id.
+        // Read as text first, an invalid byte became U+FFFD, and the id it was in another id.
         { "memory_list@1", """{ "data_file": "invalid.json" }""", "/data_file", "is not valid UTF-8", "save the file as UTF-8" },
         { "memory@1", """{ "data_file": "invalid.json" }""", "/data_file", "is not valid UTF-8", "save the file as UTF-8" },
         { "random@1", """{ "inputs": ["x"], "outputs": ["p"], "sed": 1 }""", "/sed", "Unknown key 'sed' in the settings of random@1.", "did you mean 'seed'?" },

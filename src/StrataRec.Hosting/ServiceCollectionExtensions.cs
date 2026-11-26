@@ -116,7 +116,7 @@ public static class ServiceCollectionExtensions
     /// <remarks>
     /// <para>The load runs in the hosted services' starting phase (<see cref="IHostedLifecycleService.StartingAsync"/>),
     /// which the generic host completes for every service before it starts any, the web server of an ASP.NET Core app
-    /// included, also when services start concurrently (<c>HostOptions.ServicesStartConcurrently</c>, review 33): a
+    /// included, also when services start concurrently (<c>HostOptions.ServicesStartConcurrently</c>): a
     /// service takes no request until every plan has loaded, so once it listens, it is ready. A host that is not a generic
     /// host (a bare service provider) loads the workspace itself with <see cref="LoadWorkspaceAsync"/>.</para>
     /// <para>The engine serves the workspace as it was at startup. With <see cref="StrataRecOptions.Releases"/> it serves
@@ -314,7 +314,7 @@ public static class ServiceCollectionExtensions
 /// <remarks>
 /// The load is in <see cref="StartingAsync"/>, not <see cref="StartAsync"/>: with
 /// <c>HostOptions.ServicesStartConcurrently</c> the host does not wait for one service's StartAsync before the next
-/// one's, so a web server registered later could listen with no plan loaded (review 33). Every StartingAsync completes
+/// one's, so a web server registered later could listen with no plan loaded. Every StartingAsync completes
 /// before any StartAsync runs, in either mode.
 /// </remarks>
 internal sealed partial class StrataRecStartup(

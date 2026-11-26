@@ -19,7 +19,7 @@ namespace StrataRec.Pipeline.Execution;
 /// the row selection before and after), so custom operators are explained without code of their own.</para>
 /// <para>Work is per target, not per row: a target's row is found by key (<see cref="CandidateTable.FindRow"/>) after a
 /// row source that may append it, while the target is not live, and followed through compactions (<see cref="Compacted"/>)
-/// without looking it up again; a dropped target a row source brings back is followed at its new row. Two costs follow the table instead (review 34), both only for an explained request: the rank, since the ranking
+/// without looking it up again; a dropped target a row source brings back is followed at its new row. Two costs follow the table instead, both only for an explained request: the rank, since the ranking
 /// has no inverse, is one pass over the live rows after a node that changes the row set or the order, stopping at the last
 /// live target, with a bitmap of the table's capacity; and an operator's <see cref="ExplainContext.Evaluate"/> writes its
 /// target rows into one pooled column of the table's capacity per result type (the compiled expression writes at physical
@@ -150,7 +150,7 @@ internal sealed class CandidateExplainer
             ClearOperatorNotes();
             for (var t = 0; t < _keys.Length; t++)
             {
-                // ExceptionText: describing the exception must not throw past this guard (review 34).
+                // ExceptionText: describing the exception must not throw past this guard.
                 _reasons[t] = $"the operator could not explain itself: {ex.GetType().Name}: {ExceptionText.Of(ex)}";
             }
         }

@@ -21,7 +21,7 @@ internal static class JsonNodeUtilities
     /// Whether <paramref name="value"/> holds a CLR number JSON cannot write, NaN or an infinity, of any binary floating
     /// type <see cref="JsonValue"/> holds (<see cref="double"/>, <see cref="float"/>, <see cref="Half"/>, boxed or not);
     /// <paramref name="number"/> is it as a double. Asked of the CLR value, not by writing it: writing throws, and not
-    /// alike (an <see cref="ArgumentException"/> for a double, a <see cref="JsonException"/> for a Half, review 83), and
+    /// alike (an <see cref="ArgumentException"/> for a double, a <see cref="JsonException"/> for a Half), and
     /// <see cref="JsonNode.GetValueKind"/> says Number for it. A value read from text holds none: its number is text, and
     /// converting it would make a finite binary64 number such as <c>1e100</c> an infinite float.
     /// </summary>

@@ -103,7 +103,7 @@ public class JsoncLocatorTests
 
     [Theory]
     [InlineData(0)]
-    [InlineData(1)] // the low surrogate: review 32 #8 returned the column of the next character
+    [InlineData(1)] // the low surrogate: it returned the column of the next character
     [InlineData(2)]
     public void AnOffsetInARawNonBmpCharacter_IsTheColumnOfThatUtf16Unit(int offset)
     {

@@ -142,7 +142,7 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
     public void NoteRead(string name, bool context)
     {
         // A feature of an entity keyed by features reads its key features too (they are fetched first), and
-        // so on along the chains (review 69: a deprecated key read only through its entity's features did not warn). Each
+        // so on along the chains (a deprecated key read only through its entity's features did not warn). Each
         // feature once, so a chain that loops (an error reported elsewhere) ends.
         if (_deprecated is null || !_catalog.TryGet(name, out var first) || first.IsContext != context)
         {
@@ -226,7 +226,7 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         }
 
         // A table is expanded once: its members register the rest of it, so expanding again for each member scanned the
-        // table once per member, quadratic in its width (review 67: 40,000 features took 40 s to compile, not 1 s).
+        // table once per member, quadratic in its width (40,000 features took 40 s to compile, not 1 s).
         if (!feature.IsDerived && feature.Source is { } source && _needsWholeTable is not null && _needsWholeTable(source)
             && _expanded.Add((source, feature.Entity.Name)))
         {

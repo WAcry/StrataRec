@@ -31,7 +31,7 @@ internal static class BuildCommand
 {
     /// <summary>
     /// The largest sequence number build makes, 2^53 − 1, the largest safe integer: a manifest is canonical JSON (RFC 8785),
-    /// which writes integers as doubles, so every integer up to it is written exactly and some beyond it are not (review 37).
+    /// which writes integers as doubles, so every integer up to it is written exactly and some beyond it are not.
     /// </summary>
     internal const long MaxSeq = 9_007_199_254_740_991;
 

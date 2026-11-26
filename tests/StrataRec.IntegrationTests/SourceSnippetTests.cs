@@ -24,8 +24,8 @@ public sealed class SourceSnippetTests
     [InlineData("\"名称\": x", 7, "    \"名称\": x\n     \u3000\u3000   ^")] // CJK: two cells each
     [InlineData("\"😀\": x", 7, "    \"😀\": x\n     \u3000   ^")] // a surrogate pair: one character, two cells
     [InlineData("\"e\u0301\": x", 7, "    \"e\u0301\": x\n         ^")] // a combining accent: no cell
-    [InlineData("\"𐍈\": x", 7, "    \"𐍈\": x\n         ^")] // review 34: a supplementary character that is narrow: one cell
-    [InlineData("\"か\u3099\": x", 7, "    \"か\u3099\": x\n     \u3000   ^")] // review 34: a mark in a wide block: no cell
+    [InlineData("\"𐍈\": x", 7, "    \"𐍈\": x\n         ^")] // A supplementary character that is narrow: one cell
+    [InlineData("\"か\u3099\": x", 7, "    \"か\u3099\": x\n     \u3000   ^")] // A mark in a wide block: no cell
     [InlineData("a😀b", 3, "    a😀b\n     ^")] // the column of the pair's low surrogate: under the character
     [InlineData("\"a\": ", 7, "    \"a\": \n         ^")] // the column past the text: after it
     public void TheCaret_FollowsHowATerminalDrawsTheLine(string line, int column, string expected)

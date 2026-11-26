@@ -336,7 +336,7 @@ internal static class TapCapture
 
     /// <summary>
     /// True when the expression reads what this request has no value of: a feature whose fetch failed (its storage may hold
-    /// rows invalid under a non-nullable type, which the expression would read without checking validity, review 6), or a
+    /// rows invalid under a non-nullable type, which the expression would read without checking validity), or a
     /// non-nullable column or request column no node produced (evaluated, the read would throw; a nullable one reads as
     /// missing, which an expression may handle). A tap logs such a column or context field missing; it never fails the
     /// request.

@@ -363,7 +363,7 @@ internal sealed class ConfigRef
         }
         catch (JsonCanonicalizationException ex)
         {
-            // Not written exactly, so no id: a sequence beyond 2^53 a tool other than build wrote (review 38).
+            // Not written exactly, so no id: a sequence beyond 2^53 a tool other than build wrote.
             diagnostics.Error("MANIFEST_NOT_CANONICAL", Text, ex.Pointer.ToString(),
                 $"The manifest has no content id: its canonical JSON (RFC 8785) cannot hold it exactly ({ex.Reason}).",
                 $"write integers of at most {BuildCommand.MaxSeq} (2^53 - 1) here, as 'stratarec build' does");

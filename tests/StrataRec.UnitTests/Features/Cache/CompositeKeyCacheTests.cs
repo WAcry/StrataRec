@@ -92,7 +92,7 @@ public class CompositeKeyCacheTests
     }
 
     /// <summary>
-    /// Review 78: 4,096 candidates whose keys share a 128-char request input, fetched in chunks of 512, write back one
+    /// 4,096 candidates whose keys share a 128-char request input, fetched in chunks of 512, write back one
     /// batch, which holds that string once. It was charged once per key, about 1.44 MiB, and the table's empty 1 MiB queue
     /// (a sixteenth of 16 MiB) dropped the whole batch: nothing was cached, whatever the table's room.
     /// </summary>

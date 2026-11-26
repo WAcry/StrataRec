@@ -585,7 +585,7 @@ public class DifferentialTests(ITestOutputHelper output)
         /// <summary>
     /// A divisor the binder knows is 0 (a literal, <c>int(0)</c>, a let of one) is a compile error; a 0 that
     /// only folding or the data finds gives missing. So a divisor that is not a non-zero literal is written as
-    /// <c>(d + 0)</c>, the same value but never a constant to the binder (review 66: <c>% int(0)</c> stopped seed 88), and
+    /// <c>(d + 0)</c>, the same value but never a constant to the binder (<c>% int(0)</c> stopped seed 88), and
     /// a non-zero literal stays, for the non-nullable path.
     /// </summary>
     private static string Divisor(string divisor) =>

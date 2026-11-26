@@ -156,7 +156,7 @@ public sealed class CompiledNode
     /// column it reads after a write of its own that could declare it (GroupAggregate@1 writes <c>a</c>, then reads it for
     /// <c>b</c>). A compile of one arm combination alone knows a name only once it is declared there: by the baseline, by an
     /// arm in it, or (a column without a declaration) by a node compiled before. The order of reads and writes inside one
-    /// compile is not in <see cref="ReadColumns"/> and <see cref="Outputs"/>, so it is recorded (reviews 50, 51).
+    /// compile is not in <see cref="ReadColumns"/> and <see cref="Outputs"/>, so it is recorded.
     /// </summary>
     public ImmutableArray<NameRef> Requires { get; init; } = [];
 

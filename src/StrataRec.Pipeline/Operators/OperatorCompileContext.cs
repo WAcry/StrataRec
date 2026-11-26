@@ -172,7 +172,7 @@ public sealed class OperatorCompileContext
     /// one keeps its declared type, which the caller checks it can write; without, the column must be declared. A node
     /// that writes a declared column as declared and declares an undeclared one passes its type either way, rather than
     /// asking the schema first: whether a column is declared can differ between arm combinations, which compile the node
-    /// once (review 51).
+    /// once.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// The operator declares neither <see cref="Effects.ColumnWriter"/> nor <see cref="Effects.RowSource"/>: its descriptor
@@ -657,7 +657,7 @@ public sealed class OperatorCompileContext
     /// </summary>
     public BoundService? Service(string name, string configKey, string role)
     {
-        // A config can bind null or "" to a required string; that is a config error at its key, not an exception (review 29).
+        // A config can bind null or "" to a required string; that is a config error at its key, not an exception.
         if (string.IsNullOrEmpty(name))
         {
             Error(configKey, "SERVICE_UNBOUND", $"'{configKey.TrimStart('/')}' must name a service.",

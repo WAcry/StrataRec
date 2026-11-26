@@ -33,7 +33,7 @@ public sealed partial class RecEngine
 
             // A compile that waited for model signatures runs again (BindingLease.CompileAsync): that one reads the
             // override as the first one checked it, not the host's tree, which writes its CLR values again and may have
-            // changed since (review 85).
+            // changed since.
             var patch = configOverride;
             var compilation = await lease.CompileAsync(
                 bindings =>

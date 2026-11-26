@@ -10,7 +10,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// A recall source an arm adds with its quota alone (<c>params.recall_quotas.aaa</c>): the unified plan's
 /// recall knows every source any arm gives a quota, and a request without the arm has no quota for it. It must serve each
-/// combination as a compile of that combination does, which has never heard of the source (review 52).
+/// combination as a compile of that combination does, which has never heard of the source.
 /// </summary>
 public sealed class ArmAddedSourceTests
 {
@@ -20,7 +20,7 @@ public sealed class ArmAddedSourceTests
     [InlineData(false)]
     public async Task ASourceOnlyAnArmAdds_TakesNoBitWhereThatArmIsNotAssigned(bool sourceOrder)
     {
-        // Review 52: 'aaa' comes first by name, so it took bit 1 in every request and moved popular's and two_tower's
+        // 'aaa' comes first by name, so it took bit 1 in every request and moved popular's and two_tower's
         // bits; a baseline filter on the mask kept other rows than the baseline's own compile does.
         var host = Host();
         var pipeline = host.Request.Pipeline;

@@ -14,7 +14,7 @@ internal static class RunningMean
     /// The mean after its <paramref name="k"/>-th value <paramref name="x"/>: equal values leave it exactly the value (a mean
     /// from the sum is off by its rounding, and the deviations from it made a std of equal values > 0, a z-score of ±1). The
     /// step is x/k − mean/k, not (x − mean)/k: neither a sum nor the difference of two large values of opposite signs
-    /// overflows (review 45).
+    /// overflows.
     /// </summary>
     public static double Step(double mean, double x, long k) => mean + ((x / k) - (mean / k));
 }
@@ -402,7 +402,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         /// <remarks>
         /// The signed sum is the corrected two-pass term: the running mean is rounded at the values' scale, and the
         /// deviations from it alone made the std of 1e16+6 and 1e16+4 alternating √2 instead of 1, and that of 0 and the
-        /// smallest subnormal that subnormal instead of 0 (review 78); the variance about the true mean is
+        /// smallest subnormal that subnormal instead of 0; the variance about the true mean is
         /// <c>E[d²] − E[d]²</c> of the deviations d from any center. Holding the center within ±largest |x| (a rounded mean
         /// can step past it) keeps every deviation within twice that, which the factor keeps finite.
         /// </remarks>
@@ -453,7 +453,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         /// A group's population std from its <see cref="Deviations"/>: <c>scale · √(squares/n − (sums/n)²)</c>, the
         /// difference clamped at 0, then bounded by the group's largest |x| (a population std is at most that) before it
         /// is divided by the factor: rounding can no longer carry it past the largest float64 (four −MaxValue then four
-        /// +MaxValue have std MaxValue; the rounded mean made it infinite and the node failed, review 78).
+        /// +MaxValue have std MaxValue; the rounded mean made it infinite and the node failed).
         /// </summary>
         private static double Std(double scale, double sums, double squares, long count, double peak)
         {

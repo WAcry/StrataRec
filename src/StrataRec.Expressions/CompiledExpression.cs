@@ -25,7 +25,7 @@ public abstract class CompiledExpression
     /// <summary>
     /// Every name the expression binds, whether it reads it or not: a branch the optimizer drops (<c>true || col.x</c>)
     /// or an unused <c>let</c> still names something the scope must declare, so a configuration without it does not
-    /// compile (review 51). <see cref="Reads"/> is what evaluation reads, and what is fetched.
+    /// compile. <see cref="Reads"/> is what evaluation reads, and what is fetched.
     /// </summary>
     public virtual IReadOnlyList<Symbol> Names => Reads;
 

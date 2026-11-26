@@ -108,7 +108,7 @@ public sealed class StrataRecStartupTests : IDisposable
     [Fact]
     public async Task WithServicesStartingConcurrently_AServiceRegisteredLater_StartsWithThePlansLoaded()
     {
-        // Review 33: the load ran in StartAsync, which a host starting its services concurrently does not wait for, so a web
+        // The load ran in StartAsync, which a host starting its services concurrently does not wait for, so a web
         // server registered after AddStrataRec could listen with no plan loaded. The load is now in StartingAsync, which
         // every service completes before any starts. The source's load takes a while, as a remote one would.
         Workspace(Path.Combine(_contentRoot, "config"), client: "slow_list@1");

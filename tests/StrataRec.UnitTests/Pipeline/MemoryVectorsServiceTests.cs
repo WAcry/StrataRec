@@ -109,7 +109,7 @@ public sealed class MemoryVectorsServiceTests
 
         var (status, found) = await RetrieveAsync(source, Values(ScalarValue.FromFloat64List([1.0, 2.0])));
 
-        Assert.True(status.Succeeded, status.Error); // it said "the items' vectors have 0" (review 80)
+        Assert.True(status.Succeeded, status.Error); // it said "the items' vectors have 0"
         Assert.Empty(found);
     }
 
@@ -118,7 +118,7 @@ public sealed class MemoryVectorsServiceTests
     {
         var source = Create($$"""{ "query": "user_embedding", {{Items}} }""");
 
-        // A missing value of a wrong type was taken as nothing to search with (review 80).
+        // A missing value of a wrong type was taken as nothing to search with.
         var (wrongType, _) = await RetrieveAsync(source, Values(ScalarValue.Missing, ColumnType.Int64.AsNullable()));
         Assert.Equal("The query vector 'user_embedding' must be a list of floats; it is int64 of shape [].", wrongType.Error);
 
@@ -129,7 +129,7 @@ public sealed class MemoryVectorsServiceTests
     [Fact]
     public async Task AScoreThatOverflows_FailsTheCall_InsteadOfRankingByNaN()
     {
-        // 1e308 · 2 overflows to +∞ and 1e308 · −2 to −∞: their sum is NaN, which dropped the right first item (review 80).
+        // 1e308 · 2 overflows to +∞ and 1e308 · −2 to −∞: their sum is NaN, which dropped the right first item.
         var source = Create("""
             { "query": "user_embedding", "min_score": 1, "items": [
               { "id": 1, "vector": [1e308, 1e308, 2.0] },

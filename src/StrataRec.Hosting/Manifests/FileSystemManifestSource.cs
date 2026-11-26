@@ -32,13 +32,13 @@ public sealed class FileSystemManifestSource : IManifestSource
     /// <summary>
     /// How to name a pipeline or an environment whose pointer this source keeps (<see cref="GetPointerPath"/>): the hint of
     /// every tool that reports a name it refused, and of a host that cannot read its pointer under such a name. Earlier
-    /// versions wrote pointers under names starting with '.', so it says how to move such a release (reviews 79 and 81).
+    /// versions wrote pointers under names starting with '.', so it says how to move such a release.
     /// Renaming the directory is not enough (a manifest names its environment, and a node refuses one naming another), so
     /// the release is built again; a build takes its experiments from its environment's release file and knows nothing of
     /// the stops published under another name. Built without the old file it released none of three experiments, and an
     /// experiment revoked under the old name came back. So the hint names an unused name, carries the release file over,
     /// and has the experiments the old pointer's stops removed left out of it. No version's <c>status</c> lists a pointer
-    /// under such a name (listing skips dot names, even of an environment given explicitly; review 83), and the commands
+    /// under such a name (listing skips dot names, even of an environment given explicitly), and the commands
     /// that read a manifest by its id (<c>explain-plan</c>, <c>diff</c>) compile it, which needs its bindings' files where
     /// they run, and show what it releases, not what it revoked. So the hint names the two files that hold the stops,
     /// JSON read as it is: the pointer names the manifest, and the store keeps it under its digest. A revoked experiment
@@ -66,7 +66,7 @@ public sealed class FileSystemManifestSource : IManifestSource
     /// The pointer files under the root, of <paramref name="environment"/> or of every environment, sorted by environment,
     /// then pipeline (ordinal). Whether a file's content is a valid pointer is <see cref="GetManifestIdAsync"/>'s to say;
     /// what cannot be listed is listed with its <see cref="PointerFile.Error"/>, so one bad entry does not hide the others
-    /// (review 40): a directory that cannot be read, a file name no pointer can have. Lock and temporary files, and
+    ///: a directory that cannot be read, a file name no pointer can have. Lock and temporary files, and
     /// anything else whose name starts with a dot, are skipped: no pipeline or environment may be named so.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="environment"/> is not a name a pointer can have.</exception>
@@ -82,14 +82,14 @@ public sealed class FileSystemManifestSource : IManifestSource
         else
         {
             // Enumerated, not asked whether it exists: a directory that cannot be traversed does not exist to Exists, and
-            // would read as nothing published (review 42).
+            // would read as nothing published.
             try
             {
                 environments.AddRange(Directory.EnumerateDirectories(directory));
             }
             catch (DirectoryNotFoundException)
             {
-                // Nothing published yet, unless a file stands where the directory belongs (review 43).
+                // Nothing published yet, unless a file stands where the directory belongs.
                 if (NotADirectory(directory) is { } file)
                 {
                     pointers.Add(new PointerFile(string.Empty, string.Empty, directory, file));
@@ -147,7 +147,7 @@ public sealed class FileSystemManifestSource : IManifestSource
     /// <summary>
     /// Why <paramref name="directory"/>, which could not be found, is no directory although something is there: a file at
     /// it or at one of the directories above it, up to the root. The system says "not found" for both (ENOTDIR), and a store
-    /// whose pointers cannot be listed is not one that publishes nothing (review 43). Null when nothing is there.
+    /// whose pointers cannot be listed is not one that publishes nothing. Null when nothing is there.
     /// </summary>
     private string? NotADirectory(string directory)
     {
@@ -261,7 +261,7 @@ public sealed class FileSystemManifestSource : IManifestSource
         }
         catch (InvalidOperationException ex)
         {
-            // A string JsonDocument accepts and cannot decode, as an unpaired surrogate escape (review 40).
+            // A string JsonDocument accepts and cannot decode, as an unpaired surrogate escape.
             throw Invalid(path, $"its '{ManifestMember}' is not a valid string ({ex.Message})", ex);
         }
 

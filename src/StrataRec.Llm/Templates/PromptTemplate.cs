@@ -56,7 +56,7 @@ public enum PromptScope : byte
 /// it writes into a builder kept per thread and formats numbers on the stack, so once a thread has rendered, the prompt
 /// string it returns is its only allocation. A builder that grew beyond 256 Ki characters is not kept, so a prompt that
 /// long also allocates its builder each time: keeping that much memory for every thread's life is the worse cost
-/// (review 29).</para>
+///.</para>
 /// </remarks>
 public sealed class PromptTemplate
 {

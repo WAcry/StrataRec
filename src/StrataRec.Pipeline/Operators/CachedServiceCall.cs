@@ -218,7 +218,7 @@ internal sealed class CachedServiceCall
     /// The distributed tier, for the rows the local tier did not have fresh, in one read bounded by its <c>timeout_ms</c>
     /// within the service's: fresh records answer their rows and go to the local tier; a stale one is kept for a failure.
     /// Records are judged when the read answered, by the cache's clock: one fresh when the call started may have expired
-    /// while the read took its time, as for a source's cache (review 80). A read that fails or is late leaves its rows to
+    /// while the read took its time, as for a source's cache. A read that fails or is late leaves its rows to
     /// the service. Returns the cut-off when the node's budget ran out or the caller cancelled.
     /// </summary>
     private async Task<(Exception Exception, IoOutcome Outcome)?> ReadDistributedAsync(DistributedCacheTier tier, int misses)

@@ -337,7 +337,7 @@ public class LocalTableWriterTests
     [MemberData(nameof(EmptyListsAfterText))]
     public void EmptyList_AfterTextOfAnyLength_IsKept_AndIsNotMissing(string list, int textChars)
     {
-        // Codex review 9, item 6: after a string that grew the staging buffer to a size that is not a multiple of 8, an
+        // After a string that grew the staging buffer to a size that is not a multiple of 8, an
         // empty list's aligned start was past the buffer's end and Commit threw.
         var schema = Schema(fields: new[]
         {
@@ -371,7 +371,7 @@ public class LocalTableWriterTests
     [Fact]
     public void FailedWrite_LeavesTheTableAsItWas_ThoughACompactionWasTried()
     {
-        // Codex review 9, item 3: the write needs a compaction to have a chance, the compacted copy cannot make room for
+        // The write needs a compaction to have a chance, the compacted copy cannot make room for
         // it, and the write fails. The copy must not be published: same version, bytes and generation.
         var schema = Schema(fields: new[] { new LocalTableField("l", ColumnType.List(StorageKind.Int32)) });
         var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions { PageSize = 4096, MaxBytes = 42368, CompactionMinBytes = long.MaxValue });
@@ -403,7 +403,7 @@ public class LocalTableWriterTests
     }
 
     /// <summary>
-    /// The writer keeps nothing of a version it wrote once that version is replaced (Gemini review 2026-11-14, finding 5):
+    /// The writer keeps nothing of a version it wrote once that version is replaced:
     /// the probe of its last write held the version, with its pages, index and dictionary, until the next write, which a
     /// source with nothing more to write never makes.
     /// </summary>
@@ -449,7 +449,7 @@ public class LocalTableWriterTests
     [Fact]
     public void RejectedWrite_DoesNotKeepTheDiscardedCompactedCopyAlive()
     {
-        // Codex review 11, item 3: the write's one string is looked up in the compacted copy built to make room for it;
+        // The write's one string is looked up in the compacted copy built to make room for it;
         // the copy does not make room, the write fails, and the lookup cache kept the whole copy alive (40 KB here, a
         // second table at real size) until the next Begin, which a source stopped by the failure may never call.
         var schema = Schema(fields: new[] { new LocalTableField("l", ColumnType.List(StorageKind.Int32)), new LocalTableField("s", ColumnType.String) });
@@ -474,7 +474,7 @@ public class LocalTableWriterTests
     [Fact]
     public void ExplicitCompaction_ThatWouldNotFit_IsRejected_AndTheTableIsUnchanged()
     {
-        // Codex review 11 (docs): a compacted copy can be larger than the table, so the guard that rejects it is reachable.
+        // A compacted copy can be larger than the table, so the guard that rejects it is reachable.
         // The table: key 1's empty list in a small first page, key 2's 80 KB list in a page of its own. The copy opens its
         // first page for all the bytes still to copy (a whole 64 KiB page), puts key 1 in it, and key 2 does not fit: it
         // takes a second page, and the first stays almost empty.

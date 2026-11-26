@@ -330,7 +330,7 @@ public class EntityKeyIndexTests
     {
         // A pool may hand out more than asked, differently per element type: here string arrays come back with at least
         // 64 entries while the hash array (int) is exact. After the index grew for int64 keys, switching back to strings
-        // must not take the long string array as proof that the hash array fits too (review 14).
+        // must not take the long string array as proof that the hash array fits too.
         var index = new EntityKeyIndex(EntityKeyType.String, 0, new RequestMemory(new StringRoundingPool(64)));
         Assert.True(index.TryAdd("first", 0));
 

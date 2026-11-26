@@ -33,7 +33,7 @@ public class CacheStoreCallTests
         FailedBeforeTheWait,
     }
 
-    /// <summary>Review 19: an exception whose message cannot be read must not decide what the read does.</summary>
+    /// <summary>an exception whose message cannot be read must not decide what the read does.</summary>
     [Theory]
     [InlineData(Answer.Throws)]
     [InlineData(Answer.Failed)]
@@ -77,7 +77,7 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
-    /// Review 19: a store's synchronous part runs on the request's thread and the engine does not bound it; what it
+    /// A store's synchronous part runs on the request's thread and the engine does not bound it; what it
     /// answers is judged when the engine first sees it complete. Here the store blocks before returning, past the tier's
     /// timeout (the source has time left: the connector answers) or past the source's deadline (no time left: the keys
     /// fail). Either way its fresh records (111) are never used.
@@ -117,10 +117,10 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
-    /// Review 85: a store that answers synchronously is seen answering before the flow gets its activity back. The host's
+    /// A store that answers synchronously is seen answering before the flow gets its activity back. The host's
     /// <see cref="System.Diagnostics.Activity.CurrentChanged"/> handlers ran first (in <see cref="IoCall.Sent"/>), and one
     /// that took time (here it moves the cache's clock past the TTL) made a record fresh when the store answered expired,
-    /// which went to the connector (the same as review 80's metric listener).
+    /// which went to the connector (as a metric listener that throws does).
     /// </summary>
     [Fact]
     public async Task AStoreThatAnswersAtOnce_IsSeenAnswering_BeforeTheHostsCurrentChangedHandlersRun()
@@ -163,8 +163,8 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
-    /// Review 19: once the tier's time is up (here the first chunk's synchronous part took it), no further chunk is sent.
-    /// The tier's time is judged by the cache's clock, held by the test (review 21 #2): the first chunk is sent with time
+    /// Once the tier's time is up (here the first chunk's synchronous part took it), no further chunk is sent.
+    /// The tier's time is judged by the cache's clock, held by the test: the first chunk is sent with time
     /// left, whatever the machine does, and its call moves the clock past the tier's time.
     /// </summary>
     [Fact]
@@ -190,7 +190,7 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
-    /// Review 21 #2: the tier's time is up before the first chunk is sent (the request's thread was preempted, say; here
+    /// The tier's time is up before the first chunk is sent (the request's thread was preempted, say; here
     /// every look at the clock moves it a second). No chunk is sent, and the connector answers every key.
     /// </summary>
     [Fact]
@@ -243,7 +243,7 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
-    /// Review 78: the reverse. The second chunk answers at once and is fresh; the first answers after the records' TTL
+    /// The reverse. The second chunk answers at once and is fresh; the first answers after the records' TTL
     /// passed and goes to the connector. The chunks were judged as the read reached them, in index order, so the second,
     /// waiting behind the first, was judged at the first's time: expired, and sent to the connector too (with a failing
     /// connector, the feature failed though a fresh value existed).
@@ -279,7 +279,7 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
-    /// Review 80: a chunk is judged at the cache clock's time when it was seen to answer in time, taken before the call is
+    /// A chunk is judged at the cache clock's time when it was seen to answer in time, taken before the call is
     /// completed. A host's metric listener runs at the completion; one that took time (here it moves the clock 50 ms, past
     /// the record's 10 ms TTL) made the record, fresh when the store answered, look expired, and its key went to the
     /// connector (the value 1, not 111). Both ways a chunk is found answered: at once, and after a wait.
@@ -315,7 +315,7 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
-    /// Review 80: a host's metric listener that throws while a cache read resolves, where its store call completes or where
+    /// A host's metric listener that throws while a cache read resolves, where its store call completes or where
     /// it counts the distributed tier's keys, loses its measurement. The read serves the store's record and is recorded as
     /// it ended; the throw faulted the read's resolution, so the read was never recorded (outstanding in a recording) and
     /// its fill threw the listener's exception.
@@ -517,7 +517,7 @@ public class CacheStoreCallTests
             ValueTask.CompletedTask;
     }
 
-    /// <summary>An exception whose <see cref="Exception.Message"/> getter throws (review 19).</summary>
+    /// <summary>An exception whose <see cref="Exception.Message"/> getter throws.</summary>
     private sealed class UnreadableException : Exception
     {
         public override string Message => throw new InvalidOperationException("reading the message failed");

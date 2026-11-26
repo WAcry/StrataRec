@@ -7,7 +7,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// A request file's <c>force_arms</c> and <c>assignment</c> mean what <c>DebugOptions.ForceArms</c> and
 /// <c>RecRequest.Assignment</c> mean to the engine: present or not is decided by the member, not by its length, so an
-/// explicit empty <c>force_arms</c> forces the baseline over the platform's answer (review 18 #4).
+/// explicit empty <c>force_arms</c> forces the baseline over the platform's answer.
 /// </summary>
 public sealed class RunCommandArmsTests
 {

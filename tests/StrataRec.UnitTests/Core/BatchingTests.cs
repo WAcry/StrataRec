@@ -11,7 +11,7 @@ public sealed class BatchingTests
     [InlineData(5, 2, 3)]
     [InlineData(6, 2, 3)]
     [InlineData(6, 256, 1)]
-    [InlineData(6, int.MaxValue, 1)] // (items + size - 1) / size overflowed to 0 here (review 27)
+    [InlineData(6, int.MaxValue, 1)] // (items + size - 1) / size overflowed to 0 here
     [InlineData(int.MaxValue, int.MaxValue, 1)]
     [InlineData(int.MaxValue, 1, int.MaxValue)]
     [InlineData(int.MaxValue, 2, 1073741824)]

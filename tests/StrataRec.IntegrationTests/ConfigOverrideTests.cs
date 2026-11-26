@@ -63,13 +63,13 @@ public sealed class ConfigOverrideTests
 
     [Theory]
     // What the compile of the merged configuration finds at a value the override sets is the override's, at its pointer
-    // (review 81): it was at the pipeline's pointer, and the request had no ErrorPointer.
+    //: it was at the pipeline's pointer, and the request had no ErrorPointer.
     [InlineData("""{ "params": { "final_top_k": "three" } }""", "PARAM_BAD_VALUE request/config_override/params/final_top_k: Parameter 'final_top_k'",
         "/config_override/params/final_top_k")]
     [InlineData("""{ "nodez": {} }""", "CONFIG_OVERRIDE_UNKNOWN_SECTION request/config_override/nodez", "/config_override/nodez")]
     [InlineData("""{ "nodes": { "rank_sort": { "config": { "score_col": "no.such_column" } } } }""",
         "request/config_override/nodes/rank_sort/config/score_col", "/config_override/nodes/rank_sort/config/score_col")]
-    // Review 81: an integer the canonical form cannot tell from a float passes the override's own check and is refused by
+    // An integer the canonical form cannot tell from a float passes the override's own check and is refused by
     // the parameter's binding: at the override, with the binding's code and words, as the same integer written as digits is.
     [InlineData("""{ "params": { "final_top_k": -90071992547409930E-1 } }""",
         "PARAM_BAD_VALUE request/config_override/params/final_top_k: Parameter 'final_top_k' must be an integer (int64) that RFC 8785 represents exactly, " +
@@ -83,7 +83,7 @@ public sealed class ConfigOverrideTests
     // An integer beyond 2^53 RFC 8785 cannot hold exactly: the compiler's hash of the node threw out of the request.
     [InlineData("""{ "nodes": { "coarse_top_k": { "order": 1152921504606846976 } } }""",
         "CONFIG_OVERRIDE_NOT_CANONICAL request/config_override/nodes/coarse_top_k/order", "/config_override/nodes/coarse_top_k/order")]
-    // Review 79: a host's JsonNode.Parse keeps a repeated member, and the object threw ArgumentException out of the request
+    // A host's JsonNode.Parse keeps a repeated member, and the object threw ArgumentException out of the request
     // when the compiler first enumerated it (the patch's sections, or a nested object when it was canonicalized).
     [InlineData("""{ "params": { "final_top_k": 3 }, "params": { "final_top_k": 4 } }""",
         "CONFIG_OVERRIDE_INVALID request/config_override/params: Member 'params' is given more than once. (hint: give each member once", "/config_override/params")]
@@ -106,11 +106,11 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// Review 81: what a host builds in code, beyond what its text can say. Each was an exception out of the request (or,
+    /// What a host builds in code, beyond what its text can say. Each was an exception out of the request (or,
     /// for the integer, an error with no pointer): names that differ only in case under a case-insensitive parse, which the
     /// check passed and the object threw on when first enumerated; an object repeating a member beside a NaN, which made
     /// the check give up and the canonical form throw; a tree nested deeper than a reader's default depth, which threw in
-    /// the check. Each is an invalid request at the override's pointer. Review 83: a number JSON cannot write is
+    /// the check. Each is an invalid request at the override's pointer. A number JSON cannot write is
     /// CONFIG_OVERRIDE_NOT_CANONICAL whatever its CLR type, as a NaN double is: a Half NaN or infinity threw
     /// JsonReaderException out of the request where the canonical form wrote it, and a boxed NaN was
     /// CONFIG_OVERRIDE_INVALID, written by the check.
@@ -152,7 +152,7 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// Review 81: an override nested deeper than a reader's default depth (64) threw out of the request where it was
+    /// An override nested deeper than a reader's default depth (64) threw out of the request where it was
     /// checked. It may nest <see cref="PlanCompiler.OverrideMaxDepth"/> levels (62), so that every override that runs can be
     /// recorded and replayed from its file: at the limit it compiles as before (an array is no value of final_top_k), one
     /// level more is an invalid request at the first level too deep.
@@ -188,9 +188,9 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// Review 83: a CLR value the host wraps (JsonValue.Create) is JSON only once it is written, and the check passed it as a
+    /// A CLR value the host wraps (JsonValue.Create) is JSON only once it is written, and the check passed it as a
     /// leaf: an object holding one name twice (a property and extension data) threw ArgumentException out of the request
-    /// where the canonical form wrote it (before review 81 it was an invalid request at its member), and a cycle threw
+    /// where the canonical form wrote it (it used to be an invalid request at its member), and a cycle threw
     /// JsonException there. Each is an invalid request at its pointer.
     /// </summary>
     [Theory]
@@ -211,7 +211,7 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// Review 83: a wrapped CLR <c>object[]</c> nested past the limit ran, and writing its recording threw JsonException at
+    /// A wrapped CLR <c>object[]</c> nested past the limit ran, and writing its recording threw JsonException at
     /// <c>$.Request.ConfigOverride</c>; the same arrays built of JsonArray were an invalid request. Wrapped or not, an
     /// override of 62 levels runs, and its recording is written, read and replayed; one of 63 is an invalid request at level 63.
     /// </summary>
@@ -251,7 +251,7 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// Review 83: every reader of a wrapped CLR value writes it anew, and a value may write something else the second time:
+    /// Every reader of a wrapped CLR value writes it anew, and a value may write something else the second time:
     /// the canonical form, the merge and the recording each wrote this one, which writes another popular quota each time,
     /// so the recording held a quota that did not run. It is written by the check, and what it wrote then runs and is
     /// recorded: the replay is identical, and nothing writes it after the request.
@@ -266,7 +266,7 @@ public sealed class ConfigOverrideTests
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var writes = quotas.Writes;
-        Assert.Equal(1, writes); // review 85: asking the value its kind wrote it, then writing it wrote it again
+        Assert.Equal(1, writes); // Asking the value its kind wrote it, then writing it wrote it again
         var ran = recorded.Recording!.Runs[0].Params["recall_quotas.popular"].Value!.Value.GetRawText();
         Assert.Equal("21", ran);
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
@@ -278,7 +278,7 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// Review 85: a wrapped CLR value is checked as the JSON it writes, by its own converter: a double NaN one writes as
+    /// A wrapped CLR value is checked as the JSON it writes, by its own converter: a double NaN one writes as
     /// the string "NaN" is that string, which runs and is recorded, not the number JSON cannot write.
     /// </summary>
     [Fact]
@@ -304,7 +304,7 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// Review 83: a wrapped CLR value that writes an object is merged as RFC 7396 merges an object, as the same object
+    /// A wrapped CLR value that writes an object is merged as RFC 7396 merges an object, as the same object
     /// built of JsonObject is: the merge set it whole, a leaf to it, and the baseline's two_tower quota was dropped
     /// (RECALL_UNKNOWN_SOURCE). The JSON of a patch, not how the host built it, decides how it merges.
     /// </summary>
@@ -331,7 +331,7 @@ public sealed class ConfigOverrideTests
     private static JsonObject Quotas(JsonNode? quotas) => new() { ["params"] = new JsonObject { ["recall_quotas"] = quotas } };
 
     /// <summary>
-    /// Review 83: what the merged compile finds at the baseline's <c>final_top_k</c> (its value, below the minimum the
+    /// What the merged compile finds at the baseline's <c>final_top_k</c> (its value, below the minimum the
     /// override sets) stays at the baseline when the override sets only <c>FINAL_TOP_K</c>, another parameter to the
     /// merge, which compares names by ordinal. Traced back through a host's object parsed ignoring case, it moved to
     /// <c>/config_override/params/final_top_k</c>, a member the override does not have. Only the host's options differ.
@@ -478,7 +478,7 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// An override builds on the configuration as it was loaded, not on the host's objects (review 58): the host edits them
+    /// An override builds on the configuration as it was loaded, not on the host's objects: the host edits them
     /// after the load (a parameter, an arm removed), and an empty override still runs what is served, takes the arm the
     /// served plan has, and replays identically on a fresh engine loaded from the files.
     /// </summary>

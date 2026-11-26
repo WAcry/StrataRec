@@ -39,7 +39,7 @@ public sealed class ReleaseManifest
     /// <summary>
     /// The stop in force on <paramref name="experiment"/>: its <see cref="Revoked"/> entry, unless this manifest releases
     /// the experiment again. One released again was brought back, and a controller that publishes it may have kept the
-    /// entry (review 39); <c>build</c>, <c>revoke</c> and <c>status</c> all read stops through this.
+    /// entry; <c>build</c>, <c>revoke</c> and <c>status</c> all read stops through this.
     /// </summary>
     public bool TryGetStop(string experiment, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out RevokedExperiment? stop)
     {

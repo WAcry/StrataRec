@@ -9,7 +9,7 @@ using StrataRec.UnitTests.Features.Cache;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>
-/// Review 20 #1: every cancellation of a token the framework handed to code it does not own runs that code's callbacks
+/// Every cancellation of a token the framework handed to code it does not own runs that code's callbacks
 /// on the pool and observes what they throw (<see cref="ObservedCancellationSource"/>). The sites' own regressions, with
 /// the system's timers and in a child process, are the integration tests' <c>TimerFaultTests</c>.
 /// </summary>
@@ -165,7 +165,7 @@ public sealed class ObservedCancellationSourceTests
     }
 
     /// <summary>A source with a logger of its own: records what it was told, and throws if asked to.</summary>
-    /// <summary>Review 23 #3: a cancellation through the base Cancel ran its callbacks already; one disposal disposes.</summary>
+    /// <summary>a cancellation through the base Cancel ran its callbacks already; one disposal disposes.</summary>
     [Fact]
     public void ACancellationThroughTheBaseCancel_IsDisposedByOneDisposal()
     {
@@ -198,7 +198,7 @@ public sealed class ObservedCancellationSourceTests
     }
 
     /// <summary>
-    /// Review 23 #2: a second disposal must not dispose ahead of the callbacks the first one waits for. The callbacks are
+    /// A second disposal must not dispose ahead of the callbacks the first one waits for. The callbacks are
     /// running (their task is published) when the disposals come; the window before publication is the stress test's
     /// (<c>TimerFaultTests</c>, cancel-races).
     /// </summary>

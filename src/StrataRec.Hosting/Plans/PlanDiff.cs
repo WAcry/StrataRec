@@ -41,7 +41,7 @@ public sealed record CombinationDiff(string Label, IReadOnlyList<string> Arms, s
 /// <summary>
 /// One side's plan of a combination holds a value RFC 8785 cannot hold exactly (<see cref="EffectivePlan.ToDocument"/>
 /// compares plans in that form), so the sides cannot be compared. It names the side and the combination, so that a tool
-/// reports where, as a diagnostic: <c>diff --format json</c> printed the canonicalizer's stack instead (review 79).
+/// reports where, as a diagnostic: <c>diff --format json</c> printed the canonicalizer's stack instead.
 /// </summary>
 public sealed class PlanDiffCanonicalizationException : Exception
 {

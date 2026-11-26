@@ -1674,7 +1674,7 @@ internal sealed class PipelineExecutor
     /// <summary>
     /// Where the run's log batches went, as a bundle records it: <c>captured</c> only when they were returned, with the
     /// run's result. An aborted run returns nothing, and one that captures writes nothing either, so its batches went
-    /// nowhere (<c>none</c>), though it sampled its taps; it recorded <c>captured</c> (review 79).
+    /// nowhere (<c>none</c>), though it sampled its taps; it recorded <c>captured</c>.
     /// </summary>
     /// <param name="returned">The run returns a result (<see cref="PublishLogs"/>'s <c>returned</c>).</param>
     private string LogDestination(PipelineRequest request, bool returned) =>

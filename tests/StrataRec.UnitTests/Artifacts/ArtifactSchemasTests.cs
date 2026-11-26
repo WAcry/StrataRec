@@ -141,7 +141,7 @@ public sealed class ArtifactSchemasTests
 
         Assert.Equal("""["object","null"]""", schema["type"]!.ToJsonString());
         Assert.Null(schema["required"]);
-        Assert.Equal("""{"type":"null"}""", schema["additionalProperties"]!.ToJsonString()); // an unknown key may only be deleted (review 34)
+        Assert.Equal("""{"type":"null"}""", schema["additionalProperties"]!.ToJsonString()); // an unknown key may only be deleted
         var properties = schema["properties"]!;
         Assert.Equal("""{"type":["string","null"],"enum":["x","y",null]}""", properties["a"]!.ToJsonString());
         Assert.Equal("""{"type":["integer","null"]}""", properties["b"]!.ToJsonString());

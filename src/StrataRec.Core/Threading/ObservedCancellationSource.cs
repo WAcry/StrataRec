@@ -77,7 +77,7 @@ public enum CancellationSite : byte
 /// <para>Only the cancellations above are covered: <see cref="CancelObservedAsync"/>, <see cref="CancelAfterObserved"/>
 /// and the link. The inherited <c>Cancel</c>, <c>CancelAsync</c> and <c>CancelAfter</c> bypass the protocol: their
 /// callbacks run on the calling thread or the timer, as for any token source, and a disposal concurrent with them can
-/// clear callbacks they have not taken yet (review 24). The framework never calls them on these sources.</para>
+/// clear callbacks they have not taken yet. The framework never calls them on these sources.</para>
 /// </remarks>
 public class ObservedCancellationSource : CancellationTokenSource
 {
@@ -182,7 +182,7 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// callbacks and wait for its: they return its task once it has published it, and before that, while the winner is
     /// still starting, a task that completes with its callbacks (and does not fault). So whoever cancels, the returned task
     /// says when the callbacks have run: a stop that finds a call's timer cancelling it still waits for the call's cleanup
-    /// (review 56). A source whose disposal was requested is not cancelled (a completed task): whoever held the token
+    ///. A source whose disposal was requested is not cancelled (a completed task): whoever held the token
     /// has ended.
     /// </remarks>
     public Task CancelObservedAsync()

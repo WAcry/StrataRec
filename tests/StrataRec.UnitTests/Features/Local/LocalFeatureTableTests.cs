@@ -701,7 +701,7 @@ public class LocalFeatureTableTests
     [InlineData(true)]
     public void Fill_RowsAliasingTheTargetColumn_CannotWritePastItsCapacity(bool multiField)
     {
-        // Codex review 9, item 1: the rows are a view of the target column's own pooled array (capacity 2, physical length
+        // The rows are a view of the target column's own pooled array (capacity 2, physical length
         // 16). Read live, the first write (8, to row 1) would turn the next row into 8, past the capacity.
         var schema = Schema(fields: new[] { new LocalTableField("i32", ColumnType.Int32) });
         var table = new LocalFeatureTable(schema);

@@ -62,7 +62,7 @@ public sealed class StagingStringTests
     [Fact]
     public void Intern_StartsOverForEachCall_WhenACompletedCallsWriterIsBoundToTheNextChunk()
     {
-        // Review 75: a writer reused for the next call after a call completed synchronously kept the first call's
+        // A writer reused for the next call after a call completed synchronously kept the first call's
         // values, so a first call of 4,096 distinct values left the next call no room: each of its repeated values was
         // a string of its own.
         var memory = new RequestMemory();
@@ -150,7 +150,7 @@ public sealed class StagingStringTests
         }
 
         // The best of three rounds: a pool rent can miss and allocate when tests running in parallel hold the shared
-        // pool's arrays (a once-off 6.5 KB at 50,000 keys in review 75), which is not a cost of the keys.
+        // pool's arrays (a once-off 6.5 KB at 50,000 keys), which is not a cost of the keys.
         Written(5_000);
         Written(50_000);
         long few = long.MaxValue, many = long.MaxValue;

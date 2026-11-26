@@ -24,9 +24,9 @@ internal sealed partial class UnifiedCompilation
     /// <remarks>
     /// Each part of this was a gap where the unified plan accepted what a combination's own compile refuses: a column only
     /// an arm's node declared, read by the baseline (external review P1); a writer one arm deletes or moves and a reader
-    /// another adds (generated differential test); a node reading its own output before writing it (review 50); a column
+    /// another adds (generated differential test); a node reading its own output before writing it; a column
     /// declared by an arm not assigned with its reader, a name in a branch the optimizer drops, a write that needs a
-    /// declaration (review 51). An arm whose additions are all it changes is never part of a combination checked here (it
+    /// declaration. An arm whose additions are all it changes is never part of a combination checked here (it
     /// changes no node): that it is not assigned is the case to check, since a reader cannot rely on an arm of another
     /// layer, which a request may not get.
     /// </remarks>

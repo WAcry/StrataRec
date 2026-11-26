@@ -125,10 +125,10 @@ public sealed class GeneratedExperimentTests
         }
 
         // With four or five layers of mostly one treatment, the space is past a limit of 8 to 16 that a scope of three
-        // layers fits, so a scope is checked by its combinations, not refused (review 51: no generated space checked one).
+        // layers fits, so a scope is checked by its combinations, not refused (no generated space checked one).
         // Half of those plant a rule only three layers break together: a baseline writer of stat.a before author_cap,
         // one arm making author_cap read it, one moving author_cap to 513 and one moving the writer to 514. Any one or two
-        // of them are legal (review 51: a scope check left out went unnoticed, nothing random was refused by three layers).
+        // of them are legal (a scope check left out went unnoticed, nothing random was refused by three layers).
         var many = random.Next(4) == 0;
         var triple = many && random.Next(2) == 0;
         var baseWriter = triple || random.Next(3) == 0;
@@ -149,7 +149,7 @@ public sealed class GeneratedExperimentTests
 
         // Sometimes without each arm's own compile (a host with a thousand arms turns it off), so the combinations' checks
         // alone must refuse what a combination refuses, and then with more arms invalid on their own; sometimes past the
-        // combinations checked in full, so the checks by scope must (review 50: the generated space never left the
+        // combinations checked in full, so the checks by scope must (the generated space never left the
         // exhaustive path).
         var alone = random.Next(3) != 0;
         var limit = many ? 8 + (4 * random.Next(3)) : random.Next(3) == 0 ? random.Next(1, 8) : sample.MaxCombinationsChecked;
@@ -251,7 +251,7 @@ public sealed class GeneratedExperimentTests
 
     /// <summary>
     /// The experiment as a host builds it in code: its patches hold CLR numbers (an order is an <c>int</c>), which a trip
-    /// through JSON text would turn into parsed elements (review 49: only a parsed order was read).
+    /// through JSON text would turn into parsed elements (only a parsed order was read).
     /// </summary>
     private static ExperimentArtifact Experiment(string id, Dictionary<string, JsonObject> arms) => new()
     {
@@ -317,7 +317,7 @@ public sealed class GeneratedExperimentTests
                 });
             case 14 when random.Next(2) == 0:
                 // The sample's author rank ranking by itself: it reads its value column before writing its output, so in
-                // a compile of this arm alone the name is unknown, though the baseline's variant declares it (review 50).
+                // a compile of this arm alone the name is unknown, though the baseline's variant declares it.
                 return Patch("nodes", "author_rank", new JsonObject
                 {
                     ["config"] = new JsonObject { ["outputs"] = new JsonObject { ["group.author_rank"] = new JsonObject { ["value_col"] = "group.author_rank" } } },
@@ -326,7 +326,7 @@ public sealed class GeneratedExperimentTests
             {
                 // One node writing a count and ranking rows by it: GroupAggregate@1 compiles its outputs by name, so self.b
                 // may read the self.a it has just written, but self.a reads self.b before writing it, which only a node
-                // compiled earlier can have declared (review 50). Columns of their own, int64 either way, so a type
+                // compiled earlier can have declared. Columns of their own, int64 either way, so a type
                 // mismatch with other writers does not refuse the plan before the declarations are checked.
                 var (first, second) = random.Next(2) == 0 ? ("self.a", "self.b") : ("self.b", "self.a");
                 return Patch("nodes", "self_" + suffix, new JsonObject
@@ -344,7 +344,7 @@ public sealed class GeneratedExperimentTests
             }
             case 15:
                 // A declaration of a column nodes may also write without one: it exists only where the arm is assigned,
-                // so a reader in another arm cannot rely on it there (review 51 P1).
+                // so a reader in another arm cannot rely on it there.
                 return Patch("columns", random.Next(3) == 0 ? "group.author_rank" : Stat(random), new JsonObject { ["type"] = "int64?" });
             default:
                 return Patch("log_taps", "tap_" + suffix, new JsonObject
@@ -377,7 +377,7 @@ public sealed class GeneratedExperimentTests
     /// <summary>
     /// A predicate reading <paramref name="column"/>, or mostly the sample's author rank (a stat column only an arm
     /// writes), mostly with a default; sometimes in a branch the optimizer drops, where the name must still be declared
-    /// (review 51).
+    ///.
     /// </summary>
     private static string Reader(Random random, string? column = null)
     {

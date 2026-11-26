@@ -250,7 +250,7 @@ public sealed class InitCommandTests
     [InlineData("")]
     public async Task Quote_IsReadBackAsWritten_ByAPosixShell(string argument)
     {
-        // Review 31: double quotes still expanded $ and backquotes, and a backslash went unquoted.
+        // Double quotes still expanded $ and backquotes, and a backslash went unquoted.
         var (code, stdout, stderr) = await Bash(Path.GetTempPath(), $"printf '%s' {InitCommand.Quote(argument)}");
 
         Assert.True(code == 0, stderr);
@@ -291,7 +291,7 @@ public sealed class InitCommandTests
     [InlineData("catalog", "nowhere")] // a dangling link
     public void Force_NeverWritesThroughASymbolicLink_AndWritesNothing(string link, string target)
     {
-        // Review 31: --force followed a link inside the workspace and replaced a file elsewhere.
+        // --force followed a link inside the workspace and replaced a file elsewhere.
         using var temp = new TempDirectory();
         var root = Path.Combine(temp.Path, "ws");
         Directory.CreateDirectory(root);
@@ -347,7 +347,7 @@ public sealed class InitCommandTests
     [System.Runtime.Versioning.UnsupportedOSPlatform("windows")] // CI is Linux only
     public void ADirectoryItCannotRead_IsADiagnostic_NotAnUnhandledException()
     {
-        // Review 31: the emptiness check ran outside the I/O error handling.
+        // The emptiness check ran outside the I/O error handling.
         using var temp = new TempDirectory();
         var root = Directory.CreateDirectory(Path.Combine(temp.Path, "locked")).FullName;
         File.SetUnixFileMode(root, UnixFileMode.None);

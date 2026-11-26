@@ -257,7 +257,7 @@ public class FetchChunkTests
     [Fact]
     public async Task AContextFetchNotSentBeforeTheCallerCancelled_IsNotSent_AndFailsAsCancelled()
     {
-        // Review 49: the context fetches of a request are sent one after another; once one connector's synchronous part
+        // The context fetches of a request are sent one after another; once one connector's synchronous part
         // has seen the caller cancel, the next was still sent with a cancelled token.
         using var caller = new CancellationTokenSource();
         var first = new ScriptedConnector((keys, fields, writer, _) =>

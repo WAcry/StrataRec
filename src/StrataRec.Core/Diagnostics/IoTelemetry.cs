@@ -104,7 +104,7 @@ public sealed class IoTarget
     /// <remarks>
     /// The span is created, then started, so the call holds it when the start callback throws: <see cref="Activity.Start"/>
     /// has made it <see cref="Activity.Current"/> by then, and a span left current became the parent of every later call
-    /// of the flow, the next chunk of a fetch say (reviews 82, 83). The flow gets back the activity it had, and the call
+    /// of the flow, the next chunk of a fetch say. The flow gets back the activity it had, and the call
     /// has no span: the half-started one is not stopped, which would report it to the listeners as a finished span. A
     /// sampler that throws does so before anything is created or made current.
     /// </remarks>
@@ -149,8 +149,7 @@ public sealed class IoTarget
 
     /// <summary>
     /// Records the call's metrics. Each instrument has its own boundary: what a host's listener throws loses that one
-    /// measurement, not the others of the call (a listener that threw on the duration skipped the keys and the errors,
-    /// review 83).
+    /// measurement, not the others of the call (a listener that threw on the duration skipped the keys and the errors).
     /// </summary>
     internal void Record(double seconds, IoOutcome outcome, int keys)
     {
@@ -245,7 +244,7 @@ public readonly struct IoCall
     /// this call. One that runs on is completed on the flow that awaits it, so the span stayed the parent of the call
     /// site's later calls: each chunk of a fetch from an asynchronous connector was a child of the chunk before it. A call
     /// that answered before its client returned is completed at once instead, which gives the flow its activity back after
-    /// the outcome is taken (review 85: the host's <see cref="Activity.CurrentChanged"/> handlers ran here before the
+    /// the outcome is taken (the host's <see cref="Activity.CurrentChanged"/> handlers ran here before the
     /// answer's time was read). Nothing to do without a span; never throws.
     /// </summary>
     public void Sent()
@@ -274,7 +273,7 @@ public readonly struct IoCall
     /// Sets the flow's current activity. The setter calls the host's <see cref="Activity.CurrentChanged"/> handlers once
     /// the activity is set, so what one throws is ignored, as what a listener throws when a call starts or completes
     /// (<see cref="Complete"/>): it went up through <see cref="Sent"/>, and the call site neither completed the call it
-    /// had sent nor let go of the request's memory (review 85).
+    /// had sent nor let go of the request's memory.
     /// </summary>
     private static void SetCurrent(Activity? activity)
     {
@@ -297,17 +296,17 @@ public readonly struct IoCall
     /// <c>ActivityListener</c>'s stop callback) on this thread. What one throws loses that measurement or the span's end,
     /// as for plan loads and the log pipeline: every call site completes a call here and then records it and lets go of
     /// it, so a throw here left a call that had answered recorded as outstanding and failed its node or fill with the
-    /// listener's exception (review 80). The health comes first: it is the engine's own and reaches the operator whatever
+    /// listener's exception. The health comes first: it is the engine's own and reaches the operator whatever
     /// the listeners do; each metric has its own boundary (<see cref="IoTarget.Record"/>).</para>
     /// <para>A stop callback that throws does so after the span is stopped and before <see cref="Activity.Stop"/> gives
     /// the flow back the activity it had: the flow gets it here, or the stopped span stayed the parent of the flow's later
-    /// calls (review 83).</para>
+    /// calls.</para>
     /// <para><see cref="Activity.Stop"/> makes the activity the span started over current, whatever the flow's current
     /// one. A span that is not the current activity here (a call still running when its client returned, completed on the
     /// flow that awaited it or on another) is stopped in the call site's context as it was when the call started
     /// (<see cref="ExecutionContext.Run"/>), which that change leaves as it was: the flow completing the call keeps its own
     /// activity. Stopped on that flow, one running another request's activity went on as a child of this call's request
-    /// (review 85), and one whose activity had stopped could not be given it back (review 87). The host's listeners run in
+    ///, and one whose activity had stopped could not be given it back. The host's listeners run in
     /// the call site's context, as the call's own. A call started where the execution context does not flow
     /// (<see cref="ExecutionContext.SuppressFlow"/>) has none to stop it in: it is stopped on the flow completing it, whose
     /// listeners and handlers see that flow, and the flow is given back its activity after the span stops, unless that
@@ -367,7 +366,7 @@ public readonly struct IoCall
             else
             {
                 // No context to stop it in (the flow did not flow when the call started): this flow gets back the activity
-                // it had, which the setter refuses only for one that has stopped (review 88: it was left in this call's request).
+                // it had, which the setter refuses only for one that has stopped (it was left in this call's request).
                 Stop(span);
                 if (!ReferenceEquals(Activity.Current, current))
                 {

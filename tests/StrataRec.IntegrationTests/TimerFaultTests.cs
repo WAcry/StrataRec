@@ -20,7 +20,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Review 20 #1: the framework cancels, at a deadline or a timeout, tokens it handed to code it does not own. A callback
+/// The framework cancels, at a deadline or a timeout, tokens it handed to code it does not own. A callback
 /// that code registered and that throws used to escape on the timer's thread, which ends the process (exit 134). Each
 /// site runs in a child process with the system's timers: the child must live, end the request (or the shutdown) within
 /// its budget, and observe the callback's exception: counted under its site and logged, with no task left unobserved.
@@ -50,7 +50,7 @@ public sealed class TimerFaultTests
     }
 
     /// <summary>
-    /// Review 22 #1: the holder of a token can end once it sees the cancellation flag, before the pool runs the callbacks
+    /// The holder of a token can end once it sees the cancellation flag, before the pool runs the callbacks
     /// of that cancellation, and the framework then disposes the source. The base disposal clears the registrations, so
     /// the callbacks were dropped, silently. The child has one pool worker, held by a gate, so the callbacks are queued
     /// and not yet taken when the source is disposed.
@@ -68,7 +68,7 @@ public sealed class TimerFaultTests
     }
 
     /// <summary>
-    /// Review 23 #1 and #2: the cancellation and the disposal of a source may meet in any order. Two cancellations at once
+    /// The cancellation and the disposal of a source may meet in any order. Two cancellations at once
     /// (the timer and the linked token), and a disposal repeated while a cancellation is still starting, must neither
     /// drop the queued callbacks nor dispose ahead of them. The pool's only worker is held while every round queues its
     /// callbacks, so none has run when its source is disposed; then every callback must run, once, and every source end
@@ -203,7 +203,7 @@ internal static class TimerFaultChild
         entered.Wait();
 
         // Two cancellations at once, then the disposal once both have returned. No callback can run before the pool's
-        // worker is released, so a returned task already complete said "done" too early (review 56: the one that lost
+        // worker is released, so a returned task already complete said "done" too early (the one that lost
         // while the winner was still starting got a completed task).
         var twoRan = 0;
         var two = new ObservedCancellationSource[Rounds];

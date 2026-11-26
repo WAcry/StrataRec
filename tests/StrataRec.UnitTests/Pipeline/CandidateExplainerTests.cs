@@ -126,7 +126,7 @@ public sealed class CandidateExplainerTests
     }
 
     /// <summary>
-    /// Review 35 #7: a float32 score's reason gives the result at the column's precision, and a term at float32's only
+    /// A float32 score's reason gives the result at the column's precision, and a term at float32's only
     /// where float32 holds it. The terms are float64: one outside float32's range used to read as Infinity or 0, which
     /// made the sum say Infinity × 0 = 1.
     /// </summary>
@@ -196,7 +196,7 @@ public sealed class CandidateExplainerTests
     [Fact]
     public async Task AHookThatThrows_AnExceptionWhoseMessageThrowsToo_ChangesOnlyTheReason()
     {
-        // Review 34: the guard read ex.Message, which threw out of it and failed the node.
+        // The guard read ex.Message, which threw out of it and failed the node.
         var plan = Compile("int64", reorder: "explain_throws", reorderPolicy: "fail_request");
         var plain = await Run(plan, null);
 

@@ -19,12 +19,12 @@ namespace StrataRec.Artifacts.Json;
 /// <para>
 /// Walks the document, guided by the serializer's own <see cref="JsonTypeInfo"/>, not the object it was bound to: the
 /// location is where the null is written (a key as written, not as its type reads it back; an index in the array, not in
-/// a set that dropped or reordered items; review 46), and no code of the bound object runs (a computed property returning
-/// <c>this</c> recursed; review 45). Element nullability comes from the member's annotations, so a model member added
+/// a set that dropped or reordered items), and no code of the bound object runs (a computed property returning
+/// <c>this</c> recursed). Element nullability comes from the member's annotations, so a model member added
 /// later is checked without being listed; at the root, and where annotations are unknown, a null element is let
 /// through (a patch's null deletes). A polymorphic object is walked as the type its discriminator names, a present
 /// <c>Nullable&lt;T&gt;</c> as its <c>T</c>; a member the serializer does not read (ignored, computed), a member with its
-/// own converter, or a type the serializer does not read as an object, list or map, is not walked into (review 47).
+/// own converter, or a type the serializer does not read as an object, list or map, is not walked into.
 /// </para>
 /// <para>
 /// Runs when a document or a config is bound, and only when the document has a null at all; members are looked up once
@@ -42,7 +42,7 @@ internal static class NullElements
         JsonObject o => AnyNullIn(o),
         JsonArray a => AnyNullIn(a),
         // A value can hold a CLR list or object (JsonValue.Create(array)), written as JSON that may have a null: the
-        // same JSON is checked however the tree was built (review 47).
+        // same JSON is checked however the tree was built.
         JsonValue v => v.GetValueKind() is JsonValueKind.Null or JsonValueKind.Array or JsonValueKind.Object,
         _ => false,
     };
@@ -250,7 +250,7 @@ internal static class NullElements
 
                     // What the serializer fills: through a setter, a constructor parameter, or the getter's object when
                     // it populates. An ignored member has no accessors, and its constructor parameter is not read
-                    // either (review 48); a computed one has only a getter.
+                    // either; a computed one has only a getter.
                     var ignored = property.Get is null && property.Set is null;
                     var read = !ignored && (parameter is not null || property.Set is not null || PopulatedWithoutSetter(property, info, options));
                     var member = new Member(property, nullability, read);
@@ -273,7 +273,7 @@ internal static class NullElements
     /// Whether the serializer fills a member without a setter through its getter's object. Set on the member, the
     /// serializer has checked that it can (or refused the contract); a type's or the options' preference falls back to
     /// replacing where the value cannot be populated (a struct, an array, an immutable or read-only collection), and a
-    /// member replaced without a setter is skipped (review 48). Whether it can is the serializer's converter's, which it
+    /// member replaced without a setter is skipped. Whether it can is the serializer's converter's, which it
     /// does not expose: this follows the shapes its converters populate.
     /// </summary>
     private static bool PopulatedWithoutSetter(JsonPropertyInfo property, JsonTypeInfo declaring, JsonSerializerOptions options)
@@ -310,7 +310,7 @@ internal static class NullElements
     /// A collection the serializer fills through what it can add to (a list, a collection, a dictionary, a queue or a
     /// stack), whether or not it could create one: a type derived from <c>List&lt;T&gt;</c> with only a constructor that
     /// takes arguments has no <see cref="JsonTypeInfo.CreateObject"/>, yet the instance its getter returns is filled
-    /// (review 49). Never an array or an immutable collection, which also implement the list interfaces.
+    ///. Never an array or an immutable collection, which also implement the list interfaces.
     /// </summary>
     private static bool AddedTo(Type type)
     {

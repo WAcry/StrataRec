@@ -5,7 +5,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// What the command line cannot write is a diagnostic at the option that names it, with what the system said and a hint,
-/// not an exception and its stack (review 43): the store of build, publish and revoke, the files of build --manifest and
+/// not an exception and its stack: the store of build, publish and revoke, the files of build --manifest and
 /// run --record; and a store whose pointers cannot be listed is not one that publishes nothing.
 /// </summary>
 public sealed class WriteFailureCliTests

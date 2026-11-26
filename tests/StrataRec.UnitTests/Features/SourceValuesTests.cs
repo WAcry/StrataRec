@@ -52,7 +52,7 @@ public class SourceValuesTests
     [Fact]
     public async Task APrefetchNoReaderTook_IsCountedWhenTheRequestEnds_ItsAnsweredChunksOnly()
     {
-        // A prefetch for a node that does not run (a fallback, review 25): chunks [1, 2] and [3, 4] answer (nothing for 3),
+        // A prefetch for a node that does not run (a fallback): chunks [1, 2] and [3, 4] answer (nothing for 3),
         // [5] is still running when the request ends. The source answered keys 1-4 whether or not anything read them.
         var held = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector((keys, fields, writer, _) =>

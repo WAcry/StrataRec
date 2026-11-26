@@ -166,7 +166,7 @@ public class CacheReadTests
     }
 
     /// <summary>
-    /// Review 19: the window is judged when the fallback is chosen, after the connector failed. TTL 1000 ms within 10%
+    /// The window is judged when the fallback is chosen, after the connector failed. TTL 1000 ms within 10%
     /// and a 1000 ms window: a record 1200 ms old is stale for between 700 and 900 ms more. The connector fails after
     /// 100 ms (still in the window: served) or after 10 s (past it: not served, though it was stale when the read began).
     /// </summary>
@@ -349,7 +349,7 @@ public class CacheReadTests
     [Fact]
     public async Task ARecordOfAnotherFieldSet_WhoseNamesSpellTheSameWithTabsAndNewlines_IsAMiss()
     {
-        // Review 19: the same number of fields, and the same text once names and types are joined by tabs and newlines.
+        // The same number of fields, and the same text once names and types are joined by tabs and newlines.
         const string Joined = "a\tfloat64\nb", Second = "b\tfloat64\nc";
         var store = new FakeCacheStore();
         var writer = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, field) => field == "c" ? 22.0 : 11.0), distributed: store);
@@ -495,7 +495,7 @@ public class CacheReadTests
     }
 
     /// <summary>
-    /// What is written back holds only what it needs (Gemini review 2026-11-14, finding 3): when all chunks of a read but
+    /// What is written back holds only what it needs: when all chunks of a read but
     /// one fail, the record written back does not keep the array encoded for all 512 misses alive in the queues, whose
     /// byte limits count record bytes.
     /// </summary>

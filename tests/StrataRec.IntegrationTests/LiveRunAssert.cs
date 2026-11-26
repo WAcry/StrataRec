@@ -26,7 +26,7 @@ internal static class LiveRunAssert
     /// <summary>
     /// The decisions of an engine result: which pipeline served it, and the outcome of every node of that pipeline's run.
     /// A trace carries only the served run, so a recording is compared by its served run too; a request whose primary
-    /// pipeline failed differs from one it served in the first entry (review 15).
+    /// pipeline failed differs from one it served in the first entry.
     /// </summary>
     private static List<(string Node, string Outcome)> Describe(RecResult result)
     {

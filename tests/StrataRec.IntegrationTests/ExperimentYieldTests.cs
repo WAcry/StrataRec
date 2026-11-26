@@ -138,7 +138,7 @@ public sealed class ExperimentYieldTests
 
     /// <summary>
     /// A replay resolves the yields of the replayed plan over the arms the recording was assigned, those that yielded
-    /// included (review 96): a recording where the quality experiment yielded, replayed where the short feed yields to
+    /// included: a recording where the quality experiment yielded, replayed where the short feed yields to
     /// it instead, runs as a request in both runs there now, and differs from the recording. Arms passed to the replay
     /// yield the same way.
     /// </summary>
@@ -175,7 +175,7 @@ public sealed class ExperimentYieldTests
     }
 
     /// <summary>
-    /// A recording of the platform's arms replays through the platform's rule (review 98): where the replayed plan puts
+    /// A recording of the platform's arms replays through the platform's rule: where the replayed plan puts
     /// the two experiments into one layer, both arms are a layer conflict and the request runs the baseline, as a request
     /// in them would now, not an invalid request; an arm the replayed plan does not have is ignored as unknown. Forced
     /// arms stay strict, as in a request.
@@ -222,7 +222,7 @@ public sealed class ExperimentYieldTests
     }
 
     /// <summary>
-    /// A replay's arms come from the request's assignment record (review 99): an edited assignment replays as edited and
+    /// A replay's arms come from the request's assignment record: an edited assignment replays as edited and
     /// shows as replayed arms that differ from those the primary run recorded, rather than replaying the run's arms
     /// silently; an ignored id listed twice runs once and is noted once.
     /// </summary>
@@ -255,7 +255,7 @@ public sealed class ExperimentYieldTests
 
     /// <summary>
     /// A yield changes what a request in both experiments runs, which no combination the default diff compares shows, so
-    /// it is a structural change; a reversed one is one removed and one added (review 96). An effective plan is the one a
+    /// it is a structural change; a reversed one is one removed and one added. An effective plan is the one a
     /// request in the arms runs, without the arm that yields, as the executor runs it.
     /// </summary>
     [Fact]
@@ -468,7 +468,7 @@ public sealed class ExperimentYieldDeclarationTests
 
     /// <summary>
     /// The combination limit counts the combinations that run: a yield removes those with both experiments, as one layer
-    /// would, so declaring it instead of merging two layers costs no more checks (review 96). Three layers changing one
+    /// would, so declaring it instead of merging two layers costs no more checks. Three layers changing one
     /// multiplier of fusion, each yielding to those after it, run 4 of the 8 combinations; with one yield between two of
     /// three layers changing fusion, 6 run.
     /// </summary>
@@ -492,7 +492,7 @@ public sealed class ExperimentYieldDeclarationTests
         Assert.Contains("yield", limit.Hint, StringComparison.Ordinal);
     }
 
-    /// <summary>A review of an interaction that a yield keeps apart is unused; the hint names the yield, since the two are in different layers (review 96).</summary>
+    /// <summary>A review of an interaction that a yield keeps apart is unused; the hint names the yield, since the two are in different layers.</summary>
     [Fact]
     public void AReviewOfAnInteractionAYieldKeepsApart_IsUnused_AndTheHintNamesTheYield()
     {

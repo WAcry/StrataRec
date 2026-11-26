@@ -72,7 +72,7 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
     /// <para>Only when every such connect failed without a refusal is the server taken for down: then a connection that
     /// reconnects in the background, whose failure, if it shows one already, is still read. A server that drops two
     /// connections before it answers their handshakes and refuses the third is the one case not told from a server that is
-    /// down (review 35); it is then served as one: from the connector.</para>
+    /// down; it is then served as one: from the connector.</para>
     /// </remarks>
     public async ValueTask LoadAsync(CancellationToken cancellationToken)
     {
@@ -85,7 +85,7 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
 
             // One attempt per connect: a connection that did not come up keeps reconnecting in the background
             // (AbortOnConnectFail is false), so the client's default of three only triples how long a load waits on a
-            // server that does not answer (review 24), and how long a disposal waits for a cancelled load's connection.
+            // server that does not answer, and how long a disposal waits for a cancelled load's connection.
             ConnectRetry = 1,
             AsyncTimeout = CommandTimeoutMs,
             SyncTimeout = CommandTimeoutMs,
@@ -126,7 +126,7 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
     /// </summary>
     /// <remarks>
     /// The connect itself cannot be cancelled: a cancelled load stops waiting for it, and the store keeps it, so that its
-    /// disposal waits for a connection that completes later and disposes it (review 19). The store keeps the latest one:
+    /// disposal waits for a connection that completes later and disposes it. The store keeps the latest one:
     /// the load makes no other after a cancellation, and a connect that failed made no connection.
     /// </remarks>
     private async Task<ConnectionMultiplexer?> ConnectAsync(ConfigurationOptions options, CancellationToken cancellationToken)

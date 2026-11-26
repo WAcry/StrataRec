@@ -29,7 +29,7 @@ public sealed class RunCommandDeadlineTests
             Directory.Delete(directory, recursive: true);
         }
 
-        // A value the parser cannot convert is its usage error, not a crash out of the validator (review 38).
+        // A value the parser cannot convert is its usage error, not a crash out of the validator.
         foreach (var value in new[] { "abc", "0" })
         {
             var usage = new StringWriter();

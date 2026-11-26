@@ -31,7 +31,7 @@ namespace StrataRec.Features.Runtime;
 /// <para><b>Keys.</b> A chained group's key is read from the stored values, as a request input is: a missing one (absent,
 /// failed, not answered) is no key, so nothing is called and the features take their absent values. As for a foreign key
 ///, a failed key feature fails the group's features, without a call, and a degraded one degrades them.</para>
-/// <para><b>Lifetime</b> (review 72). The prefetch holds the request memory until every group it started is stored and
+/// <para><b>Lifetime</b>. The prefetch holds the request memory until every group it started is stored and
 /// every derived feature it computes is computed, however the starts ended; then it rethrows the first failure. A chained
 /// group is not started when what its key reads failed with an exception, and not sent when its key is stored after the
 /// request has ended (<see cref="EndRequest"/>) or been cancelled; its task completes all the same, so nothing is left
@@ -308,7 +308,7 @@ public sealed partial class FeatureFetcher
 
     /// <summary>
     /// A derived context feature computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>): as soon as what it reads is
-    /// stored, or failed as soon as one of its inputs failed, since the others cannot change that (review 82: a recall query
+    /// stored, or failed as soon as one of its inputs failed, since the others cannot change that (a recall query
     /// reading the derived value waited for its other inputs, up to the node's budget, though a query reading the inputs
     /// themselves gave up at once).
     /// </summary>
@@ -464,7 +464,7 @@ public sealed partial class FeatureFetcher
             else
             {
                 // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or its
-                // time is up (an earlier group's connector ran its synchronous part; review 49): BoundedCall's rule 8.
+                // time is up (an earlier group's connector ran its synchronous part): BoundedCall's rule 8.
                 // The bound ends at the deadline taken with the budget, and the staging is set up inside the try, as a
                 // candidate fetch's (review of 43bdf97).
                 var bound = _hook is { Replays: true } ? null : new CallBound(CancellationSite.Fetch, cancellationToken, deadline, _events, _requestId);

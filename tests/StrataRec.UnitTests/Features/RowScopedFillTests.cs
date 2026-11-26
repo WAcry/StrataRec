@@ -149,7 +149,7 @@ public class RowScopedFillTests
     }
 
     /// <summary>
-    /// Review 79: a prefetch started for other rows (a fallback's declared reads, after rows were appended), which fails for
+    /// A prefetch started for other rows (a fallback's declared reads, after rows were appended), which fails for
     /// all its keys, is not waited for by a row-scoped fill whose rows have what it needs: waiting set the feature failed
     /// and failed the fill. Its rows' derived values are computed; the prefetch is left in flight, for the request's end.
     /// When a row of the fill is unfilled, the prefetch is waited for, and its failure fails the fill, not fetched again.
@@ -197,7 +197,7 @@ public class RowScopedFillTests
     }
 
     /// <summary>
-    /// Review 80: a prefetch that asked for other keys is not waited for, although a row of the fill is unfilled: a row
+    /// A prefetch that asked for other keys is not waited for, although a row of the fill is unfilled: a row
     /// appended after it started. Waiting set the feature failed when the prefetch failed for all its keys and failed the
     /// fill, though the connector was never asked for the row's key; the fill now fetches that key itself. A prefetch that
     /// asked for the key of one of the fill's rows is waited for, as before, though another row's key is not among its
@@ -276,7 +276,7 @@ public class RowScopedFillTests
     }
 
     /// <summary>
-    /// Review 80: whether a prefetch holds the key of a row of the fill is judged by the whole key, as its backfill matches
+    /// Whether a prefetch holds the key of a row of the fill is judged by the whole key, as its backfill matches
     /// rows: a key read from a candidate feature (computed by the fill for an appended row before its fetches), two
     /// varying parts, a varying part beside a request input. The prefetch of items 11 and 21 fails; item 12 is appended
     /// after it. Its foreign key, creator 1, is the prefetch's (11 / 10): waited for, the fill fails. Its pairs (12, 1)

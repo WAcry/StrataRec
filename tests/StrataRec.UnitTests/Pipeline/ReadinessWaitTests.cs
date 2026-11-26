@@ -15,7 +15,7 @@ public sealed class ReadinessWaitTests
 {
     private static readonly Action<int, FeatureFillResult> Ignore = static (_, _) => { };
 
-    /// <summary>Review 93: no copy of the list is made for an operator that waits for nothing (f450c03 made one, 24 B and up).</summary>
+    /// <summary>no copy of the list is made for an operator that waits for nothing (f450c03 made one, 24 B and up).</summary>
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -42,7 +42,7 @@ public sealed class ReadinessWaitTests
     }
 
     /// <summary>
-    /// Review 93: once the bound passed while the operator's list was read (its indexer for the second read ran past the
+    /// Once the bound passed while the operator's list was read (its indexer for the second read ran past the
     /// deadline or cancelled the caller), the rest of the list is not read: the third read's indexer, which throws, would
     /// have been the node's failure instead of the timeout or the cancellation.
     /// </summary>
@@ -79,7 +79,7 @@ public sealed class ReadinessWaitTests
     }
 
     /// <summary>
-    /// Review 95: entered with the bound already passed, the wait calls none of the operator's code, not even its list's
+    /// Entered with the bound already passed, the wait calls none of the operator's code, not even its list's
     /// Count, whose exception would otherwise stand for the timeout or the cancellation.
     /// </summary>
     [Theory]

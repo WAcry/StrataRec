@@ -115,7 +115,7 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AProviderAnsweringSynchronouslyAfterTheCallerCancelled_CancelsTheRequest()
     {
-        // Review 18 #2: an answer the engine observes complete is judged when it is observed, as BoundedCall judges a
+        // An answer the engine observes complete is judged when it is observed, as BoundedCall judges a
         // client's: the caller's cancellation comes first, so the request ends there and no pipeline runs on the answer
         // (a run would deliver its aborted bundle to OnRecording).
         using var caller = new CancellationTokenSource();
@@ -139,7 +139,7 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AProviderAnsweringSynchronouslyPastTheDeadline_IsRejectedAsPastIt()
     {
-        // Review 18 #2: the provider blocks the request's thread until the deadline has cancelled its token, then answers.
+        // The provider blocks the request's thread until the deadline has cancelled its token, then answers.
         // The engine cannot cut that short, but it does not take the late answer.
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment, new BlockingProvider(token => Assert.True(token.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)))));
@@ -193,7 +193,7 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AProviderAbandonedAtTheDeadline_SeesItsTokenCancelled()
     {
-        // Review 18 #2, follow-up: the wait and the timer that cancels the provider's token both aim at the deadline, and
+        // The wait and the timer that cancels the provider's token both aim at the deadline, and
         // the wait can end first. Disposing the source then stopped that timer: the token was never cancelled. The token
         // lives until the provider ends (BoundedCall, rule 3; the order where the wait ends first is fixed in BoundedCallTests).
         var provider = new TokenOnlyProvider();
@@ -211,7 +211,7 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AProviderAbandonedForTheCallersCancellation_SeesItsTokenCancelled()
     {
-        // Review 18 #2, follow-up: when the caller cancels, the wait's own registration on the caller's token can end the
+        // When the caller cancels, the wait's own registration on the caller's token can end the
         // request (inline, in Cancel) before the registration that cancels the provider's linked token runs; disposing the
         // source then removed that registration, and the provider's token was never cancelled.
         using var caller = new CancellationTokenSource();
@@ -255,7 +255,7 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AnAbandonedProviderWhoseCallbackThrows_IsSummarized_AndKeepsItsTokenUntilItEnds_ThenItIsDisposed()
     {
-        // Review 20 #3: the callback's failure is counted and summarized as every token's is (the request events, subject
+        // The callback's failure is counted and summarized as every token's is (the request events, subject
         // 'assignment'), and the provider's token stays valid while it runs, then is disposed once it has ended. A logger
         // that threw on the failure used to end the cleanup there: the token source was never disposed.
         var provider = new FailingCleanupProvider();

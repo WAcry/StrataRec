@@ -148,7 +148,7 @@ public sealed class ModelRankerTests
     [InlineData(3)]
     [InlineData(10)]
     [InlineData(256)]
-    [InlineData(int.MaxValue)] // one call: the batch count overflowed and no call was sent (review 27)
+    [InlineData(int.MaxValue)] // one call: the batch count overflowed and no call was sent
     public async Task Pairwise_RanksTheWindowByExpectedWins_TiesByEntityId_RowsAfterTheWindowKeepTheirOrder(int batchSize)
     {
         var models = new TestModels(_ => PairIds, Prefer(Strengths));
@@ -411,7 +411,7 @@ public sealed class ModelRankerTests
     [Theory]
     [InlineData("PairwiseRanker@1", """ "window": 1 """, "/window", "RANKER_WINDOW")]
     [InlineData("PairwiseRanker@1", """ "max_pairs": 0 """, "/max_pairs", "RANKER_MAX_PAIRS")]
-    [InlineData("PairwiseRanker@1", """ "max_pairs": 2147483647, "window": 46342 """, "/max_pairs", "RANKER_MAX_PAIRS")] // 2 · pairs overflowed at run time (review 28)
+    [InlineData("PairwiseRanker@1", """ "max_pairs": 2147483647, "window": 46342 """, "/max_pairs", "RANKER_MAX_PAIRS")] // 2 · pairs overflowed at run time
     [InlineData("PairwiseRanker@1", """ "batch_size": 0 """, "/batch_size", "MODEL_BAD_BATCH")]
     [InlineData("ListwiseReranker@1", """ "window": 0 """, "/window", "RANKER_WINDOW")]
     [InlineData("ListwiseReranker@1", """ "output": "" """, "/output", "MODEL_OUTPUT")]

@@ -90,7 +90,7 @@ internal sealed class ReplayEngines : IAsyncDisposable
 
     /// <summary>The engine to replay <paramref name="bundle"/> on, or why there is none and how to replay it instead.</summary>
     /// <exception cref="StrataRec.Pipeline.Replay.ReplayBundleException">The bundle is of another format: checked here as every entry that takes a
-    /// bundle checks it, before its runs are read (review 91).</exception>
+    /// bundle checks it, before its runs are read.</exception>
     public async Task<(RecEngine? Engine, string? Problem, string? Hint)> ForAsync(ReplayBundle bundle, CancellationToken cancellationToken)
     {
         ReplayBundleFile.CheckFormat(bundle);
@@ -128,7 +128,7 @@ internal sealed class ReplayEngines : IAsyncDisposable
     /// The pipelines the bundle's request ran, each with the manifest it recorded and where the bundle says so. The primary
     /// pipeline is always among them: a bundle without a primary run (none recorded, or one cut from the bundle) stands
     /// for it on the bundle's manifest, and the engine then replays it with every external call a gap, as it does on a
-    /// workspace (review 25).
+    /// workspace.
     /// </summary>
     private static List<Run> Runs(ReplayBundle bundle)
     {

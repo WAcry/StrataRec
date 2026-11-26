@@ -19,7 +19,7 @@ public class DistributedCacheTierTests
     private static readonly LocalTableSchema Schema = new(
         "item_store", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("clicks", ColumnType.Float64)]);
 
-    /// <summary>Review 19: a callback the store registered on its token throws when the disposal cancels it.</summary>
+    /// <summary>a callback the store registered on its token throws when the disposal cancels it.</summary>
     [Fact]
     public async Task ACancellationCallbackThatThrows_DoesNotDisposeTheStoreUnderAWrite_NorSkipItsDisposal()
     {
@@ -44,7 +44,7 @@ public class DistributedCacheTierTests
     }
 
     /// <summary>
-    /// Review 19: a metric listener that throws when a written batch is counted neither stops the loop (the next batch is
+    /// A metric listener that throws when a written batch is counted neither stops the loop (the next batch is
     /// still written) nor skips the store's disposal.
     /// </summary>
     [Fact]
@@ -70,7 +70,7 @@ public class DistributedCacheTierTests
     }
 
     /// <summary>
-    /// Review 19: once the disposal began, the loop sends no further batch. The write in flight finishes; the two queued
+    /// Once the disposal began, the loop sends no further batch. The write in flight finishes; the two queued
     /// behind it are dropped and counted, not sent on a cancelled token; the store is disposed last.
     /// </summary>
     [Fact]
@@ -98,7 +98,7 @@ public class DistributedCacheTierTests
     }
 
     /// <summary>
-    /// Review 78: as the table's writer, the tier's queue takes a batch larger than its whole limit when it is empty (the
+    /// As the table's writer, the tier's queue takes a batch larger than its whole limit when it is empty (the
     /// loop takes a batch off the queue as it sends it), and nothing over its limit while it holds some: it holds at most
     /// that one batch over its limit.
     /// </summary>
@@ -128,7 +128,7 @@ public class DistributedCacheTierTests
     }
 
     /// <summary>
-    /// Review 83: a write the tier's queue drops is counted on the thread that hands it over, a request's, while the read
+    /// A write the tier's queue drops is counted on the thread that hands it over, a request's, while the read
     /// resolves: a listener that threw there failed the read. It returns false, counted, and the listener's exception is
     /// lost; what the loop counts is still kept for the disposal to report (the test above).
     /// </summary>

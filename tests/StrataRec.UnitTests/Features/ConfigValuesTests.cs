@@ -43,7 +43,7 @@ public class ConfigValuesTests
         Assert.Equal(expected, value.AsInt64());
     }
 
-    // ---- integers, exactly (review 32 #1: through a double, 9007199254740993.0 became 9007199254740992) ----------------
+    // ---- integers, exactly (through a double, 9007199254740993.0 became 9007199254740992) ----------------
 
     /// <summary>A request's integers (a <see cref="JsonElement"/>) are read as written: a request is never stored canonical.</summary>
     [Theory]
@@ -141,7 +141,7 @@ public class ConfigValuesTests
     }
 
     /// <summary>
-    /// Review 79: configuration is stored canonical (RFC 8785), where a number written with a fraction or an exponent is a
+    /// Configuration is stored canonical (RFC 8785), where a number written with a fraction or an exponent is a
     /// double. Past ±2^53 its canonical form can be another integer: an int64 parameter written <c>1152921504606846976.0</c>
     /// validated, a run from the workspace returned 2^60 and a run from the manifest built from it 1152921504606847000. In
     /// configuration such an integer is an error, scalar or element, in the canonicalizer's words; a request reads it as

@@ -115,7 +115,7 @@ public class ListElementFeatureTests
     [Fact]
     public async Task DerivedContextFloat32Features_AreRoundedToFloat32_AndOneBeyondItsRangeIsReplaced()
     {
-        // Review 62: a context-level value is computed in float64 and published without a column; it must be what the
+        // A context-level value is computed in float64 and published without a column; it must be what the
         // same feature computed per candidate is, after float32 storage: rounded, and an overflow is an infinity.
         var rig = new FeatureTestRig();
         var list = Derived(rig, "user.w", "list<float32>", ScalarValue.FromFloat64List(new[] { 0.1, -2.5 }));
@@ -147,7 +147,7 @@ public class ListElementFeatureTests
     [Fact]
     public async Task ContextFloatFeatures_PublishTheirDefaultAndIntegerResults_AsStorageHoldsThem()
     {
-        // Review 63: the default replacing a missing or non-finite value, and an integer result of a float32 feature,
+        // The default replacing a missing or non-finite value, and an integer result of a float32 feature,
         // were published as given (0.1 as the double, 16777217 exactly), not as the float32 a candidate column holds.
         var rig = new FeatureTestRig();
         var missing = Derived(rig, "user.m", "list<float32>", ScalarValue.Missing, ScalarValue.FromFloat64List(new[] { 0.1 }));
@@ -245,7 +245,7 @@ public class ListElementFeatureTests
     [InlineData("-1e39", "float32", "must be within the float32 range [-3.4028235E+38, 3.4028235E+38], got the number -1e39; declare the type as float64")]
     public void ConfigValuesBeyondFloat32_AreRejected_WithAFix(string json, string type, string error)
     {
-        // Review 62: a default (or input) a float32 column would hold as an infinity is not a value anyone meant.
+        // A default (or input) a float32 column would hold as an infinity is not a value anyone meant.
         Assert.False(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out _, out var message));
         Assert.Contains(error, message, StringComparison.Ordinal);
         Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type).Promoted(), out _, out _));
@@ -303,7 +303,7 @@ public class ListElementFeatureTests
     [Fact]
     public void ANullableElement_InAFeatureType_SuggestsThePlainList()
     {
-        // Review 62: a feature is never written with '?'; a feature that may be missing is the one without a default.
+        // A feature is never written with '?'; a feature that may be missing is the one without a default.
         Assert.False(ConfigTypes.TryParse("list<int32?>", TypeSite.Feature, out _, out _, out var message, out var hint));
         Assert.Contains("did you mean 'list<int32>'?", hint, StringComparison.Ordinal);
         Assert.Contains("a feature without 'default' is the one that may be missing", message, StringComparison.Ordinal);

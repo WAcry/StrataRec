@@ -37,7 +37,7 @@ public sealed class MovedNodeOrderTests
 
     /// <summary>
     /// The order is the JSON number, however the tree holds it: one built in code holds a CLR int, not the parsed tree's
-    /// JSON element, and only a long was read, so the moved writer was compiled last, after the reader (review 49).
+    /// JSON element, and only a long was read, so the moved writer was compiled last, after the reader.
     /// </summary>
     [Theory]
     [InlineData("parsed")]

@@ -167,8 +167,8 @@ internal static class InitCommand
 
     /// <summary>
     /// The checks before anything is written: the directory is one, it is empty unless <paramref name="force"/>, and every
-    /// path of the workspace is free, with no symbolic link on the way (a link would take a write outside the workspace,
-    /// review 31). Fills <paramref name="existing"/> with the files init would overwrite; false when a check failed, with its
+    /// path of the workspace is free, with no symbolic link on the way (a link would take a write outside the workspace).
+    /// Fills <paramref name="existing"/> with the files init would overwrite; false when a check failed, with its
     /// diagnostic. Throws what the file system throws.
     /// </summary>
     private static bool Check(string root, string label, InitFile[] files, bool force, List<string> existing, DiagnosticBag diagnostics)
@@ -362,7 +362,7 @@ internal static class InitCommand
 
     /// <summary>
     /// The argument as a POSIX shell reads it back: as it is when every character is plain, else in single quotes, inside
-    /// which a shell expands nothing (a quote itself is closed, escaped and reopened: <c>'\''</c>). Review 31: double quotes
+    /// which a shell expands nothing (a quote itself is closed, escaped and reopened: <c>'\''</c>). Double quotes
     /// still expanded <c>$</c> and backquotes.
     /// </summary>
     internal static string Quote(string argument)

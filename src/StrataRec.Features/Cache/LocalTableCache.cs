@@ -119,7 +119,7 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
     /// A string is charged once where consecutive keys share it, the same object as the previous key's same part: a part
     /// from a request input or a context feature is one string for every key of the read, and charging it per key made
     /// 4,096 candidates sharing a 128-character part cost about 1.44 MiB instead of 0.32 MiB, so an empty 1 MiB queue
-    /// dropped the batch (review 78). Comparing references allocates nothing; an equal string that is another object is
+    /// dropped the batch. Comparing references allocates nothing; an equal string that is another object is
     /// another object held, and charged.
     /// </remarks>
     public long Bytes { get; } = Footprint(keys, records, count, partCount);
@@ -295,7 +295,7 @@ public sealed class LocalTableCache
     /// The retention less the record's age, at least 1 ms. The age is judged as <see cref="Classify(long, ulong, long)"/> judges it: a write
     /// time ahead of the clock (the clock stepped back during the fetch, say) counts as written now, so the result is at
     /// most <see cref="RetentionMs"/>, which the binding checked against <see cref="MaxRetentionMs"/>; at that bound a
-    /// write time 1 ms ahead used to overflow the ticks to a negative time to live (review 21 #1). In ticks, so no
+    /// write time 1 ms ahead used to overflow the ticks to a negative time to live. In ticks, so no
     /// floating-point rounding takes the boundary past what a <see cref="TimeSpan"/> holds.
     /// </remarks>
     internal TimeSpan StoreTimeToLive(long writtenMs, long nowMs)
@@ -331,7 +331,7 @@ public sealed class LocalTableCache
     /// <summary>
     /// Counts a write-back a tier's queue did not take. Never throws: a read hands its records to the queues while it
     /// resolves, after its calls and before it is recorded, so a metric listener that threw here turned a read the
-    /// connector had answered into a failed fill, unrecorded (review 83). The measurement is lost instead, as in
+    /// connector had answered into a failed fill, unrecorded. The measurement is lost instead, as in
     /// <see cref="CountKeys"/>. What the writers count on their own threads is reported to the host as before
     /// (<see cref="CountWrites"/>).
     /// </summary>
@@ -350,7 +350,7 @@ public sealed class LocalTableCache
     /// <summary>
     /// Counts a read's keys by tier and outcome. Never throws: a read counts its distributed tier's and its stale keys while
     /// it resolves, after its store calls and before it is recorded, so a metric listener that threw there left a read that
-    /// had answered unrecorded and failed its fill (review 80). The measurement is lost instead, as in
+    /// had answered unrecorded and failed its fill. The measurement is lost instead, as in
     /// <see cref="IoCall.Complete"/>.
     /// </summary>
     internal void CountKeys(CacheTier tier, CacheKeyOutcome outcome, int keys)

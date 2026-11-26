@@ -114,7 +114,7 @@ public sealed class PlanCompilation
     /// it wrapped is the JSON it wrote once (but a number or string the canonical form reports), and a wrapped
     /// <see cref="System.Text.Json.JsonElement"/> the JSON of the element. Whoever keeps the override for this
     /// compile (a recording of the request) keeps this one: the host's tree would write those values again, perhaps
-    /// differently (review 83). Null without an override, or when the override failed its check.
+    /// differently. Null without an override, or when the override failed its check.
     /// </summary>
     public JsonObject? ConfigOverride { get; internal set; }
 

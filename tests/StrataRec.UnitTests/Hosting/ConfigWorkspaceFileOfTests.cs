@@ -38,7 +38,7 @@ public sealed class ConfigWorkspaceFileOfTests : IDisposable
     [InlineData("table:t", "tables/t.jsonc")]
     [InlineData("policy", "policy.jsonc")]
     [InlineData("releases/p.local.jsonc", "releases/p.local.jsonc")] // a label that is a path
-    [InlineData("pipeline:a b", "pipelines/a b.jsonc")] // an id may contain spaces (review 32 #7: it named pipelines/a.jsonc)
+    [InlineData("pipeline:a b", "pipelines/a b.jsonc")] // an id may contain spaces (it named pipelines/a.jsonc)
     [InlineData("pipelines/a b.jsonc", "pipelines/a b.jsonc")]
     [InlineData("pipeline:a", "pipelines/a.jsonc")]
     public void ALabel_NamesItsFile(string label, string file)

@@ -13,7 +13,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// Pinned versions (<c>col.x@node</c>) are judged per arm combination, against the nodes that run together,
-/// so the unified plan accepts exactly the combinations a compile of each alone accepts (review 20 #4). They used to be
+/// so the unified plan accepts exactly the combinations a compile of each alone accepts. They used to be
 /// judged once over the union of every node's variants: an arm that can never meet the reader could reject the plan, and
 /// a combination that removes the version could pass.
 /// </summary>

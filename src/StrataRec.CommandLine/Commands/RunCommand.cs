@@ -242,7 +242,7 @@ internal static class RunCommand
                              "includes compiling the code it runs. Rerun with --deadline-ms 5000 to rule out the clock.");
         }
 
-        // A bundle that cannot be written is said, and the result printed all the same: the request ran (review 43).
+        // A bundle that cannot be written is said, and the result printed all the same: the request ran.
         var recorded = true;
         if (recordPath is not null)
         {
@@ -280,14 +280,14 @@ internal static class RunCommand
 
     /// <summary>
     /// The command that replays a bundle just recorded, to copy into a shell: each path quoted for the shell, and one that
-    /// starts with '-' written ./-b, which the command line would otherwise read as an option (review 34).
+    /// starts with '-' written ./-b, which the command line would otherwise read as an option.
     /// </summary>
     internal static string ReplayCommandLine(string config, string bundle) =>
         $"stratarec replay -c {InitCommand.Quote(AsPath(config))} {InitCommand.Quote(AsPath(bundle))}";
 
     /// <summary>
     /// The same for a run on <paramref name="reference"/>: a bundle of a manifest replays on it, from its store, where the
-    /// manifest's id is found; a manifest file is named, since it need not be in the store (review 37).
+    /// manifest's id is found; a manifest file is named, since it need not be in the store.
     /// </summary>
     private static string ReplayCommandLine(ConfigRef reference, string bundle) => reference.Kind switch
     {

@@ -7,7 +7,7 @@ namespace StrataRec.Core.Memory;
 /// <remarks>
 /// A configured size may be as large as <see cref="int.MaxValue"/>, which means "everything in one batch". The usual
 /// <c>(items + size - 1) / size</c> overflows there and gave no batch at all, so nothing was sent and the work was read as
-/// done (review 27); <see cref="Count"/> cannot overflow.
+/// done; <see cref="Count"/> cannot overflow.
 /// </remarks>
 public static class Batching
 {

@@ -6,7 +6,7 @@ using StrataRec.UnitTests.Features.Cache;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>
-/// Reviews 82 and 83: a host's activity listener that throws when a call's span is sampled, starts or stops leaves the
+/// A host's activity listener that throws when a call's span is sampled, starts or stops leaves the
 /// call without a span or without its end, and leaves the flow's current activity as the call found it. The span the
 /// start callback threw on was already current, and a stopped span whose stop callback threw stayed current: either
 /// became the parent of the flow's next call.
@@ -50,7 +50,7 @@ public sealed class IoCallSpanTests
     }
 
     /// <summary>
-    /// Review 85: <see cref="Activity.Stop"/> makes the activity a span started over current, whatever the flow's current
+    /// <see cref="Activity.Stop"/> makes the activity a span started over current, whatever the flow's current
     /// one. A call sent, then completed on a flow that runs another request's activity, made that flow a child of this
     /// call's request. A flow whose current activity is the span still gets the request's back (the test above).
     /// </summary>
@@ -79,7 +79,7 @@ public sealed class IoCallSpanTests
     }
 
     /// <summary>
-    /// Review 87: the call's span is stopped in the call site's context, so the flow completing it is not touched at all.
+    /// The call's span is stopped in the call site's context, so the flow completing it is not touched at all.
     /// Stopped on that flow and given its activity back afterwards, one whose activity had already stopped (which the
     /// setter refuses) stayed in this call's request, and the host's CurrentChanged handlers saw it moved there.
     /// </summary>
@@ -129,7 +129,7 @@ public sealed class IoCallSpanTests
     }
 
     /// <summary>
-    /// Review 88: a call started where the execution context does not flow has none to stop its span in. Stopped on the
+    /// A call started where the execution context does not flow has none to stop its span in. Stopped on the
     /// flow completing it, that flow was left in this call's request: its next span joined the request's trace.
     /// </summary>
     [Theory]
@@ -163,9 +163,9 @@ public sealed class IoCallSpanTests
 }
 
 /// <summary>
-/// Review 83: each metric of a call has its own boundary. A host's listener that threw on the duration skipped the call's
+/// Each metric of a call has its own boundary. A host's listener that threw on the duration skipped the call's
 /// key count and its error count, which other listeners subscribe to on their own; the health and failure summaries were
-/// kept (review 80).
+/// kept.
 /// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class IoCallMetricTests

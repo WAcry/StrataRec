@@ -173,12 +173,12 @@ public sealed class RevokeCommandTests
     }
 
     /// <summary>
-    /// Review 83: the move <see cref="FileSystemManifestSource.NameHint"/> describes for a release an earlier version
+    /// The move <see cref="FileSystemManifestSource.NameHint"/> describes for a release an earlier version
     /// published under a name starting with '.', step by step (the old release is under <c>local</c> here: the files are
     /// laid out alike, and no version's status lists one under such a name, so the hint names them). The pointer names the
     /// manifest, the store holds it under its digest as JSON, and what it revoked is under <c>revoked</c> and not under
     /// <c>experiments</c>; left out of the release file copied to the new name, it stays out of what that name publishes,
-    /// which releases what the old pointer did. Built from the copy as it was, the revoked experiment came back (review 81).
+    /// which releases what the old pointer did. Built from the copy as it was, the revoked experiment came back.
     /// </summary>
     [Fact]
     public async Task TheMoveTheNameHintDescribes_KeepsWhatTheOldReleaseRevokedOut()
@@ -267,7 +267,7 @@ public sealed class RevokeCommandTests
 
     /// <summary>
     /// A pointer that cannot be read, however it cannot, is one error, and what the other pointers publish is still shown
-    /// (review 40: an undecodable string, a file name no pointer can have and an environment that cannot be listed each
+    /// (an undecodable string, a file name no pointer can have and an environment that cannot be listed each
     /// ended the command with nothing shown); a filter skips the environments it does not ask for.
     /// </summary>
     [Fact]
@@ -316,7 +316,7 @@ public sealed class RevokeCommandTests
             File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
 
-        // Pointers that cannot be traversed are not "nothing published", with -e either (review 42: exit 0, nothing shown).
+        // Pointers that cannot be traversed are not "nothing published", with -e either (exit 0, nothing shown).
         var all = Path.Combine(store, "pointers");
         File.SetUnixFileMode(all, UnixFileMode.None);
         try
@@ -344,7 +344,7 @@ public sealed class RevokeCommandTests
     /// Each experiment records what its compile needed beyond the baseline, and a revocation drops exactly that, so a binary
     /// without those types refuses the release and takes the revocation. Inferred from the names the
     /// configuration wrote, a revocation kept the connector and store types of feature sources only the revoked experiment
-    /// read (review 68), and guessed at models an operator uses by its config's default (reviews 39, 40, 42).
+    /// read, and guessed at models an operator uses by its config's default.
     /// </summary>
     [Fact]
     public async Task EachExperiment_RequiresWhatItsCompileUsed_AndARevocationDropsExactlyThat()
@@ -418,7 +418,7 @@ public sealed class RevokeCommandTests
 
     /// <summary>
     /// What the published manifest releases is not revoked, whatever it lists as revoked: a controller brought it back
-    /// (review 39: build refused the configuration that was published), and a later stop no longer lists it.
+    /// (build refused the configuration that was published), and a later stop no longer lists it.
     /// </summary>
     [Fact]
     public async Task Build_TakesWhatThePublishedManifestBroughtBack()
@@ -443,7 +443,7 @@ public sealed class RevokeCommandTests
         Assert.True(code == 0, errors);
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors);
 
-        // Nor does status call it revoked, in text or JSON (review 71): the entry is no stop in force.
+        // Nor does status call it revoked, in text or JSON: the entry is no stop in force.
         var (statusCode, status, statusErrors) = await Status(store);
         Assert.True(statusCode == 0, statusErrors);
         Assert.DoesNotContain("revoked ", status);
@@ -462,7 +462,7 @@ public sealed class RevokeCommandTests
 
     /// <summary>
     /// A stop takes the pointer's lock as publish does, and names an experiment once however often it is given; a blob the
-    /// process may not read is a diagnostic at the manifest's pointer (review 39: an unhandled exception).
+    /// process may not read is a diagnostic at the manifest's pointer (an unhandled exception).
     /// </summary>
     [Fact]
     public async Task Revoke_TakesThePointersTurn_NamesEachExperimentOnce_AndSaysWhatItCannotRead()

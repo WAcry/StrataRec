@@ -182,7 +182,7 @@ public sealed class RecErrorKindTests : IDisposable
     [Fact]
     public async Task InputsReadWithOnePlan_AndRunOnTheNext_AreCheckedAgainstTheNext()
     {
-        // Review 32: a host reads the body with the schema served now; a release loaded before ExecuteAsync no longer
+        // A host reads the body with the schema served now; a release loaded before ExecuteAsync no longer
         // declares one of the inputs. The engine's own check, against the plan it runs, is the answer: invalid, at the pointer.
         await using var engine = Load(_root);
         Assert.True(engine.TryGetRequestSchema("feed", out var before));
@@ -206,7 +206,7 @@ public sealed class RecErrorKindTests : IDisposable
     [InlineData(true)]
     public async Task AReplay_OnASchemaThatNowRejectsTheRecordedInputs_IsAnInvalidRequest_AsTheRequestWouldBe(bool withFallback)
     {
-        // Review 33: the replay ran the inputs it decoded without the check, so a release that requires a new input turned
+        // The replay ran the inputs it decoded without the check, so a release that requires a new input turned
         // the recorded request into a failure, or a success of the fallback, where the engine answers it as invalid.
         await using var engine = Load(_root);
         var recorded = await engine.ExecuteAsync(Request("feed", Inputs(1001), debug: new DebugOptions { Record = true }), TestContext.Current.CancellationToken);

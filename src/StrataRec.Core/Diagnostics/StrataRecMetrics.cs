@@ -408,7 +408,7 @@ public static class StrataRecMetrics
     /// Creates the instruments on <see cref="StrataRecTelemetry.Meter"/>, in this type's initializer. Creating an instrument
     /// tells every <see cref="MeterListener"/> of it, on this thread: a host's listener that threw there failed the
     /// initializer, and every later read of any instrument threw <see cref="TypeInitializationException"/> for the rest of
-    /// the process, in a plan load as in a log submission (review 81). An instrument whose creation throws is made again
+    /// the process, in a plan load as in a log submission. An instrument whose creation throws is made again
     /// on a meter disposed before it, which tells no listener and records nothing: the engine runs on without that
     /// instrument's measurements. The listeners after the one that threw were not told of it either, which only the host
     /// can mend, by fixing its listener.

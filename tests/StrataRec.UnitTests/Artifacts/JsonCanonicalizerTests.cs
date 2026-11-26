@@ -345,7 +345,7 @@ public class JsonCanonicalizerTests
     }
 
     /// <summary>
-    /// Review 83: a Half that is not finite was not checked as a double or float is, and writing it threw
+    /// A Half that is not finite was not checked as a double or float is, and writing it threw
     /// JsonReaderException ('N' is an invalid start of a value), not a canonicalization error at its pointer. It is
     /// rejected as they are, boxed or not; a finite Half is a number.
     /// </summary>

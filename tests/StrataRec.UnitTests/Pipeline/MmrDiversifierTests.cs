@@ -26,7 +26,7 @@ public sealed class MmrDiversifierTests
     [Fact]
     public void RowsWithoutAScore_ComeAfterEveryRowWithOne_EvenWithoutWeightOnTheScore()
     {
-        // Review 49: at λ = 0 the missing score's −∞ was weighted to 0 like every score, and the third row, opposite the
+        // At λ = 0 the missing score's −∞ was weighted to 0 like every score, and the third row, opposite the
         // first pick, went before the second.
         double[] scores = [1.0, 0.9, double.NegativeInfinity];
         float[]?[] vectors = [[1, 0], [1, 0], [-1, 0]];
@@ -40,7 +40,7 @@ public sealed class MmrDiversifierTests
     [InlineData(0.5)]
     public void RowsWithoutAScore_ComeLast_EvenWhenSimilaritiesAreNaN(double lambda)
     {
-        // Review 50: finite vectors whose norm overflows float give NaN similarities, and NaN compares below the −∞ that
+        // Finite vectors whose norm overflows float give NaN similarities, and NaN compares below the −∞ that
         // stood for a missing score, so the first row left (here without a score) won.
         double[] scores = [1.0, double.NegativeInfinity, 0.9];
         float[]?[] vectors = [[2e38f, 2e38f], [2e38f, 2e38f], [2e38f, 2e38f]];
@@ -61,7 +61,7 @@ public sealed class MmrDiversifierTests
     [Fact]
     public void WithNoWeightOnSimilarity_TheOrderIsTheScores_WhateverTheVectors()
     {
-        // Review 49: finite vectors whose norm overflows float made every cosine NaN, and 0·NaN hid the scores.
+        // Finite vectors whose norm overflows float made every cosine NaN, and 0·NaN hid the scores.
         double[] scores = [1.0, 0.7, 0.9];
         float[]?[] vectors = [[2e38f, 2e38f], [2e38f, 2e38f], [2e38f, 2e38f]];
 

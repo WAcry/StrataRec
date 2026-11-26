@@ -369,7 +369,7 @@ public class BindingHostTableTests
     public async Task ACallbackAndItsLogBothFailing_StillLeaveShutdownWaitingForTheSource()
     {
         // The failed callback is logged (event 1206), and here that log throws too. The stop must still wait for the run:
-        // a shutdown that returned now would let the caller free what the source is still cleaning up (review 14).
+        // a shutdown that returned now would let the caller free what the source is still cleaning up.
         var logs = new ListLoggerFactory(throwOn: 1206);
         var host = new BindingHost(new BindingHostOptions { ShutdownTimeout = TimeSpan.FromSeconds(30) }, logs);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

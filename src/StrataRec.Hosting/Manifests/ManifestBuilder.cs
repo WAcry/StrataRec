@@ -124,7 +124,7 @@ public static class ManifestBuilder
         {
             if (manifest.TryGetStop(name, out var stop))
             {
-                revoked[name] = stop; // not one the manifest releases: that was brought back (review 39)
+                revoked[name] = stop; // not one the manifest releases: that was brought back
             }
         }
 

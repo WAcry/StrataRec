@@ -6,7 +6,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Review 44: an undeclared output takes its type from the first variant that writes it, and every arm combination runs on
+/// An undeclared output takes its type from the first variant that writes it, and every arm combination runs on
 /// that one schema. An arm that writes it as another type (count to mean, or a group key that may be missing) was compiled
 /// against the first type: the mean was written as an integer, a missing count failed the request. It is an error at
 /// compile time now, and a declaration under /columns that both can write is the fix.

@@ -151,7 +151,7 @@ public sealed class GroupAggregateTests
     }
 
     [Theory]
-    [InlineData(10000000000000004.0, 17)] // review 44: the mean from the sum was one ulp off, and the deviations from it a std of 2
+    [InlineData(10000000000000004.0, 17)] // The mean from the sum was one ulp off, and the deviations from it a std of 2
     [InlineData(0.1, 17)]                  // the same at the scale of a score: a z-score of ±1 for equal scores
     [InlineData(1e308, 2)]                 // the mean of values whose sum overflows
     public async Task EqualValues_HaveTheirValueAsMean_AndAStdOfZero(double value, int count)
@@ -168,7 +168,7 @@ public sealed class GroupAggregateTests
     }
 
     [Theory]
-    [InlineData(1e308, -1e308)] // review 45: x − mean overflowed, where the mean is 0
+    [InlineData(1e308, -1e308)] // X − mean overflowed, where the mean is 0
     [InlineData(-1e308, 1e308)]
     public async Task TheMeanOfLargeValuesOfOppositeSigns_IsFinite(double first, double second)
     {
@@ -224,7 +224,7 @@ public sealed class GroupAggregateTests
     }
 
     /// <summary>
-    /// Review 78: the std is about the true mean, not the running mean rounded at the values' scale, and at most the
+    /// The std is about the true mean, not the running mean rounded at the values' scale, and at most the
     /// largest |x|. The deviations from the rounded mean alone made 1e16+6 and 1e16+4 alternating √2, 0 and the smallest
     /// subnormal (alone or with a second one) that subnormal, and four −MaxValue then four +MaxValue infinite: missing in
     /// a nullable output, and a failed node in a non-nullable one. In this input order, through both.
@@ -286,7 +286,7 @@ public sealed class GroupAggregateTests
     }
 
     /// <summary>
-    /// Review 71: both grouping operators group by a string entity_id. A string column groups by string equality (equal
+    /// Both grouping operators group by a string entity_id. A string column groups by string equality (equal
     /// values that are other instances are one group), numbered as they first appear; a missing value is in no group.
     /// </summary>
     [Fact]

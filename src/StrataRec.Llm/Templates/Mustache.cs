@@ -142,7 +142,7 @@ internal sealed class MustacheTemplate
 
     /// <summary>
     /// The deepest nesting of sections a template may have. Binding and rendering recurse once per level, so without a
-    /// bound a long template of nested sections overflowed the stack and ended the process at load (review 29); a prompt
+    /// bound a long template of nested sections overflowed the stack and ended the process at load; a prompt
     /// needs a few levels at most.
     /// </summary>
     public const int MaxDepth = 32;

@@ -248,7 +248,7 @@ public sealed class UnwrittenAndUncommittedDataTests
     public void AFallbackIsChecked_AgainstWhatCameBeforeItsNode_AndWhatFollowsSeesWhatEitherMayLeave(string scenario, string expected, string mention)
     {
         // A fallback runs where its node failed and was rolled back, so it must pass the checks the node's own position
-        // would apply to it, whatever the node's effects (review 13). It used to be checked only for its outputs and
+        // would apply to it, whatever the node's effects. It used to be checked only for its outputs and
         // inputs: a row source standing in for a column writer appended rows whose non-nullable columns read pooled data.
         // Each effect is checked once: a row source fallback of a row source reports nothing twice.
         var (columns, nodes) = scenario switch
@@ -309,7 +309,7 @@ public sealed class UnwrittenAndUncommittedDataTests
         // Nodes of one order run in an unspecified relative order, so neither may have row effects or read
         // what the other writes. A position runs its node or its fallback: a fallback that appends rows, or reads the other
         // node's column, used to pass because only the node was checked, and the result then depended on node names
-        // (review 15).
+        //.
         var primary = scenario switch
         {
             "row source shares an order" => """
@@ -370,7 +370,7 @@ public sealed class UnwrittenAndUncommittedDataTests
     {
         // base commits score.x = 1. late writes 99 into its own version and fails; on_failure skips it. The output and a
         // later node read its version pinned. They used to read 99 live, while a replay, which skips a recorded timeout
-        // instead of running it, read it as missing (review 11).
+        // instead of running it, read it as missing.
         var timeout = how == "returns late" ? ", \"timeout_ms\": 50" : string.Empty;
         var plan = Compile(""" "score.x": { "type": "float64", "flow": true, "default": 0.0 }, "score.seen": { "type": "float64", "default": 0.0 } """, $$"""
             "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7, 8] } },

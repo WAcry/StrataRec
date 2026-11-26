@@ -320,7 +320,7 @@ public static class LogBatchJson
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when json.ValueKind == JsonValueKind.Number:
                 // A JSON number is finite: one beyond the float64 range reads as an infinity, which a writer would have
-                // spelled "Infinity". Read as one, it compared equal to a real infinity (review 84). A float32 value beyond
+                // spelled "Infinity". Read as one, it compared equal to a real infinity. A float32 value beyond
                 // the float32 range is not one either: stored, it would be an infinity.
                 if (type.Kind == StorageKind.Float32 && !nonFiniteAsStrings)
                 {

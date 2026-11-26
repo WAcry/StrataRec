@@ -186,7 +186,7 @@ public sealed class LogPipelineTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("context").GetProperty("user_id").ValueKind);
     }
 
-    // ---- Review 4 ---------------------------------------------------------------------------------------------------
+    // ---- Cancellation, limits and drains ---------------------------------------------------------------------------
 
     [Fact]
     public async Task FullDurableQueueReportsTheLossOrSpills()
@@ -256,7 +256,7 @@ public sealed class LogPipelineTests
     }
 
     /// <summary>
-    /// Review 65: a string many values point to (a dictionary-encoded column, a constant) is counted once per batch, not
+    /// A string many values point to (a dictionary-encoded column, a constant) is counted once per batch, not
     /// per row, which overstated 1,024 rows sharing a 4 KB string 158 times and dropped durable batches that fit; and the
     /// envelope's maps count per entry, where a fixed 256 bytes let zero-row batches of 100 node outcomes overrun the
     /// budget 13 times.
@@ -271,7 +271,7 @@ public sealed class LogPipelineTests
         Assert.Equal(empty + 4096 * 2, Titled(rows, _ => shared).ApproximateBytes);
         Assert.Equal(empty - 24 + rows * (24 + 4096 * 2L), Titled(rows, _ => new string('s', 4096)).ApproximateBytes);
         // Two strings alternating are two strings; two that share a slot of the table evict each other and count on every
-        // row, an overstatement the estimate accepts (review 66: the test must pick them, not assume new objects differ).
+        // row, an overstatement the estimate accepts (the test must pick them, not assume new objects differ).
         var (apart, together) = TwoPairs();
         Assert.Equal(empty - 24 + 2 * (24 + 4096 * 2L), Titled(rows, i => apart[i % 2]).ApproximateBytes);
         Assert.Equal(empty - 24 + rows * (24 + 4096 * 2L), Titled(rows, i => together[i % 2]).ApproximateBytes);
@@ -394,7 +394,7 @@ public sealed class LogPipelineTests
     }
 
     /// <summary>
-    /// Review 70: a bool is 0/1 wherever a log writes it (decisions: bool columns are int_cols), in a column, a list and the
+    /// A bool is 0/1 wherever a log writes it (decisions: bool columns are int_cols), in a column, a list and the
     /// context alike. The typed column encoder wrote true/false for columns and lists while the context kept 0/1.
     /// </summary>
     [Fact]
@@ -422,7 +422,7 @@ public sealed class LogPipelineTests
     }
 
     /// <summary>
-    /// Review 70: a schema id names one record. A context field whose type changed (the request field it reads did) got the
+    /// A schema id names one record. A context field whose type changed (the request field it reads did) got the
     /// same id, so a reader holding the record by id read it with the old type; the id now hashes the record itself.
     /// </summary>
     [Fact]
@@ -490,7 +490,7 @@ public sealed class LogPipelineTests
     [Fact]
     public async Task DisposeIsBoundedEvenWhenTheSinkIgnoresCancellation()
     {
-        // Review 5 finding 5: DrainTimeout must bound shutdown even if a write never completes.
+        // DrainTimeout must bound shutdown even if a write never completes.
         var stuck = new TaskCompletionSource();
         var sink = new StuckSink(stuck.Task);
         var pipeline = new LogPipeline(sink, new LogPipelineOptions { DrainTimeout = TimeSpan.FromMilliseconds(20) });
@@ -506,7 +506,7 @@ public sealed class LogPipelineTests
     [Fact]
     public async Task DrainTimeout_SettlesUnreadBatchesAsDropped()
     {
-        // Review 6 #4: batches still queued when the drain timeout cancels the loop were never settled, so pending (and
+        // Batches still queued when the drain timeout cancels the loop were never settled, so pending (and
         // the queue-depth series) stayed up and FlushAsync waited forever.
         var sink = new BlockingSink(); // honors cancellation
         var pipeline = new LogPipeline(sink, new LogPipelineOptions { MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(20) });

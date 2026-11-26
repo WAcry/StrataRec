@@ -93,7 +93,7 @@ public sealed partial class RecEngine
                 Debug = request.Debug,
             };
 
-            // The caller's mistakes first, as ExecuteAsync checks them (review 33): inputs the replayed plan rejects are an
+            // The caller's mistakes first, as ExecuteAsync checks them: inputs the replayed plan rejects are an
             // invalid request at their pointer, and no fallback pipeline serves them, so a replay on a changed schema
             // answers what the engine would answer the request now.
             if (plan.RequestSchema.Check(inputs) is { } invalid)
@@ -108,7 +108,7 @@ public sealed partial class RecEngine
                     notes, 0, plan.ManifestId);
             }
 
-            // The arms to run, resolved over the replayed plan as the request's assignment would be now (reviews 96, 98).
+            // The arms to run, resolved over the replayed plan as the request's assignment would be now.
             // A recording of the platform's arms (external, provider) holds every id the platform sent, those that ran and
             // those it ignored for any reason; they go through the platform's rule again, so a changed plan ignores (an
             // unknown arm, a layer conflict), runs or yields them as it would the request. Forced arms, and arms passed to
@@ -271,7 +271,7 @@ public sealed partial class RecEngine
     public static ReplayOutcome? Aborted(ReplayBundle bundle)
     {
         ArgumentNullException.ThrowIfNull(bundle);
-        ReplayBundleFile.CheckFormat(bundle); // a bundle object a host deserialized itself is checked as a file is (review 89)
+        ReplayBundleFile.CheckFormat(bundle); // a bundle object a host deserialized itself is checked as a file is
         if (!bundle.Result.Aborted)
         {
             return null;
@@ -604,7 +604,7 @@ public sealed partial class RecEngine
             elapsedMs += runs[i].Result.ElapsedMs;
 
             // A run that finished (the primary, its fallback pipeline aborted) captured its batches for a result the caller
-            // never gets: they went nowhere, as the aborted run's did (review 79).
+            // never gets: they went nowhere, as the aborted run's did.
             if (runs[i].Sampling.Logs == "captured")
             {
                 runs[i].Sampling.Logs = "none";
@@ -634,7 +634,7 @@ public sealed partial class RecEngine
     /// <param name="configOverride">
     /// The request's configuration override as its plan was compiled with it, not the host's tree (<see cref="DebugOptions.ConfigOverride"/>):
     /// copying that would write the CLR values the host wrapped once more, and a value that writes something else the
-    /// second time would be recorded as what did not run (review 83).
+    /// second time would be recorded as what did not run.
     /// </param>
     private ReplayRequestRecord RequestRecord(
         RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, IReadOnlyList<string> arms, IReadOnlyList<IgnoredArm> ignored,

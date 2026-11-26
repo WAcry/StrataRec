@@ -15,8 +15,8 @@ namespace StrataRec.IntegrationTests;
 /// without a declaration, by a node compiled before it that writes it. The unified plan compiles each node once on a
 /// schema holding what any arm declares, so each case here was accepted while the combination's merged config is refused:
 /// a writer another layer's arm takes away (found by <see cref="GeneratedExperimentTests"/>), a node reading its own output
-/// before writing it (review 50), a declaration by an arm not assigned with the reader, a name in a dead branch, a write
-/// that needs a declaration, a parameter another arm adds (review 51).
+/// before writing it, a declaration by an arm not assigned with the reader, a name in a dead branch, a write
+/// that needs a declaration, a parameter another arm adds.
 /// </summary>
 public sealed class DeclarationTests
 {
@@ -51,7 +51,7 @@ public sealed class DeclarationTests
     [Fact]
     public void ANodeReadingItsOwnOutputBeforeWritingIt_IsRejected_ThoughAnotherVariantDeclaredIt()
     {
-        // Review 50: GroupAggregate@1 reads its value columns before it writes its outputs, so a value column naming its own
+        // GroupAggregate@1 reads its value columns before it writes its outputs, so a value column naming its own
         // output is unknown when the arm's config is compiled alone; the baseline's variant had declared it in the unified
         // schema, and a read of a column the node writes was let through. Each arm alone is not compiled here (With).
         var host = HomeFeedTestHost.Load();
@@ -105,7 +105,7 @@ public sealed class DeclarationTests
         Assert.True(unified.Succeeded, string.Join("\n", unified.Diagnostics));
     }
 
-    /// <summary>The second is review 51's: the optimizer drops the branch, the name must still be declared to bind.</summary>
+    /// <summary>The second is the optimizer drops the branch, the name must still be declared to bind.</summary>
     [Theory]
     [InlineData("col.group.author_rank")]
     [InlineData("true ? 7 : (col.group.author_rank ?? 0)")]
@@ -129,7 +129,7 @@ public sealed class DeclarationTests
     [Fact]
     public void ADiagnosticAtATapOrAnOutputColumn_EscapesItsNameInThePointer()
     {
-        // Review 52: the names went into the pointer as they are, so '/' and '~' made it point elsewhere, and the tap's
+        // The names went into the pointer as they are, so '/' and '~' made it point elsewhere, and the tap's
         // error was not attributed to the arm that adds it.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Output.Columns["rank/of~author"] = "col.group.author_rank";
@@ -153,7 +153,7 @@ public sealed class DeclarationTests
     [Fact]
     public void AnErrorInATapsContextOrAMapKey_IsAtItsEscapedPointer()
     {
-        // Review 53: a context name went into the pointer as it is, so the error an arm's tap made was placed in the
+        // A context name went into the pointer as it is, so the error an arm's tap made was placed in the
         // baseline's file; a map parameter's keys and names likewise.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Params["recall_quotas"]!["a/b~c"] = "many";
@@ -171,7 +171,7 @@ public sealed class DeclarationTests
     [Fact]
     public void AnErrorInAColumnOrAFusionTerm_IsAtItsEscapedPointer()
     {
-        // Review 54: a declared column's name and a multiplier's or addend's name went into the pointer as they are.
+        // A declared column's name and a multiplier's or addend's name went into the pointer as they are.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Columns["col/of~x"] = new ColumnSpec { Type = "int46" };
         var request = With(host.Request, [Treatment("a", """
@@ -189,7 +189,7 @@ public sealed class DeclarationTests
     [Fact]
     public void AColumnDeclaredOnlyByAnArmNotAssignedWithItsReader_IsNotDeclaredThere()
     {
-        // Review 51 P1: a declares the column the baseline's writer declares too, b reads it, c deletes the writer; each arm
+        // A declares the column the baseline's writer declares too, b reads it, c deletes the writer; each arm
         // is valid alone and checked so. With b and c but not a, the name is unknown. The unified schema held a's
         // declaration for every combination, so the column did not count as one needing a writer: the plan was accepted,
         // and revoking a published a build no host could load.
@@ -218,7 +218,7 @@ public sealed class DeclarationTests
         Assert.EndsWith("(together with c/t)", error.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>Review 51: the binder resolves every name; the optimizer then drops the branch, and the reads with it.</summary>
+    /// <summary>the binder resolves every name; the optimizer then drops the branch, and the reads with it.</summary>
     [Theory]
     [InlineData("true || ((col.group.author_rank ?? 1) <= 3)")]
     [InlineData("false ? ((col.group.author_rank ?? 1) <= 3) : true")]
@@ -263,7 +263,7 @@ public sealed class DeclarationTests
     [Fact]
     public void AWriteThatNeedsADeclaration_DoesNotDeclareTheColumnItWrites()
     {
-        // Review 51: an extension writes its column with a type of its own unless both options are on; then it writes it
+        // An extension writes its column with a type of its own unless both options are on; then it writes it
         // as declared (TryWriteColumn without an implicit type). Each arm alone declares it; a and b together have no
         // declaration, though the unified schema had one from the other variants.
         var host = HomeFeedTestHost.Load();
@@ -308,7 +308,7 @@ public sealed class DeclarationTests
     public void PastTheLimit_ANameOnlyThreeLayersTogetherLeaveUndeclared_IsFoundInItsScope()
     {
         // Joint reads y only when a and b both switch it on; c deletes y's writer. Every arm and every pair is legal; four
-        // more layers make 128 combinations, past the limit of 8, which the three deciding layers fit (review 51: the
+        // more layers make 128 combinations, past the limit of 8, which the three deciding layers fit (the
         // generated space never checked a scope it could enumerate).
         var host = HomeFeedTestHost.Load();
         var pipeline = host.Request.Pipeline;

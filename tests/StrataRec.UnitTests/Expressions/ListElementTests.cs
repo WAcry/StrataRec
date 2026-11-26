@@ -183,7 +183,7 @@ public class ListElementTests
     [Fact]
     public void LiteralListConversion_VisitsEachNodeOfASharedLetOnce()
     {
-        // Review 62: each let doubles the paths to the literal, not the nodes; walking paths took 190 MB at 18 levels.
+        // Each let doubles the paths to the literal, not the nodes; walking paths took 190 MB at 18 levels.
         var f = new ExprFixture(capacity: 4).Ctx("ctx.b", "bool", ScalarValue.FromBool(true)).Build(1);
         var source = new System.Text.StringBuilder("let a0 = [1]; ");
         for (var i = 1; i <= 20; i++)

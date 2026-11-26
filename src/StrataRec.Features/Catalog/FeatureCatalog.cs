@@ -792,7 +792,7 @@ public sealed class FeatureCatalog
     /// feature part is an edge, candidate (<c>col.</c>) or context (<c>ctx.</c>), so a cycle through any part of a composite
     /// key is found. An entity found to lead into no cycle is remembered for the whole catalog and not walked again, whatever
     /// kind of edge reached it: without it, eight parts reading eight features of the same parent walk the parent's chain
-    /// eight times each, and a valid chain of ten such entities took 6 s (review 76). A cycle that also passes through a
+    /// eight times each, and a valid chain of ten such entities took 6 s. A cycle that also passes through a
     /// derived feature is found where the plan compiles the derived feature (the catalog does not compile expressions), and
     /// reported there with the same code at a key part on the cycle: a derived feature is no edge here, since what it reads
     /// is in its expression, not in its entity's key (review of IO step 5: an entity's argument reading a derived feature

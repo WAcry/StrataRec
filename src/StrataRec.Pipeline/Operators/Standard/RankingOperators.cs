@@ -463,10 +463,10 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
     /// <remarks>
     /// The similarity was floored at 0 (the largest started at 0), so a row opposite every pick counted as merely
     /// unrelated (external review). A row without a score had relevance −∞, which λ = 0 turned into 0 (to avoid 0·−∞),
-    /// so it went before rows with a score (review 49). With λ = 1, vectors whose norm overflows float made every
-    /// similarity NaN, and 0·NaN left the order to the incoming one instead of the score (review 49). Rows without a
+    /// so it went before rows with a score. With λ = 1, vectors whose norm overflows float made every
+    /// similarity NaN, and 0·NaN left the order to the incoming one instead of the score. Rows without a
     /// score are kept out of the choice while one with a score is left, not given the lowest value: a NaN value compares
-    /// below every value too (review 50). Among rows with a score, such vectors still give NaN; their order is not
+    /// below every value too. Among rows with a score, such vectors still give NaN; their order is not
     /// rescaled for that magnitude.
     /// </remarks>
     /// <param name="rows">The window's rows, in their incoming order.</param>
@@ -522,7 +522,7 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
                 if (double.IsNegativeInfinity(relevance[i]))
                 {
                     // No score: only once every row with one is picked, then in the incoming order. Not by value: a NaN
-                    // similarity (vectors whose norm overflows float) compares below −∞ too (review 50).
+                    // similarity (vectors whose norm overflows float) compares below −∞ too.
                     if (scoredLeft == 0)
                     {
                         best = i;

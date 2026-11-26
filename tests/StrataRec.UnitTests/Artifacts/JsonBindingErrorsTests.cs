@@ -292,7 +292,7 @@ public class JsonBindingErrorsTests
     [Fact]
     public void AKeyThatLooksLikePathSyntax_NextToItsShortPrefix_IsTheOneTheRestOfThePathFits()
     {
-        // Review 32 #5: with "a" beside "a'].b", the error in "a'].b" was an unknown key "b']" in entry "a".
+        // With "a" beside "a'].b", the error in "a'].b" was an unknown key "b']" in entry "a".
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PipelineArtifact>(
             """{"pipeline_id":"p","nodes":{"a":{"op":"TopK@1","order":1},"a'].b":{"op":"TopK@1","order":"bad"}}}"""));
 
@@ -325,7 +325,7 @@ public class JsonBindingErrorsTests
     [InlineData("""{ "$type": "square" }""", "/$type", """'$type' must be one of "counted", got the string "square".""", null)]
     public void APolymorphicObject_IsReadWithTheTypeItsDiscriminatorSelects(string json, string pointer, string message, string? hint)
     {
-        // Review 32 #6: the base contract (no properties) made count an unknown key, with the hint "it takes no keys".
+        // The base contract (no properties) made count an unknown key, with the hint "it takes no keys".
         var error = Error<Shape>(json, "the shape");
 
         Assert.Equal((pointer, message, hint), (error.Pointer, error.Message, error.Hint));
@@ -359,7 +359,7 @@ public class JsonBindingErrorsTests
     [InlineData("""{ "plain": "Fast" }""", "/plain", """'plain' must be an integer, got the string "Fast".""")] // the serializer's own enum converter reads numbers
     public void AnEnum_IsDescribedByTheConverterThatReadsIt(string json, string pointer, string message)
     {
-        // Review 32 #6: a string enum converter (allowIntegerValues: false, or on the member) was told "must be an integer".
+        // A string enum converter (allowIntegerValues: false, or on the member) was told "must be an integer".
         var error = Error<Modes>(json);
 
         Assert.Equal((pointer, message), (error.Pointer, error.Message));
@@ -370,7 +370,7 @@ public class JsonBindingErrorsTests
     [Fact]
     public void AStringThatIsNotValidUnicode_InAnArtifact_IsAControlledError()
     {
-        // Review 32 #4: describing the value decoded it again and threw InvalidOperationException.
+        // Describing the value decoded it again and threw InvalidOperationException.
         var json = """{"pipeline_id":"p","nodes":{"a":{"op":"TopK@1","order":""" + Unpaired + "}}}";
 
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PipelineArtifact>(json, "p.json"));

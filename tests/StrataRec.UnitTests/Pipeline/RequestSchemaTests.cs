@@ -85,7 +85,7 @@ public sealed class RequestSchemaTests
     [InlineData("""{ "user_id": 1, "a/b": 2 }""", "/inputs/a~1b", "Input 'a/b' must be a string, got the number 2.", null)]
     [InlineData("""[1]""", "/inputs", "'inputs' must be an object of input values by name, got an array.",
         "declared inputs: 'a/b', 'emb', 'flag', 'n32', 'region', 'tags' and 'user_id'")]
-    // Review 32: what System.Text.Json parses but a request must not hold, at its pointer.
+    // What System.Text.Json parses but a request must not hold, at its pointer.
     [InlineData("""{ "user_id": 1, "user_id": 2 }""", "/inputs/user_id", "Member 'user_id' is given more than once.",
         "give each member once: which of two values would count is not defined")]
     [InlineData("""{ "user_id": 1, "region": "\uD800" }""", "/inputs/region", "The string \"\\uD800\" is not valid Unicode: an escape is an unpaired surrogate.",

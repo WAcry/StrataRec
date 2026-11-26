@@ -12,7 +12,7 @@ public class UpdateContractsTests
     [Fact]
     public void UpdatePosition_EveryWayOfMakingOne_RejectsNegativeOffsets()
     {
-        // Codex review 9, item 8: Single bypassed the checks and made {"0":-1}, which FromJson then rejected.
+        // Single bypassed the checks and made {"0":-1}, which FromJson then rejected.
         Assert.Throws<ArgumentOutOfRangeException>(() => UpdatePosition.Single(-1));
         Assert.Throws<ArgumentOutOfRangeException>(() => new UpdatePosition(new[] { new PartitionOffset(0, -1) }));
         Assert.Throws<ArgumentOutOfRangeException>(() => new UpdatePosition(new[] { new PartitionOffset(-1, 0) }));
@@ -54,7 +54,7 @@ public class UpdateContractsTests
     [Fact]
     public async Task MemorySource_CancelledBeforeItsFirstBatch_WritesNothing()
     {
-        // Codex review 9, item 7 (third case): a completed source with an update waiting, run with a cancelled token.
+        // A completed source with an update waiting, run with a cancelled token.
         var source = new MemoryFeatureUpdateSource();
         source.Upsert(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue> { ["i64"] = ScalarValue.FromInt64(1) });
         source.Complete();
@@ -70,7 +70,7 @@ public class UpdateContractsTests
     }
 
     [Theory]
-    [InlineData(1, 1)] // Codex review 10, item 3: cancelled while the first of three updates is applied
+    [InlineData(1, 1)] // Cancelled while the first of three updates is applied
     [InlineData(3, 3)] // cancelled while the last one is applied: the checkpoint and the successful return are next
     public async Task MemorySource_CancelledMidBatch_ThrowsAndKeepsThePosition(int cancelAtBegin, int applied)
     {

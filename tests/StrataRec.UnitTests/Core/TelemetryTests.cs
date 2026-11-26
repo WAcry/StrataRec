@@ -152,7 +152,7 @@ public sealed class RequestEventLogTests
     [Fact]
     public void AllFailedCalls_RecordedWhileFlushing_NeverReadAsRecovery()
     {
-        // Review 6 #3: a call and its failure counted separately could land in different windows, so a window of only
+        // A call and its failure counted separately could land in different windows, so a window of only
         // failed calls looked healthy ("recovered") or held more failures than calls. Producers run on dedicated threads
         // with a fixed amount of work, so a busy thread pool (CI) cannot leave the windows empty.
         var logger = new ListLogger();

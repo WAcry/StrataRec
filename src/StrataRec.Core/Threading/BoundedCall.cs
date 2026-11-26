@@ -474,8 +474,8 @@ internal static class BoundedCall
     /// <summary>
     /// Rule 5: has the call site record the call, then completes its metrics, health and span, once. Completing never
     /// throws (<see cref="IoCall.Complete"/>): a host's metric listener that threw there left a call that had answered
-    /// unrecorded, outstanding in a recording, and threw out of the node in place of its result (review 80). The call site
-    /// goes first, so a listener that takes time (or moves a cache's clock) cannot change what it sees (review 80).
+    /// unrecorded, outstanding in a recording, and threw out of the node in place of its result. The call site
+    /// goes first, so a listener that takes time (or moves a cache's clock) cannot change what it sees.
     /// </summary>
     private static void End<T, TCall>(TCall call, in IoCall io, in CallResult<T> result, CallBound bound)
         where TCall : struct, IBoundedCall<T>

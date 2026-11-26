@@ -279,7 +279,7 @@ public sealed partial class FeatureFetcher
 
         // Tracked, as the context fetch is: it may start an origin call after every call the request has sent so far
         // completed (the request may have stopped reading it, after a failure), so the drain waits for it, not only for
-        // the calls it starts (review 78).
+        // the calls it starts.
         _memory.Hold();
         read.Resolution = ResolveAsync(read, cancellationToken);
         TrackIo(read.Resolution);
@@ -330,7 +330,7 @@ public sealed partial class FeatureFetcher
         {
             // A store's synchronous part runs here, unbounded (see ICacheStore.GetAsync): once one has taken the
             // tier's time, the chunks not sent yet are not sent (BoundedCall's rule 8); their keys go to the connector
-            // like a late chunk's. The tier's time is judged by the cache's clock, which a test holds (review 21 #2).
+            // like a late chunk's. The tier's time is judged by the cache's clock, which a test holds.
             var offset = c * chunkSize;
             calls[c] = BoundedCall.RunAsync<bool, StoreCall>(
                 new StoreCall(this, read, tier, offset, Math.Min(chunkSize, read.MissCount - offset), answeredAt, c), read.Cancellation!, _memory,
@@ -347,7 +347,7 @@ public sealed partial class FeatureFetcher
             // Each chunk is judged at the time its call was seen to answer, not when this loop reaches it: a later chunk
             // may answer after a record it carries expired, so the time an earlier chunk was judged at would serve it as
             // fresh (pre-release assessment); and one that answered at once, waiting here behind a slow earlier chunk,
-            // would be judged late and its fresh records sent to the connector (review 78).
+            // would be judged late and its fresh records sent to the connector.
             var answered = await calls[c].ConfigureAwait(false);
             var nowMs = answered.Outcome == IoOutcome.Ok ? answeredAt[c] : ChunkNotAnswered;
             if (nowMs == ChunkNotAnswered)
@@ -410,7 +410,7 @@ public sealed partial class FeatureFetcher
     /// <remarks>
     /// The time is taken as soon as the outcome is known, before <see cref="IoCall.Complete"/> calls the host's listeners
     /// (<see cref="BoundedCall"/> has the call site end first): one that took time, or moved the cache's clock, made a
-    /// record fresh when the store answered look expired, and sent its key to the connector (review 80).
+    /// record fresh when the store answered look expired, and sent its key to the connector.
     /// </remarks>
     private readonly struct StoreCall(FeatureFetcher fetcher, CacheRead read, DistributedCacheTier tier, int offset, int count, long[] answeredAt, int chunk)
         : IBoundedCall<bool>
@@ -428,7 +428,7 @@ public sealed partial class FeatureFetcher
             return IoOutcome.Ok;
         }
 
-        public void Pending(Task done) => fetcher.TrackIo(done); // done once the store and this call site both are (review 78)
+        public void Pending(Task done) => fetcher.TrackIo(done); // done once the store and this call site both are
 
         public void Ended(in CallResult<bool> result, TimeSpan duration) =>
             answeredAt[chunk] = result.Outcome == IoOutcome.Ok ? read.Cache.NowMs() : ChunkNotAnswered;

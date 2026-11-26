@@ -303,7 +303,7 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 35 #2: a logger that throws used to end the polling for good (the pointer's failure was logged in a catch),
+    /// A logger that throws used to end the polling for good (the pointer's failure was logged in a catch),
     /// and the node went on serving its plan without ever taking another release. Now it loses its records, and nothing
     /// else: the pointer is read again on its schedule, a rejected manifest is tried again, and applied.
     /// </summary>
@@ -347,7 +347,7 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 35 #1: the manifest source gets a token of the framework's at startup, not the host's. A callback it
+    /// The manifest source gets a token of the framework's at startup, not the host's. A callback it
     /// registered that throws used to come out of the host's cancellation (out of the startup timeout's timer, that ends
     /// the process).
     /// </summary>
@@ -369,7 +369,7 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 35 #3: stopping waited for the callbacks a source registered on the polling's token, without bound; one
+    /// Stopping waited for the callbacks a source registered on the polling's token, without bound; one
     /// that blocks held the host's stop past its timeout. The host's stop token bounds the stop now.
     /// </summary>
     [Fact]
@@ -400,7 +400,7 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 36 #1: a stop used to return once the polling ended, with the source's cleanup on the stopping token still
+    /// A stop used to return once the polling ended, with the source's cleanup on the stopping token still
     /// running, and the container then disposed the source under it, the stop timeout far off. The stop waits for the
     /// callbacks of its cancellation too, within its timeout.
     /// </summary>
@@ -427,7 +427,7 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 56 #1: the same for a read that timed out. Its timeout cancelled the token, the read returned while the
+    /// The same for a read that timed out. Its timeout cancelled the token, the read returned while the
     /// source's cleanup on the token still ran, and the call was dropped, so a stop finished at once (3.5 ms) and the
     /// container disposed the source under the cleanup. A call is kept until its callbacks have run.
     /// </summary>
@@ -455,7 +455,7 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 56 #2: the startup read had no <see cref="ReleaseOptions.PointerTimeout"/>, so a source that never answered
+    /// The startup read had no <see cref="ReleaseOptions.PointerTimeout"/>, so a source that never answered
     /// held the start for as long as the host's token allowed (by default, forever). It fails the start, saying so.
     /// </summary>
     [Fact]
@@ -476,12 +476,12 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 79: earlier versions published under environment names starting with '.', which pointers now refuse, so a
+    /// Earlier versions published under environment names starting with '.', which pointers now refuse, so a
     /// host restarted on such an environment fails to start. The error says how to move the release, not to check that
     /// the manifest source can be reached: renaming the directory is not enough, as the manifest names its environment.
-    /// Review 81: followed as it was, the hint could change the experiments served (a build under a name with no release
+    /// Followed as it was, the hint could change the experiments served (a build under a name with no release
     /// file of the old one's, or one that never saw the old name's stops); it says to carry the release file over to an
-    /// unused name and to compare what the new manifest releases and revokes before the hosts move. Review 83: the old
+    /// unused name and to compare what the new manifest releases and revokes before the hosts move. The old
     /// version's status it named for that lists nothing under such a name; it names the files that hold the old release's
     /// revocations, to leave them out of the new release file.
     /// </summary>
@@ -505,7 +505,7 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// Review 36 #2:an attempt that threw before it set its outcome (here describing the store's exception threw) left the
+    /// An attempt that threw before it set its outcome (here describing the store's exception threw) left the
     /// new manifest with the last one's final outcome, so the polling, alive, never loaded it. The store fails once: the
     /// manifest is applied when it is tried again.
     /// </summary>

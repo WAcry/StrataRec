@@ -380,7 +380,7 @@ public sealed record LogSchema(string Id, string TapId, ImmutableArray<LogField>
     /// <summary>
     /// The schema with its id: the sha256 of the record's JSON as a sink writes it, less the id. Everything the record says
     /// is in the id and nothing else is: a context field whose type changed gets a new id (it hashed the tap's definition
-    /// and its columns' types, so a reader holding the record by id read the field with the old type; review 70), and a
+    /// and its columns' types, so a reader holding the record by id read the field with the old type), and a
     /// change of rate or filter that leaves the record as it was keeps it.
     /// </summary>
     public static LogSchema Create(string tapId, ImmutableArray<LogField> columns, ImmutableArray<LogField> context)

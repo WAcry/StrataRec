@@ -297,7 +297,7 @@ public sealed class FeaturePlan
     /// <exception cref="ArgumentException">An info of <paramref name="features"/> belongs to a plan already.</exception>
     /// <remarks>The plan takes <paramref name="features"/> as they are and fills in their groups, fields, key dependencies
     /// and waves. So an info belongs to one plan: one that a plan has taken (another plan's <see cref="Features"/>, which
-    /// requests are using) is refused before anything changes (review 56).</remarks>
+    /// requests are using) is refused before anything changes.</remarks>
     internal static FeaturePlan Create(
         IReadOnlyList<FeatureRuntimeInfo> features,
         SourceBindingArtifact bindings,

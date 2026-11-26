@@ -151,7 +151,7 @@ public sealed class MetricsTests
     [Fact]
     public async Task ARequestAssignedThenOutOfBudget_ReportsTheArmsAndIgnoredIdsItsMetricsCounted()
     {
-        // Review 18 #3: the rejection after assignment said nothing was assigned or ignored, while the per-arm error and
+        // The rejection after assignment said nothing was assigned or ignored, while the per-arm error and
         // the ignored ids were already counted. A zero deadline is spent by the time assignment returns, deterministically.
         using var capture = new MetricCapture();
         var (engine, plan) = LoadEngine(HomeFeedTestHost.Load());
@@ -254,7 +254,7 @@ public sealed class MetricsTests
 
             Assert.Single(capture.Of(StrataRecMetrics.Names.RequestErrors)); // the request itself failed
 
-            // Review 6 #5: the node the caller cut off still has its outcome, duration and rows.
+            // The node the caller cut off still has its outcome, duration and rows.
             Assert.Single(capture.Of(StrataRecMetrics.Names.NodeOutcomes), m => Tag(m, StrataRecTags.Node) == node && Tag(m, StrataRecTags.Outcome) == "aborted");
             // Cut off 300 ms after its slow call started, in seconds; the upper bound is a generous watchdog.
             Assert.InRange(Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => Tag(m, StrataRecTags.Node) == node).Value, 0.2, 30);
@@ -279,7 +279,7 @@ public sealed class MetricsTests
     [InlineData("recall")]
     public async Task ClientTimeoutExceptions_AreTimeouts(string client)
     {
-        // Review 6 #6: a client's own transport timeout is a timeout, as it already was for feature sources.
+        // A client's own transport timeout is a timeout, as it already was for feature sources.
         using var capture = new MetricCapture();
         var host = HomeFeedTestHost.Load();
         var environment = new PlanEnvironment
@@ -536,7 +536,7 @@ public sealed class TracingTests
     [Fact]
     public async Task FallbackOnlyArm_IsAttributedOnThePositionSpan_WithTheFallbackVariant()
     {
-        // Review 6 #7: an arm that changes only the fallback triggers when the fallback runs; the span must say so.
+        // An arm that changes only the fallback triggers when the fallback runs; the span must say so.
         using var spans = new SpanCapture();
         var host = HomeFeedTestHost.LoadModified(root =>
         {
@@ -568,7 +568,7 @@ public sealed class TracingTests
     [Fact]
     public async Task AbortedRequest_RootSpanKeepsTheManifestAndAssignedArms()
     {
-        // Review 6 #8: the release and the arms are known before execution; an abort must not erase them.
+        // The release and the arms are known before execution; an abort must not erase them.
         using var spans = new SpanCapture();
         var (engine, plan) = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root => MetricsTests.SlowDown(root, "model", tightTimeout: false)));
         using var cancel = new CancelOnceCallStarts("model ctr_model", TimeSpan.FromMilliseconds(300));

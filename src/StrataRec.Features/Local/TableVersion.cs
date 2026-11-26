@@ -1611,7 +1611,7 @@ public sealed class TableVersion
     /// already dropped: its bytes, and each dictionary string whose last reference it holds. <paramref name="dropped"/>
     /// counts, per code, the references of the records dropped so far, and this record's are added. A string another
     /// record still references frees nothing (compaction keeps it whole), so the sum never counts what compaction cannot
-    /// free (review 75: a share per reference counted part of a long shared string as freed, and a write-back the
+    /// free (a share per reference counted part of a long shared string as freed, and a write-back the
     /// eviction was for still did not fit). Writer side, for choosing what to evict.
     /// </summary>
     internal long Drop(byte[] page, int offset, int[] dropped)

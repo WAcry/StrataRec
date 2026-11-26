@@ -7,7 +7,7 @@ using StrataRec.Hosting.Plans;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Review 79: an int64 parameter written <c>1152921504606846976.0</c> validated and built, but the manifest, which holds
+/// An int64 parameter written <c>1152921504606846976.0</c> validated and built, but the manifest, which holds
 /// the configuration in its canonical form (RFC 8785), read it as 1152921504606847000: a run from the workspace returned
 /// 2^60, a run from the manifest built from it another integer, and <c>diff --format json</c> printed the canonicalizer's
 /// exception instead of a report. The canonicalizer refuses such an integer when it is written as plain digits; written

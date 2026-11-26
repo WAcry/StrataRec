@@ -60,7 +60,7 @@ public class ListInt32EndToEndTests
     [InlineData("list<int32>", "col.entity_id > 1 ? [3000000000] : [7]")]
     public async Task OutputReadingAFailedDerivedFeature_FailsTheRequest(string type, string expr)
     {
-        // Review 6 #1 (verification): a non-nullable derived feature whose value did not fit fails; an output expression
+        // A non-nullable derived feature whose value did not fit fails; an output expression
         // reading it directly must not serve the invalid storage as a present value.
         var root = Workspace();
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), $$"""
@@ -127,7 +127,7 @@ public class ListInt32EndToEndTests
     [InlineData("tags32", null, 3_000_000_000L)]
     public async Task RequestInputOutsideItsDeclaredInt32Type_IsRejected(string input, long? scalar, long? element)
     {
-        // Review 6 #2: inputs are held promoted (int64) but validated against the declared int32 width.
+        // Inputs are held promoted (int64) but validated against the declared int32 width.
         var plan = Compile(Workspace());
         var value = scalar is { } s ? ScalarValue.FromInt64(s) : ScalarValue.FromInt64List(new long[] { 7, element!.Value });
 

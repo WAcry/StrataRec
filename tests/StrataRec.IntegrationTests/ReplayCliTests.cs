@@ -40,7 +40,7 @@ public sealed class ReplayCliTests
     [Fact]
     public async Task TheReplayCommandRunPrints_ReadsAPathThatLooksLikeAnOption_AsAPath()
     {
-        // Review 34: 'run --record=-b' printed 'stratarec replay -c ws -b', where -b is the bundle option.
+        // 'run --record=-b' printed 'stratarec replay -c ws -b', where -b is the bundle option.
         Assert.Equal("stratarec replay -c ws ./-b", RunCommand.ReplayCommandLine("ws", "-b"));
         Assert.Equal("stratarec replay -c ./-ws 'my b.json'", RunCommand.ReplayCommandLine("-ws", "my b.json"));
         Assert.Equal("stratarec replay -c ws /tmp/-b", RunCommand.ReplayCommandLine("ws", "/tmp/-b"));
@@ -55,7 +55,7 @@ public sealed class ReplayCliTests
     }
 
     /// <summary>
-    /// Review 34: a command line that does not parse is a usage error, exit 2, never an exception (a -b without its value
+    /// A command line that does not parse is a usage error, exit 2, never an exception (a -b without its value
     /// threw from the validator) nor 1, which says the configuration has errors or, for diff, that something differs.
     /// </summary>
     [Theory]
@@ -90,7 +90,7 @@ public sealed class ReplayCliTests
 
     /// <summary>
     /// replay writes its items as run does, the output columns in their own member: a column named id or rank cannot
-    /// collide with the item's (it flattened them into the item and wrote both 'id' members, architecture audit 1).
+    /// collide with the item's (it flattened them into the item and wrote both 'id' members).
     /// </summary>
     [Fact]
     public async Task ReplayItems_AreTheItemsRunPrints_SoAColumnNamedIdOrRankCannotCollide()

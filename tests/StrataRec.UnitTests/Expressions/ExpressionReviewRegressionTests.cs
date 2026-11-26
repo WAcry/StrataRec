@@ -531,7 +531,7 @@ public class ExpressionReviewRegressionTests
 
     // ------------------------------------------------------------------------------------------------------------
     // #16: request-level results never hand out the compiled expression's own constant arrays writable. They were copied;
-    // since review 56 a value's lists are read-only spans, so the constant itself is returned.
+    // a value's lists are read-only spans, so the constant itself is returned.
 
     [Theory]
     [InlineData("[1, 2]")]
@@ -566,7 +566,7 @@ public class ExpressionReviewRegressionTests
         Assert.True(Unsafe.AreSame(ref MemoryMarshal.GetReference(compiled.EvaluateScalar(f.Context).AsStringList()), ref supplied[0]));
     }
 
-    /// <summary>Review 56: a value hands out no array of its own (a plan's default or parameter, a constant, is shared).</summary>
+    /// <summary>a value hands out no array of its own (a plan's default or parameter, a constant, is shared).</summary>
     [Fact]
     public void ScalarValue_HandsOutNoWritableArray()
     {

@@ -78,7 +78,7 @@ public sealed class ModelScorerTests
     [InlineData(3, new[] { 3, 2 })]
     [InlineData(4, new[] { 3, 2 })] // the fewest batches, even: not 4 and 1
     [InlineData(256, new[] { 5 })]
-    [InlineData(int.MaxValue, new[] { 5 })] // one batch: the batch count must not overflow (review 27)
+    [InlineData(int.MaxValue, new[] { 5 })] // one batch: the batch count must not overflow
     public async Task EachInput_IsSentAsItsTypeGivesIt_WithEveryRowsValue_InBatchesOfBatchSize(int batchSize, int[] sizes)
     {
         var models = new CapturingModels(AllKindsSignature);

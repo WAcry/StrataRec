@@ -744,7 +744,7 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
-    /// Rule 8 (Gemini review 2026-11-14, finding 4): a call whose caller has already cancelled (an earlier source of the
+    /// Rule 8: a call whose caller has already cancelled (an earlier source of the
     /// same recall did, say) or whose time is up is not sent; it ends cancelled or out of budget, recorded once, and gives
     /// back the memory and the budget.
     /// </summary>
@@ -938,7 +938,7 @@ public sealed class BoundedCallTests
 }
 
 /// <summary>
-/// Review 80, rule 5: a host's metric listener that throws while a call completes loses its measurement. The call is still
+/// A host's metric listener that throws while a call completes loses its measurement. The call is still
 /// recorded, with the outcome it had, the caller gets its result rather than the listener's exception, and the call lets
 /// go of the memory: the call site completed the call before recording it, so the throw left a call that had answered
 /// unrecorded (outstanding in a recording) and threw out of the node.
@@ -976,7 +976,7 @@ public sealed class BoundedCallListenerTests
     public async Task AnActivityListenerThatThrowsWhenACallStarts_LeavesItWithoutASpan_AndTheCallLetsGoOfTheMemory()
     {
         // The call site holds the request's memory, then starts the call: a throw from the host's start callback kept the
-        // memory held for good (found while fixing review 80). The listener samples only this test's trace.
+        // memory held for good. The listener samples only this test's trace.
         var root = "bounded-call-start-" + Guid.NewGuid().ToString("N");
         ActivityTraceId trace = default;
         var started = 0;
@@ -1162,7 +1162,7 @@ public sealed class BoundedCallAllocationTests
     {
         // The token source is created before the call is sent, so that the client's token carries the timeout. About
         // 224 B on .NET 10: the source, its registration on the node token and the timer (160 B with CancelAfter, whose
-        // timer cancels on the timer's thread; review 20 #1). Bounded, so that anything more per call shows up here.
+        // timer cancels on the timer's thread). Bounded, so that anything more per call shows up here.
         var bytes = BytesPerCall(timeoutMs: 300_000, calls: 2_000);
 
         Assert.InRange(bytes, 1, 256);

@@ -26,7 +26,7 @@ public static class ConfigValues
     /// <summary>
     /// Converts <paramref name="node"/>, a configuration value, to a value of <paramref name="type"/> (promoted storage). An
     /// integer written with a fraction or an exponent beyond ±2^53 whose canonical form (RFC 8785) is another integer is an
-    /// error: the configuration is stored in that form, and a plan built from it would read the other integer (review 79).
+    /// error: the configuration is stored in that form, and a plan built from it would read the other integer.
     /// </summary>
     /// <param name="error">
     /// What is wrong, in the words of the JSON written (<see cref="JsonWords"/>), as the rest of a sentence whose subject
@@ -443,7 +443,7 @@ public static class ConfigValues
     /// when that form is a different integer; null otherwise. Configuration is stored canonical, where such a number is a
     /// double: past ±2^53 its shortest digits can be another integer (2^60 becomes <c>1152921504606847000</c>), so a plan
     /// run from the workspace and the same plan run from its manifest bound different values, and the effective plan
-    /// <c>diff</c> canonicalizes failed (review 79). The canonicalizer refuses such an integer written as plain digits
+    /// <c>diff</c> canonicalizes failed. The canonicalizer refuses such an integer written as plain digits
     /// (<see cref="JsonCanonicalizer"/>, when an artifact or an override is hashed), but cannot tell <c>….0</c> from a
     /// float; the binding can. One whose canonical form is itself (<c>1e18</c>) is kept, as plain digits are. Allocates
     /// only for such a number past 2^53.

@@ -12,7 +12,7 @@ namespace StrataRec.Artifacts.Json;
 /// What <see cref="Jsonc"/> rejects in a configuration file, for a value System.Text.Json has already parsed (a request
 /// body read with <see cref="JsonDocument"/>): a member given twice in one object, a name or string whose escapes are not
 /// Unicode (an unpaired surrogate such as <c>\uD800</c>), and a name or string whose bytes are not UTF-8 (a raw
-/// <c>0xFF</c>, which <see cref="JsonDocument"/> keeps until the text is read, review 33).
+/// <c>0xFF</c>, which <see cref="JsonDocument"/> keeps until the text is read).
 /// </summary>
 /// <remarks>
 /// System.Text.Json parses both. What it does with them later is not an answer to the caller: a <c>JsonObject</c> throws
@@ -69,7 +69,7 @@ public static class StrictJson
 
     /// <summary>
     /// <see cref="Check(in JsonElement)"/> for a node tree a host built in code, before the engine reads it, so that no
-    /// later read throws (review 79, review 81). Each object is enumerated once here, inside a catch: an object
+    /// later read throws. Each object is enumerated once here, inside a catch: an object
     /// <see cref="JsonNode.Parse(string, JsonNodeOptions?, JsonDocumentOptions)"/> made from text keeps that text until it
     /// is first enumerated, and then throws when two members have one name (by ordinal comparison, or ignoring case when
     /// its <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/> says so) or a name is not Unicode, at whatever level
@@ -83,14 +83,14 @@ public static class StrictJson
     /// written, and it is written anew by every reader: a CLR object that writes an object or an array (a property and
     /// <see cref="System.Text.Json.Serialization.JsonExtensionDataAttribute"/> holding one name twice, an
     /// <c>object[]</c> nested deeper than the limit) passed as a leaf, and threw where the canonical form or a recording
-    /// wrote it (review 83). So such a value is written once, here, and read back from that text, with names compared by
+    /// wrote it. So such a value is written once, here, and read back from that text, with names compared by
     /// ordinal (as RFC 7396 merging compares them, <see cref="JsonMergePatch"/>): its objects and arrays get the same
     /// checks, its depth counted from its place in the tree, at pointers into it. One whose writing throws (a cycle, a
     /// NaN inside it) is reported at its pointer, in the words of what threw. A number JSON cannot write (NaN or an
     /// infinity, of double, float or Half, boxed or not) that cannot be written, and a string that is not Unicode (the
     /// writer puts U+FFFD in its place), are kept as they are: the canonical form reports them at their pointer. Every
-    /// other value, a primitive too, is the JSON it writes, by its own converter (review 85), but one holding a
-    /// <see cref="JsonElement"/>, which is the JSON of the element, whatever converter it was given (review 87).</para>
+    /// other value, a primitive too, is the JSON it writes, by its own converter, but one holding a
+    /// <see cref="JsonElement"/>, which is the JSON of the element, whatever converter it was given.</para>
     /// <para>What the check read is what the caller must read from then on, <paramref name="copy"/>: reading the host's
     /// tree again would write its CLR values again, and a value may write something else the second time.</para>
     /// </remarks>
@@ -177,11 +177,11 @@ public static class StrictJson
     /// <summary>
     /// A value the host gave as a CLR object (see the remarks of <see cref="Check(JsonNode?, int, out JsonNode?)"/>): written
     /// once, here, inside the catch, and read back; that text is what is checked and copied, so nothing after the check
-    /// writes a CLR value, and what is checked is what the value writes, by its own converter (review 85: asking an object
+    /// writes a CLR value, and what is checked is what the value writes, by its own converter (asking an object
     /// its kind wrote it, and writing it wrote it again; a double NaN a converter writes as the string "NaN" was refused as
     /// the number it is). A number JSON cannot write (NaN or an infinity, <see cref="JsonNodeUtilities.IsNonFiniteNumber"/>)
     /// that fails to write or to read back is the canonical form's to report at its pointer, as a double NaN is, whatever
-    /// its CLR type (writing a Half NaN wrote text that threw a JsonReaderException out of the request, review 83).
+    /// its CLR type (writing a Half NaN wrote text that threw a JsonReaderException out of the request).
     /// </summary>
     private static JsonBindingError? CheckClrValue(JsonValue value, int level, int maxDepth, out JsonNode? copy)
     {
@@ -216,12 +216,12 @@ public static class StrictJson
 
     /// <summary>
     /// A value holding a <see cref="JsonElement"/>: the JSON the element is, read from the element and copied from it, never
-    /// written by the value, whose converter may be the host's (review 87: one given a <c>JsonTypeInfo&lt;JsonElement&gt;</c>
+    /// written by the value, whose converter may be the host's (one given a <c>JsonTypeInfo&lt;JsonElement&gt;</c>
     /// was checked as the element and copied by <see cref="JsonNode.DeepClone"/>, which ran the converter outside the
     /// check: what it wrote was used unchecked, and what it threw went out of the request). Its strings and names are
     /// checked as text, with its depth counted from its place in the tree, by one walk that stops at the first problem
-    /// (review 90: the depth was checked by the copy, after a walk of the whole element, which a host's element thousands
-    /// of levels deep took past the stack); then it is copied. Walked, not read back from its text (review 88):
+    /// (the depth was checked by the copy, after a walk of the whole element, which a host's element thousands
+    /// of levels deep took past the stack); then it is copied. Walked, not read back from its text:
     /// the text of an element read from JSONC keeps its comments and trailing commas, one read with a larger depth limit
     /// went past the reader's own, and getting the text of one holding bytes that are not UTF-8 threw. A default element
     /// holds no JSON at all.

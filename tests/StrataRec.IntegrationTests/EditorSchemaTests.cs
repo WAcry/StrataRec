@@ -279,7 +279,7 @@ public sealed class EditorSchemaTests
     [InlineData("""{ "log_taps": { "served": { "columns": { "bookmark_rate": "col.item.bookmark_rate" } } } }""")]
     [InlineData("""{ "features": { "item.bookmarks_7d": { "type": "float32", "source": "item_store", "field": "i_bmk_7d", "default": 0.0 } } }""")]
     [InlineData("""{ "columns": { "score.extra": { "type": "float32", "default": 0.0 } }, "derived_features": { "item.x": { "type": "float32", "expr": "1.0" } } }""")]
-    // Review 34: switching a node's op deletes the old operator's config members, which the new one's schema does not have.
+    // Switching a node's op deletes the old operator's config members, which the new one's schema does not have.
     [InlineData("""{ "nodes": { "rank_sort": { "op": "ExpressionFilter@1", "config": { "score_col": null, "k": null, "predicate": "true" } } } }""")]
     public void TheExperimentSchema_AcceptsMergePatches(string patch)
     {

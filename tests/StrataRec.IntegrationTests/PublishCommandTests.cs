@@ -173,7 +173,7 @@ public sealed class PublishCommandTests
     /// <summary>
     /// A pointer names a manifest of its own pipeline and environment; one that names another's (copied or edited by hand)
     /// says nothing of this pipeline's sequence, so build without --seq and publish refuse it rather than number or compare
-    /// by it. Sequence numbers end at 2^53 - 1, the largest integer a manifest's JSON writes exactly (review 37).
+    /// by it. Sequence numbers end at 2^53 - 1, the largest integer a manifest's JSON writes exactly.
     /// </summary>
     [Fact]
     public async Task Build_AndPublish_RefuseAPointerToAnotherPipelinesManifest_AndSeqsEndAt2To53()
@@ -208,7 +208,7 @@ public sealed class PublishCommandTests
         Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
         Assert.Contains("error SEQ_EXHAUSTED", errors.ToString());
 
-        // --seq takes 1 to 2^53 - 1; what is no long at all is the parser's usage error, not a crash (review 38).
+        // --seq takes 1 to 2^53 - 1; what is no long at all is the parser's usage error, not a crash.
         foreach (var seq in new[] { "0", "9007199254740992" })
         {
             var usage = new StringWriter();
@@ -260,8 +260,8 @@ public sealed class PublishCommandTests
         Assert.Contains("error POINTER_NAME_INVALID --env", status.ToString());
         Assert.Contains(Hint, status.ToString());
 
-        // Review 79: earlier versions published under such names; the hint says how to move such a release. Review 81: to an
-        // unused name, with the old release file. Review 83: leaving out what the old release revoked, read from the files
+        // Earlier versions published under such names; the hint says how to move such a release. To an
+        // unused name, with the old release file. Leaving out what the old release revoked, read from the files
         // that hold it, since no version's status lists a pointer under such a name.
         Assert.Contains("to move a release an earlier version published under such a name, choose a new environment name nothing uses yet, " +
             "copy releases/<pipeline>.<old name>.jsonc to releases/<pipeline>.<new name>.jsonc", status.ToString());

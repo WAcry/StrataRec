@@ -144,7 +144,7 @@ public class SnapshotFilesUpdateSourceTests
         { "{\"files\": [], \"position\": {\"0\": -1}}", "/position/0", "partition" },
         { "{\"files\": [], \"format\": \"parquet\"}", "/format", "jsonl" },
         { "{\"files\": [], \"generation\": 3}", "/generation", "'files'" },
-        { "{\"files\": [], \"a/b~c\": 1}", "/a~1b~0c", "'files'" }, // review 54: the member's name escaped
+        { "{\"files\": [], \"a/b~c\": 1}", "/a~1b~0c", "'files'" }, // The member's name escaped
         { "{\"position\": {}}", "", "list the data files" },
         { "[]", "", "\"files\"" },
         { "{\"files\": [\"missing.jsonl\"]}", "", "before the manifest" },
@@ -277,10 +277,10 @@ public class SnapshotFilesUpdateSourceTests
     [InlineData("""{"uri": "x", "reload": "1h"}""", "/reload", "PT1H")]
     [InlineData("""{"uri": "x", "reload": "-PT1H"}""", "/reload", "PT1H")]
     [InlineData("""{"uri": "x", "reload": 3600}""", "/reload", "stratarec schema bindings")]
-    [InlineData("""{"uri": "x", "reload": "P60D"}""", "/reload", "P49D")] // longer than a timer waits (Gemini review 2026-11-14, finding 7)
-    [InlineData("""{"uri": "x", "reload": "P1000000000D"}""", "/reload", "P49D")] // longer than a TimeSpan holds (review 59)
+    [InlineData("""{"uri": "x", "reload": "P60D"}""", "/reload", "P49D")] // longer than a timer waits
+    [InlineData("""{"uri": "x", "reload": "P1000000000D"}""", "/reload", "P49D")] // longer than a TimeSpan holds
     [InlineData("""{"uri": "x", "reloads": "PT1H"}""", "/reloads", "did you mean 'reload'?")]
-    [InlineData("""{"uri": "x", "a/b~c": 1}""", "/a~1b~0c", "reload")] // review 54: the setting's name escaped
+    [InlineData("""{"uri": "x", "a/b~c": 1}""", "/a~1b~0c", "reload")] // The setting's name escaped
     public void Factory_SettingErrors_NameTheSetting(string settings, string pointer, string hint)
     {
         var error = Assert.Throws<BindingException>(() => new SnapshotFilesUpdateSourceFactory().Create(Context(settings)));

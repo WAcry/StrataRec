@@ -820,7 +820,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             var remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {
-                // The arms were decided and the ignored ids counted: the record says so, as the metric does (review 18 #3).
+                // The arms were decided and the ignored ids counted: the record says so, as the metric does.
                 return result = Rejected(request, RecErrorKind.DeadlineExceeded, "deadline exceeded before execution (assignment took the whole budget)",
                     new ExperimentRecord(pipeline.Plan.ArmIds(arms), Array.Empty<string>(), ignored), pipeline.Plan.ManifestId);
             }
@@ -992,9 +992,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         // The provider shares the end-to-end deadline, through the framework's one bounded wait (BoundedCall), as connectors
         // and models do: it is called inline on the request's thread, and what it does before it returns is not bounded;
         // its asynchronous part is (its token is cancelled at the deadline, and the wait ends there even if it ignores the
-        // token, review 18 #2), its callbacks run on the pool and what they throw is counted and summarized (review 20 #1),
-        // an answer that came after the wait timed out is not taken (review 20 #2), and its token lives until it ends
-        // (review 20 #3). It writes into nothing of the request, which has no memory yet.
+        // token), its callbacks run on the pool and what they throw is counted and summarized,
+        // an answer that came after the wait timed out is not taken, and its token lives until it ends
+        //. It writes into nothing of the request, which has no memory yet.
         var bound = new CallBound(CancellationSite.Assignment, cancellationToken, deadline, _executor.Events, request.RequestId);
         CallResult<IReadOnlyList<string>> asked;
         try
@@ -1183,7 +1183,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// The captured batches of a request its fallback pipeline served: the primary run's, then the fallback's, each with
     /// the pipeline and manifest of the run that captured it. Both ran for the request, and a request that is not captured
     /// writes both to the sink; only the fallback's were returned, so a capture lost what the primary logged before it
-    /// failed (its taps, and its <c>$experiments</c> record of the arms it ran, review 79).
+    /// failed (its taps, and its <c>$experiments</c> record of the arms it ran).
     /// </summary>
     private static IReadOnlyList<Logging.LogBatch> BothRuns(IReadOnlyList<Logging.LogBatch> primary, IReadOnlyList<Logging.LogBatch> fallback)
     {

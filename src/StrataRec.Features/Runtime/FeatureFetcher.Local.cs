@@ -137,7 +137,7 @@ public sealed partial class FeatureFetcher
                 if (batch.KeyRecords.Length > 0)
                 {
                     // Recorded before its metrics: a host's listener that throws on them fails the fill, as on any metric
-                    // the request thread records, but the read it served is in the recording (review 83).
+                    // the request thread records, but the read it served is in the recording.
                     if (_hook is { Replays: false } recorder)
                     {
                         RecordRead(recorder, group, features, version, batch, started);

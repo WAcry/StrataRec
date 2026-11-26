@@ -499,7 +499,7 @@ public sealed class RunReplayTests
     }
 
     /// <summary>
-    /// Review 30: two annotators share a model; the first one's call for entity 50 failed, the second one's succeeded. When
+    /// Two annotators share a model; the first one's call for entity 50 failed, the second one's succeeded. When
     /// the first no longer calls 50 in the replay, the second's call must get its own recorded answer, not the failure left
     /// by the other prompt. A recorded failure still answers the call it was (same entity, same inputs).
     /// </summary>

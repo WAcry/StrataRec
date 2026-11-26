@@ -226,7 +226,7 @@ public sealed class RecallQueryTests
     public async Task AQueryReadingADerivedFeature_IsSentOnceItIsComputed_NotAfterTheWholePrefetch()
     {
         // user.query_embedding is derived from the user's embedding; geo_store (the request's country) is still in flight.
-        // The derived feature was computed only once every group was stored, so two_tower waited for geo_store (review 80).
+        // The derived feature was computed only once every group was stored, so two_tower waited for geo_store.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "catalog/home_feed.jsonc", "\"derived_features\": {",
@@ -258,7 +258,7 @@ public sealed class RecallQueryTests
     public async Task AFeatureThatFailed_RefusesTheSourceAtOnce_WhateverItsOtherFeaturesDo()
     {
         // two_tower reads the user's embedding, whose store fails, and the country's region, whose store is held past the
-        // node's budget: the source is refused when the embedding fails, not timed out with the region (review 80).
+        // node's budget: the source is refused when the embedding fails, not timed out with the region.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"user_store\":   { \"connector\": \"memory@1\",", "\"user_store\":   { \"connector\": \"memory@1\", \"fail\": true,");
@@ -285,7 +285,7 @@ public sealed class RecallQueryTests
     public async Task SourcesWhoseFeaturesAreStoredTogether_AreSentInSourceOrder()
     {
         // popular reads the user's tenure, two_tower the user's embedding: both stored by user_store at once. two_tower comes
-        // first in source_order, so it is sent first, every time (each source waited on its own and raced, review 80).
+        // first in source_order, so it is sent first, every time (each source waited on its own and raced).
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"queries\": { \"two_tower\": {", "\"queries\": { \"popular\": { \"tenure\": \"ctx.user.tenure_days\" }, \"two_tower\": {"));
         for (var i = 0; i < 16; i++)
@@ -308,7 +308,7 @@ public sealed class RecallQueryTests
     {
         // popular's client blocks in a callback on its token, registered after the node started waiting for two_tower's
         // embedding; the node's token is cancelled at the deadline on a thread that runs the newest callback first. The
-        // wait was cancelled through that token, so it waited for the client's callback to return (review 80); it ends at
+        // wait was cancelled through that token, so it waited for the client's callback to return; it ends at
         // the deadline on its own now, as a call does.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"order\": 100, \"op\": \"MultiSourceRecall@1\",", "\"order\": 100, \"op\": \"MultiSourceRecall@1\", \"timeout_ms\": 1000,"));
@@ -367,7 +367,7 @@ public sealed class RecallQueryTests
         // held); popular the user's tenure, stored at once; regional the region's boost (region_store, keyed by the region and
         // held) or, together, the country's region as two_tower does. popular's call opens geo_store and waits until
         // region_store has started, so the country's region is stored after two_tower was checked and before the round
-        // waits. Each source observed the tasks on its own (review 82): that store was missed until region_store answered,
+        // waits. Each source observed the tasks on its own: that store was missed until region_store answered,
         // and with together, regional, checked after the store, was sent before two_tower.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
@@ -429,7 +429,7 @@ public sealed class RecallQueryTests
     {
         // user_store fails; geo_store, which region.boost waits for, is held past the node's budget. A query reading tenure
         // and boost itself is refused at once; one reading a feature derived from both waited for boost, up to the node's
-        // budget (review 82).
+        // budget.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"user_store\":   { \"connector\": \"memory@1\",", "\"user_store\":   { \"connector\": \"memory@1\", \"fail\": true,");
@@ -456,7 +456,7 @@ public sealed class RecallQueryTests
     }
 
     /// <summary>
-    /// Review 84: once the node's budget has run out, no read is settled, even when a settled callback ran past it and the
+    /// Once the node's budget has run out, no read is settled, even when a settled callback ran past it and the
     /// read was stored meanwhile. The first callback (the user's features, stored at once) holds on until the 500 ms budget
     /// cancels the node token, then lets geo_store answer and waits until the country's region is stored (region_store,
     /// keyed by it, has started). The next round found the region stored, Task.WhenAny of a completed task returned at once
@@ -801,7 +801,7 @@ public sealed class RecallQueryTests
 /// <summary>
 /// A prefetch that faults while a recall source waits for it (here a host's metric listener throwing a TimeoutException as
 /// it measures user_store's values) is the node's exception, the same whether it faulted before the wait or during it: the
-/// wait took a fault of the one task it waited for for the node's deadline (review 82). Process-wide: a MeterListener.
+/// wait took a fault of the one task it waited for for the node's deadline. Process-wide: a MeterListener.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class RecallQueryListenerTests
@@ -854,7 +854,7 @@ public sealed class RecallQueryListenerTests
     {
         // The first read is settled at once; its callback runs past the node's budget, and the second read's feature is
         // stored (or its store faults) before the callback returns. The wait had already seen it done, so the second read
-        // was settled after the deadline, or the late fault was the node's exception (review 84).
+        // was settled after the deadline, or the late fault was the node's exception.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"recall\": {", "\"late\": { \"order\": 50, \"op\": \"LateSettle@1\", \"timeout_ms\": 300, \"config\": {} }, \"recall\": {"));
         using var listener = new MeterListener();

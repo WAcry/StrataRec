@@ -172,7 +172,7 @@ public static class LlmAnswer
             return text;
         }
 
-        // Only the outer fence: backticks inside, such as in a JSON string, are content (review 29); anything else after the
+        // Only the outer fence: backticks inside, such as in a JSON string, are content; anything else after the
         // array, a second code block included, fails the strict parse.
         return text[(newline + 1)..^Fence.Length].Trim();
     }
@@ -203,13 +203,13 @@ public static class LlmAnswer
     /// <summary>
     /// The answer in UTF-8 for the JSON reader, rented from the request. A client's string may hold an unpaired surrogate,
     /// which UTF-8 cannot encode: the encoder would replace it with U+FFFD, a different character that can be another
-    /// entity's id (review 30). So each one is written as its JSON escape (<c>\uD800</c>) instead: inside a string it is the
+    /// entity's id. So each one is written as its JSON escape (<c>\uD800</c>) instead: inside a string it is the
     /// escaped lone surrogate the walk already counts as an unknown element; outside one the answer is not valid JSON.
     /// </summary>
     /// <remarks>
     /// Except where the surrogate is the character of an escape (an odd run of backslashes before it): there the answer is
     /// invalid JSON, and the six characters of an escape would make it valid, <c>\\uD800</c>, a string that can be another
-    /// entity's id (review 31). It is written as U+FFFD, which no escape takes either, so the answer stays invalid.
+    /// entity's id. It is written as U+FFFD, which no escape takes either, so the answer stays invalid.
     /// </remarks>
     private static int ToUtf8(ReadOnlySpan<char> text, RequestMemory memory, out byte[] bytes)
     {
@@ -505,7 +505,7 @@ public static class LlmAnswer
             catch (InvalidOperationException)
             {
                 // A JSON string that is not valid Unicode (an unpaired surrogate escape such as \uD800) is valid JSON but names
-                // no entity: an unknown element, like any other string that is not a window row's id (review 29).
+                // no entity: an unknown element, like any other string that is not a window row's id.
             }
 
             return -1;

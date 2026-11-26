@@ -56,7 +56,7 @@ internal static class CommonOptions
     /// <summary>
     /// The value an option's token converted to, for a validator that checks its range; null when it did not convert,
     /// which System.CommandLine reports as a usage error of its own. Reading a failed conversion throws, out of the parse,
-    /// which ended the process (review 38: <c>--seq abc</c> exited 134 instead of 2).
+    /// which ended the process (<c>--seq abc</c> exited 134 instead of 2).
     /// </summary>
     public static T? Converted<T>(OptionResult result)
         where T : struct

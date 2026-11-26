@@ -107,7 +107,7 @@ public sealed class LogBatch
     /// <remarks>
     /// <para>A string is counted once per batch however many values point to it: a local table's values, a category a
     /// connector interned or a constant give many rows the same string object, and counting it per row overstated a batch
-    /// of 1,024 rows sharing a 4 KB string 158 times (review 65). Sharing is found by identity in a small direct-mapped table of recent strings, so a
+    /// of 1,024 rows sharing a 4 KB string 158 times. Sharing is found by identity in a small direct-mapped table of recent strings, so a
     /// string evicted by another that maps to the same slot is counted again: an overstatement, never an understatement.
     /// A column's values are one array (<see cref="LogColumn"/>), counted by its length.</para>
     /// <para>Strings of the plan (tap, pipeline, manifest and schema ids, node, arm, column and outcome names) are shared by every

@@ -313,7 +313,7 @@ public sealed partial class RequestEventLog : IDisposable
     /// <summary>Calls and failures of one dependency in the current window, and the verdict of the last window with calls.</summary>
     /// <remarks>
     /// A call and its failure are added and taken under one lock: counted separately, a flush between the two increments
-    /// moves the failure into the next window without its call, and the verdicts of both windows go wrong (review 6).
+    /// moves the failure into the next window without its call, and the verdicts of both windows go wrong.
     /// The lock is per dependency and held for a few instructions.
     /// </remarks>
     private sealed class HealthWindow

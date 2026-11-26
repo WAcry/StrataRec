@@ -13,7 +13,7 @@ namespace StrataRec.UnitTests.Core;
 /// writer ran, exactly the rows it wrote a value into are present, holding that value; every other row is still missing.
 /// </summary>
 /// <remarks>Test writers against real table slots with this helper. A buffer made directly counts every row valid, so a
-/// writer that writes values in bulk and forgets to mark them passes there and leaves table rows missing (review 13).</remarks>
+/// writer that writes values in bulk and forgets to mark them passes there and leaves table rows missing.</remarks>
 internal static class TableWrites
 {
     /// <summary>One non-nullable column type of each <see cref="StorageKind"/>; a new kind fails here until it has one.</summary>

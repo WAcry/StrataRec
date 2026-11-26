@@ -59,13 +59,13 @@ public sealed class LogPipelineOptions
     /// <summary>
     /// The longest <see cref="DrainTimeout"/>: disposal waits for the consumers for the drain timeout and half a second
     /// more, in one timer's wait. A drain timeout up to the timer's own limit passed the check, and disposal then threw
-    /// when it added the half second, skipping its cleanup (review 78).
+    /// when it added the half second, skipping its cleanup.
     /// </summary>
     public static readonly TimeSpan MaxDrainTimeout = LongestWait - LogPipeline.ShutdownGrace;
 
     /// <summary>
     /// The shortest <see cref="MaxRetryDelay"/>, 1 ms: a timer waits whole milliseconds, so a shorter delay is none. One
-    /// tick passed the check and retried a sink that kept failing about 49,000 times in 79 ms (review 78).
+    /// tick passed the check and retried a sink that kept failing about 49,000 times in 79 ms.
     /// </summary>
     public static readonly TimeSpan MinRetryDelay = TimeSpan.FromMilliseconds(1);
 
@@ -249,7 +249,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// its consumer can see it (see <see cref="QueueDepth"/>), and given back when it is not queued, whatever happens on the
     /// way: the first use of the metric instruments threw after the bytes were reserved (a host's listener that throws
     /// when an instrument is published), and they stayed reserved for a batch nobody would write, so a flush never
-    /// returned (review 81).
+    /// returned.
     /// </summary>
     private bool TryQueue(LogBatch batch, bool durable)
     {
@@ -401,7 +401,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
 
     /// <summary>
     /// Writes a diagnostic of the disposal. A logger that throws loses the record and nothing else: the events 3003 and
-    /// 3004 and the last summaries threw out of <see cref="DisposeAsync"/> and skipped the rest of its cleanup (review 81).
+    /// 3004 and the last summaries threw out of <see cref="DisposeAsync"/> and skipped the rest of its cleanup.
     /// </summary>
     private void Diagnose(Action<ILogger, LogPipeline> write)
     {
@@ -420,7 +420,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// throws, and then the batches are counted as dropped (whether the sink has them is not known) and the loop goes on.
     /// The host's diagnostics cannot throw out of here (its logger and metric listeners are isolated), but a loop that
     /// left on such an exception kept the batches it had taken pending, so <see cref="FlushAsync"/> never returned, their
-    /// bytes stayed in the budget, and its queue went on taking batches nobody would read (review 78).
+    /// bytes stayed in the budget, and its queue went on taking batches nobody would read.
     /// </remarks>
     private async Task RunAsync(ChannelReader<LogBatch> reader, bool durable)
     {
@@ -441,7 +441,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
                     if (rejection is not null)
                     {
                         // The outcome is settled before the host hears of the rejection: nothing its callback does, or
-                        // what it throws, can count the batches the sink wrote as dropped (review 81).
+                        // what it throws, can count the batches the sink wrote as dropped.
                         ReportRejected(rejected, rejection);
                     }
                 }
@@ -576,7 +576,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// Tells the event summary and the host's <see cref="LogPipelineOptions.Rejected"/> callback of each batch the sink
     /// rejected, after the write's outcome is settled: reported while the outcome was still open, a callback that threw an
     /// exception whose message threw too took the whole write with it, and the batches the sink had written were counted
-    /// as dropped (review 81). Nothing here throws.
+    /// as dropped. Nothing here throws.
     /// </summary>
     private void ReportRejected(HashSet<LogBatch> rejected, LogBatchRejectedException reason)
     {
@@ -591,7 +591,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// <summary>
     /// The wait before the next attempt of a failed durable write: <see cref="FirstRetryDelay"/> after the first failure,
     /// then twice the last wait, never more than <paramref name="longest"/>, the first wait included (it was 10 ms whatever
-    /// the longest wait configured, review 78).
+    /// the longest wait configured).
     /// </summary>
     /// <param name="last">The last wait; null before the first retry.</param>
     internal static TimeSpan RetryDelay(TimeSpan? last, TimeSpan longest) =>
@@ -612,7 +612,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// <summary>
     /// Logs the first failure of a run of failed writes; later ones are only counted (events, not traffic). A
     /// logger that throws loses the record and changes nothing else: it threw out of the consumer, which then left the
-    /// batches it had taken unsettled (review 78).
+    /// batches it had taken unsettled.
     /// </summary>
     private void SinkFailed(bool durable, Exception ex)
     {
@@ -683,7 +683,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// <summary>
     /// Moves the queue-depth series. A batch is counted in before it is queued, and counted out before the pending count
     /// drops: the producer published its +1 once the batch was visible, so a consumer that wrote it at once could publish
-    /// its −1 first and the series went below zero, and a flush could return before the last −1 (review 78).
+    /// its −1 first and the series went below zero, and a flush could return before the last −1.
     /// </summary>
     private static void QueueDepth(long delta, bool durable) =>
         Measure(static () => StrataRecMetrics.LogQueueDepth, delta, durable ? DurableTags : BestEffortTags);
@@ -691,9 +691,9 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// <summary>
     /// Adds to a metric. What a listener throws is lost with its measurement, as for plan loads, and never
     /// cuts the accounting of a submission or a settlement short: one that threw while the consumer settled a write left
-    /// the write's batches pending, so <see cref="FlushAsync"/> never returned and their bytes stayed in the budget (review 78).
+    /// the write's batches pending, so <see cref="FlushAsync"/> never returned and their bytes stayed in the budget.
     /// The instrument is read inside the isolation too: its first read runs the instruments' initializer, where a listener
-    /// is told of every instrument (review 81).
+    /// is told of every instrument.
     /// </summary>
     private static void Measure(Func<Counter<long>> counter, long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
     {

@@ -17,7 +17,7 @@ namespace StrataRec.UnitTests.Features;
 public class FeatureRuntimeReviewRegressionTests
 {
     /// <summary>
-    /// Review 56 #4: <see cref="FeaturePlan.Create"/> fills in the infos it is given, so a plan built from another plan's
+    /// <see cref="FeaturePlan.Create"/> fills in the infos it is given, so a plan built from another plan's
     /// (its public <see cref="FeaturePlan.Features"/>, here with bindings that fail) rewrote that plan's groups under its
     /// requests, which then failed. Such infos are refused before anything changes.
     /// </summary>
@@ -122,7 +122,7 @@ public class FeatureRuntimeReviewRegressionTests
     }
 
     /// <summary>
-    /// Review 72: when sending one context group threw (here a recording hook, as the next group was about to be sent),
+    /// When sending one context group threw (here a recording hook, as the next group was about to be sent),
     /// the prefetch released the request memory while a group already sent was still to be stored: once its connector
     /// answered and released its own hold, the buffers went back, and the store then read poisoned staging and wrote a
     /// default. The prefetch now holds the memory until every group it started is stored, and still fails.
@@ -264,7 +264,7 @@ public class FeatureRuntimeReviewRegressionTests
     [Fact]
     public async Task Batches_AMaxBatchOfInt32Max_IsOneChunkOfEveryKey()
     {
-        // "Everything in one chunk": the chunk count overflowed to 0, so no call was sent and no key was fetched (review 27).
+        // "Everything in one chunk": the chunk count overflowed to 0, so no call was sent and no key was fetched.
         var chunks = new List<int>();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
@@ -289,7 +289,7 @@ public class FeatureRuntimeReviewRegressionTests
     [Fact]
     public async Task Batches_AMaxBatchOfInt32Max_ReadsTheDistributedTierAndFetchesItsMissesInOneChunkEach()
     {
-        // The cache path chunks its distributed read and its fetch of the misses by max_batch too (review 27).
+        // The cache path chunks its distributed read and its fetch of the misses by max_batch too.
         var store = new FakeCacheStore();
         var writer = new FeatureTestRig().CacheSource("shared", ScriptedConnector.Values((key, _) => key * 1.5), distributed: store, maxBatch: int.MaxValue);
         var writerScore = writer.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "shared");

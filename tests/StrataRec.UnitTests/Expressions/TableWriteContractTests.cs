@@ -8,7 +8,7 @@ namespace StrataRec.UnitTests.Expressions;
 /// <summary>
 /// An expression writing into a real table slot keeps the slot's write contract (<see cref="TableWrites"/>): the rows it
 /// wrote a value into are present, the rows it wrote as missing and the rows it did not write are missing. The other
-/// expression tests write into buffers made directly, which count every row valid and so cannot tell (review 13).
+/// expression tests write into buffers made directly, which count every row valid and so cannot tell.
 /// </summary>
 /// <remarks>
 /// The matrix covers each storage type, nullable and not; the identity domain (most rows, lanes indexed by row) and the

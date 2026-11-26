@@ -120,7 +120,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     [InlineData(Pipeline, "\"key\": [\"ctx.request.user_id\", \"ctx.request.session_id\"]", "\"key\": [\"ctx.request.usr_id\", \"ctx.request.session_id\"]",
         "EXPR_UNKNOWN_NAME", "/funnel_groups/deep_trace/key/0", "ctx.request.usr_id")] // a tap samples by this group
     [InlineData(Pipeline, "\"all\":        { \"key\": [\"ctx.request.id\"], \"rate\": 1.0 }", "\"all\":        { \"key\": [\"ctx.request.id\"], \"rate\": 2 }",
-        "FUNNEL_BAD_RATE", "/funnel_groups/all/rate", "\"rate\": 2")] // two taps sample by this group (review 32 #9)
+        "FUNNEL_BAD_RATE", "/funnel_groups/all/rate", "\"rate\": 2")] // two taps sample by this group
     [InlineData(Pipeline, "\"key\": [\"ctx.request.user_id\", \"ctx.request.session_id\"]", "\"key\": []",
         "FUNNEL_NO_KEY", "/funnel_groups/deep_trace/key", "\"key\": []")]
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"diversity_cap\": null,", "\"diversty_cap\": null,",
@@ -212,7 +212,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "error REQUEST_INVALID /inputs/surfce: Input 'surfce' is not declared in the request_schema of pipeline 'home_feed'.")]
     [InlineData("\"deadline_ms\": 200", "\"deadline_ms\": \"200\"", "\"deadline_ms\"",
         "error REQUEST_INVALID /deadline_ms: 'deadline_ms' must be a number or null, got the string \"200\".")]
-    // Review 32: a null pipeline_id was an unhandled exception; duplicate members are rejected as in a service's request body.
+    // A null pipeline_id was an unhandled exception; duplicate members are rejected as in a service's request body.
     [InlineData("\"pipeline_id\": \"home_feed\"", "\"pipeline_id\": null", "\"pipeline_id\"",
         "error REQUEST_INVALID /pipeline_id: 'pipeline_id' must be a string, got null.")]
     [InlineData("\"pipeline_id\": \"home_feed\"", "\"pipeline_id\": \"\"", "\"pipeline_id\"",

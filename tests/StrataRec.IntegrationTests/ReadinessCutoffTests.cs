@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Review 86: <see cref="OperatorContext.WhenEachReadyAsync"/> settles nothing once the node's budget has run out or the
+/// <see cref="OperatorContext.WhenEachReadyAsync"/> settles nothing once the node's budget has run out or the
 /// caller gave up, however long a settled callback ran: reads with nothing to wait for (settled at once, one after
 /// another) as well as reads judged in a round, and a prefetch fault read after the bound passed does not stand for it.
 /// </summary>
@@ -49,7 +49,7 @@ public sealed class ReadinessCutoffTests
     }
 
     /// <summary>
-    /// Reviews 89 and 91: the operator's list is read once per read, before any callback runs. Indexed later, between a
+    /// The operator's list is read once per read, before any callback runs. Indexed later, between a
     /// bound check and what it guarded, a slow list let a callback run after the bound passed (89), and let a faulted
     /// prefetch be read after it, standing for the timeout or the cancellation (91).
     /// </summary>
@@ -231,7 +231,7 @@ public sealed class ReadinessCutoffTests
 }
 
 /// <summary>
-/// Review 86, with a prefetch fault: both reads are stored in the same round, the second's prefetch faulted (a listener
+/// With a prefetch fault: both reads are stored in the same round, the second's prefetch faulted (a listener
 /// of geo_store's values throws, process-wide, hence the collection). After the first callback ran past the budget or
 /// the caller gave up, the second read's state was read first and its fault was the node's exception, recorded as having
 /// run, not as the timeout or the cancellation that came first.

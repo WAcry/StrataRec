@@ -127,7 +127,7 @@ internal sealed class RequestTelemetry
             if (result is null)
             {
                 // Aborted (caller cancellation, defect): no result, but the release and the arms were known before
-                // execution, and slow treatment requests are exactly the ones worth finding by arm (review 6).
+                // execution, and slow treatment requests are exactly the ones worth finding by arm.
                 activity.SetStatus(ActivityStatusCode.Error, "aborted");
                 if (plan is not null)
                 {

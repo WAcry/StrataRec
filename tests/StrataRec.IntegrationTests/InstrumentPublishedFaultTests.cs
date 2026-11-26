@@ -7,7 +7,7 @@ using StrataRec.Logging;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Review 81: the engine's instruments are created when they are first read, and creating one tells every
+/// The engine's instruments are created when they are first read, and creating one tells every
 /// <see cref="MeterListener"/> of it. A host's listener that threw there failed that initializer, for the whole process:
 /// each log submission threw <see cref="TypeInitializationException"/> after it had reserved the batch's bytes, so nothing
 /// reached the sink and a flush never completed, and a plan load threw as well. The first read happens once per process,

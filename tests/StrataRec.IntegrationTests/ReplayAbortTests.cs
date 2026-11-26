@@ -279,7 +279,7 @@ public sealed class ReplayAbortTests
     }
 
     /// <summary>
-    /// Review 79: a request that captures its logs, cancelled while it runs, returns no batches and writes none, yet its
+    /// A request that captures its logs, cancelled while it runs, returns no batches and writes none, yet its
     /// recording said they were captured. They went nowhere; the sampling decisions it made are kept.
     /// </summary>
     [Fact]

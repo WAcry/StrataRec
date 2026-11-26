@@ -194,7 +194,7 @@ public sealed class MustacheParserTests
     [Fact]
     public void SectionsNestedDeeperThanMaxDepth_AreAnError_AtTheFirstTooDeepTag()
     {
-        // Review 29: binding and rendering recurse per level, and 15,000 levels overflowed the stack at load.
+        // Binding and rendering recurse per level, and 15,000 levels overflowed the stack at load.
         static string Nested(int depth) => string.Concat(Enumerable.Repeat("{{#s}}", depth)) + "x" + string.Concat(Enumerable.Repeat("{{/s}}", depth));
 
         Assert.True(MustacheTemplate.TryParse(Nested(MustacheTemplate.MaxDepth), out _, out _));

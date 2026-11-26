@@ -155,7 +155,7 @@ public sealed class ReplayBundleFileTests
 
     [Theory]
     [InlineData("")]
-    [InlineData("\uFEFF")] // a text that kept its file's byte order mark (review 48: the version was not read, the layout was)
+    [InlineData("\uFEFF")] // a text that kept its file's byte order mark (the version was not read, the layout was)
     public void AnotherFormat_IsRejectedAtFormat_BeforeItsLayoutIsReadAsThisOne(string prefix)
     {
         // Another format's layout: read as this one it would be a structural error somewhere inside.
@@ -187,7 +187,7 @@ public sealed class ReplayBundleFileTests
     [InlineData("format")] // read before the structure, to check the version
     public void AStringThatIsNotValidUnicode_IsRejectedAsMalformed_NotThrownAsAnotherException(string member)
     {
-        // Review 32 #4: "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
+        // "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
         var unpaired = "\"" + (char)92 + "uD800\"";
         var json = member == "seed"
             ? """{"format":"stratarec.replay_bundle/2026-11-26.1","request":{"seed":""" + unpaired + "}}"

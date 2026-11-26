@@ -1057,7 +1057,7 @@ public sealed class PlanBuilder
             var node = ordered[i];
 
             // Same order ⇒ no dependency. A position runs its node or, when that fails, its fallback, so
-            // every branch of one position must be independent of every branch of the other (review 15): a fallback that
+            // every branch of one position must be independent of every branch of the other: a fallback that
             // appends rows, filters or reads a column the other writes makes the order matter as much as its node would.
             var branches = Branches(node, fallbacks);
             for (var j = i + 1; j < ordered.Count && ordered[j].Order == node.Order; j++)
@@ -1164,13 +1164,13 @@ public sealed class PlanBuilder
 
             // A fill writes the rows live when it runs, and a tap never fills: the rows this position may append (by the node
             // or its fallback) have no value for any candidate feature filled before them, the node's own reads too, until a
-            // later node fills it again (review 87: a tap after a node whose row-source fallback served logged the appended
+            // later node fills it again (a tap after a node whose row-source fallback served logged the appended
             // row's value from storage nobody wrote). Context features, which the prefetch stores, stay.
             // A node its 'when' or 'min_remaining_ms' skips fills nothing, and its fallback does not run: after it, only the
-            // context features they read are there whatever ran (review 85). A tap attached to it is captured only once it
+            // context features they read are there whatever ran. A tap attached to it is captured only once it
             // or its fallback has run, so it may log all the node reads.
             // A tap of entered or dropped rows logs rows that were live when the node filled, and none that this position
-            // appends: it may log all the node reads, whatever is appended (review 88).
+            // appends: it may log all the node reads, whatever is appended.
             HashSet<int>? entered = null;
             if (AttachedTo(taps, node.NodeId, enteredOrDropped: true))
             {
@@ -1993,7 +1993,7 @@ public sealed class PlanBuilder
 
             foreach (var feature in features)
             {
-                // The latest order a variant logging the feature may be captured after (review 92: of every variant, one
+                // The latest order a variant logging the feature may be captured after (of every variant, one
                 // at the output logging other things too); a row source that never appends before it adds no row it logs.
                 var latest = int.MinValue;
                 foreach (var tap in variants)
@@ -2009,8 +2009,8 @@ public sealed class PlanBuilder
                 Scope($"tap '{tapId}' reading feature '{name}'", pointer, deciding, tapId);
 
                 // A row source between the last reader and the tap leaves the rows it appends without the feature: one
-                // such position decides it with the readers (review 88: a layer adding a row source was not in the scope).
-                // Only one that may run before the tap is captured (review 90: one after it made a scope of more layers,
+                // such position decides it with the readers (a layer adding a row source was not in the scope).
+                // Only one that may run before the tap is captured (one after it made a scope of more layers,
                 // which past the combination limit rejects the plan). Orders and attach points are taken across variants,
                 // not paired by combination: an arm moving both, or a fallback a later node also falls back to, still
                 // counts (see docs/decisions/experiments.md).
@@ -2307,7 +2307,7 @@ public sealed class PlanBuilder
             if (Reads(node.ReadFeatures))
             {
                 // A tap attached to a node is captured only once it ran: one that may be skipped counts there too, and one
-                // whose position appends rows only for entered or dropped rows (review 88: it was named for any tap).
+                // whose position appends rows only for entered or dropped rows (it was named for any tap).
                 if (!before)
                 {
                     if (!appends || scope != TapScope.Survived)
@@ -2329,8 +2329,8 @@ public sealed class PlanBuilder
             }
         }
 
-        // The output reads its columns' features for every row it returns (review 85: the hint only named nodes); a tap
-        // there logs those rows only (review 87: an entered or dropped tap was told to attach where its scope is refused).
+        // The output reads its columns' features for every row it returns (the hint only named nodes); a tap
+        // there logs those rows only (an entered or dropped tap was told to attach where its scope is refused).
         if (output is not null && scope == TapScope.Survived)
         {
             foreach (var (_, expression) in output.Columns)
@@ -2358,20 +2358,20 @@ public sealed class PlanBuilder
 
         if (appender is not null && scope != TapScope.Survived)
         {
-            // Rows a tap of entered or dropped rows logs there were live when the node filled (review 92: it was told to
+            // Rows a tap of entered or dropped rows logs there were live when the node filled (it was told to
             // look for a later reader).
             return $"attach the tap after '{reader}', which reads '{name}': a tap of {(scope == TapScope.Entered ? "entered" : "dropped")} rows there logs rows that were live when it filled them";
         }
 
         if (reader is not null && readerMaySkip && appender is null)
         {
-            // A tap there runs only when the node does (review 94: one after it went to a later reader that appends).
+            // A tap there runs only when the node does (one after it went to a later reader that appends).
             return $"attach the tap after '{reader}', which reads '{name}': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point";
         }
 
         if ((laterAppender ?? appender) is { } last)
         {
-            // Every later reader appends rows (review 92: the hint asked for a node that reads it, and named none).
+            // Every later reader appends rows (the hint asked for a node that reads it, and named none).
             return $"attach the tap after a node after '{last}' that reads '{name}': the rows '{last}' or its fallback appends have no value for it";
         }
 
@@ -2420,7 +2420,7 @@ public sealed class PlanBuilder
     /// every request. Its candidate features, and the candidate keys they are fetched by, are written into the table only by
     /// the fallback's own fill, when it runs; the prefetch for it never backfills. Counted as fetched, they let a tap after
     /// the node log a column nobody had written when the fallback did not run, and the request threw once the tap was
-    /// sampled (review 83: <c>col.creator.pop</c>, which only the fallback reads, and its key <c>col.item.base</c>).
+    /// sampled (<c>col.creator.pop</c>, which only the fallback reads, and its key <c>col.item.base</c>).
     /// </summary>
     private void MarkContextFetched(HashSet<int> fetched, ImmutableArray<int> features)
     {
@@ -2441,7 +2441,7 @@ public sealed class PlanBuilder
     /// The feature plan makes the key features a physical feature's dependencies when it groups the features, after these
     /// checks run, so they follow the entity's key here: a tap logging <c>ctx.country.region</c>, the key of the
     /// <c>ctx.region.boost</c> a node reads, was told no node reads it, although the prefetch fetches it for every request
-    /// that runs the node (review 80). A key feature is registered with the features keyed by it. What a fallback's reads
+    /// that runs the node. A key feature is registered with the features keyed by it. What a fallback's reads
     /// make available is less (<see cref="MarkContextFetched"/>).
     /// </remarks>
     private void MarkFetched(HashSet<int> fetched, ImmutableArray<int> features)

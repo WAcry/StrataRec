@@ -107,7 +107,7 @@ public static class JsonIntegers
         var integer = number[integerStart..i];
         if (integer.Length > 1 && integer[0] == '0')
         {
-            return false; // RFC 8259: no leading zeros ("01", review 33)
+            return false; // RFC 8259: no leading zeros ("01")
         }
 
         var fraction = ReadOnlySpan<char>.Empty;
@@ -122,7 +122,7 @@ public static class JsonIntegers
             fraction = number[fractionStart..i];
             if (fraction.Length == 0)
             {
-                return false; // a digit after the point ("1.", review 33)
+                return false; // a digit after the point ("1.")
             }
         }
 
@@ -144,7 +144,7 @@ public static class JsonIntegers
             // Saturates past what the text's own digits can offset: the scale below is the exponent less at most the
             // text's length (fraction digits) plus at most its length (trailing zeros), so beyond length + 19 the number
             // is out of a long's range, or not an integer, whatever the cap. A fixed cap could be offset by a long run of
-            // zeros (review 33).
+            // zeros.
             var cap = number.Length + 19L;
             while (i < number.Length && char.IsAsciiDigit(number[i]))
             {

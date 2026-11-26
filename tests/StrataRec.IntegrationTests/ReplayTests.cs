@@ -130,7 +130,7 @@ public sealed class ReplayTests
     }
 
     /// <summary>
-    /// Review 89: a bundle a host deserialized itself (from its own store, say), not read by <see cref="ReplayBundleFile"/>,
+    /// A bundle a host deserialized itself (from its own store, say), not read by <see cref="ReplayBundleFile"/>,
     /// is refused at its format all the same, a finished request's as an aborted one's: the layout of 2026-11-20.1 is
     /// this build's, so deserializing it succeeds, and its calls were batched at other boundaries.
     /// </summary>
@@ -158,7 +158,7 @@ public sealed class ReplayTests
         Assert.Contains("record the request again", replay.Hint, StringComparison.Ordinal);
     }
 
-    /// <summary>Review 89: the schema of a bundle names this build's format, not any string.</summary>
+    /// <summary>the schema of a bundle names this build's format, not any string.</summary>
     [Fact]
     public void TheBundleSchema_RequiresThisBuildsFormat()
     {

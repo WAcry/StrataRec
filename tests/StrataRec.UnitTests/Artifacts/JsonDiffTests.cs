@@ -82,7 +82,7 @@ public class JsonDiffTests
     public void Changes_AreOrderedByTheirEscapedPointers_NotByMemberNames()
     {
         // By name: "/" < "a" < "a!" < "~", so the walk meets /~1, /a/x, /a!, /~0; escaping and the '/' after a parent
-        // member reorder them (review 24).
+        // member reorder them.
         var changes = JsonDiff.Compare(
             JsonNode.Parse("""{"/":0,"~":0,"a":{"x":0},"a!":0}"""),
             JsonNode.Parse("""{"/":1,"~":1,"a":{"x":1},"a!":1}"""));

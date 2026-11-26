@@ -7,7 +7,7 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>
-/// Review 85: the host's <see cref="Activity.CurrentChanged"/> handler runs whenever a call gives the flow its activity
+/// The host's <see cref="Activity.CurrentChanged"/> handler runs whenever a call gives the flow its activity
 /// back. One that threw when the call's span stopped being current went up through <see cref="IoCall.Sent"/>: the call
 /// site had sent the call and neither completed it nor let go of the request's memory, and the caller got the handler's
 /// exception for a call that had answered.
@@ -49,7 +49,7 @@ public sealed class BoundedCallCurrentChangedTests
             Activity.CurrentChanged -= Changed;
         }
 
-        Assert.Equal(pending ? 2 : 1, thrown); // a pending call's span is also stopped in the call site's context (review 87)
+        Assert.Equal(pending ? 2 : 1, thrown); // a pending call's span is also stopped in the call site's context
         Assert.Equal((IoOutcome.Ok, 42), (result.Outcome, result.Value));
         Assert.True(Assert.Single(flow.Named("recall " + target)).IsStopped);
         Assert.Equal(new[] { "sent", "ended" }, client.Observed);

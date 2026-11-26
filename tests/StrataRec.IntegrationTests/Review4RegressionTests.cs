@@ -200,7 +200,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public async Task CancelledCapturingRequestNeverWritesToTheProductionLogs()
     {
-        // Review 5 finding 2: a cancelled preview (CaptureLogs) must not fall back to persistent submission.
+        // A cancelled preview (CaptureLogs) must not fall back to persistent submission.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
@@ -226,7 +226,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public void FunnelKeysMustBeHashableScalars()
     {
-        // Review 5 finding 3: a list key compiled, then threw from sampling at request time.
+        // A list key compiled, then threw from sampling at request time.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
@@ -241,7 +241,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public void RowSourceOutputsCannotBePinned()
     {
-        // Review 5 finding 4: row sources share one slot per column, so col.x@recall read an unwritten per-node slot.
+        // Row sources share one slot per column, so col.x@recall read an unwritten per-node slot.
         var host = WithPipelineEdit("\"primary_source\": \"col.recall.primary_source\"",
             "\"primary_source\": \"col.recall.primary_source\", \"pinned\": \"col.recall.best_score@recall ?? -100.0\"");
 

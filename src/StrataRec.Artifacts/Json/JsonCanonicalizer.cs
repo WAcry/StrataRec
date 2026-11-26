@@ -244,7 +244,7 @@ public static class JsonCanonicalizer
         private void WriteValue(JsonValue value)
         {
             // GetValueKind reports Number for a NaN double, so non-finite CLR values must be caught first, before they are
-            // written (a Half threw JsonReaderException there, review 83). A parsed number's range is checked by
+            // written (a Half threw JsonReaderException there). A parsed number's range is checked by
             // ParseNumber against binary64, which is what RFC 8785 uses.
             if (JsonNodeUtilities.IsNonFiniteNumber(value, out _))
             {

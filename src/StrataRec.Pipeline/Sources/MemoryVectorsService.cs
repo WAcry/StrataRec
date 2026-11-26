@@ -62,7 +62,7 @@ public sealed class MemoryVectorsService : IServiceClient
                 $"give it one in the recall node's queries, e.g. \"queries\": {{ \"{call.Service}\": {{ \"{_query}\": \"ctx.user.embedding\" }} }}.");
         }
 
-        // The query's type first, so a wrong one fails whether or not this request has a value (review 80).
+        // The query's type first, so a wrong one fails whether or not this request has a value.
         if (input.ElementType is not (TensorElementType.Float32 or TensorElementType.Float64) || input.Shape.Length != 1)
         {
             return ServiceStatus.Failed(
@@ -126,7 +126,7 @@ public sealed class MemoryVectorsService : IServiceClient
 
                 if (!double.IsFinite(score))
                 {
-                    // A product overflowed: the order (and min_score) would be decided by NaN or infinity (review 80).
+                    // A product overflowed: the order (and min_score) would be decided by NaN or infinity.
                     return ServiceStatus.Failed(
                         $"The dot product of item {(_stringIds[i] ?? _int64Ids[i].ToString(System.Globalization.CultureInfo.InvariantCulture))} with the query vector " +
                         $"'{_query}' is not finite; scale the vectors so it fits a float64.");

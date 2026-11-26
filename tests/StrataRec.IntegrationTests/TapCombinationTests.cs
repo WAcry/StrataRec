@@ -12,7 +12,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// A tap's attach point and the context features it logs are judged per arm combination, against that combination's
-/// nodes, as a compile of the combination alone judges them (review 20, the union checks left after #4). Both used to be
+/// nodes, as a compile of the combination alone judges them (the union checks left after #4). Both used to be
 /// judged against every variant at once: a baseline tap could depend on a node or a feature reader that only an arm adds,
 /// and the baseline then broke when that experiment ended (a tap after a missing node never fires; a feature nobody reads
 /// is fetched for the tap alone).
@@ -63,7 +63,7 @@ public sealed class TapCombinationTests
     }
 
     /// <summary>
-    /// Review 80: a tap may log the key of a chain a node reads. Here the two-tower recall's query alone reads
+    /// A tap may log the key of a chain a node reads. Here the two-tower recall's query alone reads
     /// <c>ctx.region.boost</c> (the fusion's regional weight is a constant), and the output tap logs its key,
     /// <c>ctx.country.region</c>. What a combination fetches followed a feature's derived inputs, not its entity's key
     /// features, which the feature plan adds after these checks: the tap was rejected (TAP_FEATURE_NOT_FETCHED in the

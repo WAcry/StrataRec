@@ -93,7 +93,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
         }
 
         // The two rows of every pair are gathered into one buffer per input: beyond this a request could not hold them,
-        // and fails at load rather than on its first request (review 28).
+        // and fails at load rather than on its first request.
         if (config.MaxPairs > MaxPairsLimit)
         {
             context.Error("/max_pairs", "RANKER_MAX_PAIRS",

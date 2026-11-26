@@ -92,7 +92,7 @@ public sealed class InteractionWarningTests
     }
 
     /// <summary>
-    /// Review 69: an arm that changes an existing node into a writer of a flow column changes the structure, as adding
+    /// An arm that changes an existing node into a writer of a flow column changes the structure, as adding
     /// one does. A filter becomes a writer of score.final, and another experiment's added node reads score.final: the
     /// reader warns, naming the changed node. Settings of a node that keeps its columns still do not.
     /// </summary>
@@ -114,7 +114,7 @@ public sealed class InteractionWarningTests
     }
 
     /// <summary>
-    /// Review 70: changing a read of a pinned version (col.score.final@fusion) to the current one is a new dependency: a
+    /// Changing a read of a pinned version (col.score.final@fusion) to the current one is a new dependency: a
     /// writer another experiment adds before the node now changes what it reads (the two arms together filtered every
     /// item), so it warns. A pinned read does not see the writer, so it does not.
     /// </summary>
@@ -140,7 +140,7 @@ public sealed class InteractionWarningTests
     }
 
     /// <summary>
-    /// Review 71: a node's fallback reads when the node fails, so an arm that turns a fallback on, or points the node at
+    /// A node's fallback reads when the node fails, so an arm that turns a fallback on, or points the node at
     /// another one, adds what that fallback reads. Turned on here, the fallback read the zero another experiment writes
     /// into score.final, and nothing warned. A fallback the baseline's node already had adds nothing.
     /// </summary>
@@ -182,7 +182,7 @@ public sealed class InteractionWarningTests
     }
 
     /// <summary>
-    /// Review 69: while the configuration has errors, interactions are not known, so no review is called unused: a node's
+    /// While the configuration has errors, interactions are not known, so no review is called unused: a node's
     /// config error made the sample's valid review "unused", with a hint to remove it.
     /// </summary>
     [Fact]

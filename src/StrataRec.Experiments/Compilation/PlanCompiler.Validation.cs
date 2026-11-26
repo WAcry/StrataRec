@@ -423,7 +423,7 @@ internal sealed partial class UnifiedCompilation
     /// </summary>
     private void ValidateYields()
     {
-        // With an error anywhere, conflicts and interactions are not all known (as for reviewed interactions, review 69).
+        // With an error anywhere, conflicts and interactions are not all known (as for reviewed interactions).
         if (_diagnostics.HasErrors)
         {
             return;
@@ -475,7 +475,7 @@ internal sealed partial class UnifiedCompilation
     private void ValidateReviewedInteractions()
     {
         // With an error anywhere, interactions are not known: an arm whose patch or node did not compile has none to find
-        // (review 69: a node's config error made a valid review "unused", and the hint said to remove it).
+        // (a node's config error made a valid review "unused", and the hint said to remove it).
         if (_diagnostics.HasErrors)
         {
             return;
@@ -545,7 +545,7 @@ internal sealed partial class UnifiedCompilation
             // column. A node whose operator or config now writes or reads another column is a change of structure (review
             // 69: a filter replaced by a writer of score.final, read by another experiment's added node, did not warn). Only
             // a read of the current version counts: a pinned one (col.x@node) does not see a writer another arm adds, and a
-            // read changed from pinned to current is a new dependency (review 70).
+            // read changed from pinned to current is a new dependency.
             var baseline = arm.AddedNodes.Contains(nodeId) ? null : v.Variants[v.IndexOf(RequestArms.None)];
             foreach (var output in node.Outputs)
             {
@@ -580,7 +580,7 @@ internal sealed partial class UnifiedCompilation
             }
 
             // A node's fallback reads when the node fails: an arm that turns the fallback on, or points the node at another
-            // one, adds what that fallback reads (review 71). Compared with what the baseline's node could reach (itself and
+            // one, adds what that fallback reads. Compared with what the baseline's node could reach (itself and
             // its own fallback), so a fallback the baseline already ran adds nothing, and one no node reaches counts nowhere.
             if (FallbackOf(node, only) is { } fallback)
             {

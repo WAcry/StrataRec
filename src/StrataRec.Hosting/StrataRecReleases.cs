@@ -251,7 +251,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     /// <summary>
     /// Cancels the calls in flight, then the polling. Each call's token is cancelled here, not through its link to the
     /// polling's, so the returned task covers its callbacks too: a source's cleanup on the token of a pointer read ends
-    /// before the container disposes the source (review 36). No call starts after this.
+    /// before the container disposes the source. No call starts after this.
     /// </summary>
     private Task CancelAll()
     {
@@ -294,7 +294,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     /// <summary>
     /// Ends a call that has returned. A call cancelled before (its timeout, mostly) may have returned while the callbacks
     /// of that cancellation still run, a source's cleanup on its token, say: it stays listed until they have run, so a
-    /// stop still waits for them before the container disposes the source (review 56: the call was dropped on return,
+    /// stop still waits for them before the container disposes the source (the call was dropped on return,
     /// and the stop finished first). Not waited for here, which would hold the polling.
     /// </summary>
     private void EndCall(ObservedCancellationSource call)
@@ -369,7 +369,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
                 catch (Exception ex) when (!stopping.IsCancellationRequested)
                 {
                     // A defect: the polling must outlive it, or the node would serve the plan and never take another
-                    // release. The attempt it cut short is tried again, as a rejected one is (review 36: a new id left
+                    // release. The attempt it cut short is tried again, as a rejected one is (a new id left
                     // final, its manifest was never loaded).
                     state.Final = false;
                     state.RetryDelay = NextDelay(state.RetryDelay);
@@ -381,7 +381,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         catch (Exception) when (stopping.IsCancellationRequested)
         {
             // The host stops: whatever the cancelled work threw on its way out (a cancellation, or a transport's own
-            // exception) ends the polling, and is no fault for anyone to observe after the stop gave up waiting (review 37).
+            // exception) ends the polling, and is no fault for anyone to observe after the stop gave up waiting.
         }
     }
 

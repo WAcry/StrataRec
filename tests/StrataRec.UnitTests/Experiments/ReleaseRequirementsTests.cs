@@ -12,7 +12,7 @@ namespace StrataRec.UnitTests.Experiments;
 public sealed class ReleaseRequirementsTests
 {
     /// <summary>
-    /// Review 69: a combination can need what no experiment needs alone. exp_switch points recall at quota map q2;
+    /// A combination can need what no experiment needs alone. exp_switch points recall at quota map q2;
     /// exp_add (another layer) adds a source of client type future@1 to q2. Alone, neither binds it; together they do. It
     /// goes to both, so removing either removes it, and the union of a release's requires covers what its full compile
     /// needs.
@@ -59,7 +59,7 @@ public sealed class ReleaseRequirementsTests
     }
 
     /// <summary>
-    /// Review 70: a needs future@1 alone, and b and c (other layers) need it together. It goes to all three: revoking a
+    /// A needs future@1 alone, and b and c (other layers) need it together. It goes to all three: revoking a
     /// leaves b and c requiring what they need. Before, only a listed it, and the release without a required nothing a
     /// binary without future@1 lacks, though its compile fails there.
     /// </summary>

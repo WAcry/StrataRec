@@ -249,7 +249,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// <para>Each round observes the prefetch once, then settles, in the order of <paramref name="reads"/>, every read that
     /// this one observation settles, so reads whose features are stored together are settled in that order whenever the
     /// store happens; then it waits for any feature it observed in flight, so one stored meanwhile starts the next round at
-    /// once (review 82: each read observed the tasks on its own, so a store between two reads put them in different rounds,
+    /// once (each read observed the tasks on its own, so a store between two reads put them in different rounds,
     /// and one between the check and the wait was missed until another feature was stored).</para>
     /// <para><paramref name="settled"/> runs on the operator's flow, one call at a time; what it throws ends the wait.</para>
     /// <para>The wait is bounded on its own by the attempt's deadline and the caller, as a call is
@@ -271,7 +271,7 @@ public sealed class OperatorContext : IServiceCallScope
         // One pass over the operator's list, which reads each read once and never again: one with nothing to wait for is
         // settled as it is read, the others are kept with their features (no copy of the list: none for an operator that
         // waits for nothing). The bound is checked before each call into the operator's code, its list's Count and indexer
-        // as its callback (review 95: Count too): indexed in each round, a slow list let a callback run after the bound passed (review 89) and a faulted
+        // as its callback (Count too): indexed in each round, a slow list let a callback run after the bound passed and a faulted
         // prefetch stand for it (91); read up front without a check, the rest of the list was read after it (93).
         List<(int Index, ImmutableArray<int> Features)>? waiting = null;
         ThrowIfBoundPassed();
@@ -328,11 +328,11 @@ public sealed class OperatorContext : IServiceCallScope
             {
                 var (i, read) = waiting[w];
                 // Before the read's state is read: a faulted prefetch rethrown there must not stand for a deadline or a
-                // caller that came first (review 86).
+                // caller that came first.
                 ThrowIfBoundPassed();
                 if (Settled(features, read, tasks, stored, out var result))
                 {
-                    ThrowIfBoundPassed(); // and before its callback: judging a read of many features takes time too (review 93)
+                    ThrowIfBoundPassed(); // and before its callback: judging a read of many features takes time too
                     waiting.RemoveAt(w--);
                     settled(i, result);
                 }
@@ -361,7 +361,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// The bound of <see cref="WhenEachReadyAsync"/> outside its wait: a settled callback that ran past the deadline (or
     /// until the caller gave up) must not let the next round, or the next read of this one, settle what was stored late.
     /// The wait itself would not say so: a task already completed makes <c>Task.WhenAny</c> complete at once, and a timed
-    /// wait on a completed task never times out (review 84).
+    /// wait on a completed task never times out.
     /// </summary>
     private void ThrowIfBoundPassed()
     {

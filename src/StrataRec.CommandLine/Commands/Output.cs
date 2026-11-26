@@ -137,7 +137,7 @@ internal static class Output
 
         var caret = new System.Text.StringBuilder(before.Length + at - start + 1);
         caret.Append(' ', before.Length);
-        // By code point (review 34): a mark, a format character or a variation selector takes no cell, whatever block it is
+        // By code point: a mark, a format character or a variation selector takes no cell, whatever block it is
         // in; then a wide character two (a full-width space) and any other one.
         for (var i = start; i < at;)
         {
@@ -275,7 +275,7 @@ internal static class Output
     /// <summary>
     /// Writes a file the command line names (<c>build --manifest</c>, <c>run --record</c>), creating its directory as
     /// <c>init</c> and <c>schema --out</c> do. What cannot be written is OUTPUT_UNWRITABLE at <paramref name="option"/>, with
-    /// what the system said, not an exception and its stack (review 43). False when it was not written.
+    /// what the system said, not an exception and its stack. False when it was not written.
     /// </summary>
     public static bool WriteFile(string option, string path, Action<string> write, DiagnosticBag diagnostics)
     {
@@ -300,7 +300,7 @@ internal static class Output
 
     /// <summary>
     /// A store that cannot be written (build, publish and revoke write it; a node only reads it): STORE_UNWRITABLE at
-    /// <c>--store</c> with what the system said, which names the path, not an exception and its stack (review 43).
+    /// <c>--store</c> with what the system said, which names the path, not an exception and its stack.
     /// </summary>
     public static void StoreUnwritable(Exception ex, DiagnosticBag diagnostics) =>
         diagnostics.Error("STORE_UNWRITABLE", "--store", string.Empty, ex.Message,

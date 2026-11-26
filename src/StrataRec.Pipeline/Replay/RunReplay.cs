@@ -255,7 +255,7 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <remarks>
     /// A recorded failure answers only the call it was: the same node, entities, inputs and limit. Taken by entities alone, the
     /// failure of another call of the same model and entity (another node, another prompt) answered this one, and hid the
-    /// success the recording has for its own inputs (review 30). A node's own answer of the call's limit is consumed even
+    /// success the recording has for its own inputs. A node's own answer of the call's limit is consumed even
     /// when another answers the call better, so its later calls still meet their own recorded calls in order.
     /// </remarks>
     /// <param name="caller">The calling node, or the feature source (IO step 5): its own recorded calls answer it first,

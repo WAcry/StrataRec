@@ -152,7 +152,7 @@ public class ListInt32FeatureTests
     [InlineData("col.entity_id > 1 ? [3000000000] : [7]", "list<int32>")]
     public async Task DerivedInt32_OutOfRange_WithoutDefaultOrNullability_FailsTheFeature(string expr, string type)
     {
-        // Review 6 #1: the replacement "missing" cannot live in a non-nullable feature; readers would skip validity and
+        // The replacement "missing" cannot live in a non-nullable feature; readers would skip validity and
         // read whatever the storage holds.
         var rig = new FeatureTestRig();
         var feature = rig.Derived("item.narrow", FeatureTestRig.Item, ColumnType.Parse(type), Compile(expr), Array.Empty<int>());

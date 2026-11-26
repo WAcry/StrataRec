@@ -197,7 +197,7 @@ public class ChainedContextKeyTests
     }
 
     /// <summary>
-    /// Fourteen levels, each keyed by eight features of the level before (review 76's shape, as context keys): each group
+    /// Fourteen levels, each keyed by eight features of the level before (as context keys): each group
     /// starts once, after its parent, with its parent's eight values as its key.
     /// </summary>
     [Fact]
@@ -453,7 +453,7 @@ public class ChainedContextKeyTests
     /// A group whose key reads two context features fails as soon as one of them failed, without waiting for the other:
     /// it cannot change that, and what waits for the group's task (a recall's query values) learns it at once (review of
     /// the IO redesign: an entity whose argument had failed waited for its other one). A fill waits for its whole closure,
-    /// whose worst state it returns, as for a derived feature computed early (review 82).
+    /// whose worst state it returns, as for a derived feature computed early.
     /// </summary>
     [Fact]
     public async Task AGroupWhoseKeyPartFailed_FailsAtOnce_WithoutWaitingForItsOtherPart()
@@ -512,7 +512,7 @@ public class ChainedContextKeyTests
     }
 
     /// <summary>
-    /// Review 72 for chains: a group started once its key was stored, after the request let go of its memory, holds it
+    /// For chains: a group started once its key was stored, after the request let go of its memory, holds it
     /// until it is stored: it reads its staging and writes its value before the buffers go back.
     /// </summary>
     [Fact]
@@ -539,7 +539,7 @@ public class ChainedContextKeyTests
     }
 
     /// <summary>
-    /// Review 72 for chains: when a later start throws (here a recording hook, as a second chained group is sent), the
+    /// For chains: when a later start throws (here a recording hook, as a second chained group is sent), the
     /// chained group already sent is still stored before the memory goes back, and the prefetch still fails.
     /// </summary>
     [Fact]
@@ -735,7 +735,7 @@ public class ChainedContextKeyTests
     }
 
     /// <summary>
-    /// Review 77: the drain is a promise that every operation has really finished. A chained group whose key was stored
+    /// The drain is a promise that every operation has really finished. A chained group whose key was stored
     /// before the request ended registers its connector call on another thread, possibly after the drain was asked for;
     /// the drain took one snapshot, completed while that call still ran (it ignores cancellation), and the memory was
     /// still held. The drain now waits until a round finds nothing new.

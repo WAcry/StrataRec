@@ -173,7 +173,7 @@ public sealed class ManifestLoadTests : IDisposable
     }
 
     /// <summary>
-    /// Review 35 #4: the download is part of the load, so disposing the engine cancels it, as it cancels a load waiting
+    /// The download is part of the load, so disposing the engine cancels it, as it cancels a load waiting
     /// for its tables; the store did not use to get any cancellation but the caller's.
     /// </summary>
     [Fact]
@@ -195,7 +195,7 @@ public sealed class ManifestLoadTests : IDisposable
     }
 
     /// <summary>
-    /// Review 35 #1: the store gets the load's token, not the caller's. A callback the store registered that throws used to
+    /// The store gets the load's token, not the caller's. A callback the store registered that throws used to
     /// come out of the caller's cancellation (out of its <c>CancelAfter</c> timer, that ends the process); it runs on the
     /// pool now, and the load ends as cancelled with the current plan serving.
     /// </summary>

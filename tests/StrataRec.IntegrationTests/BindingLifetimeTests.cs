@@ -315,7 +315,7 @@ public sealed class BindingLifetimeTests
 
     /// <summary>
     /// A metric listener that throws right after the swap loses its record, and nothing else: the load is applied (it used
-    /// to throw, the plan served already, review 35), and the replaced plan's lease is retired.
+    /// to throw, the plan served already), and the replaced plan's lease is retired.
     /// </summary>
     [Fact]
     public async Task AMetricCallbackThatThrowsAfterTheSwap_LosesItsRecord_AndTheLoadIsApplied_AndRetiresTheReplacedPlansLease()
@@ -419,7 +419,7 @@ public sealed class BindingLifetimeTests
         }).Root;
 
     /// <summary>
-    /// Review 85: a compile that waited for a model's signature runs again, and that one read the host's override again:
+    /// A compile that waited for a model's signature runs again, and that one read the host's override again:
     /// a wrapped CLR value was written once more (and ran as it wrote then), and a plain tree the host changed meanwhile
     /// was compiled as changed. Both compiles read the override as the first one checked it.
     /// </summary>
