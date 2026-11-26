@@ -64,7 +64,13 @@ public class CacheStoreCallTests
         var request = rig.NewRequest([1, 2]);
         var reading = request.EnsureAsync(clicks).AsTask();
         await entered.Task;
-        later.TrySetException(new UnreadableException());
+        if (answer == Answer.FailsLater)
+        {
+            // Only the answer that hands this task to the engine fails it: a failed task nobody waits for is reported
+            // when it is collected, and whoever reports it reads the message this exception throws on.
+            later.TrySetException(new UnreadableException());
+        }
+
         var result = await reading;
 
         Assert.Equal(FeatureState.Ok, result.State);
