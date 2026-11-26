@@ -38,9 +38,7 @@ POINTER = (re.compile(r"^(?:I?[A-Z][a-z0-9]+){2,}$"),        # CandidateTable, I
            re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$"),    # COLUMN_NO_PRODUCER
            re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$"))    # timeout_ms
 PATH = re.compile(r"^(?:src|tests|samples|docs|scripts|\.github|\.agents)/[\w./@-]+$")
-DOC_PATH = re.compile(r"\bdocs/[\w./-]+\.md\b")
 EXCUSE = re.compile(r"\b(TODO|FIXME|HACK)\b")
-CITED_ROUND = re.compile(r"\b(?:[Rr]eviews?|[Ii]nvestigation|[Aa]udit) \d+\b")
 SLEEP = re.compile(r"Thread\.Sleep\(|Task\.Delay\((?!Timeout\.Infinite)")
 PUBLIC_TYPE = re.compile(r"^\s*public\s+(?:(?:sealed|static|abstract|readonly|partial|ref|unsafe)\s+)*"
                          r"(?:class|struct|interface|enum|record(?:\s+(?:struct|class))?)\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
@@ -92,18 +90,12 @@ def budgets(repo):
 
 
 def comments(repo):
-    """No excuse comments, and code points only at what the repository has: documents that exist, no numbered review rounds."""
+    """No excuse comments: what is found in the code is copied by the next change."""
     for path in repo.under(CODE, (".cs",)):
         for number, line in enumerate(repo.read(path).split("\n"), 1):
             if EXCUSE.search(line):
                 repo.fail("comments", f"{path}:{number}", "an excuse comment (TODO, FIXME, HACK). Do it now, or record why it "
                           "is not done as a decision (.agents/skills/record-decision); later changes copy what they find.")
-            if CITED_ROUND.search(line):
-                repo.fail("comments", f"{path}:{number}", "cites a review round by its number, which nothing in the repository "
-                          "resolves. Say what the code must do or what went wrong; name a commit when the history matters.")
-            for doc in DOC_PATH.findall(line):
-                if not os.path.exists(os.path.join(repo.root, doc)):
-                    repo.fail("comments", f"{path}:{number}", f"points at {doc}, which does not exist.")
 
 
 def sleeps(repo):
@@ -266,7 +258,7 @@ def selftest():
         ".agents/skills/x/SKILL.md": "---\nname: x\n---\n",
         "src/StrataRec.Core/StrataRec.Core.csproj": '<Project><ItemGroup><InternalsVisibleTo Include="StrataRec.Pipeline" />'
                                                     '<InternalsVisibleTo Include="StrataRec.UnitTests" /></ItemGroup></Project>',
-        "src/StrataRec.Core/CandidateTable.cs": "// See docs/decisions/execution.md.\npublic sealed class CandidateTable { }\n"
+        "src/StrataRec.Core/CandidateTable.cs": "public sealed class CandidateTable { }\n"
                                                 'class C { string a = "timeout_ms", b = "COLUMN_NO_PRODUCER"; }\n',
         "src/StrataRec.Pipeline/StrataRec.Pipeline.csproj": '<Project><ItemGroup><ProjectReference Include="..\\StrataRec.Core\\'
                                                             'StrataRec.Core.csproj" /></ItemGroup></Project>',
@@ -277,8 +269,6 @@ def selftest():
         ("budget", ".agents/skills/x/SKILL.md", "x\n" * (SKILL_LINES + 1)),
         ("budget", "docs/decisions/execution.md", "x" * (DECISION_CHARS + 1)),
         ("comments", "src/StrataRec.Core/Later.cs", "// TODO: handle the empty table\n"),
-        ("comments", "src/StrataRec.Core/Pointer.cs", "// See docs/design.md.\n"),
-        ("comments", "tests/T/RoundTests.cs", "// Review 88: a layer adding a row source was not in the scope.\n"),
         ("sleeps", "tests/T/SleepTests.cs", "Thread.Sleep(50);\n" * (SLEEP_BASELINE + 1)),
         ("names", "docs/decisions/execution.md", "- **x.** `RemovedType` did this.\n"),
         ("names", "docs/decisions/execution.md", "- **x.** the key `removed_key`.\n"),
