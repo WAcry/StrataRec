@@ -397,8 +397,8 @@ internal sealed class CachedServiceCall
     {
         if (Count(RowState.Fresh, negate: true) == Count(RowState.Stale, negate: false) && StaleAnswer(_cache.Policy.NowMs()))
         {
-            // Taken only if the node could still send the call now, as an answer of the tiers alone is (review of IO
-            // step 4: a caller that cancelled while the distributed tier used up the service's time got the stale values).
+            // Taken only if the node could still send the call now, as an answer of the tiers alone is
+            // (a caller that cancelled while the distributed tier used up the service's time got the stale values).
             if (BoundedCall.CutOff(_scope.Budget) is { } late)
             {
                 return new Result(default, late.Outcome, late.Exception, false);

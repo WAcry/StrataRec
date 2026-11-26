@@ -18,14 +18,14 @@ namespace StrataRec.UnitTests.Expressions;
 public class ExpressionRegressionTests
 {
     // ------------------------------------------------------------------------------------------------------------
-    // #11: desugared built-ins must lift every argument.
+    // Desugared built-ins must lift every argument.
 
     private static readonly double?[] Grid = { null, -1.0, 0.0, 0.5, 1.0, 2.0, double.NaN };
 
     [Fact]
     public void LinearDecay_MissingEnd_IsMissing_SoCoalesceTakesTheDefault()
     {
-        // The reviewer's repro: x <= start used to return the constant 1 without looking at end.
+        // x <= start used to return the constant 1 without looking at end.
         var f = new ExprFixture().Ctx("ctx.end", "float64?").Build(3);
         ExprAssert.Scalar(f, "linear_decay(0.0, 1.0, ctx.end) ?? 0.0", 0.0);
         ExprAssert.Scalar(f, "linear_decay(0.0, 1.0, ctx.end)", null);
@@ -156,7 +156,7 @@ public class ExpressionRegressionTests
     }
 
     // ------------------------------------------------------------------------------------------------------------
-    // #12: every NaN hashes as the canonical quiet NaN, so rewrites that change NaN sign/payload cannot change hash01.
+    // Every NaN hashes as the canonical quiet NaN, so rewrites that change NaN sign/payload cannot change hash01.
 
     private const long CanonicalNaNBits = 0x7FF8000000000000;
 
@@ -236,7 +236,7 @@ public class ExpressionRegressionTests
         // Row level: optimized vectorized program (full range and gather) and the unoptimized reference interpreter.
         string[] rowLevel =
         {
-            "hash01((-sqrt(col.x)) * 2.0)",            // the reviewer's repro: Neg moved into the invariant
+            "hash01((-sqrt(col.x)) * 2.0)",            // Neg moved into the invariant
             "hash01((-sqrt(col.x)) / param.w)",
             "hash01(2.0 * (-log(col.x)))",
             "hash01(col.z / col.z)",
@@ -297,7 +297,7 @@ public class ExpressionRegressionTests
     }
 
     // ------------------------------------------------------------------------------------------------------------
-    // #13: malformed escapes are syntax diagnostics (offset + hint), never exceptions out of TryCompile.
+    // Malformed escapes are syntax diagnostics (offset + hint), never exceptions out of TryCompile.
 
     [Theory]
     [InlineData(@"'\UFFFFFFFF'", 1)]
@@ -413,7 +413,7 @@ public class ExpressionRegressionTests
     }
 
     // ------------------------------------------------------------------------------------------------------------
-    // #15: evaluating into a column the expression reads (in-place update) uses each row's values from before the call.
+    // Evaluating into a column the expression reads (in-place update) uses each row's values from before the call.
 
     [Fact]
     public void Coalesce_IntoTheListColumnItReads_TakesTheFallback_NotStaleData()
@@ -529,7 +529,7 @@ public class ExpressionRegressionTests
     }
 
     // ------------------------------------------------------------------------------------------------------------
-    // #16: request-level results never hand out the compiled expression's own constant arrays writable. They were copied;
+    // Request-level results never hand out the compiled expression's own constant arrays writable. They were copied;
     // a value's lists are read-only spans, so the constant itself is returned.
 
     [Theory]

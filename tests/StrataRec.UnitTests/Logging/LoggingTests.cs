@@ -522,7 +522,7 @@ public sealed class LogPipelineTests
     }
 
     /// <summary>
-    /// Pre-release assessment: once a batch is delivered and a flush completed, the pipeline holds nothing of it. The
+    /// Once a batch is delivered and a flush completed, the pipeline holds nothing of it. The
     /// consumer cleared its list only when the next batch came, so an idle queue kept its last write's batches alive.
     /// </summary>
     [Fact]
@@ -552,7 +552,7 @@ public sealed class LogPipelineTests
     }
 
     /// <summary>
-    /// Pre-release assessment: options that cannot work fail before the consumers start, naming the option, both where
+    /// Options that cannot work fail before the consumers start, naming the option, both where
     /// the pipeline is made and where a host registers it. No batches per write left a consumer handing the sink empty
     /// lists forever with the pending count never reaching 0; a negative one failed the consumer as it started.
     /// </summary>

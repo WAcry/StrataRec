@@ -142,7 +142,7 @@ public sealed class StrictJsonTests
     [InlineData(10_000, 5)]
     [InlineData(64, 64)]
     [InlineData(65, 64)]
-    [InlineData(70, 64)] // the review's: 70 levels at /params/final_top_k
+    [InlineData(70, 64)] // 70 levels at /params/final_top_k
     public void ATreeNestedPastTheLimit_IsReportedAtTheFirstLevelTooDeep(int levels, int maxDepth)
     {
         var error = StrictJson.Check(Nested(levels), maxDepth, out _);

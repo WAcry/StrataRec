@@ -1465,7 +1465,7 @@ internal sealed class PipelineExecutor
                 && storage.Type.AsNullable() == types[c].AsNullable())
             {
                 // A column is read from its own storage, as a tap reads it: nothing to evaluate, and no buffer of the
-                // table's size for the few rows returned (2 MB for a 128-float embedding over 4,096 rows, audit of f47a255).
+                // table's size for the few rows returned (2 MB for a 128-float embedding over 4,096 rows).
                 for (var i = 0; i < count; i++)
                 {
                     values[c][i] = ColumnValues.Get(storage, rows[i]);

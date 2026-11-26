@@ -198,12 +198,12 @@ public sealed class RequestColumnEndToEndTests
     public void ANullableFlowRequestColumnsOptionalWriters_AreNotCheckedTogether()
     {
         var host = HomeFeedTestHost.Load();
-        host.Request.Pipeline.RequestColumns["review.flow"] = new ColumnSpec { Type = "int64?", Flow = true };
+        host.Request.Pipeline.RequestColumns["shared.flow"] = new ColumnSpec { Type = "int64?", Flow = true };
         var placements = new List<ExperimentPlacement>();
         for (var i = 0; i < 13; i++)
         {
             placements.Add(Treatment("w" + i, $$"""
-                { "nodes": { "count_{{i}}": { "order": {{600 + i}}, "op": "RequestAggregate@1", "config": { "values": { "review.flow": { "fn": "count" } } } } } }
+                { "nodes": { "count_{{i}}": { "order": {{600 + i}}, "op": "RequestAggregate@1", "config": { "values": { "shared.flow": { "fn": "count" } } } } } }
                 """));
         }
 
@@ -259,7 +259,7 @@ public sealed class RequestColumnEndToEndTests
     /// where that arm is not assigned, also when the combinations are checked by scope (past the limit): the name decides
     /// which combinations the tap is checked in. gate's named input reads the column only when
     /// a and b both switch it on, and only the tap c adds compiles it (columns_from); d declares it. The same for a
-    /// parameter only d declares (audit of f47a255: the scope left parameters out, the plan loaded, and the tap threw when
+    /// parameter only d declares (the scope left parameters out, the plan loaded, and the tap threw when
     /// it captured a request in a, b and c).
     /// </summary>
     [Theory]
@@ -306,11 +306,11 @@ public sealed class RequestColumnEndToEndTests
         for (var i = 0; i < 13; i++)
         {
             var tap = i == 0
-                ? """, "log_taps": { "probe": { "group": "all", "attach": { "output": true }, "context": { "flag": "true ? 1 : (req.review.flow ?? 0)" } } }"""
+                ? """, "log_taps": { "probe": { "group": "all", "attach": { "output": true }, "context": { "flag": "true ? 1 : (req.shared.flow ?? 0)" } } }"""
                 : string.Empty;
             placements.Add(Treatment("w" + i, $$"""
-                { "request_columns": { "review.flow": { "type": "int64?", "flow": true } },
-                  "nodes": { "count_{{i}}": { "order": {{600 + i}}, "op": "RequestAggregate@1", "config": { "values": { "review.flow": { "fn": "count" } } } } }{{tap}} }
+                { "request_columns": { "shared.flow": { "type": "int64?", "flow": true } },
+                  "nodes": { "count_{{i}}": { "order": {{600 + i}}, "op": "RequestAggregate@1", "config": { "values": { "shared.flow": { "fn": "count" } } } } }{{tap}} }
                 """));
         }
 

@@ -70,7 +70,7 @@ public sealed class ReplayComparisonTests
     }
 
     /// <summary>
-    /// A bundle only one side replayed is in neither side's rates (audit of f47a255): the baseline counted its failure
+    /// A bundle only one side replayed is in neither side's rates: the baseline counted its failure
     /// there, and showed 50% errors of two requests beside the candidate's 0% of one.
     /// </summary>
     [Fact]

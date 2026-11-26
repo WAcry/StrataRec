@@ -378,8 +378,8 @@ public static class ManifestBuilder
     /// Checks that the manifest a pointer names is one of the pointer's pipeline and environment, and reports
     /// <c>MANIFEST_OTHER_PIPELINE</c> at <c>/pipeline_id</c> or <c>MANIFEST_OTHER_ENVIRONMENT</c> at <c>/environment</c>
     /// otherwise. A content hash proves integrity, not identity: a node must not serve another pipeline's plan under this
-    /// one's name, and <c>stratarec build</c> and <c>publish</c> must not number a release after another pipeline's (review
-    /// 37). Returns whether it is.
+    /// one's name, and <c>stratarec build</c> and <c>publish</c> must not number a release after another pipeline's.
+    /// Returns whether it is.
     /// </summary>
     public static bool CheckIdentity(ReleaseManifest manifest, string manifestId, string pipelineId, string environment, DiagnosticBag diagnostics)
     {

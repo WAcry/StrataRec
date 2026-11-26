@@ -63,7 +63,7 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
     /// <remarks>
     /// <para>Whether the server refuses the store is read from a connection that saw it. StackExchange.Redis records a
     /// refusal on its connection before it ends the connect, and publishes it (to the connection's failure events and to
-    /// the failures of later commands) only after (investigations 1 and 3): a connect that returns disconnected may not
+    /// the failures of later commands) only after: a connect that returns disconnected may not
     /// show yet why, and a probe made afterwards can fail, from a timeout or a reset, before it reads a refusal of its own.
     /// But a connect that must succeed reports, when it gives up, the refusal its own connection recorded. So the store
     /// first connects that way (<see cref="StrictConnects"/> times at most, one attempt each), and that connection, once

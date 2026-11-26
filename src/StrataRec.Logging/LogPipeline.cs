@@ -489,7 +489,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// <summary>
     /// Counts each batch of a write as delivered or dropped and gives its bytes back to the queue's budget, then lets go
     /// of the batches before the loop waits for more: an idle loop kept the last write's batches (a wide candidate tap's
-    /// among them) alive until its queue was written to again (pre-release assessment). They are let go of, and every
+    /// among them) alive until its queue was written to again. They are let go of, and every
     /// measurement of them published, before the pending count drops: a completed <see cref="FlushAsync"/> holds none and
     /// has seen the queue depth come back down. Nothing here throws (<see cref="Measure(Func{Counter{long}}, long, ReadOnlySpan{KeyValuePair{string, object}})"/>).
     /// </summary>

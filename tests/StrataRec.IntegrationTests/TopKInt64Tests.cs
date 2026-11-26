@@ -11,7 +11,7 @@ public sealed class TopKInt64Tests
     [InlineData(true, new[] { 9007199254740992L, 9007199254740993L })]
     public async Task EntityIdsAbove2To53_RankByTheirValue(bool ascending, long[] expected)
     {
-        // The reported case: as doubles both ids are 2^53, so they tied and the lower id came first in either direction.
+        // As doubles both ids are 2^53, so they tied and the lower id came first in either direction.
         // Artifacts are RFC 8785 JSON, which cannot hold such integers; the ids come from the source's data, as in production.
         var files = new Dictionary<string, string> { ["fixtures/ids.json"] = """{ "items": [9007199254740992, 9007199254740993] }""" };
         var plan = MiniWorkspace.Compile("\"s\": { \"client\": \"memory_list@1\", \"data_file\": \"fixtures/ids.json\" }", $$"""

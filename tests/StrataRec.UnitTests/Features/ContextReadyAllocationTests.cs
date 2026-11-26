@@ -8,8 +8,8 @@ namespace StrataRec.UnitTests.Features;
 public sealed class ContextReadyAllocationTests
 {
     /// <summary>
-    /// Asking whether context features are stored, when a synchronous source stored them, allocates nothing (review of
-    /// 43bdf97: the wait for the other case was a closure over the fetcher, allocated on every ask).
+    /// Asking whether context features are stored, when a synchronous source stored them, allocates nothing
+    /// (the wait for the other case was a closure over the fetcher, allocated on every ask).
     /// </summary>
     [Fact]
     public async Task AskingForFeaturesStoredAlready_AllocatesNothing()

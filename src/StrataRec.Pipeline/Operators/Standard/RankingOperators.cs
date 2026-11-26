@@ -222,7 +222,7 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
     /// eligible: the earliest placeable row is the smallest head among eligible groups, kept in a heap. Placing a row
     /// counts it in the window and uncounts the row the window leaves, which may make that group eligible again. O(n log G)
     /// for n rows in G groups; the first version rescanned the pending rows and recounted the window at every position,
-    /// O(n² · window), 9 ms for 5,000 rows in two groups (performance audit).
+    /// O(n² · window), 9 ms for 5,000 rows in two groups.
     /// </remarks>
     internal static int Place(ReadOnlySpan<int> groupOf, int groups, int window, int maxPerWindow, Span<int> placed, Core.Memory.RequestMemory memory)
     {

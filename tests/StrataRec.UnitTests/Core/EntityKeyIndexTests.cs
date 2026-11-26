@@ -354,7 +354,7 @@ public class EntityKeyIndexTests
 
     /// <summary>Rents string arrays of at least <c>stringLength</c> entries and every other array at the exact length.</summary>
     /// <summary>
-    /// Audit A6: a scratch index gives back each array it outgrows at once (growth, a larger reset, a key type's arrays
+    /// A scratch index gives back each array it outgrows at once (growth, a larger reset, a key type's arrays
     /// replaced), keeps the other key type's, and gives back the rest with <see cref="EntityKeyIndex.ReturnArrays"/>:
     /// every array it rented goes back exactly once, and the request's end gives back none of them.
     /// </summary>

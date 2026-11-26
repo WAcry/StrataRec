@@ -22,7 +22,7 @@ public sealed class VersionReferenceTests
     [Fact]
     public async Task APinOnlyInAnArmThatExcludesTheRowSourceVariant_IsAccepted_AndEachArmServesItsOwnPlan()
     {
-        // Codex's case: in one layer, 'rows' makes producer a row source and 'pin' adds a reader of its version. They never
+        // In one layer, 'rows' makes producer a row source and 'pin' adds a reader of its version. They never
         // run together, and each configuration alone is legal; the union of producer's variants rejected the plan.
         var (request, environment) = Exclusive(sameLayer: true);
         foreach (var arms in new[] { Array.Empty<string>(), new[] { "choice/rows" }, new[] { "choice/pin" } })
@@ -59,7 +59,7 @@ public sealed class VersionReferenceTests
     [Fact]
     public void PastTheLimit_AVersionThatOnlyThreeArmsTogetherRemove_IsRejected_AsTheirCompileRejectsIt()
     {
-        // Codex's triple: producer stops writing x only when a, b and c are all on, and a baseline node reads its version.
+        // Producer stops writing x only when a, b and c are all on, and a baseline node reads its version.
         // With 13 layers the unified compile checks scope by scope; it used to accept and serve this plan.
         var (request, environment) = Fading(stopAt: 3, readerArm: null, extraLayers: 10);
         foreach (var pair in new[] { new[] { "a/t", "b/t" }, new[] { "a/t", "c/t" }, new[] { "b/t", "c/t" } })

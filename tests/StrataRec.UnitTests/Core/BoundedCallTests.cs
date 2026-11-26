@@ -542,8 +542,8 @@ public sealed class BoundedCallTests
 
     /// <summary>
     /// A caller that ended the wait before the cancellation a client's task ended with reached it was first: the call is
-    /// the caller's, though the client's task had ended cancelled, on its own, before the caller cancelled (review of
-    /// 378b594: the lease had seen the client complete with no token cancelled, and the call was the client's own
+    /// the caller's, though the client's task had ended cancelled, on its own, before the caller cancelled
+    /// (the lease had seen the client complete with no token cancelled, and the call was the client's own
     /// timeout, the operator given a failed status instead of the caller's cancellation). The client's completion is held
     /// after the lease's continuation and before the wait's, by one registered between them.
     /// </summary>
@@ -1061,7 +1061,7 @@ public sealed class BoundedCallListenerTests
 
     /// <summary>
     /// A call whose host's sampler takes only the scope's time is the scope's, though its own deadline came first when it
-    /// started: that deadline, on a clock of its own (held still here), has not passed (review of the step 4b fixes: the
+    /// started: that deadline, on a clock of its own (held still here), has not passed (the
     /// order told before the call started put it down to its own deadline).
     /// </summary>
     [Fact]

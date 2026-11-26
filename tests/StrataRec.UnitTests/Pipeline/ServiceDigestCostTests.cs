@@ -11,8 +11,8 @@ namespace StrataRec.UnitTests.Pipeline;
 public sealed class ServiceDigestCostTests
 {
     /// <summary>
-    /// The items' digests and keys of a call of up to 64 inputs allocate nothing once the pools are warm (review of
-    /// 5e07f1b: a call of exactly 32 took its layout from the heap).
+    /// The items' digests and keys of a call of up to 64 inputs allocate nothing once the pools are warm
+    /// (a call of exactly 32 took its layout from the heap).
     /// </summary>
     [Theory]
     [InlineData(31)]

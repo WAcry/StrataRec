@@ -277,7 +277,7 @@ public static class RecResultJson
     /// A result's items as a JSON array, each <c>{ "rank", "id", "columns": { … } }</c>, written from the columns (no row
     /// dictionaries are made). The output columns are a member of their own, so a column named <c>id</c> or <c>rank</c>
     /// cannot collide with the item's (<c>stratarec replay</c> writes its items with this too: it flattened the columns
-    /// into the item and wrote duplicate members, architecture audit). A column's declared type decides how its floats
+    /// into the item and wrote duplicate members). A column's declared type decides how its floats
     /// print (<see cref="ResultColumns.Types"/>): a <c>float32</c> or <c>list&lt;float32&gt;</c> column's as floats.
     /// </summary>
     public static void WriteItems(Utf8JsonWriter json, ResultColumns items)

@@ -131,7 +131,7 @@ public sealed class RequestAllocationTests
     }
 
     /// <summary>
-    /// Audit A6: a request's temporaries (the ranking copy of each attempt, backfill and derived row lists, the recall
+    /// A request's temporaries (the ranking copy of each attempt, backfill and derived row lists, the recall
     /// merge, filter masks, TopK and quota selections) go back to the pool when their computation is done, not with the
     /// request: held to the end, every array a 4,000-candidate request rented was out at once, and with many requests in
     /// flight the shared pool dropped what it could not keep and later rents allocated.

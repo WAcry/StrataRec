@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Regression tests for findings of the logging/expressions/e2e review (cf06c43).</summary>
+/// <summary>Defects of logging, expressions and whole runs that were fixed, one test each.</summary>
 public sealed class PipelineRegressionTests
 {
     [Fact]

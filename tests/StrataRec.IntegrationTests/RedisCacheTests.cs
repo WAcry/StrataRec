@@ -168,7 +168,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     }
 
     /// <summary>
-    /// The CI flake's first cause (an investigation reproduced it): StackExchange.Redis tells the connect that its
+    /// The CI flake's first cause: StackExchange.Redis tells the connect that its
     /// connection ended before it publishes the refusal that ended it. Holding that publication (the client logs it as
     /// event 89 just before) until the load has decided made a refused load succeed, every time. The first connect must
     /// succeed now: when it gives up, it reads the refusal the client recorded, not the published one.
@@ -354,7 +354,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
 
 /// <summary>
 /// A logger that holds the client's thread where it is about to publish a refused handshake (event 89 with an
-/// authentication failure), until released: the investigation's deterministic reproduction of the publication race.
+/// authentication failure), until released: a deterministic reproduction of the publication race.
 /// </summary>
 internal sealed class HoldRefusalLog(ManualResetEventSlim release) : Microsoft.Extensions.Logging.ILoggerFactory
 {

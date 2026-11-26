@@ -152,7 +152,7 @@ public sealed class CacheEngineTests
     }
 
     /// <summary>
-    /// The shared tier's keys say where a source's values come from (audit of f47a255): a source bound to other data reads
+    /// The shared tier's keys say where a source's values come from: a source bound to other data reads
     /// its connector, not what the earlier binding left under the same source and entity, where every record had the same
     /// layout and was taken for fresh (the new plan served the old data until it expired); a binding that only tunes how
     /// the values are fetched keeps them.

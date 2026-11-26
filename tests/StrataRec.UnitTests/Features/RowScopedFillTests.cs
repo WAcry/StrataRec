@@ -58,7 +58,7 @@ public class RowScopedFillTests
     [Fact]
     public async Task AValueOutsideTheRows_ThatTheTypeCannotHold_DoesNotFailTheFill_AWholeFillThenFailsOnIt()
     {
-        // The review's case: item 1's 1.5e9 fits a non-nullable int32 feature, item 2's 3e9 does not.
+        // Item 1's 1.5e9 fits a non-nullable int32 feature, item 2's 3e9 does not.
         var (rig, _, _, narrow) = BaseRig("col.item.base * 1500000000", ColumnType.Int32);
         var request = rig.NewRequest([1, 2]);
 

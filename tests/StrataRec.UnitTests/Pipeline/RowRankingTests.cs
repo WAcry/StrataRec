@@ -20,7 +20,7 @@ public sealed class RowRankingTests
     [InlineData(true)]
     public void EntityIdsJustAbove2To53_RankByTheirExactValue(bool ascending)
     {
-        // The reported case: {"score_col": "entity_id", "k": 2}. As doubles both ids are 2^53 and tie, so the tie-break
+        // {"score_col": "entity_id", "k": 2}. As doubles both ids are 2^53 and tie, so the tie-break
         // put the lower id first whatever the direction.
         var ids = new[] { TwoTo53, TwoTo53 + 1 };
         var (table, memory) = Table(ids);

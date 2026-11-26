@@ -80,8 +80,8 @@ public sealed class CustomPlacementTests
     }
 
     /// <summary>
-    /// A candidate TopK dropped and an injector brought back is found, and explained, at its new row (review of the
-    /// invariants, 2026-11-22: the table found its dropped row, so a second injector took it for not shown and appended it
+    /// A candidate TopK dropped and an injector brought back is found, and explained, at its new row
+    /// (the table found its dropped row, so a second injector took it for not shown and appended it
     /// again, and its explanation said TopK dropped it, unless the table was compacted in between); whether it was makes
     /// no difference.
     /// </summary>

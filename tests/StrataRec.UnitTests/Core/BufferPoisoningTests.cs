@@ -32,7 +32,7 @@ public sealed class BufferPoisoningTests
     }
 
     /// <summary>
-    /// Audit A6: a scratch buffer goes back when the computation that rented it is done, poisoned like the rest, and is
+    /// A scratch buffer goes back when the computation that rented it is done, poisoned like the rest, and is
     /// not on the ledger: the request's end does not give it back again, and it is not in the rented bytes.
     /// </summary>
     [Fact]

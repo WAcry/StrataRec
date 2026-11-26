@@ -220,7 +220,7 @@ public class CacheStoreCallTests
     }
 
     /// <summary>
-    /// Pre-release assessment: each chunk of the tier's read is judged when it answered. The first chunk answers at once
+    /// Each chunk of the tier's read is judged when it answered. The first chunk answers at once
     /// and is fresh; the second answers after the records' TTL passed (50 ms against 10 ms) and goes to the connector. The
     /// time the first chunk was judged at made the second's record a fresh hit.
     /// </summary>

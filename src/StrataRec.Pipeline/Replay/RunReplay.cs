@@ -273,8 +273,8 @@ internal sealed class RunReplay : IFeatureCallHook
         {
             // What an entry remembers of a call is of this one only (ServiceEntry.AskedFor): each call has an epoch of its
             // own, never one used before, and one made while it is answered (an operator's code may call again, from a
-            // getter of what it hands over) ends with it, the epoch of the call it interrupted active again (review of
-            // 43bdf97: one counter, the interrupted call went on with the epoch of the one inside it, and answers that one's).
+            // getter of what it hands over) ends with it, the epoch of the call it interrupted active again
+            // (one counter, the interrupted call went on with the epoch of the one inside it, and answers that one's).
             var interrupted = _epoch.Active;
             _epoch.Active = ++_epoch.Last;
             try
@@ -362,7 +362,7 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>
     /// Whether a recorded call has output <paramref name="name"/> for <paramref name="call"/>, at the call's limit (an output
     /// or a text may say how many items it was asked for): recorded, or asked for and left unwritten
-    /// by the service, which is its answer too (review of the step 5 fixes: such an output was a gap, or borrowed from
+    /// by the service, which is its answer too (such an output was a gap, or borrowed from
     /// another call that had it).
     /// </summary>
     private static bool Has(ServiceEntry entry, ServiceCall call, string name) =>
@@ -1366,8 +1366,8 @@ internal sealed class RunReplay : IFeatureCallHook
                     "a feature source's call names its source and the entity it computed; a node's names neither");
             }
 
-            // The outputs it asked for, each once, and what it returned of them only: what the recorder writes (review of
-            // the step 5 fixes: any other list would answer a call it was not, or leave out what the service did write).
+            // The outputs it asked for, each once, and what it returned of them only: what the recorder writes
+            // (any other list would answer a call it was not, or leave out what the service did write).
             for (var r = 0; r < call.Requested.Count; r++)
             {
                 if (call.Requested.IndexOf(call.Requested[r]) != r)

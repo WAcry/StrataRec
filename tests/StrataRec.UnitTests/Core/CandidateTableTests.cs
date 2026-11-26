@@ -253,7 +253,7 @@ public class CandidateTableTests
         Assert.Equal(1, table.FindRow(EntityKey.FromInt64(20)));
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(40)));
 
-        // 20 dropped and brought back: found at its new, live row (review of the invariants, 2026-11-22: the first row
+        // 20 dropped and brought back: found at its new, live row (the first row
         // was found, the dropped one, so an injector took 20 for not shown and appended it a third time).
         table.Rows.Retain(new[] { true, false, true });
         table.AppendRows(new long[] { 40, 20, 50 });

@@ -397,7 +397,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         /// of their squares), with every deviation divided by the group's largest (LAPACK's dlassq): no square of a large
         /// deviation overflows and none of a small one underflows, so the std is right at every scale a float64 holds
         /// (±1e200 has std 1e200 and ±1e-200 has 1e-200; summing the squares themselves made the first infinite and the
-        /// second 0, pre-release assessment).
+        /// second 0).
         /// </summary>
         /// <remarks>
         /// The signed sum is the corrected two-pass term: the running mean is rounded at the values' scale, and the

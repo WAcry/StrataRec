@@ -200,7 +200,7 @@ public sealed class GroupAggregateTests
     }
 
     /// <summary>
-    /// Pre-release assessment: the std is right at every scale a float64 holds. Summing squared deviations made ±1e200
+    /// The std is right at every scale a float64 holds. Summing squared deviations made ±1e200
     /// infinite (the node failed) and ±1e-200 zero; a group near the largest float64 and one of subnormals are covered too.
     /// </summary>
     [Theory]

@@ -8,7 +8,7 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>Regression tests for findings from the Core review.</summary>
+/// <summary>Defects of the core types that were fixed, one test each.</summary>
 public class CoreRegressionTests
 {
     private static CandidateTable NewTable(int capacity, params ColumnType[] extra)

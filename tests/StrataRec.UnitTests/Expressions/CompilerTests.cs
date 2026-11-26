@@ -8,7 +8,7 @@ namespace StrataRec.UnitTests.Expressions;
 /// <summary>Parsing, typing, diagnostics and explain output.</summary>
 public class CompilerTests
 {
-    /// <summary>The home-feed catalog plus the columns used in 7.3, 7.8 and 9.3.</summary>
+    /// <summary>The home-feed catalog plus the columns the example expressions read.</summary>
     internal static ExprFixture HomeFeed()
     {
         var f = new ExprFixture()

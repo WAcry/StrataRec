@@ -160,7 +160,7 @@ public sealed class ConfigOverrideTests
     [Theory]
     [InlineData(62)]
     [InlineData(63)]
-    [InlineData(70)] // the review's
+    [InlineData(70)]
     public async Task AnOverrideNestedPastTheLimit_IsAnInvalidRequest_AtTheFirstLevelTooDeep(int levels)
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());

@@ -13,7 +13,7 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>Regression tests for the feature-runtime findings of the artifacts/feature-runtime review (eb7e005).</summary>
+/// <summary>Defects of the feature runtime that were fixed, one test each.</summary>
 public class FeatureRuntimeRegressionTests
 {
     /// <summary>
@@ -77,7 +77,7 @@ public class FeatureRuntimeRegressionTests
     }
 
     /// <summary>
-    /// Audit B6: a reader of context features waits for the sources it reads, not for the slowest one: an ANN recall
+    /// A reader of context features waits for the sources it reads, not for the slowest one: an ANN recall
     /// reading the user's embedding did not start before a slower source of other user features answered. A derived
     /// context feature still waits for the whole fetch, which computes it last.
     /// </summary>

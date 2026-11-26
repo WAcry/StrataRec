@@ -29,7 +29,7 @@ internal readonly struct ServiceCaller
 
     /// <summary>
     /// The entity a source's call computes: a source may compute several, whose calls are each its own as two nodes' are
-    /// (review of the step 5 fixes: two entities' calls of the same arguments and outputs took each other's answers when
+    /// (two entities' calls of the same arguments and outputs took each other's answers when
     /// the prefetch made them in another order).
     /// </summary>
     public string? Entity { get; }
@@ -122,7 +122,7 @@ internal static class ServiceCallPath
         var result = await BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
             new ServiceInvocation(scope, service.Client, call, response, service.Target, recorder, sequence), scope.Budget, scope.Memory, service.Target,
             CallDeadline.After(service.TimeoutMs)).ConfigureAwait(false);
-        // Every end named, no default arm: a new kind of end does not compile until it is decided here (architecture audit).
+        // Every end named, no default arm: a new kind of end does not compile until it is decided here.
         return result.End switch
         {
             CallEnd.Answered => result.Value,

@@ -21,7 +21,7 @@ namespace StrataRec.Hosting;
 /// that serves part of its pipelines, or a fallback that is never loaded, fails requests silently.</para>
 /// <para>The polling starts in <see cref="StartAsync"/>, once every service's starting phase has succeeded, with one task
 /// per pipeline: a load, or a pointer read that hangs until its <see cref="ReleaseOptions.PointerTimeout"/>, delays only
-/// its own pipeline's polls, so an emergency revocation of one pipeline never waits for another (review: a blocked report
+/// its own pipeline's polls, so an emergency revocation of one pipeline never waits for another (a blocked report
 /// of one pipeline held a newer release of another for 25 polls). Loads of different pipelines may run at the same time,
 /// as the engine allows. The background outcomes go to the reporter through a bounded queue and one task of their own
 /// (<see cref="IReleaseStatusReporter"/>); at startup each is reported before the next pipeline loads, so a host that
@@ -30,8 +30,8 @@ namespace StrataRec.Hosting;
 /// <para>The source, the store and the reporter get tokens of the framework's (<see cref="CancellationSite.Release"/>), never
 /// the host's: their callbacks run on the thread pool when the host cancels, and what they throw is counted, not thrown
 /// on the host's timer. A stop waits for the callbacks of its cancellation as for the polling, within the host's stop
-/// timeout: the container disposes the extensions next, and a callback cleaning up must not find them disposed (review
-/// 36). Neither a logger nor a metric listener that throws changes what the polling does: the record is lost, the
+/// timeout: the container disposes the extensions next, and a callback cleaning up must not find them disposed.
+/// Neither a logger nor a metric listener that throws changes what the polling does: the record is lost, the
 /// schedule and the reports are not.</para>
 /// </remarks>
 internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyncDisposable, IDisposable

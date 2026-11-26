@@ -118,7 +118,7 @@ public class ChainedContextKeyTests
         await request.Fetcher.WhenIoCompleteAsync();
     }
 
-    /// <summary>B6 for starts: a chained group waits for the group it reads, not for a slower one it does not.</summary>
+    /// <summary>A chained group waits for the group it reads, not for a slower one it does not.</summary>
     [Fact]
     public async Task AChainedGroup_DoesNotWaitForAnUnrelatedSlowGroup()
     {

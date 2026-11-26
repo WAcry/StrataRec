@@ -56,7 +56,7 @@ public sealed class LinearModelClientTests
     /// <summary>
     /// The weights are added in the order of their inputs' names, not in the order the settings spell them: a float32
     /// sum depends on its order, and two bindings that differ only in the order of a JSON object's members are the same
-    /// content (audit of f47a255: they scored 0 and 1).
+    /// content (they scored 0 and 1).
     /// </summary>
     [Fact]
     public async Task TheScore_DoesNotDependOnTheOrderTheWeightsAreWrittenIn()

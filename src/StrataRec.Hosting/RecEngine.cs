@@ -765,7 +765,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         // A request's time is taken once, when it arrives: the pipeline, its fallback pipeline and the pipelines its nodes
         // call see the same, and so does a recorded request, whose bundle holds exactly what ran. Left to
         // each run, a request that waited for its assignment, or fell back, ran at a later time than the same request
-        // recorded, and a filter on the time could serve it other items (audit of f47a255). A recorded request resolves
+        // recorded, and a filter on the time could serve it other items. A recorded request resolves
         // its seed here too; otherwise each run derives the same from the request id.
         var record = request.Debug is { } debug && (debug.Record || debug.OnRecording is not null);
         var seed = record ? request.Seed ?? PipelineRequest.DefaultSeed(request.RequestId) : request.Seed;

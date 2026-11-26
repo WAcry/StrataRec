@@ -37,7 +37,7 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 }
 
 /// <summary>
-/// Request-scoped feature enrichment (6.5–6.8). Fetch results land in key-ordered staging buffers and
+/// Request-scoped feature enrichment. Fetch results land in key-ordered staging buffers and
 /// are backfilled into whatever rows are live <em>when a reader needs them</em>, so filters and Compact during in-flight
 /// I/O never misplace values. Local groups are read synchronously from their tables when a reader needs
 /// them (<c>FeatureFetcher.Local.cs</c>); cache groups the same way, with the keys the table does not have fresh resolved

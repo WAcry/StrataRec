@@ -346,7 +346,7 @@ public sealed partial class FeatureFetcher
             var count = Math.Min(chunkSize, read.MissCount - offset);
             // Each chunk is judged at the time its call was seen to answer, not when this loop reaches it: a later chunk
             // may answer after a record it carries expired, so the time an earlier chunk was judged at would serve it as
-            // fresh (pre-release assessment); and one that answered at once, waiting here behind a slow earlier chunk,
+            // fresh; and one that answered at once, waiting here behind a slow earlier chunk,
             // would be judged late and its fresh records sent to the connector.
             var answered = await calls[c].ConfigureAwait(false);
             var nowMs = answered.Outcome == IoOutcome.Ok ? answeredAt[c] : ChunkNotAnswered;
@@ -1253,7 +1253,7 @@ public sealed partial class FeatureFetcher
 
         /// <summary>
         /// A list no target of the row takes is walked without being decoded: a record holds every field of its source,
-        /// and a node that reads one number of it paid for each tag's string (audit of f47a255: 1.9 MB a read of 1,000
+        /// and a node that reads one number of it paid for each tag's string (1.9 MB a read of 1,000
         /// records with 24 tags each). A string is decoded when a target takes it, as <see cref="String"/> does.
         /// </summary>
         public void StringListStart(int field, int count)

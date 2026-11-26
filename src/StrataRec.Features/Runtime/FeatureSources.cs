@@ -257,7 +257,7 @@ internal sealed class FeatureSourceResolver
     /// readers of one output conflict when their element types differ or their lengths do; a scalar and a list of its
     /// type, or a list and a fixed-length list, can both be served. A conflict is a <c>SERVICE_OUTPUT_TYPE_CONFLICT</c>
     /// at the later feature's type, in name order, as a table's field of two types is (such a plan
-    /// loaded, and every call failed; then of f0f6871: the first check compared whole types and rejected a list read as a
+    /// loaded, and every call failed; the first check compared whole types and rejected a list read as a
     /// fixed-length list too).
     /// </summary>
     private bool OutputsServeTheirReaders(SourceSupply supply, FeatureRuntimeInfo[] members)

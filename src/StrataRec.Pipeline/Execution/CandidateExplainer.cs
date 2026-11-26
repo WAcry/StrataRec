@@ -118,8 +118,8 @@ internal sealed class CandidateExplainer
             var row = _rows[t];
             if (appends && (row < 0 || !rows.IsAlive(row)))
             {
-                // Appended, or brought back after it was dropped: the last row appended with the key (review of the
-                // invariants, 2026-11-22: a dropped target that an injector brought back was explained at its dropped row).
+                // Appended, or brought back after it was dropped: the last row appended with the key
+                // (a dropped target that an injector brought back was explained at its dropped row).
                 // A key of the other key type is never found.
                 row = table.FindRow(_keys[t]);
             }

@@ -26,7 +26,7 @@ namespace StrataRec.Features.Runtime;
 /// <para><b>Readiness.</b> Every context feature the prefetch supplies has a task that completes once the feature is stored
 /// (<see cref="_contextReady"/>, all set before <see cref="StartContextFetch"/> returns): its group's, or, for a derived
 /// feature a key reads or an operator awaits while it runs (a recall query), its computation's
-/// (<see cref="FeatureRuntimeInfo.ComputedEarly"/>). A reader waits for the features it reads (audit B6). Any other derived
+/// (<see cref="FeatureRuntimeInfo.ComputedEarly"/>). A reader waits for the features it reads. Any other derived
 /// context feature is computed once every group is stored, and its readers wait for the whole prefetch.</para>
 /// <para><b>Keys.</b> A chained group's key is read from the stored values, as a request input is: a missing one (absent,
 /// failed, not answered) is no key, so nothing is called and the features take their absent values. As for a foreign key
@@ -228,8 +228,8 @@ public sealed partial class FeatureFetcher
             }
 
             // Every group started reads its staging and writes its features when its source answers, and a chained one
-            // starts when its key is stored: the memory is held until all of them are done, however the start ended (review
-            // 72: a recording hook that threw while the next group was sent released it, and a group answered later read and
+            // starts when its key is stored: the memory is held until all of them are done, however the start ended
+            // (a recording hook that threw while the next group was sent released it, and a group answered later read and
             // wrote returned buffers). The first failure is rethrown.
             for (var n = 0; n < storedCount; n++)
             {

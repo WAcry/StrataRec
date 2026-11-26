@@ -1729,8 +1729,8 @@ public sealed class PlanBuilder
         }
 
         // The earliest order a row source may append at: that of a variant that is a row source, or for one that is a fallback,
-        // of a variant of a node falling back to it; null when nothing may run it (a fallback nothing falls back to). Review
-        // 92: every variant counted, one at int.MaxValue was taken for no order and so for the first, and so was a fallback
+        // of a variant of a node falling back to it; null when nothing may run it (a fallback nothing falls back to).
+        // When every variant counted, one at int.MaxValue was taken for no order and so for the first, and so was a fallback
         // nothing falls back to.
         int? Earliest(string id)
         {
@@ -1948,8 +1948,8 @@ public sealed class PlanBuilder
                         // An arm's declaration of anything else: a request column bound in a branch the optimizer may drop
                         // (whether it is declared is the tap's arms' to decide, not its writers'; a read of it has its own
                         // scope below, with them), a parameter or a feature only an arm adds. Every name the complete check
-                        // judges by the assigned arms decides here that the tap is checked where its arms are (audit of
-                        // f47a255: a parameter was left out, and a tap reading it without its arm threw when it captured).
+                        // judges by the assigned arms decides here that the tap is checked where its arms are
+                        // (a parameter was left out, and a tap reading it without its arm threw when it captured).
                         bindsArmDeclared = true;
                     }
                 }

@@ -50,8 +50,8 @@ public sealed class ReadinessCutoffTests
 
     /// <summary>
     /// The operator's list is read once per read, before any callback runs. Indexed later, between a
-    /// bound check and what it guarded, a slow list let a callback run after the bound passed (89), and let a faulted
-    /// prefetch be read after it, standing for the timeout or the cancellation (91).
+    /// bound check and what it guarded, a slow list let a callback run after the bound passed, and let a faulted
+    /// prefetch be read after it, standing for the timeout or the cancellation.
     /// </summary>
     [Fact]
     public async Task TheOperatorsList_IsReadOncePerRead_BeforeAnyCallback()

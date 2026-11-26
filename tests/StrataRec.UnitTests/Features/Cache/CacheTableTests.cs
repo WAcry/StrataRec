@@ -36,7 +36,7 @@ public class CacheTableTests
     }
 
     /// <summary>
-    /// Pre-release assessment: a write-back is charged what it holds while it waits, its keys' strings with its records.
+    /// A write-back is charged what it holds while it waits, its keys' strings with its records.
     /// A 10,000-char key with an 18-byte record held 20 KB against a queue that counted 18 B, in either tier. Each queue
     /// holds a small batch here, since an empty one takes even a batch over its limit.
     /// </summary>

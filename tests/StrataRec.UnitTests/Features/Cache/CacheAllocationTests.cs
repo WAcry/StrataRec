@@ -50,7 +50,7 @@ public class CacheAllocationTests(ITestOutputHelper output)
 
     /// <summary>
     /// A record holds every field of its source; a read fills the ones its node reads. A list of strings nobody reads is
-    /// walked, not decoded: decoding it cost an array and a string per tag for every record (audit of f47a255).
+    /// walked, not decoded: decoding it cost an array and a string per tag for every record.
     /// </summary>
     [Fact]
     public void AStringListNobodyReads_IsNotDecoded()

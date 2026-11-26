@@ -9,7 +9,7 @@ namespace StrataRec.UnitTests.Features;
 
 /// <summary>
 /// An entity declares only its key, an ordered tuple of 1 to 8 parts; whether it is per request or per candidate, and each
-/// part's type, follow from it (audit B2). Declared separately, they could disagree: <c>"key_type": "int64"</c> on
+/// part's type, follow from it. Declared separately, they could disagree: <c>"key_type": "int64"</c> on
 /// <c>col.entity_id</c> in a pipeline of string ids made every lookup of the entity's features miss, with no error.
 /// </summary>
 public sealed class EntityKeyTests

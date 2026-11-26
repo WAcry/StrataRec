@@ -73,8 +73,8 @@ public sealed class ServiceCallAllocationTests
     }
 
     /// <summary>
-    /// A cancellation while the call is checked is a cancelled task that throws it, as an async method's (reviews of the
-    /// step 5 fixes and of da5cfe6: the task was faulted, then cancelled with another exception).
+    /// A cancellation while the call is checked is a cancelled task that throws it, as an async method's
+    /// (the task was faulted, then cancelled with another exception).
     /// </summary>
     [Fact]
     public async Task ACancellationWhileTheCallIsChecked_IsACancelledTask_ThatThrowsIt()

@@ -113,7 +113,7 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
     /// <summary>
     /// What the batch holds while it waits, charged to the writer's queue: its records' bytes, its two arrays and its keys'
     /// strings. A long string key (a composite one, say) with a short record holds more in its key than in its record, and
-    /// the records' bytes alone let the queue hold several times its limit (pre-release assessment).
+    /// the records' bytes alone let the queue hold several times its limit.
     /// </summary>
     /// <remarks>
     /// A string is charged once where consecutive keys share it, the same object as the previous key's same part: a part

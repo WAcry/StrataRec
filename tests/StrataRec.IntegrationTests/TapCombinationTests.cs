@@ -12,7 +12,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// A tap's attach point and the context features it logs are judged per arm combination, against that combination's
-/// nodes, as a compile of the combination alone judges them (the union checks left after #4). Both used to be
+/// nodes, as a compile of the combination alone judges them. Both used to be
 /// judged against every variant at once: a baseline tap could depend on a node or a feature reader that only an arm adds,
 /// and the baseline then broke when that experiment ended (a tap after a missing node never fires; a feature nobody reads
 /// is fetched for the tap alone).

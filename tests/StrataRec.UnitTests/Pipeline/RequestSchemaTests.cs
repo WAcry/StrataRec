@@ -240,7 +240,7 @@ public sealed class RequestSchemaTests
     [InlineData("region", "string?", "string", null)] // the fallback is more lenient
     [InlineData("region", "int64", "string", "FALLBACK_INPUT_TYPE")] // another type
     [InlineData("region", "int64?", "string?", "FALLBACK_INPUT_TYPE")]
-    // Judged by what the fallback's binding converts (review: int32 → int64 was flagged, though the fallback served it).
+    // Judged by what the fallback's binding converts (int32 → int64 was flagged, though the fallback served it).
     [InlineData("n", "int64", "int32", null)] // every int32 is an int64
     [InlineData("n", "int64?", "int32", null)]
     [InlineData("n", "int32", "int64", "FALLBACK_INPUT_TYPE")] // beyond the int32 range fails

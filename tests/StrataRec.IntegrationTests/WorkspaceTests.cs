@@ -160,7 +160,7 @@ public sealed class WorkspaceTests
     }
 
     /// <summary>
-    /// The assessment's case: <c>pipelines/home_feed.json</c>, whose final_top_k is out of range, beside the sample's
+    /// <c>pipelines/home_feed.json</c>, whose final_top_k is out of range, beside the sample's
     /// <c>.jsonc</c>. Validate, build and a host read the one workspace index, and each refuses the pair; validate used to
     /// pass on the <c>.jsonc</c>, and report PARAM_OUT_OF_RANGE only once the <c>.jsonc</c> was removed.
     /// </summary>

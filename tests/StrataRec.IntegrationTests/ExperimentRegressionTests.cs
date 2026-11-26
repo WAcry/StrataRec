@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Regression tests for findings of the experiments/hosting review (c84900e).</summary>
+/// <summary>Defects of experiment compilation and hosting that were fixed, one test each.</summary>
 public sealed class ExperimentRegressionTests
 {
     private static ExperimentArtifact Experiment(string json) => ArtifactSerializer.Deserialize<ExperimentArtifact>(json);

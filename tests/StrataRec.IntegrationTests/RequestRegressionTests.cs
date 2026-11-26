@@ -7,7 +7,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>What the project audit of f47a255 found and was fixed, each as the request a host would send.</summary>
+/// <summary>Defects that were fixed, each as the request a host would send.</summary>
 public sealed class RequestRegressionTests
 {
     private sealed class SlowProvider : IAssignmentProvider

@@ -8,8 +8,8 @@ namespace StrataRec.UnitTests.Features.Cache;
 
 /// <summary>
 /// A distributed tier's time is judged by the cache's clock, which the host may move while its tracing runs as the read
-/// starts: the read is waited for by the time left after that, so a record that comes later than it is not taken (review
-/// of the step 4b fixes: the order of the two deadlines told before the call started chose the token, and no timer of the
+/// starts: the read is waited for by the time left after that, so a record that comes later than it is not taken
+/// (the order of the two deadlines told before the call started chose the token, and no timer of the
 /// tier's own was set).
 /// </summary>
 public sealed class DistributedTierClockTests
@@ -18,7 +18,7 @@ public sealed class DistributedTierClockTests
     public async Task AClockMovedByTheHostsTracing_LeavesTheTierLessTime_AndItsLateRecordIsNotTaken()
     {
         const int sourceMs = 4000;
-        var name = "review_clock_" + Guid.NewGuid().ToString("N");
+        var name = "tier_clock_" + Guid.NewGuid().ToString("N");
         var store = new LateStore();
         var connector = ScriptedConnector.Values((_, _) => 7.0);
         var rig = new FeatureTestRig().CacheSource(name, connector, distributed: store, distributedTimeoutMs: sourceMs, timeoutMs: sourceMs);

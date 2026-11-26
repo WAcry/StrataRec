@@ -321,8 +321,8 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// Two entities of one source are two calls, each answered by its own in a replay: a recorded call keeps the outputs it
-    /// asked for, so the call of the entity that reads other outputs does not take the other's failure (review of IO
-    /// step 5, where they did, and of its fixes, where one source computed one entity, which a reload changed anyway).
+    /// asked for, so the call of the entity that reads other outputs does not take the other's failure
+    /// (it did; and a first fix let one source compute one entity only, which a reload changed anyway).
     /// </summary>
     [Fact]
     public async Task TwoEntitiesOfOneSource_AreTwoCalls_EachReplayedByItsOwn()
@@ -349,8 +349,8 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// Two entities of one source whose calls are the same (arguments and outputs) are still each answered by its own in a
-    /// replay, made in whatever order: a source's call is recorded with its entity, as a node's with its node (review of
-    /// da5cfe6: the replay made them in another order, and the transient failure of one went to the other).
+    /// replay, made in whatever order: a source's call is recorded with its entity, as a node's with its node
+    /// (the replay made them in another order, and the transient failure of one went to the other).
     /// </summary>
     [Fact]
     public async Task TwoEntitiesOfOneSourceMakingTheSameCall_AreEachReplayedByItsOwn_WhateverTheOrder()
@@ -433,7 +433,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// An output the service left unwritten is missing, live and in a replay of the same configuration, which neither
-    /// reports it as a gap nor takes it from another call that has it (review of the step 5 fixes).
+    /// reports it as a gap nor takes it from another call that has it.
     /// </summary>
     [Fact]
     public async Task AnOutputTheServiceLeftUnwritten_IsMissing_AndReplaysSo()

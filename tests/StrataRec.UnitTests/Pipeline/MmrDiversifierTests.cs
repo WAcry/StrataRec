@@ -15,7 +15,7 @@ public sealed class MmrDiversifierTests
     [Fact]
     public void AnOppositeVector_IsANegativeSimilarity_NotZero()
     {
-        // The reviewer's example: after A, B (opposite A) scores 0.35 + 0.5 = 0.85, C (unrelated) 0.40.
+        // After A, B (opposite A) scores 0.35 + 0.5 = 0.85, C (unrelated) 0.40.
         double[] scores = [1.0, 0.7, 0.8];
         float[]?[] vectors = [[1, 0], [-1, 0], [0, 1]];
 

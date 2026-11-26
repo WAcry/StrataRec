@@ -30,7 +30,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     /// <summary>
     /// The most bytes waiting to be written: 16 MiB, a few seconds of misses at a high miss rate. A batch is charged what it
     /// holds, its records' bytes and its entries with their key texts: a long key text with a short record holds more in
-    /// its key (pre-release assessment).
+    /// its key.
     /// </summary>
     public const long DefaultQueueBytes = 16L << 20;
 

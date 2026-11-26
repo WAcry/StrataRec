@@ -61,7 +61,7 @@ public sealed class TapCandidateKeyTests
 
     /// <summary>
     /// A node that reads <c>col.creator.pop</c> runs before the tap: its fill wrote the feature and its key, which the tap
-    /// logs with no log consumers, captured, and written to a sink (rejected by the first fix of this review, which followed
+    /// logs with no log consumers, captured, and written to a sink (rejected by a first fix, which followed
     /// only context keys).
     /// </summary>
     [Theory]

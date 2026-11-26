@@ -726,7 +726,7 @@ public sealed class OperatorCompileContext
     /// a prompt template's references are written) and records the read, as <see cref="CompileExpression"/>,
     /// <see cref="TryReadColumn"/> and <see cref="TryParam"/> do for theirs: the fetch planner then fetches a feature before
     /// the node runs, and data-flow validation and experiment footprints see the read. One step, so a
-    /// name cannot be read without being recorded (architecture audit: resolving through <see cref="Scope"/> and recording
+    /// name cannot be read without being recorded (resolving through <see cref="Scope"/> and recording
     /// were two calls, and an operator that forgot the second compiled and ran without its feature fetched).
     /// </summary>
     /// <returns>

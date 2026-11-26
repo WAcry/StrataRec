@@ -272,7 +272,7 @@ public sealed class OperatorContext : IServiceCallScope
         // settled as it is read, the others are kept with their features (no copy of the list: none for an operator that
         // waits for nothing). The bound is checked before each call into the operator's code, its list's Count and indexer
         // as its callback (Count too): indexed in each round, a slow list let a callback run after the bound passed and a faulted
-        // prefetch stand for it (91); read up front without a check, the rest of the list was read after it (93).
+        // prefetch stand for it; read up front without a check, the rest of the list was read after it.
         List<(int Index, ImmutableArray<int> Features)>? waiting = null;
         ThrowIfBoundPassed();
         var count = reads.Count;

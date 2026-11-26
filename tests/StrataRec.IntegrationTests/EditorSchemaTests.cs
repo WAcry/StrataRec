@@ -231,7 +231,7 @@ public sealed class EditorSchemaTests
     [InlineData("""{}""", false)]
     [InlineData("""{ "key": "ctx.request.user_id", "args": { "q": "ctx.request.query" } }""", false)]
     [InlineData("""{ "args": {} }""", false)]
-    [InlineData("""{ "key": "ctx.request.user_id", "args": null }""", true)] // null is not declared (review of the step 5 fixes)
+    [InlineData("""{ "key": "ctx.request.user_id", "args": null }""", true)] // null is not declared
     [InlineData("""{ "key": null, "args": { "q": "ctx.request.query" } }""", true)]
     [InlineData("""{ "args": null }""", false)]
     [InlineData("""{ "key": null }""", false)]
