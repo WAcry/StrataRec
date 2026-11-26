@@ -47,6 +47,13 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>The attempt's staged request values, by position in <see cref="_requestOutputs"/>, missing where none was; made on the first write.</summary>
     private ScalarValue[]? _staged;
 
+    /// <summary>
+    /// The node's output slots that held a version when the attempt started (<see cref="Rewrites"/>), each with the buffer
+    /// this attempt writes instead, made when it is first asked for. Null for a node that runs for the first time in the
+    /// request, which is nearly every attempt.
+    /// </summary>
+    private Dictionary<int, ColumnBuffer?>? _rewrites;
+
     internal OperatorContext(RequestState state, string nodeId, Effects effects, AttemptBudget budget, ImmutableArray<RequestOutput> requestOutputs = default)
     {
         _state = state;
@@ -119,7 +126,45 @@ public sealed class OperatorContext : IServiceCallScope
     /// writes only the rows it appended; after a node has written its own version of the column, the buffer is that
     /// version, so the appended rows get their values in the column readers see (a score for injected rows, design 4.6).
     /// </summary>
-    public ColumnBuffer Output(in OutputColumn column) => _state.Table.GetOrCreateSlot(_state.OutputSlot(_effects, column));
+    /// <remarks>
+    /// Every attempt writes a version of its own. A node that runs again in a request (a fallback node shared by several
+    /// nodes) does not get the buffer of what it wrote before: that stays what readers see, this node included, until this
+    /// attempt commits, and stays for good when it fails. So a row the attempt does not write is missing, as in any new
+    /// version, and never keeps the earlier run's value.
+    /// </remarks>
+    public ColumnBuffer Output(in OutputColumn column)
+    {
+        var slot = _state.OutputSlot(_effects, column);
+        if (_rewrites is { } rewrites && rewrites.TryGetValue(slot, out var mine))
+        {
+            return mine ?? (rewrites[slot] = _state.Table.CreateDetached(slot));
+        }
+
+        return _state.Table.GetOrCreateSlot(slot);
+    }
+
+    /// <summary>
+    /// Says that the node's own slot <paramref name="slot"/> holds a version an earlier run of the node committed: the
+    /// attempt writes another buffer (<see cref="Output"/>), published by <see cref="PublishRewrites"/> when it commits.
+    /// </summary>
+    internal void Rewrites(int slot) => (_rewrites ??= new Dictionary<int, ColumnBuffer?>()).Add(slot, null);
+
+    /// <summary>Makes the buffers the attempt wrote instead of its earlier versions the slots' own: the attempt commits.</summary>
+    internal void PublishRewrites()
+    {
+        if (_rewrites is null)
+        {
+            return;
+        }
+
+        foreach (var (slot, buffer) in _rewrites)
+        {
+            if (buffer is not null)
+            {
+                _state.Table.ReplaceSlot(slot, buffer);
+            }
+        }
+    }
 
     public ScalarValue Param(in ParamRef parameter) => _state.Params[parameter.Id];
 

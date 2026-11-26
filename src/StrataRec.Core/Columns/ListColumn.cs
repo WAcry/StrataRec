@@ -43,7 +43,7 @@ public abstract class ListColumn : ColumnBuffer
     /// <param name="source">A list column of the same element storage; it may be this column, and the same row.</param>
     /// <param name="positions">Indexes into the source row's list; one may be taken more than once.</param>
     /// <exception cref="ArgumentException">The source stores another element type.</exception>
-    /// <exception cref="IndexOutOfRangeException">A position is outside the source row's list.</exception>
+    /// <exception cref="IndexOutOfRangeException">A position is outside the source row's list; the row is then left as it was.</exception>
     public abstract void SetTaken(int row, ListColumn source, int sourceRow, ReadOnlySpan<int> positions);
 
     protected override void GatherValues(ReadOnlySpan<int> rows, int newCapacity)
@@ -137,8 +137,16 @@ public sealed class ListColumn<T> : ListColumn
         }
 
         // Read before the extent is made: the span stays valid when the arena grows (SetUninitialized), also when the
-        // source is this column.
+        // source is this column. Checked before it is made too: a position outside the list leaves the row as it was.
         var values = from.Get(sourceRow);
+        foreach (var position in positions)
+        {
+            if ((uint)position >= (uint)values.Length)
+            {
+                throw new IndexOutOfRangeException($"Position {position} is outside the source row's list of {values.Length} elements.");
+            }
+        }
+
         var extent = SetUninitialized(row, positions.Length);
         for (var i = 0; i < positions.Length; i++)
         {

@@ -69,4 +69,24 @@ public class ListTakenTests
         Assert.Throws<ArgumentException>(() => floats.SetTaken(0, ids, 0, [0]));
         Assert.Throws<IndexOutOfRangeException>(() => ids.SetTaken(1, ids, 0, [2]));
     }
+
+    /// <summary>
+    /// A position outside the list leaves the row as it was: an operator that catches it and goes on serves what the row
+    /// held (review of 5307fe0, finding 11: the new length was published first, with whatever the arena held behind it).
+    /// </summary>
+    [Fact]
+    public void APositionOutsideTheList_LeavesTheRowAsItWas()
+    {
+        var memory = new RequestMemory();
+        var ids = new ListColumn<long>(ColumnType.Parse("list<int64>"), 2, memory);
+        ids.Set(0, [10, 20]);
+        ids.Set(1, [42]);
+
+        Assert.Throws<IndexOutOfRangeException>(() => ids.SetTaken(1, ids, 0, [1, 8]));
+        Assert.Throws<IndexOutOfRangeException>(() => ids.SetTaken(1, ids, 0, [-1]));
+
+        Assert.True(ids.IsValid(1));
+        Assert.Equal(new long[] { 42 }, ids.Get(1).ToArray());
+        Assert.Equal(new long[] { 10, 20 }, ids.Get(0).ToArray());
+    }
 }

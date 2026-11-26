@@ -1364,7 +1364,7 @@
                             ]
                           },
                           "timeout_ms": {
-                            "description": "The most a call may take, in milliseconds; a slower one fails, and its row gets no values. Without it, as long as the node has.",
+                            "description": "The deadline of each called run, in milliseconds from when it is called; without it, what the node has left. It is the called pipeline's deadline as a request's is: a pipeline that fails when it runs out of time fails the call, and its row gets no values; one that serves what it has by then (a node of its own with on_failure: skip) answers with that.",
                             "type": [
                               "integer",
                               "null"

@@ -576,16 +576,26 @@ public sealed class OperatorCompileContext
     public bool CallReadsKeys(PipelineCall call, string configKey, EntityKeyType type)
     {
         ArgumentNullException.ThrowIfNull(call);
+        if (call.ReadsKeys is { } declared && declared != type)
+        {
+            // One call's ids are of one type: the second reading would be the only one checked when the call is made.
+            Error(configKey, "PIPELINE_CALL_KEY_TYPE", $"The ids of pipeline '{call.PipelineId}' are read as {Key(declared)} and as {Key(type)}.",
+                "a pipeline's keys are of one type: read its ids as that type everywhere");
+            return false;
+        }
+
         call.ReadsKeys = type;
         if (call.Interface is { } callee && PipelineCall.ReadKeyMismatch(callee, type) is { } mismatch)
         {
             Error(configKey, "PIPELINE_CALL_KEY_TYPE", Sentence(mismatch),
-                $"read them into a list of {(callee.KeyType == EntityKeyType.Int64 ? "int64" : "string")}, the key type of '{callee.PipelineId}'");
+                $"read them into a list of {Key(callee.KeyType)}, the key type of '{callee.PipelineId}'");
             return false;
         }
 
         return true;
     }
+
+    private static string Key(EntityKeyType type) => type == EntityKeyType.Int64 ? "int64" : "string";
 
     /// <summary>
     /// The inputs each called pipeline requires that nothing passes, reported where the node names the pipeline: known

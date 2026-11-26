@@ -4,7 +4,7 @@
 // host asks for one pipeline, "shelves".
 //
 //   shelves (the rows)  →  content (a pipeline per shelf, all at once)  →  filled (drop the empty ones)
-//   →  heads (a custom operator, Components/DistinctHeads.cs: what a shelf shows first is not what a shelf above shows first)
+//   →  heads (a custom operator, Components/DistinctHeads.cs: a shelf starts with the items no shelf above shows first)
 {
   "$schema": "../schemas/pipeline.schema.json",
   "pipeline_id": "shelves",

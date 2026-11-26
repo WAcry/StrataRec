@@ -200,7 +200,7 @@
                   "enumDescriptions": [
                     "Multiplies a score by a per-category factor and writes it to a column.",
                     "score = base × Π multipliers + Σ addends, with named, independently patchable terms.",
-                    "Reorders each row's list so that its first items are not among the first items of a row above.",
+                    "Reorders each row's list so that the items no row above shows first come first.",
                     "Drops rows for which a boolean ColumnExpr predicate is false.",
                     "Evaluates a ColumnExpr for every live row and writes it to a column.",
                     "Per group of rows (by a column, or all rows): count, sum, mean, min, max, std or rank, written back to every row of the group.",
@@ -454,7 +454,7 @@
                   "then": {
                     "properties": {
                       "config": {
-                        "description": "Reorders each row's list so that its first items are not among the first items of a row above.",
+                        "description": "Reorders each row's list so that the items no row above shows first come first.",
                         "type": [
                           "object",
                           "null"
@@ -478,7 +478,7 @@
                             }
                           },
                           "head_param": {
-                            "description": "Parameter (int64) holding how many items a row shows first: none of them is among the first of a row above.",
+                            "description": "Parameter (int64) holding how many items a row shows first: the items no row above shows first come first, as many as the row has; when it has fewer, the others follow in their order.",
                             "type": [
                               "string",
                               "null"
@@ -1186,7 +1186,7 @@
                             ]
                           },
                           "timeout_ms": {
-                            "description": "The most a call may take, in milliseconds; a slower one fails, and its row gets no values. Without it, as long as the node has.",
+                            "description": "The deadline of each called run, in milliseconds from when it is called; without it, what the node has left. It is the called pipeline's deadline as a request's is: a pipeline that fails when it runs out of time fails the call, and its row gets no values; one that serves what it has by then (a node of its own with on_failure: skip) answers with that.",
                             "type": [
                               "integer",
                               "null"

@@ -823,6 +823,20 @@ internal sealed class PipelineExecutor
                 : long.MaxValue;
             var budget = new AttemptBudget(cancellationToken, deadline, state.Events, state.RequestId);
             var context = new OperatorContext(state, node.NodeId, node.Effects, budget, node.RequestOutputs);
+            if ((node.Effects & Operators.Effects.RowSource) == 0)
+            {
+                // A node that already ran in this request (a fallback node shared by several nodes) has a version in its
+                // slots: this attempt writes another, and the earlier one stays until it commits (OperatorContext.Output).
+                // A row source's slots are shared, and it writes only the rows it appends, which a rollback releases.
+                foreach (var output in node.Outputs)
+                {
+                    if (state.Table.TryGetSlot(output.Slot) is not null)
+                    {
+                        context.Rewrites(output.Slot);
+                    }
+                }
+            }
+
             var callsBefore = node.Calls.IsEmpty ? 0 : state.PipelineCallsOf(node.NodeId);
             string? failure;
             var timedOut = false;
@@ -908,9 +922,8 @@ internal sealed class PipelineExecutor
             var output = node.Outputs[o];
             var column = state.Plan.Schema.Columns[output.LogicalId];
 
-            // A node that never asked for its buffer wrote nothing: the new slot has every row missing.
-            var slot = state.OutputSlot(node.Effects, output);
-            var buffer = table.GetOrCreateSlot(slot);
+            // A node that never asked for its buffer wrote nothing: the new version has every row missing.
+            var buffer = context.Output(output);
             if (ColumnValues.IsFloat(buffer)
                 && ColumnValues.SanitizeNonFinite(buffer, live, column.HasDefault ? column.Default : ScalarValue.Missing) is > 0 and var replaced)
             {
@@ -921,7 +934,7 @@ internal sealed class PipelineExecutor
                 }
             }
 
-            if (!output.Type.Nullable && table.CountMissingLiveRows(slot) is > 0 and var missing)
+            if (!output.Type.Nullable && table.CountMissingLiveRows(buffer) is > 0 and var missing)
             {
                 return $"left non-nullable column '{output.Name}' without a value on {missing} of {live.Length} live rows";
             }
@@ -932,6 +945,7 @@ internal sealed class PipelineExecutor
             return failure;
         }
 
+        context.PublishRewrites();
         foreach (var output in node.Outputs)
         {
             // A row source that wrote into another node's version leaves that version current (OutputSlot).

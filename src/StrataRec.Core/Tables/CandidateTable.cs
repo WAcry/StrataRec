@@ -92,6 +92,9 @@ public readonly struct TableCheckpoint
 /// its checkpoint (a failed node's own outputs, or a shared row-source slot it started) and releases the rows the attempt
 /// appended in the slots that existed before, which keep everything else. A dropped slot reads as never written, through
 /// any read path (the current version or a pinned <c>col.x@node</c>), exactly as in a replay that skips the attempt.</para>
+/// <para>A slot that has a buffer is not written again by a later attempt of the node it belongs to (a fallback node
+/// that runs for several nodes): the attempt fills a buffer of its own (<see cref="CreateDetached"/>), which becomes the
+/// slot's when the attempt commits (<see cref="ReplaceSlot"/>), so a failed one leaves the slot untouched too.</para>
 /// <para>Rows at or past <see cref="PhysicalRowCount"/> carry nothing that is read: a row's state in every slot is reset
 /// when it is appended, and <see cref="Rollback"/> releases the rows a failed attempt appended, so the next append
 /// reuses them.</para>
@@ -177,11 +180,36 @@ public sealed class CandidateTable
             return existing;
         }
 
-        var created = ColumnBuffer.Create(Schema.SlotTypes[slot], Math.Max(1, StorageCapacity), Memory);
-        created.SetAllMissing();
+        var created = CreateDetached(slot);
         _slots[slot] = created;
         _created[_createdCount++] = slot;
         return created;
+    }
+
+    /// <summary>
+    /// A buffer for another version of a slot that has one, every row missing as in a new slot, and not the slot's until
+    /// <see cref="ReplaceSlot"/>: a node that runs again in a request (a fallback node shared by several nodes) writes
+    /// here, so what it wrote before stays what readers see, the node itself included, until the new version is published,
+    /// and stays for good when the attempt fails.
+    /// </summary>
+    public ColumnBuffer CreateDetached(int slot)
+    {
+        var created = ColumnBuffer.Create(Schema.SlotTypes[slot], Math.Max(1, StorageCapacity), Memory);
+        created.SetAllMissing();
+        return created;
+    }
+
+    /// <summary>Makes <paramref name="buffer"/> (<see cref="CreateDetached"/>) the slot's. The buffer it replaces stays rented until the request ends.</summary>
+    public void ReplaceSlot(int slot, ColumnBuffer buffer)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        if (_slots[slot] is null)
+        {
+            throw new InvalidOperationException("Only a slot that has a buffer is replaced; a new one is created (GetOrCreateSlot).");
+        }
+
+        _slots[slot] = buffer;
+        _filled[slot] = null;
     }
 
     /// <summary>Fill bitmap of a slot (allocated, all-clear, on first use).</summary>
@@ -240,13 +268,12 @@ public sealed class CandidateTable
     /// Number of live rows that have no value in the slot: all of them when the slot was never created. Checked a word of
     /// rows at a time, so a slot with a value on every live row costs no per-row work.
     /// </summary>
-    public int CountMissingLiveRows(int slot)
-    {
-        if (_slots[slot] is not { } buffer)
-        {
-            return Rows.Count;
-        }
+    public int CountMissingLiveRows(int slot) => _slots[slot] is { } buffer ? CountMissingLiveRows(buffer) : Rows.Count;
 
+    /// <summary><see cref="CountMissingLiveRows(int)"/> of a buffer made for this table that is not one of its slots yet.</summary>
+    public int CountMissingLiveRows(ColumnBuffer buffer)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
         var validity = buffer.Validity;
         if (validity is null)
         {

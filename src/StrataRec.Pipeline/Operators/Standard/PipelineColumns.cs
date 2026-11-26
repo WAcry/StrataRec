@@ -64,8 +64,10 @@ public sealed class PipelineColumnsConfig
     public required int MaxCalls { get; init; }
 
     /// <summary>
-    /// The most a call may take, in milliseconds; a slower one fails, and its row gets no values. Without it, as long as
-    /// the node has.
+    /// The deadline of each called run, in milliseconds from when it is called; without it, what the node has left. It is
+    /// the called pipeline's deadline as a request's is: a pipeline that fails when it runs out of time fails the call,
+    /// and its row gets no values; one that serves what it has by then (a node of its own with <c>on_failure: skip</c>)
+    /// answers with that.
     /// </summary>
     public int? TimeoutMs { get; init; }
 }
@@ -318,8 +320,9 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                 {
                     ok = false;
                 }
-                else if (!type.IsList && !type.Nullable)
+                else if ((!type.IsList || type.IsFixedLength) && !type.Nullable)
                 {
+                    // A list of any length is empty there; one of a fixed length has no empty value.
                     context.Error(key, "COLUMN_TYPE_MISMATCH", $"Column '{name}' is {type}; a row whose call fails, or that calls nothing, has no value in it.",
                         $"declare it as {{ \"type\": \"{type.AsNullable()}\" }}");
                     ok = false;
@@ -407,8 +410,21 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
             var uncalled = live[rows.Length..].ToArray();
             var liveCount = live.Length;
             var callees = new Callee?[rows.Length];
+            var given = Prepare(context, rows, callees);
             var calls = new Task<PipelineCallResult>?[rows.Length];
-            var made = Start(context, rows, callees, calls);
+            var made = new List<Task<PipelineCallResult>>(rows.Length);
+
+            // Started in rank order, once every row's inputs are there: a call's place among the node's calls is its
+            // row's, whatever order they finish in, so the called runs get the same seeds every time and a recording
+            // replays; and nothing that can fail lies between two calls, so none is left running by a failure here.
+            for (var i = 0; i < rows.Length; i++)
+            {
+                if (callees[i] is { } callee)
+                {
+                    calls[i] = context.CallPipelineAsync(callee.Call, given[i], timeout).AsTask();
+                    made.Add(calls[i]!);
+                }
+            }
 
             // Every call is awaited before any is read: one that throws (the caller cancelled) leaves none running unobserved.
             if (made.Count > 0)
@@ -467,10 +483,10 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
         }
 
         /// <summary>
-        /// Starts each row's call, in rank order: a call's place among the node's calls is its row's, whatever order they
-        /// finish in, so the called runs get the same seeds every time and a recording replays.
+        /// Which pipeline each row calls (none for a row of no kind the node has a pipeline for) and the inputs it passes,
+        /// before any call is made: an input that cannot be read fails the node with nothing started.
         /// </summary>
-        private List<Task<PipelineCallResult>> Start(OperatorContext context, int[] rows, Callee?[] callees, Task<PipelineCallResult>?[] calls)
+        private RequestInputs?[] Prepare(OperatorContext context, int[] rows, Callee?[] callees)
         {
             var eval = context.EvalContext;
             var capacity = Math.Max(1, context.Table.StorageCapacity);
@@ -483,7 +499,7 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
 
             // A row-level input is evaluated once for the rows called, whichever pipelines take it.
             Dictionary<CompiledExpression, ColumnBuffer>? perRow = null;
-            var made = new List<Task<PipelineCallResult>>(rows.Length);
+            var inputs = new RequestInputs?[rows.Length];
             for (var i = 0; i < rows.Length; i++)
             {
                 var callee = all;
@@ -523,11 +539,10 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                 }
 
                 callees[i] = callee;
-                calls[i] = context.CallPipelineAsync(callee.Call, given, timeout).AsTask();
-                made.Add(calls[i]!);
+                inputs[i] = given;
             }
 
-            return made;
+            return inputs;
         }
 
         /// <summary>

@@ -298,7 +298,9 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     /// The page of shelves: each row is a shelf, and its items are the list the shelf's pipeline returned, called by
     /// <c>PipelineColumns@1</c>. An item is on two shelves; only the sponsored shelf has track ids; a shelf no pipeline
     /// fills is dropped; and the page's own operator (<c>DistinctHeads@1</c>) moves what a shelf above shows first
-    /// behind the head, with every list that goes with the ids, unless the experiment's arm turns the rule off.
+    /// behind the items no shelf above shows first, with every list that goes with the ids, unless the experiment's arm
+    /// turns the rule off. Nothing is dropped, so a shelf with fewer such items than its head still starts with some a
+    /// shelf above shows.
     /// </summary>
     [Fact]
     public async Task ThePageOfShelves_HasAListPerShelf_AndItsOwnRuleAcrossThem()
@@ -332,10 +334,42 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(asRanked["trending"].Items, ruled["trending"].Items);
         Assert.NotEmpty(asRanked["editors"].Items.Take(3).Intersect(head));
         Assert.Empty(ruled["editors"].Items.Take(2).Intersect(head));
-        Assert.Equal(asRanked["editors"].Items.Order(), ruled["editors"].Items.Order()); // nothing dropped
+
+        // The editors' shelf has two items the trending shelf does not show first, fewer than a head: they come first, the
+        // others follow in their order, and so the third it shows is still one the trending shelf shows (nothing is dropped).
+        var fresh = asRanked["editors"].Items.Where(i => !head.Contains(i)).ToArray();
+        Assert.Equal(2, fresh.Length);
+        Assert.Equal(fresh.Concat(asRanked["editors"].Items.Where(head.Contains)), ruled["editors"].Items);
+        Assert.Contains(ruled["editors"].Items[2], head);
         var scoreOf = asRanked["editors"].Items.Zip(asRanked["editors"].Scores).ToDictionary(p => p.First, p => p.Second);
         Assert.Equal(ruled["editors"].Items.Select(i => scoreOf[i]), ruled["editors"].Scores);
         Assert.Equal(new[] { "exp_shelf_heads/as_ranked" }, Strings(plain["experiments"]!["assigned"]));
+    }
+
+    /// <summary>
+    /// A shelf kept without items (a placeholder: nullable ids, no filter) goes through the page's rule with what it has.
+    /// <c>DistinctHeads@1</c> writes a new version of every list, so the row's empty list of scores has to be carried into
+    /// it (review of 5307fe0, finding 7: the row was left out, and the node failed when it committed a non-nullable
+    /// column without a value).
+    /// </summary>
+    [Fact]
+    public async Task AShelfKeptWithoutItems_PassesThePagesRule_WithItsOtherLists()
+    {
+        var root = CopyOfTheWorkspace();
+        var shelves = Path.Combine(root, "pipelines", "shelves.jsonc");
+        Edit(shelves, "\"items\":       { \"type\": \"list<int64>\",   \"flow\": true }", "\"items\":       { \"type\": \"list<int64>?\",  \"flow\": true }");
+        Edit(shelves, "\"predicate\": \"size(col.items) > 0\"", "\"predicate\": \"col.entity_id != 'none'\"");
+        using var kept = _host.WithWebHostBuilder(builder => builder.UseSetting("StrataRec:ConfigRoot", root));
+
+        var (status, page) = await Post(kept.CreateClient(), "shelves", """{ "inputs": { "user_id": 1001, "region": "us" } }""");
+
+        Assert.True(status == HttpStatusCode.OK, page.ToJsonString());
+        var rows = page["items"]!.AsArray();
+        Assert.Equal(new[] { "trending", "editors", "sponsored", "archive" }, rows.Select(n => n!["id"]!.GetValue<string>()));
+        var archive = rows[3]!["columns"]!;
+        Assert.Null(archive["items"]);
+        Assert.Empty(archive["item_scores"]!.AsArray());
+        Assert.Equal(4, rows[1]!["columns"]!["items"]!.AsArray().Count); // the other shelves as before
     }
 
     private sealed record Shelf(string Id, long[] Items, double[] Scores, string[]? TrackIds);
@@ -607,7 +641,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         string error;
         foreach (var id in Pipelines)
         {
-            // The service serves the three: each is built and published on its own, the home page's calls with it.
+            // The service serves them all: each is built and published on its own, with the pipelines the pages call.
             var manifest = Path.Combine(store, id + ".manifest.json");
             (code, _, error) = await StratarecText("build", "-c", ConfigRoot, "-s", store, "-p", id, "-m", manifest);
             Assert.True(code == 0, error);

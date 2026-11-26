@@ -16,14 +16,16 @@ public sealed class DistinctHeadsConfig
         "without a value in one keeps none.")]
     public List<string>? With { get; init; }
 
-    [Description("Parameter (int64) holding how many items a row shows first: none of them is among the first of a row above.")]
+    [Description("Parameter (int64) holding how many items a row shows first: the items no row above shows first come first, " +
+        "as many as the row has; when it has fewer, the others follow in their order.")]
     public required string HeadParam { get; init; }
 }
 
 /// <summary>
 /// <c>DistinctHeads@1</c>: a rule across the rows of a page whose rows hold lists (<c>pipelines/shelves.jsonc</c>). What a
-/// row shows first, its first few items, is not what a row above shows first: an item a row above has in its head moves
-/// behind the head here. Nothing is dropped, and an item may still be on several rows.
+/// row shows first, its first few items, are the ones no row above shows first, as far as it has such: an item a row
+/// above has in its head moves behind the others here. Nothing is dropped, so a row with too few items of its own still
+/// starts with some a row above shows, and an item may be on several rows.
 /// </summary>
 /// <remarks>
 /// <para>How an operator works on lists:</para>
@@ -41,7 +43,7 @@ public sealed class DistinctHeadsConfig
 public sealed class DistinctHeadsFactory : IOperatorFactory
 {
     public OperatorDescriptor Descriptor { get; } = new("DistinctHeads", 1, Effects.ColumnWriter, typeof(DistinctHeadsConfig),
-        "Reorders each row's list so that its first items are not among the first items of a row above.");
+        "Reorders each row's list so that the items no row above shows first come first.");
 
     public Operator? Compile(OperatorCompileContext context)
     {
@@ -105,7 +107,17 @@ public sealed class DistinctHeadsFactory : IOperatorFactory
             {
                 if (!ids.IsValid(row))
                 {
-                    continue; // a row without a list keeps none
+                    // A row without ids has nothing to reorder. What it has in the other lists is carried into the node's
+                    // version as it is: the node writes a new version of each, and a row it left out would have no value.
+                    for (var c = 1; c < into.Length; c++)
+                    {
+                        if (from[c] is { } other && other.IsValid(row))
+                        {
+                            into[c].CopyFrom(other, row, row);
+                        }
+                    }
+
+                    continue;
                 }
 
                 // The head: the first items no row above shows first. Then the others, in their order.

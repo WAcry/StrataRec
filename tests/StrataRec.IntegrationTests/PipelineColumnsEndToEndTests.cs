@@ -1,5 +1,6 @@
 using StrataRec.Artifacts.Model;
 using StrataRec.Core.Values;
+using StrataRec.Experiments.Assignment;
 using StrataRec.Experiments.Compilation;
 using StrataRec.Hosting;
 using StrataRec.Hosting.Replay;
@@ -38,7 +39,8 @@ public sealed class PipelineColumnsEndToEndTests
           "entity_key_type": "int64",
           "request_schema": { "user_id": { "type": "int64?" }, "country": { "type": "string?" } },
           "columns": { "games": { "type": "list<int64>" }, "bids": { "type": "list<float64>?" }, "count": { "type": "int64?" },
-                       "tags": { "type": "list<string>?" }, "wrong": { "type": "float64", "default": 0.0 } },
+                       "tags": { "type": "list<string>?" }, "wrong": { "type": "float64", "default": 0.0 },
+                       "pair": { "type": "list<float64,2>", "default": [0.0, 0.0] } },
           "param_schema": { "recall_quotas": { "type": "map<string,int64>", "min": 0, "max": 1000 }, "top_k": { "type": "int64", "min": 1, "max": 100 } },
           "params": { "recall_quotas": { "popular": 3 }, "top_k": 50 },
           "nodes": {
@@ -78,9 +80,11 @@ public sealed class PipelineColumnsEndToEndTests
             more?.Invoke(root);
         });
 
-    private static RecEngine Engine(HomeFeedTestHost host, params string[] pipelines)
+    private static RecEngine Engine(HomeFeedTestHost host, params string[] pipelines) => Engine(host, null, pipelines);
+
+    private static RecEngine Engine(HomeFeedTestHost host, IAssignmentProvider? provider, params string[] pipelines)
     {
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root });
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root }, provider);
         foreach (var id in pipelines.Length == 0 ? ["promoted", "tagged", "page"] : pipelines)
         {
             var diagnostics = new DiagnosticBag();
@@ -239,6 +243,54 @@ public sealed class PipelineColumnsEndToEndTests
         }
     }
 
+    /// <summary>
+    /// Every row's inputs are read before any call is made: one that cannot be read fails the node with nothing started
+    /// (review of 5307fe0, finding 5: the calls of the rows before it were under way and left behind, and whether the
+    /// recording had them depended on how fast they ended).
+    /// </summary>
+    [Fact]
+    public async Task AnInputThatCannotBeRead_FailsTheNode_BeforeAnyCallIsMade()
+    {
+        // Row 5 calls with its key. Row 8's entry passes a parameter's key that has no value, which reading it refuses.
+        const string OneUnreadable = """
+            "pipeline": "promoted", "inputs": { "slots": "col.entity_id" }, "ids": "games", "max_calls": 10,
+            "pipelines": { "8": { "pipeline": "promoted", "inputs": { "slots": "param.slots_by.food" } } }
+            """;
+        var host = Host(OneUnreadable, more: root =>
+        {
+            ReplayTests.Edit(root, "pipelines/page.jsonc", "\"top_k\": { \"type\": \"int64\", \"min\": 1, \"max\": 100 } },",
+                "\"top_k\": { \"type\": \"int64\", \"min\": 1, \"max\": 100 }, \"slots_by\": { \"type\": \"map<string,int64>\" } },");
+            ReplayTests.Edit(root, "pipelines/page.jsonc", "\"top_k\": 50 },", "\"top_k\": 50, \"slots_by\": { \"food\": null } },");
+        });
+        var asked = 0;
+        var provider = new Provider(context =>
+        {
+            if (context.PipelineId == "promoted")
+            {
+                Interlocked.Increment(ref asked); // a called run asks for its assignment as it starts
+            }
+        });
+        var request = Request("page");
+
+        var page = await Engine(host, provider).ExecuteAsync(
+            new RecRequest { PipelineId = request.PipelineId, RequestId = request.RequestId, Inputs = request.Inputs, Deadline = request.Deadline, TimeMs = request.TimeMs, Debug = request.Debug },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(page.Succeeded);
+        Assert.Contains("node 'content' failed", page.Error);
+        Assert.Contains("slots_by", page.Error);
+        Assert.Equal(0, Volatile.Read(ref asked));
+    }
+
+    private sealed class Provider(Action<AssignmentContext> asked) : IAssignmentProvider
+    {
+        public ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken)
+        {
+            asked(context);
+            return ValueTask.FromResult<IReadOnlyList<string>>([]);
+        }
+    }
+
     /// <summary>The first <c>max_calls</c> rows are called; the others get no values, and the node says so.</summary>
     [Fact]
     public async Task TheRowsAfterTheMostCalls_AreNotCalled()
@@ -312,6 +364,8 @@ public sealed class PipelineColumnsEndToEndTests
     [InlineData("\"bids\": \"bid\"", "\"tags\": \"bid\"", "PIPELINE_CALL_OUTPUT", "/nodes/content/config/columns/tags")]
     [InlineData("\"bids\": \"bid\"", "\"bids\": \"bud\"", "PIPELINE_CALL_OUTPUT", "/nodes/content/config/columns/bids")]
     [InlineData("\"count\": \"count\"", "\"wrong\": \"count\"", "COLUMN_TYPE_MISMATCH", "/nodes/content/config/values/wrong")]
+    // A list of a fixed length has no empty value for a row without a result (review of 5307fe0, finding 4: such a row got a list of none).
+    [InlineData("\"count\": \"count\"", "\"pair\": \"count\"", "COLUMN_TYPE_MISMATCH", "/nodes/content/config/values/pair")]
     [InlineData("\"bids\": \"bid\"", "\"games\": \"bid\"", "COLUMN_WRITTEN_TWICE", "/nodes/content/config/columns/games")]
     [InlineData("\"count\": \"count\"", "\"bids\": \"count\"", "COLUMN_WRITTEN_TWICE", "/nodes/content/config/values/bids")]
     // What the node is told.

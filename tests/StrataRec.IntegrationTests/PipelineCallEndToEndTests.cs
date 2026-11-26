@@ -748,6 +748,52 @@ public sealed class PipelineCallEndToEndTests
         Assert.True(complete.Succeeded, string.Join("\n", complete.Diagnostics));
     }
 
+    /// <summary>
+    /// A call's ids are read as one key type. An operator that declares two is refused where it declares the second,
+    /// also when the called pipeline is not known at compile time (review of 5307fe0, finding 8: each declaration replaced
+    /// the one before, so only the last was checked when the call was made, and the other reading went unchecked).
+    /// </summary>
+    [Fact]
+    public void ACallWhoseIdsAreReadAsTwoKeyTypes_IsRefused_AlsoWithoutTheCalledPipeline()
+    {
+        var host = Host(callNode: """ "probe": { "order": 200, "op": "ReadsTwice@1", "config": { "pipeline": "promoted" } } """);
+        var feed = RequestOf(host, "feed");
+        var unchecked_ = new PlanCompileRequest
+        {
+            Pipeline = feed.Pipeline, Catalog = feed.Catalog, Bindings = feed.Bindings, Tables = feed.Tables, Policy = feed.Policy, Experiments = feed.Experiments,
+        };
+        var environment = new PlanEnvironment { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new ReadsTwiceFactory()) };
+
+        var compilation = PlanCompiler.Compile(unchecked_, environment);
+
+        var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
+        Assert.Equal(("PIPELINE_CALL_KEY_TYPE", "/nodes/probe/config/second"), (error.Code, error.Pointer));
+        Assert.Contains("as int64 and as string", error.Message);
+    }
+
+    /// <summary><c>ReadsTwice@1</c>: declares a call and that it reads the ids as int64, and as string.</summary>
+    private sealed class ReadsTwiceFactory : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("ReadsTwice", 1, Effects.None, typeof(ProbeConfig), "Reads a call's ids as two key types.");
+
+        public Operator? Compile(OperatorCompileContext context)
+        {
+            var config = context.BindConfig<ProbeConfig>();
+            if (config is null || !context.TryCallPipeline(config.Pipeline, "/pipeline", out var call))
+            {
+                return null;
+            }
+
+            var ok = context.CallReadsKeys(call, "/first", StrataRec.Core.Keys.EntityKeyType.Int64) & context.CallReadsKeys(call, "/second", StrataRec.Core.Keys.EntityKeyType.String);
+            return ok ? new Nothing() : null;
+        }
+
+        private sealed class Nothing : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context) => ValueTask.CompletedTask;
+        }
+    }
+
     // ---- Review of f59fe2a..525e990 ----
 
     /// <summary>
