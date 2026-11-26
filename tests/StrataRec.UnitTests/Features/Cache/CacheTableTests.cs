@@ -15,6 +15,81 @@ public class CacheTableTests
     private static readonly LocalTableSchema Schema = new(
         "item_store", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("clicks", ColumnType.Float64), new("name", ColumnType.String)]);
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void VersionsSharingDensePages_KeepThePinnedValuesAfterLaterWrites(bool stringKeys, bool variableWidth)
+    {
+        var clock = new ManualClock();
+        var schema = new LocalTableSchema("s", "e", stringKeys ? EntityKeyType.String : EntityKeyType.Int64, LocalTableMode.Cache,
+            [new("v", ColumnType.List(StorageKind.Float32))]);
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
+        {
+            MaxBytes = 256 << 10, PageSize = 4096, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock },
+        });
+        var cache = table.Cache!;
+        var writer = new CacheRecordWriter(cache.Layout, 512);
+        float[][] vectors = [new float[4], new float[16], new float[64], new float[192]];
+        var pinned = table.Pin();
+        var key = 0;
+        while (ReferenceEquals(table.Pin(), pinned) && key < 2_000)
+        {
+            Write(key, key);
+            key++;
+        }
+
+        var first = table.Pin();
+        Assert.NotSame(pinned, first);
+        var nextKey = key;
+        while (ReferenceEquals(first, table.Pin()) && nextKey < key * 2)
+        {
+            Write(nextKey, nextKey);
+            nextKey++;
+        }
+
+        // The hand crosses both copied and shared pages. With no hits, the original cold suffix stays in FIFO order.
+        var second = table.Pin();
+        Assert.NotSame(first, second);
+        var oldest = Enumerable.Range(0, key).First(k => second.Find(Key(k)).Found);
+        for (var k = 0; k < key; k++)
+        {
+            Assert.Equal(k >= oldest, second.Find(Key(k)).Found);
+        }
+
+        var shared = 0;
+        for (var k = 0; k < key - 1; k++)
+        {
+            var before = pinned.Find(Key(k));
+            var after = first.Find(Key(k));
+            if (after.Found && ReferenceEquals(before.Page, after.Page))
+            {
+                shared++;
+                Write(k, -k - 1);
+            }
+        }
+
+        Assert.True(shared > 0);
+        for (var k = 0; k < key - 1; k++)
+        {
+            Assert.Equal(k, pinned.Read(0, pinned.Find(Key(k))).AsFloat64List()[0]);
+        }
+
+        EntityKey Key(int k) => stringKeys ? EntityKey.FromString($"item-{k}") : EntityKey.FromInt64(k);
+        void Write(int k, int marker)
+        {
+            var value = variableWidth ? vectors[unchecked((uint)k * 2654435761u) >> 30] : vectors[2];
+            value[0] = marker;
+            writer.Begin(clock.NowMs, cache.Fingerprint, absent: false);
+            writer.List<float>(0, value);
+            var (offset, length) = writer.End();
+            Assert.True(cache.TryWriteBack(new CacheWriteBatch([Key(k)], [writer.Bytes.AsMemory(offset, length)], 1)));
+            cache.WriteQueued(table.Writer);
+            clock.AdvanceMs(1);
+        }
+    }
+
     [Fact]
     public void AWriteBackPastTheQueuesBytes_IsDropped_AndCounted_AndTheQueueTakesBatchesAgainOnceDrained()
     {
@@ -132,8 +207,10 @@ public class CacheTableTests
         Assert.Equal(2, table.Pin().RecordCount);
     }
 
-    [Fact]
-    public void Eviction_CountsASharedStringAsFreed_OnlyWhenItsLastRecordGoes()
+    [Theory]
+    [InlineData(100L)]
+    [InlineData(1L)] // eviction drops the old record of the very key being replaced
+    public void Eviction_CountsASharedStringAsFreed_OnlyWhenItsLastRecordGoes(long writtenKey)
     {
         // Ten records share one 25,000-char string. Each record's share of it was counted as freed, so the
         // eviction for a 10,000-char write-back dropped one record, the shared string stayed whole, and the write-back
@@ -158,18 +235,145 @@ public class CacheTableTests
         var cache = table.Cache!;
         var codec = new CacheRecordWriter(cache.Layout, 64);
         codec.Begin(clock.NowMs + 100, cache.Fingerprint, absent: false);
-        codec.String(0, new string('n', 10_000));
+        var replacement = new string('n', 10_000);
+        codec.String(0, replacement);
         var (offset, length) = codec.End();
-        Assert.True(cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(100)], [codec.Bytes.AsMemory(offset, length)], 1)));
+        Assert.True(cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(writtenKey)], [codec.Bytes.AsMemory(offset, length)], 1)));
         cache.WriteQueued(table.Writer);
 
         var version = table.Pin();
-        Assert.True(version.Find(100L).Found);
+        Assert.Equal(replacement, version.Read(0, version.Find(writtenKey)).AsString());
         Assert.True(version.Bytes <= 64 << 10);
     }
 
     [Fact]
-    public void AWriteThatDoesNotFit_DropsExpiredRecordsFirst_ThenTheOldestWritten_AndTheTableStaysWithinMaxBytes()
+    public void AddingAKeyAtTheIndexGrowthBoundary_PreservesMostSmallRecords()
+    {
+        const int Keys = 1024;
+        const int MaxBytes = 64 << 10;
+        var clock = new ManualClock();
+        var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("score", ColumnType.Float64)]);
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
+        {
+            MaxBytes = MaxBytes, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock },
+        });
+        for (long key = 0; key < Keys; key++)
+        {
+            var builder = table.Writer.Begin(key, clock.NowMs);
+            builder.SetFloat64(0, key);
+            Assert.True(builder.Commit());
+        }
+
+        var cache = table.Cache!;
+        var codec = new CacheRecordWriter(cache.Layout, 32);
+        codec.Begin(clock.NowMs, cache.Fingerprint, absent: false);
+        codec.Float64(0, Keys);
+        var (offset, length) = codec.End();
+        Assert.True(cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(Keys)], [codec.Bytes.AsMemory(offset, length)], 1)));
+        cache.WriteQueued(table.Writer);
+
+        var version = table.Pin();
+        Assert.True(version.Find((long)Keys).Found);
+        Assert.InRange(version.RecordCount, Keys * 2 / 3, Keys);
+        Assert.True(version.Bytes <= MaxBytes);
+    }
+
+    [Fact]
+    public void Eviction_PreservesMostOfAnEquallySizedBatchFetchedAtOneTime()
+    {
+        const long MaxBytes = 256 << 10;
+        var (table, cache, clock) = Table(maxBytes: MaxBytes);
+        using var oldest = new Counted(StrataRecMetrics.Names.CacheEvictions, "oldest");
+        long key = 0;
+        while (oldest.Total == 0 && key < 100)
+        {
+            Write(table, cache, clock.NowMs, key++);
+        }
+
+        var version = table.Pin();
+        Assert.InRange(oldest.Total, 1, key / 2); // freeing a quarter of the table does not cost its whole batch
+        Assert.Equal(key - oldest.Total, version.RecordCount);
+        Assert.True(version.Find(key - 1).Found);
+        Assert.True(version.Bytes <= MaxBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Eviction_KeepsAHitUntilItHelpsTheRecordSurvive(bool reclaimExpired)
+    {
+        var (table, cache, clock) = Table(maxBytes: 256 << 10, ttlMs: 1_000);
+        for (long k = 0; k < 20; k++)
+        {
+            Write(table, cache, clock.NowMs, k);
+        }
+
+        if (reclaimExpired)
+        {
+            clock.AdvanceMs(2_000);
+        }
+
+        // Older records make room first. Once eviction reaches this pair, the hit should protect 20 over 21.
+        Write(table, cache, clock.NowMs, 20);
+        table.Pin().Find(20L).MarkCacheHit();
+        long key = 21;
+        do
+        {
+            clock.AdvanceMs(1);
+            Write(table, cache, clock.NowMs, key++);
+        }
+        while (table.Pin().Find(21L).Found && key < 200);
+
+        Assert.False(table.Pin().Find(21L).Found);
+        Assert.True(table.Pin().Find(20L).Found);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Eviction_ResumesAtTheNextInsertionAfterCompaction(bool refreshNext)
+    {
+        var (table, cache, clock) = Table(maxBytes: 256 << 10);
+        var deletedAt = clock.NowMs;
+        Assert.True(table.Writer.Delete(-1L, deletedAt));
+        Write(table, cache, clock.NowMs, 0);
+        table.Pin().Find(0L).MarkCacheHit();
+        long key = 1;
+        while (table.Compactions == 0 && key < 100)
+        {
+            Write(table, cache, clock.NowMs, key++); // every insertion has the same fetch timestamp
+        }
+
+        var first = table.Pin();
+        Assert.True(first.Find(0L).Found);
+        var next = Enumerable.Range(1, (int)key - 1).First(k => first.Find((long)k).Found);
+        if (refreshNext)
+        {
+            clock.AdvanceMs(1);
+            Write(table, cache, clock.NowMs, next); // the replacement is now the newest insertion
+        }
+
+        table.Writer.Compact();
+        var before = table.Pin();
+        while (ReferenceEquals(before, table.Pin()) && key < 200)
+        {
+            Write(table, cache, clock.NowMs, key++);
+        }
+
+        var after = table.Pin();
+        Assert.NotSame(before, after);
+        Assert.True(after.Find(0L).Found); // the hand already gave this key its chance on the first sweep
+        Assert.Equal(refreshNext, after.Find((long)next).Found);
+        Assert.False(after.Find((long)next + 1).Found);
+        Assert.True(before.Find((long)next + 1).Found);
+        Write(table, cache, deletedAt, -1); // pressure must preserve the deletion watermark
+        Assert.False(table.Pin().Find(-1L).Found);
+    }
+
+    [Theory]
+    [InlineData(20)]
+    [InlineData(50)]
+    public void AWriteThatDoesNotFit_DropsExpiredRecordsFirst_ThenColdInsertions_AndStaysWithinMaxBytes(long zeroAt)
     {
         const long MaxBytes = 256 << 10;
         var (table, cache, clock) = Table(maxBytes: MaxBytes, ttlMs: 1_000, staleIfErrorMs: 1_000);
@@ -180,14 +384,15 @@ public class CacheTableTests
         var key = 0L;
         for (; key < 20; key++)
         {
-            Write(table, cache, clock.NowMs, key);
+            Write(table, cache, clock.NowMs, Id(key));
             clock.AdvanceMs(10);
         }
 
+        var bytesPerRecord = table.Pin().RecordBytes / key; // variable-length names are dictionary entries
         clock.AdvanceMs(3_000);
-        for (; table.Pin().RecordCount == key || expired.Total == 0; key++)
+        for (; key < 120 && (table.Pin().RecordCount == key || expired.Total == 0); key++)
         {
-            Write(table, cache, clock.NowMs, key);
+            Write(table, cache, clock.NowMs, Id(key));
             clock.AdvanceMs(10);
             Assert.True(table.Pin().Bytes <= MaxBytes);
         }
@@ -195,23 +400,93 @@ public class CacheTableTests
         var version = table.Pin();
         Assert.Equal(20, expired.Total);
         Assert.Equal(0, oldest.Total); // the expired ones made room
-        Assert.All(Enumerable.Range(0, 20), k => Assert.False(version.Find(k).Found));
-        Assert.True(version.Find(key - 1).Found);
+        Assert.Equal(bytesPerRecord * version.RecordCount, version.RecordBytes);
+        Assert.All(Enumerable.Range(0, 20), k => Assert.False(version.Find(Id(k)).Found));
+        Assert.True(version.Find(Id(key - 1)).Found);
 
-        // Now nothing has expired: a write that does not fit drops the oldest written down to three quarters.
+        // The hand has not moved yet: the oldest cold insertions now leave first.
         var first = key;
-        while (oldest.Total == 0)
+        while (oldest.Total == 0 && key < first + 120)
         {
-            Write(table, cache, clock.NowMs, key++);
+            Write(table, cache, clock.NowMs, Id(key++));
             clock.AdvanceMs(1);
             Assert.True(table.Pin().Bytes <= MaxBytes);
         }
 
         version = table.Pin();
+        Assert.True(oldest.Total > 0);
+        Assert.Equal(bytesPerRecord * version.RecordCount, version.RecordBytes);
         Assert.True(version.Bytes <= MaxBytes * 3 / 4 + (8 << 10), $"{version.Bytes} B");
-        Assert.False(version.Find(20L).Found); // the oldest
-        Assert.True(version.Find(key - 1).Found); // the newest
-        Assert.True(version.Find(first).Found || oldest.Total > first - 20);
+        for (long k = 20; k < key; k++)
+        {
+            Assert.Equal(k >= 20 + oldest.Total, version.Find(Id(k)).Found);
+        }
+
+        long Id(long k) => k == zeroAt ? 0 : k + 1;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReplacingACachedValue_MakesRoomFromItsOldValueAndSupersededDataFirst(bool superseded)
+    {
+        var (table, cache, clock) = Table(maxBytes: 256 << 10);
+        for (var key = 0; key < 38; key++)
+        {
+            Write(table, cache, clock.NowMs, key);
+        }
+
+        clock.AdvanceMs(1);
+        if (superseded)
+        {
+            for (var key = 0; key < 11; key++)
+            {
+                Set(key, key + new string('u', 2_000));
+            }
+        }
+
+        Set(100, new string('x', 20_000));
+        Assert.Equal(39, table.Pin().RecordCount);
+        clock.AdvanceMs(1);
+        using var evicted = new Counted(StrataRecMetrics.Names.CacheEvictions, "oldest");
+        var replacement = new string('y', 34_000);
+        Set(100, replacement);
+
+        var version = table.Pin();
+        Assert.Equal(replacement, version.Read(1, version.Find(100L)).AsString());
+        Assert.Equal(39, version.RecordCount); // all the other fresh keys still fit alongside the replacement
+        Assert.Equal(0, evicted.Total);
+
+        void Set(long key, string value)
+        {
+            Assert.True(cache.TryWriteBack(Batch(cache, clock.NowMs, value, key)));
+            cache.WriteQueued(table.Writer);
+        }
+    }
+
+    [Theory]
+    [InlineData(200_000)] // the string alone exceeds the budget
+    [InlineData(130_900)] // the string fits, but not with even an empty table's overhead
+    public void AWriteBackThatCannotFitInTheTable_KeepsItsExistingRecords(int length)
+    {
+        var (table, cache, clock) = Table(maxBytes: 256 << 10);
+        for (var key = 0; key < 58; key++)
+        {
+            Write(table, cache, clock.NowMs, key);
+            clock.AdvanceMs(1);
+        }
+
+        using var failed = new Counted(StrataRecMetrics.Names.CacheWrites, "failed");
+        using var oldest = new Counted(StrataRecMetrics.Names.CacheEvictions, "oldest");
+        var before = table.Pin();
+        Assert.True(cache.TryWriteBack(Batch(cache, clock.NowMs, new string('x', length), 1000)));
+        cache.WriteQueued(table.Writer);
+
+        Assert.Same(before, table.Pin());
+        Assert.Equal(58, table.Pin().RecordCount);
+        Assert.False(table.Pin().Find(1000L).Found);
+        Assert.Equal(1, failed.Total);
+        Assert.Equal(0, oldest.Total);
     }
 
     [Fact]
@@ -225,11 +500,14 @@ public class CacheTableTests
         var (offset, length) = writer.End();
         using var failed = new Counted(StrataRecMetrics.Names.CacheWrites, "failed");
 
-        cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(1), EntityKey.FromInt64(2)], [writer.Bytes.AsMemory(offset, length), new byte[] { 1, 2, 3 }], 2));
+        var truncated = Batch(cache, clock.NowMs, "title", 3).Records[0][..^1]; // valid first field, incomplete second field
+        cache.TryWriteBack(new CacheWriteBatch(
+            [EntityKey.FromInt64(1), EntityKey.FromInt64(2), EntityKey.FromInt64(3)],
+            [writer.Bytes.AsMemory(offset, length), new byte[] { 1, 2, 3 }, truncated], 3));
         cache.WriteQueued(table.Writer);
 
         Assert.Equal(0, table.Pin().RecordCount);
-        Assert.Equal(2, failed.Total);
+        Assert.Equal(3, failed.Total);
     }
 
     [Fact]

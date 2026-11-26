@@ -198,6 +198,7 @@ internal sealed class CachedServiceCall
             }
             else if (freshness == CacheFreshness.Fresh)
             {
+                found.MarkCacheHit();
                 _rows[r] = new Row(RowState.Fresh, found, null);
                 hits++;
             }

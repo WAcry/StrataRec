@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Numerics;
@@ -6,6 +7,7 @@ using System.Runtime.InteropServices;
 using StrataRec.Core.Columns;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
+using StrataRec.Features.Cache;
 
 namespace StrataRec.Features.Local;
 
@@ -17,14 +19,14 @@ namespace StrataRec.Features.Local;
 /// <remarks>
 /// <para>A record is built in private buffers (<see cref="RecordBuilder"/>) and only reaches the pages at
 /// <see cref="RecordBuilder.Commit"/>: the record bytes are written into free space at the end of a page, then the index
-/// slot is pointed at them with one release write. Records are never modified, so a reader sees the old record or the new
-/// one, both complete. String values are encoded at commit, after any compaction the commit itself triggered, so a code
+/// slot is pointed at them with one release write. Published values are immutable, so a reader sees the old record or
+/// the new one, both complete. String values are encoded at commit, after any compaction the commit itself triggered, so a code
 /// always belongs to the dictionary of the version the record lands in.</para>
 /// <para>Compaction runs here, synchronously: when superseded records and the dictionary strings only they referenced
 /// make up more than half of the record and string bytes (and at least
 /// <see cref="LocalFeatureTableOptions.CompactionMinBytes"/>), or when a write would pass <c>max_bytes</c> and superseded
 /// records could be freed. It copies the current record of every key, tombstones included, into a new version
-/// built aside (<see cref="BuildCompacted"/>), which is published whole only when it fits <c>max_bytes</c> (with the
+/// built aside (<see cref="BuildCompacted(long)"/>), which is published whole only when it fits <c>max_bytes</c> (with the
 /// pending write, when the write asked for it); otherwise it is dropped and the table stays as it was. Updates wait
 /// while it runs.</para>
 /// </remarks>
@@ -55,11 +57,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private readonly ulong[] _written;
     private readonly PendingBuffer _pending = new();
     private long[] _newStrings = new long[16]; // scratch set of the record's new strings, see NewStringBytes
-    // A string field NewStringBytes looked up during the current Commit (which clears it when it ends, however it ends):
-    // its code in _lookedUpIn, or -1 if new.
+    // Each budget trial replaces this lookup. The last successful trial used the dictionary we now encode into.
     private int _lookedUpField = -1;
     private int _lookedUpCode;
-    private TableVersion? _lookedUpIn;
     private readonly int[] _pendingStart;
     private readonly int[] _pendingCount;
     private int _openList = -1;
@@ -82,7 +82,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     /// <summary>The table written to (a cache's writer finds its queue there).</summary>
     internal LocalFeatureTable Table => _table;
 
-    /// <summary>Sees every version <see cref="BuildCompacted"/> builds, installed or discarded: lets a test check that a
+    /// <summary>Sees every version <see cref="BuildCompacted(long)"/> builds, installed or discarded: lets a test check that a
     /// discarded copy is not kept alive. Null outside tests.</summary>
     internal Action<TableVersion>? CompactedCopyBuilt { get; set; }
 
@@ -181,8 +181,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     /// <summary>
     /// Compacts now: copies the current record of every key (and every tombstone) into a new version and publishes it.
-    /// A <c>cache</c> table can drop the records written before <paramref name="dropWrittenBefore"/> on the way (expired
-    /// beyond any use; phase 2 decides the cutoff).
+    /// A <c>cache</c> table can drop the records written before <paramref name="dropWrittenBefore"/> on the way.
     /// </summary>
     /// <exception cref="LocalTableFullException">The compacted copy would not fit <c>max_bytes</c> (laying records out
     /// anew can leave more of the pages' tails empty); it is discarded and the table is unchanged.</exception>
@@ -201,56 +200,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
 
         Install(next);
-    }
-
-    /// <summary>
-    /// The write time to pass to <see cref="Compact"/> so that it drops the oldest-written records of a <c>cache</c> table
-    /// and frees at least <paramref name="bytes"/> (records written at the same time go together); <see cref="long.MaxValue"/>
-    /// when even all of them hold less. A record frees its own bytes and the dictionary strings no record left references
-    /// (<see cref="TableVersion.Drop"/>): a string costs its record only a code, so counting record bytes alone would drop
-    /// many times what is needed from a table of long strings, and a string still shared with a record that stays is not
-    /// freed at all.
-    /// </summary>
-    internal long WriteTimeCutoff(long bytes)
-    {
-        var version = _version;
-        var index = version.Index;
-        var entries = index.Entries;
-        var writtenAt = new long[index.Count];
-        var positions = new long[index.Count];
-        var count = 0;
-        for (var s = 0; s < index.SlotCount; s++)
-        {
-            var position = entries[(2 * s) + 1];
-            if (position == 0)
-            {
-                continue;
-            }
-
-            var page = version.PageOf(position);
-            var offset = (int)position;
-            if ((page[offset + RecordLayout.FlagsOffset] & RecordLayout.TombstoneFlag) != 0)
-            {
-                continue;
-            }
-
-            writtenAt[count] = BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(offset + RecordLayout.VersionOffset));
-            positions[count++] = position;
-        }
-
-        Array.Sort(writtenAt, positions, 0, count);
-        var dropped = new int[version.StringCount]; // per code, the references of the records dropped so far
-        long freed = 0;
-        for (var i = 0; i < count; i++)
-        {
-            freed += version.Drop(version.PageOf(positions[i]), (int)positions[i], dropped);
-            if (freed >= bytes)
-            {
-                return writtenAt[i] == long.MaxValue ? long.MaxValue : writtenAt[i] + 1;
-            }
-        }
-
-        return long.MaxValue;
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -343,7 +292,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         MarkWritten(field, valid: false);
     }
 
-    internal bool Commit(int token)
+    internal bool Commit(int token, LocalTableCache? cache = null)
     {
         CheckOpen(token);
         _open = false;
@@ -351,23 +300,19 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _openList = -1;
         try
         {
-            return !_ignored && CommitRecord();
+            return !_ignored && CommitRecord(cache);
         }
         finally
         {
-            // The string lookup NewStringBytes keeps for Encode lives for this commit only, however it ends: on a write
-            // that fails for max_bytes it points into the compacted copy built and discarded for it, a whole second table.
-            _lookedUpField = -1;
-            _lookedUpIn = null;
             ForgetProbe();
         }
     }
 
-    private bool CommitRecord()
+    private bool CommitRecord(LocalTableCache? cache)
     {
         var newKey = _oldPosition == 0;
         var size = RecordSize(OldRecord(out var oldOffset), oldOffset);
-        EnsureBudget(size, newKey, strings: true);
+        newKey = EnsureBudget(size, newKey, strings: true, cache);
         ReprobeIfMoved(newKey);
         var oldPage = OldRecord(out oldOffset);
 
@@ -391,7 +336,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             {
                 // NewStringBytes may have looked this value up already, in this very version (nothing was added since).
                 var chars = MemoryMarshal.Cast<byte, char>(_pending.Read(_pendingStart[f], 2 * _pendingCount[f]));
-                var code = f == _lookedUpField && ReferenceEquals(_lookedUpIn, _version)
+                var code = f == _lookedUpField
                     ? (_lookedUpCode >= 0 ? _lookedUpCode : _version.AddString(new string(chars)))
                     : Encode(chars);
                 Unsafe.WriteUnaligned(ref _fixed[_layout.Offsets[f]], code);
@@ -543,7 +488,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     /// <summary>
     /// Re-finds the key's slot when a compaction (new version) or an index growth happened since the probe, and grows the
-    /// index first when the key is new. The key's current record survives a compaction, so it is found again.
+    /// index first when the key is new. A cache eviction may have removed the key being replaced.
     /// </summary>
     private void ReprobeIfMoved(bool newKey)
     {
@@ -612,40 +557,84 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     /// <summary>
     /// Enforces <c>max_bytes</c>: the table's size after this write (a new page, index growth, new strings) must fit.
-    /// When it would not and superseded records could be freed, a compacted copy is built aside and the write charged
-    /// against it; the copy is installed only if the write then fits. Otherwise the write fails and the table is
-    /// unchanged: same version, same generation. The charge is exactly what the write then adds, so the limit holds to the
-    /// byte.
+    /// If needed, compaction reclaims superseded records, then a cache write can also evict live keys. Each candidate
+    /// is built aside and installed only if it leaves room for the pending write.
     /// </summary>
-    private void EnsureBudget(int recordBytes, bool newKey, bool strings)
+    /// <returns>Whether the key needs a new index slot in the version that receives the write.</returns>
+    private bool EnsureBudget(int recordBytes, bool newKey, bool strings, LocalTableCache? cache = null)
     {
-        var required = Required(_version, recordBytes, newKey, strings);
+        var required = Required(_version, recordBytes, newKey, strings, out var newStringObjects);
         if (required <= _options.MaxBytes)
         {
-            return;
+            return newKey;
         }
 
-        if (_version.SupersededBytes > 0)
+        // An empty table needs at least the record and its distinct strings. Page and dictionary growth would
+        // overstate that lower bound: a cache eviction can recover a whole page or shrink a nearly full dictionary.
+        if (cache is not null && recordBytes + newStringObjects > _options.MaxBytes)
         {
-            // Charged against the compacted copy: its dictionary keeps only strings still in use, so a string this record
-            // shares with a superseded record only is new again; and its pages are laid out anew.
-            var compacted = BuildCompacted(long.MinValue);
-            var afterCompaction = Required(compacted, recordBytes, newKey, strings);
-            if (afterCompaction <= _options.MaxBytes)
+            throw new LocalTableFullException(Schema, _options.MaxBytes, required);
+        }
+
+        var packedBytes = _version.Bytes;
+        if (_version.SupersededBytes > 0 && TryCompactForWrite(recordBytes, newKey, strings, ref required, ref packedBytes))
+        {
+            return newKey;
+        }
+
+        if (cache is not null)
+        {
+            // Plan the eviction while the fully decoded write is still staged. A copy that cannot admit it leaves
+            // the old cache and its metrics intact, including the record being replaced.
+            var target = _options.MaxBytes / 4 * 3;
+            // Victims release records and unshared strings. Charging a whole index doubling or the next append page
+            // against those bytes can evict every small record, even though rebuilding avoids that growth.
+            var livePayload = _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
+            var headroom = Math.Min(packedBytes - target, livePayload / 4);
+            var avoidableGrowth = _version.IndexGrowthBytes(newKey) + Math.Max(0, _version.PageGrowthBytes(recordBytes) - recordBytes);
+            var toFree = Math.Max(1, Math.Max(headroom, required - avoidableGrowth - _options.MaxBytes));
+            var deadBefore = cache.NowMs() - cache.MaxLifetimeMs - cache.Options.StaleIfErrorMs;
+            var compacted = BuildCompacted(deadBefore, toFree, _oldPosition, out var expired, out var oldest);
+            newKey = newKey || compacted.ProbeForWrite(_indexKey, _key.AsSpan(0, _keyLength), out _) == 0;
+            var afterEviction = Required(compacted, recordBytes, newKey, strings, out _);
+            if (afterEviction <= _options.MaxBytes)
             {
                 Install(compacted);
-                return;
+                cache.CountEvictions(expired, oldest);
+                return newKey;
             }
 
-            required = Math.Min(required, afterCompaction);
+            required = Math.Min(required, afterEviction);
         }
 
         throw new LocalTableFullException(Schema, _options.MaxBytes, required);
     }
 
+    // A rejected copy can be as large as the original. End its stack lifetime before building an eviction candidate.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool TryCompactForWrite(int recordBytes, bool newKey, bool strings, ref long required, ref long packedBytes)
+    {
+        var compacted = BuildCompacted(long.MinValue);
+        // Its pages are packed and its dictionary now contains only strings still in use.
+        var afterCompaction = Required(compacted, recordBytes, newKey, strings, out _);
+        if (afterCompaction <= _options.MaxBytes)
+        {
+            Install(compacted);
+            return true;
+        }
+
+        required = Math.Min(required, afterCompaction);
+        packedBytes = Math.Min(packedBytes, compacted.Bytes); // superseded data need not be freed a second time by evicting live keys
+        return false;
+    }
+
     /// <summary>The size <paramref name="version"/> would have after this write.</summary>
-    private long Required(TableVersion version, int recordBytes, bool newKey, bool strings) =>
-        version.Bytes + version.PageGrowthBytes(recordBytes) + version.IndexGrowthBytes(newKey) + (strings ? NewStringBytes(version) : 0);
+    private long Required(TableVersion version, int recordBytes, bool newKey, bool strings, out long newStringObjects)
+    {
+        newStringObjects = 0;
+        var dictionary = strings ? NewStringBytes(version, out newStringObjects) : 0;
+        return version.Bytes + version.PageGrowthBytes(recordBytes) + version.IndexGrowthBytes(newKey) + dictionary;
+    }
 
     /// <summary>
     /// What the record's strings add to the dictionary of the version being written: each distinct value of its written
@@ -654,8 +643,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     /// does at commit (fields kept from the old record already have codes). Allocates only when a record brings more
     /// strings than any record before it.
     /// </summary>
-    private long NewStringBytes(TableVersion version)
+    private long NewStringBytes(TableVersion version, out long objectBytes)
     {
+        objectBytes = 0;
         _lookedUpField = -1;
         var fields = _layout.DictionaryFields;
         var candidates = 0L;
@@ -680,8 +670,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             var chars = MemoryMarshal.Cast<byte, char>(_pending.Read(_pendingStart[single], 2 * _pendingCount[single]));
             _lookedUpCode = version.FindString(chars);
             _lookedUpField = single;
-            _lookedUpIn = version;
-            return _lookedUpCode >= 0 ? 0 : version.StringAdditionBytes(1, TableVersion.StringObjectBytes(chars.Length));
+            if (_lookedUpCode >= 0)
+            {
+                return 0;
+            }
+
+            objectBytes = TableVersion.StringObjectBytes(chars.Length);
+            return version.StringAdditionBytes(1, objectBytes);
         }
 
         // An open-addressing set of the new strings found so far, as (pending offset + 1) << 32 | length; at most half full.
@@ -694,7 +689,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         var set = _newStrings.AsSpan(0, size);
         set.Clear();
         var count = 0;
-        var objectBytes = 0L;
         foreach (var f in fields)
         {
             if (!Bits.Get(_written, f) || !FixedValid(f))
@@ -778,76 +772,350 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// The one compaction routine: builds, aside, a version holding the current record (or
-    /// tombstone) of every key, and returns it unpublished. Nothing else changes, so a caller that finds the result too
-    /// large just drops it; <see cref="Install"/> makes it current.
+    /// Builds an unpublished version holding the surviving records and tombstones. A caller that finds the result
+    /// too large just drops it; <see cref="Install"/> makes it current.
     /// </summary>
     /// <remarks>
-    /// Records are self-contained byte ranges, so each is copied as is; only string codes are re-encoded into the new
-    /// version's dictionary, which therefore keeps only strings still in use. Tombstones are kept: dropping one would let
-    /// an older update of the deleted key, delivered late, bring it back. Records are copied in their old page order and
-    /// packed: each new page is just large enough for the records still to come (up to the largest page size). Copying in
-    /// index-slot order instead would mix record sizes and can leave more of each page's tail empty, which can make the
-    /// copy larger than the original.
+    /// Physical order is insertion order, including across sealed pages shared by both versions. Packing the other
+    /// records in this order preserves the eviction hand and avoids mixing sizes in index-slot order. String codes
+    /// are remapped into a dictionary containing only live strings. Tombstones prevent a late update from reviving
+    /// a deleted key.
     /// </remarks>
-    private TableVersion BuildCompacted(long dropWrittenBefore)
+    private TableVersion BuildCompacted(long dropWrittenBefore) =>
+        BuildCompacted(dropWrittenBefore, 0, 0, out _, out _);
+
+    private TableVersion BuildCompacted(long dropWrittenBefore, long bytesToFree, long replacedPosition, out int expired, out int oldest)
     {
         var old = _version;
-        var oldIndex = old.Index;
-        var entries = oldIndex.Entries;
-        var positions = new long[oldIndex.Count];
-        var slots = new int[oldIndex.Count];
-        var live = 0;
-        for (var s = 0; s < oldIndex.SlotCount; s++)
+        var index = old.Index;
+        var count = index.Count;
+        var sortKeys = ArrayPool<long>.Shared.Rent(count);
+        var slots = ArrayPool<int>.Shared.Rent(count);
+        var stringMap = ArrayPool<int>.Shared.Rent(old.StringCount);
+        try
         {
-            var position = entries[(2 * s) + 1];
-            if (position != 0)
+            var order = sortKeys.AsSpan(0, count);
+            var kept = slots.AsSpan(0, count);
+            var remaining = old.RecordBytes - old.SupersededBytes;
+            expired = oldest = 0;
+            int live = 0;
+            for (var s = 0; s < index.SlotCount; s++)
             {
-                positions[live] = position;
-                slots[live] = s;
-                live++;
+                if (index.Entries[(2 * s) + 1] != 0)
+                {
+                    kept[live++] = s;
+                }
+            }
+
+            OrderByPosition(kept, order);
+            var hand = old.CacheHand;
+            if (dropWrittenBefore != long.MinValue || bytesToFree > 0)
+            {
+                live = SelectSurvivors(kept, stringMap, dropWrittenBefore, bytesToFree, replacedPosition, ref remaining, ref hand, out expired, out oldest);
+            }
+
+            var next = NewVersion(live);
+            var share = bytesToFree > 0 && old.StringCount == 0;
+            if (share)
+            {
+                PlanPageRuns(kept[..live], order[..live]);
+            }
+
+            stringMap.AsSpan(0, old.StringCount).Fill(-1);
+            next.AddRecordBytes(remaining);
+            int sharedEnd = 0, tombstones = 0;
+            long sharedPage = 0;
+            for (var i = 0; i < live; i++)
+            {
+                var entry = 2 * kept[i];
+                var position = index.Entries[entry + 1];
+                var page = old.PageOf(position);
+                var offset = (int)position;
+                if (share && order[i] != 0)
+                {
+                    var run = order[i];
+                    if (run < 0)
+                    {
+                        sharedPage = next.AttachSealedPage(page);
+                        sharedEnd = i - (int)run;
+                    }
+                    else
+                    {
+                        remaining = run;
+                    }
+                }
+
+                var tombstone = (page[offset + RecordLayout.FlagsOffset] & RecordLayout.TombstoneFlag) != 0;
+                long relocated;
+                if (i < sharedEnd)
+                {
+                    relocated = sharedPage | (uint)offset;
+                }
+                else
+                {
+                    var length = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
+                    relocated = next.Reserve(length, out var copy, packFor: remaining);
+                    remaining -= length;
+                    var copyOffset = (int)relocated;
+                    page.AsSpan(offset, length).CopyTo(copy.AsSpan(copyOffset));
+                    if (!tombstone)
+                    {
+                        RemapStrings(copy, copyOffset, next, old.Strings, stringMap);
+                        next.Reference(copy, copyOffset, +1);
+                    }
+                }
+
+                if (hand != 0 && position >= hand)
+                {
+                    next.CacheHand = relocated;
+                    hand = 0;
+                }
+
+                next.Index.InsertUnpublished(index.Entries[entry], relocated);
+                tombstones += tombstone ? 1 : 0;
+            }
+
+            next.AddRecords(live - tombstones, tombstones);
+            CompactedCopyBuilt?.Invoke(next);
+            return next;
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(stringMap);
+            ArrayPool<int>.Shared.Return(slots);
+            ArrayPool<long>.Shared.Return(sortKeys);
+        }
+    }
+
+    // Keep FIFO order whether records are copied or their dense page is shared. The pooled sort workspace stores a
+    // positive byte count at the start of each sparse run, or the negative record count of one sealed page.
+    private void PlanPageRuns(ReadOnlySpan<int> slots, Span<long> runs)
+    {
+        var entries = _version.Index.Entries;
+        runs.Clear();
+        var sparse = 0;
+        for (var first = 0; first < slots.Length;)
+        {
+            var position = entries[(2 * slots[first]) + 1];
+            var page = _version.PageOf(position);
+            var number = position >> 32;
+            var end = first;
+            long liveBytes = 0;
+            for (; end < slots.Length; end++)
+            {
+                position = entries[(2 * slots[end]) + 1];
+                if (position >> 32 != number)
+                {
+                    break;
+                }
+
+                liveBytes += BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan((int)position + RecordLayout.LengthOffset));
+            }
+
+            if (liveBytes * 16 < (long)page.Length * 15)
+            {
+                runs[sparse] += liveBytes;
+            }
+            else
+            {
+                runs[first] = first - end;
+                sparse = end;
+            }
+
+            first = end;
+        }
+    }
+
+    private void OrderByPosition(Span<int> slots, Span<long> scratch)
+    {
+        var entries = _version.Index.Entries;
+        if (slots.Length >= 128 && slots.Length <= int.MaxValue / 2
+            && TryOrderDensePages(slots, MemoryMarshal.Cast<long, int>(scratch)))
+        {
+            return;
+        }
+
+        var positions = scratch[..slots.Length];
+        for (var i = 0; i < slots.Length; i++)
+        {
+            positions[i] = entries[(2 * slots[i]) + 1];
+        }
+
+        positions.Sort(slots);
+    }
+
+    // Records of similar width often occupy consecutive cells of their pages. If each occupied cell holds just
+    // one record start, scanning the cells yields exact page order in linear time. Sparse pages or a collision
+    // fall back to sorting the original slots. Both paths reuse the same scratch space.
+    private bool TryOrderDensePages(Span<int> slots, Span<int> scratch)
+    {
+        var version = _version;
+        if (version.PageCount >= scratch.Length)
+        {
+            return false;
+        }
+
+        var entries = version.Index.Entries;
+        var first = entries[(2 * slots[0]) + 1];
+        var width = BinaryPrimitives.ReadInt32LittleEndian(version.PageOf(first).AsSpan((int)first + RecordLayout.LengthOffset));
+        var starts = scratch[..version.PageCount];
+        var cells = scratch[version.PageCount..];
+        var total = 0;
+        for (var p = 0; p < starts.Length; p++)
+        {
+            starts[p] = total;
+            var count = 1 + ((version.Pages[p].Length - 1) / width);
+            if (count > cells.Length - total)
+            {
+                return false;
+            }
+
+            total += count;
+        }
+
+        cells = cells[..total];
+        cells.Clear();
+        foreach (var slot in slots)
+        {
+            var position = entries[(2 * slot) + 1];
+            ref var cell = ref cells[starts[(int)(position >> 32) - 1] + ((int)position / width)];
+            if (cell != 0)
+            {
+                return false;
+            }
+
+            cell = slot + 1;
+        }
+
+        var i = 0;
+        foreach (var cell in cells)
+        {
+            if (cell != 0)
+            {
+                slots[i++] = cell - 1;
             }
         }
 
-        Array.Sort(positions, slots, 0, live); // a position is (page + 1) << 32 | offset: page order
-        var next = NewVersion(live);
-        var codeMap = new int[old.StringCount];
-        Array.Fill(codeMap, -1);
-        var strings = old.Strings;
-        var remaining = old.RecordBytes - old.SupersededBytes;
-        for (var i = 0; i < live; i++)
+        return true;
+    }
+
+    /// <summary>
+    /// Leaves the survivors' slots at the start of the span. Drops expired values, then evicts from the SIEVE hand
+    /// in insertion order until the payload charge reaches the byte target.
+    /// A full cache write replaces every field of its previous record, whose bytes can therefore make room before any
+    /// other key is evicted. A timestamp can cover a whole batch, so victims are selected individually. A shared string
+    /// frees space only when the last record referencing it goes.
+    /// </summary>
+    private int SelectSurvivors(
+        Span<int> slots, int[] droppedReferences, long dropWrittenBefore, long bytesToFree, long replacedPosition,
+        ref long remaining, ref long hand, out int expired, out int oldest)
+    {
+        var old = _version;
+        var entries = old.Index.Entries;
+        expired = oldest = 0;
+        if (bytesToFree > 0)
         {
-            var page = old.PageOf(positions[i]);
-            var offset = (int)positions[i];
-            var length = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
-            var tombstone = (page[offset + RecordLayout.FlagsOffset] & RecordLayout.TombstoneFlag) != 0;
-            if (!tombstone && dropWrittenBefore != long.MinValue
-                && BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(offset + RecordLayout.VersionOffset)) < dropWrittenBefore)
+            droppedReferences.AsSpan(0, old.StringCount).Clear();
+        }
+
+        int candidates = 0;
+        int cursor = 0;
+        for (var i = 0; i < slots.Length; i++)
+        {
+            var slot = slots[i];
+            var position = entries[(2 * slot) + 1];
+            var page = old.PageOf(position);
+            var offset = (int)position;
+            var time = BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(offset + RecordLayout.VersionOffset));
+            if ((position == replacedPosition || time < dropWrittenBefore) && (page[offset + RecordLayout.FlagsOffset] & RecordLayout.TombstoneFlag) == 0)
             {
-                remaining -= length;
+                if (position != replacedPosition)
+                {
+                    expired++;
+                }
+                remaining -= BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
+                if (bytesToFree > 0)
+                {
+                    bytesToFree -= old.Drop(page, offset, droppedReferences);
+                }
+
                 continue;
             }
 
-            var copyPosition = next.Reserve(length, out var copy, packFor: remaining);
-            remaining -= length;
-            var copyOffset = (int)copyPosition;
-            page.AsSpan(offset, length).CopyTo(copy.AsSpan(copyOffset));
-            if (!tombstone)
+            if (position < hand)
             {
-                RemapStrings(copy, copyOffset, next, strings, codeMap);
-                next.Reference(copy, copyOffset, +1);
+                cursor++;
             }
 
-            next.Index.InsertUnpublished(entries[2 * slots[i]], copyPosition);
-            next.AddRecordBytes(length);
-            next.AddRecords(tombstone ? 0 : 1, tombstone ? 1 : 0);
+            slots[candidates++] = slot;
         }
 
-        CompactedCopyBuilt?.Invoke(next);
-        return next;
+        if (bytesToFree <= 0)
+        {
+            return candidates;
+        }
+
+        // Positions are FIFO insertion order, kept across compactions. An append replacing a record is a new arrival.
+        // Advance the hand only when pressure actually scans; untouched survivors keep their visited bits.
+        if (cursor == candidates)
+        {
+            cursor = 0;
+        }
+
+        for (var pass = 0; pass < 2 && bytesToFree > 0; pass++)
+        {
+            for (var walked = 0; walked < candidates && bytesToFree > 0; walked++)
+            {
+                var at = cursor++;
+                if (cursor == candidates)
+                {
+                    cursor = 0;
+                }
+
+                var slot = slots[at];
+                if (slot < 0)
+                {
+                    continue;
+                }
+
+                var position = entries[(2 * slot) + 1];
+                var page = old.PageOf(position);
+                var offset = (int)position;
+                ref var flags = ref page[offset + RecordLayout.FlagsOffset];
+                var seen = Volatile.Read(ref flags);
+                if ((seen & RecordLayout.TombstoneFlag) != 0)
+                {
+                    continue;
+                }
+
+                // Bound the scan even if readers keep setting visited. A rejected candidate may consume a hint.
+                if (pass == 0 && (seen & RecordLayout.CacheHitFlag) != 0)
+                {
+                    Volatile.Write(ref flags, (byte)(seen & ~RecordLayout.CacheHitFlag));
+                    continue;
+                }
+
+                bytesToFree -= old.Drop(page, offset, droppedReferences);
+                remaining -= BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
+                slots[at] = -1;
+                hand = position + 1; // the copy maps the next newer survivor, or leaves zero to wrap
+                oldest++;
+            }
+        }
+
+        var kept = 0;
+        for (var i = 0; i < candidates; i++)
+        {
+            if (slots[i] >= 0)
+            {
+                slots[kept++] = slots[i];
+            }
+        }
+
+        return kept;
     }
 
-    /// <summary>Makes a version from <see cref="BuildCompacted"/> the one written to, and current unless a reload is
+    /// <summary>Makes a version from <see cref="BuildCompacted(long)"/> the one written to, and current unless a reload is
     /// building it.</summary>
     private void Install(TableVersion next)
     {
@@ -989,7 +1257,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     private bool FixedValid(int field) => (_fixed[RecordLayout.ValidityOffset + (field >> 3)] & (1 << (field & 7))) != 0;
 
-    private void Discard()
+    internal void Discard()
     {
         if (_open)
         {
@@ -1312,6 +1580,9 @@ public readonly struct RecordBuilder
     /// <summary>Writes the record. Returns false when the update was ignored as stale.</summary>
     /// <exception cref="LocalTableFullException">The table would pass <c>max_bytes</c> even after compaction.</exception>
     public bool Commit() => Writer.Commit(_token);
+
+    /// <summary>Commits a complete cache record; the writer may evict other keys to make room for it.</summary>
+    internal bool CommitCached(LocalTableCache cache) => Writer.Commit(_token, cache);
 
     private LocalTableWriter Writer => _writer ?? throw new InvalidOperationException("This RecordBuilder was not created by IFeatureTableWriter.Begin.");
 

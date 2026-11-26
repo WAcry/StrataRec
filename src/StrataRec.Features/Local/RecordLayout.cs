@@ -14,7 +14,7 @@ namespace StrataRec.Features.Local;
 /// <code>
 /// 0   int64  version       event version (local) or write time (cache)
 /// 8   int32  length        bytes of the whole record, fixed part plus variable data, a multiple of 8
-/// 12  uint8  flags         bit 0: tombstone
+/// 12  uint8  flags         bit 0 marks a tombstone, bit 1 marks a recent cache hit
 /// 13  uint8[V] validity    bit f set = field f has a value (V = ceil(fields / 8))
 /// …   int32  key offset    hashed keys only: the key's canonical bytes (<see cref="TableKeys"/>), relative to the record start
 ///     int32  key length    in bytes
@@ -39,6 +39,7 @@ internal sealed class RecordLayout
     public const int FlagsOffset = 12;
     public const int ValidityOffset = 13;
     public const byte TombstoneFlag = 1;
+    public const byte CacheHitFlag = 2;
 
     public RecordLayout(LocalTableSchema schema)
     {

@@ -113,7 +113,7 @@ public sealed class FeatureSourceBinding
     /// <summary>Modes <c>local</c> and <c>cache</c>: the most memory each of the source's tables may take, e.g. <c>"512MiB"</c>.</summary>
     [Description("Modes local and cache, required: the most memory each table of the source (one per entity) may take, as an " +
         "integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"512MiB\". A local load that would exceed it fails and the plan is " +
-        "not served; a cache that reaches it drops its expired records, then its oldest.")]
+        "not served; a cache that reaches it drops expired records first, then favors retaining recently read records.")]
     [RegularExpression(ByteSizePattern)]
     public string? MaxBytes { get; init; }
 
@@ -179,7 +179,7 @@ public class CacheBinding
 public sealed class ServiceCacheBinding : CacheBinding
 {
     [Description("Required: the most memory the service's in-process cache table may take, as an integer and a unit B, KiB, " +
-        "MiB, GiB or TiB, e.g. \"64MiB\". A cache that reaches it drops its expired records, then its oldest.")]
+        "MiB, GiB or TiB, e.g. \"64MiB\". A cache that reaches it drops expired records first, then favors retaining recently read records.")]
     [RegularExpression(FeatureSourceBinding.ByteSizePattern)]
     public string? MaxBytes { get; init; }
 }

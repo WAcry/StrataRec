@@ -106,16 +106,8 @@ public sealed partial class FeatureFetcher
 
         var keyCount = batch.KeyRecords.Length;
         var nowMs = cache.NowMs();
-        var misses = 0;
-        var keys = keyCount == 0 ? default : batch.Keys.Batch(_memory);
-        var hashes = _memory.Rent<ulong>(Math.Max(1, keyCount));
-        for (var k = 0; k < keyCount; k++)
-        {
-            hashes[k] = LocalTableCache.KeyHash(keys, k);
-            misses += Freshness(cache, version, batch.KeyRecords[k], hashes[k], nowMs) == CacheFreshness.Fresh ? 0 : 1;
-        }
-
-        if (misses == 0)
+        var read = FindCacheMisses(group, features, cache, version, batch, nowMs);
+        if (read is null)
         {
             // Every key fresh (or no row has a key): a local read, recorded before its metrics (ReadLocal).
             Fill(group, features, version, batch.Rows, batch.RowRecords);
@@ -133,10 +125,6 @@ public sealed partial class FeatureFetcher
             SetReadState(group, features);
             return;
         }
-
-        var read = new CacheRead(group, features.ToArray(), version, keys, hashes, misses, batch.Rows.Length, isContext: false, _memory);
-        batch.KeyRecords.CopyTo(read.Records);
-        SortMisses(read, nowMs);
 
         // The hits are filled now, from scratch lists; the misses' rows go to the read, which fills them once resolved.
         var hitRows = _memory.RentScratch<int>(batch.Rows.Length);
@@ -182,6 +170,49 @@ public sealed partial class FeatureFetcher
         _cacheTail = read;
     }
 
+    private CacheRead? FindCacheMisses(
+        FetchGroup group, ReadOnlySpan<int> features, LocalTableCache cache, TableVersion version, in LocalReadBatch batch, long nowMs)
+    {
+        var records = batch.KeyRecords;
+        // Before the earliest possible expiry, the write time alone proves freshness. In a fresh batch this avoids
+        // materializing the distinct keys and hashing every part of every key just to reproduce its TTL jitter.
+        var k = 0;
+        if (batch.Found == records.Length)
+        {
+            var freshSince = nowMs - cache.MinLifetimeMs;
+            while (k < records.Length && version.VersionOf(records[k]) >= freshSince)
+            {
+                records[k].MarkCacheHit();
+                k++;
+            }
+
+            if (k == records.Length)
+            {
+                return null;
+            }
+        }
+
+        var keys = batch.Keys.Batch(_memory);
+        CacheMiss[]? misses = null;
+        var count = 0;
+        for (; k < records.Length; k++)
+        {
+            var record = records[k];
+            var freshness = record.Found ? cache.Classify(version.VersionOf(record), keys, k, nowMs) : CacheFreshness.Expired;
+            if (freshness == CacheFreshness.Fresh)
+            {
+                record.MarkCacheHit();
+            }
+            else
+            {
+                misses ??= _memory.Rent<CacheMiss>(records.Length - k);
+                misses[count++] = new CacheMiss(k, freshness == CacheFreshness.Stale);
+            }
+        }
+
+        return misses is null ? null : new CacheRead(group, features.ToArray(), version, keys, records, misses, count, batch.Rows.Length, _memory);
+    }
+
     /// <summary>
     /// The read of a context cache group (one key, from request inputs or context key features), from the context prefetch: a fresh record is
     /// published at once; otherwise the read is returned resolving, for <see cref="CompleteCachedContextAsync"/>.
@@ -192,10 +223,10 @@ public sealed partial class FeatureFetcher
     {
         var cache = group.Supply.Table!.Table.Cache!;
         var nowMs = cache.NowMs();
-        var hashes = _memory.Rent<ulong>(1);
-        hashes[0] = LocalTableCache.KeyHash(key, 0);
-        if (Freshness(cache, version, record, hashes[0], nowMs) == CacheFreshness.Fresh)
+        var freshness = record.Found ? cache.Classify(version.VersionOf(record), key, 0, nowMs) : CacheFreshness.Expired;
+        if (freshness == CacheFreshness.Fresh)
         {
+            record.MarkCacheHit();
             StoreLocalContext(group, features, version, key, record, started); // recorded before its metrics (ReadLocal)
             cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, 1);
             if (CountsValues)
@@ -206,50 +237,11 @@ public sealed partial class FeatureFetcher
             return null;
         }
 
-        var read = new CacheRead(group, features.ToArray(), version, key, hashes, missCount: 1, rowCapacity: 0, isContext: true, _memory);
-        read.Records[0] = record;
-        SortMisses(read, nowMs);
+        var misses = _memory.Rent<CacheMiss>(1);
+        misses[0] = new CacheMiss(0, freshness == CacheFreshness.Stale);
+        var read = new CacheRead(group, features.ToArray(), version, key, new ReadOnlySpan<LocalRecordRef>(in record), misses, 1, rowCapacity: 0, _memory);
         Resolve(read, started, cancellationToken);
         return read;
-    }
-
-    /// <summary>How a key's table record stands now; a key the table does not hold is <see cref="CacheFreshness.Expired"/>.</summary>
-    private static CacheFreshness Freshness(LocalTableCache cache, TableVersion version, in LocalRecordRef record, ulong keyHash, long nowMs) =>
-        record.Found ? cache.Classify(version.VersionOf(record), keyHash, nowMs) : CacheFreshness.Expired;
-
-    /// <summary>Sorts the read's keys into fresh ones and misses (whose table record may still serve if the connector fails).</summary>
-    private static void SortMisses(CacheRead read, long nowMs)
-    {
-        var cache = read.Cache;
-        int fresh = 0, missing = 0, expired = 0, m = 0;
-        for (var k = 0; k < read.KeyCount; k++)
-        {
-            var freshness = Freshness(cache, read.Version, read.Records[k], read.KeyHashes[k], nowMs);
-            if (freshness == CacheFreshness.Fresh)
-            {
-                read.MissOf[k] = -1;
-                fresh++;
-                continue;
-            }
-
-            read.MissOf[k] = m;
-            read.MissKey[m] = k;
-            read.LocalStale[m] = freshness == CacheFreshness.Stale;
-            m++;
-            if (read.Records[k].Found)
-            {
-                expired++;
-            }
-            else
-            {
-                missing++;
-            }
-        }
-
-        read.SelectMisses();
-        cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, fresh);
-        cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Miss, missing);
-        cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Expired, expired);
     }
 
     /// <summary>
@@ -321,7 +313,7 @@ public sealed partial class FeatureFetcher
     /// <summary>Reads the misses from the distributed tier, chunk by chunk, and sorts what it had by freshness.</summary>
     private async ValueTask ReadDistributedAsync(CacheRead read, DistributedCacheTier tier, CancellationToken cancellationToken)
     {
-        var chunkSize = Batching.Size(read.MissCount, read.IsContext ? 1 : read.Supply.MaxBatch); // the fewest chunks, even
+        var chunkSize = Batching.Size(read.MissCount, read.Supply.MaxBatch); // the fewest chunks, even
         var chunks = Batching.Count(read.MissCount, chunkSize);
         var calls = _memory.Rent<ValueTask<CallResult<bool>>>(chunks);
         var answeredAt = _memory.Rent<long>(chunks);
@@ -372,7 +364,7 @@ public sealed partial class FeatureFetcher
                     continue;
                 }
 
-                switch (cache.Classify(writtenMs, read.KeyHashes[read.MissKey[m]], nowMs))
+                switch (cache.Classify(writtenMs, read.KeyBatch, read.Misses[m].KeyIndex, nowMs))
                 {
                     case CacheFreshness.Fresh:
                         read.Sources[m] = CacheSource.Distributed;
@@ -465,7 +457,7 @@ public sealed partial class FeatureFetcher
         {
             if (read.Sources[m] is CacheSource.Pending or CacheSource.StaleCandidate)
             {
-                keyOf[n] = read.MissKey[m];
+                keyOf[n] = read.Misses[m].KeyIndex;
                 missOf[n++] = m;
             }
         }
@@ -473,7 +465,7 @@ public sealed partial class FeatureFetcher
         var layout = group.KeyLayout;
         var keys = read.KeyBatch.Select(keyOf.AsSpan(0, count), _memory.Rent<EntityKey>((layout.VaryingCount * count) + layout.PartCount - layout.VaryingCount));
 
-        var chunkSize = Batching.Size(count, read.IsContext ? 1 : read.Supply.MaxBatch); // the fewest chunks, even
+        var chunkSize = Batching.Size(count, read.Supply.MaxBatch); // the fewest chunks, even
         var chunks = Batching.Count(count, chunkSize);
         var staging = new StagingArea(group.Fields.AsSpan(), count, chunkSize, _memory);
         var calls = _memory.Rent<ValueTask<CallResult<FetchStatus>>>(chunks);
@@ -615,11 +607,11 @@ public sealed partial class FeatureFetcher
             switch (read.Sources[m])
             {
                 case CacheSource.Pending or CacheSource.StaleCandidate:
-                    var key = read.KeyHashes[read.MissKey[m]];
-                    var localMs = read.LocalStale[m] ? read.Version.VersionOf(read.Records[read.MissKey[m]]) : 0;
-                    var local = read.LocalStale[m] && read.Cache.Classify(localMs, key, nowMs) != CacheFreshness.Expired;
+                    var miss = read.Misses[m];
+                    var localMs = miss.LocalStale ? read.Version.VersionOf(read.Records[miss.KeyIndex]) : 0;
+                    var local = miss.LocalStale && read.Cache.Classify(localMs, read.KeyBatch, miss.KeyIndex, nowMs) != CacheFreshness.Expired;
                     var sharedMs = read.Sources[m] == CacheSource.StaleCandidate ? CacheRecord.WrittenMs(read.Bytes[m].Span) : 0;
-                    var shared = read.Sources[m] == CacheSource.StaleCandidate && read.Cache.Classify(sharedMs, key, nowMs) != CacheFreshness.Expired;
+                    var shared = read.Sources[m] == CacheSource.StaleCandidate && read.Cache.Classify(sharedMs, read.KeyBatch, miss.KeyIndex, nowMs) != CacheFreshness.Expired;
                     if (shared && !(local && localMs > sharedMs))
                     {
                         read.Sources[m] = CacheSource.StaleDistributed;
@@ -688,7 +680,7 @@ public sealed partial class FeatureFetcher
 
             for (var p = 0; p < parts; p++)
             {
-                keys[(l * parts) + p] = read.KeyBatch.Key(read.MissKey[m], p);
+                keys[(l * parts) + p] = read.KeyBatch.Key(read.Misses[m].KeyIndex, p);
             }
 
             records[l++] = read.Bytes[m];
@@ -874,7 +866,7 @@ public sealed partial class FeatureFetcher
                         break;
                     case CacheSource.StaleLocal:
                         staleRows[stale] = read.Rows[i];
-                        staleRecords[stale++] = read.Records[read.MissKey[m]];
+                        staleRecords[stale++] = read.Records[read.Misses[m].KeyIndex];
                         break;
                     case CacheSource.Failed:
                         fill.AllMissing(layout.FieldCount);
@@ -930,6 +922,8 @@ public sealed partial class FeatureFetcher
     /// <summary>A slot a cache read fills, and the feature it holds.</summary>
     private readonly record struct CacheTarget(FeatureRuntimeInfo Info, ColumnBuffer Column);
 
+    private readonly record struct CacheMiss(int KeyIndex, bool LocalStale);
+
     /// <summary>
     /// One cache read that missed: its keys and what each resolved to, the rows waiting for them, and its budget. The
     /// arrays are rented from the request memory, which the read holds until it has resolved.
@@ -937,8 +931,8 @@ public sealed partial class FeatureFetcher
     private sealed class CacheRead
     {
         public CacheRead(
-            FetchGroup group, int[] features, TableVersion version, in EntityKeyBatch keys, ulong[] keyHashes, int missCount, int rowCapacity, bool isContext,
-            RequestMemory memory)
+            FetchGroup group, int[] features, TableVersion version, in EntityKeyBatch keys, ReadOnlySpan<LocalRecordRef> records,
+            CacheMiss[] misses, int missCount, int rowCapacity, RequestMemory memory)
         {
             Group = group;
             Cache = group.Supply.Table!.Table.Cache!;
@@ -946,20 +940,34 @@ public sealed partial class FeatureFetcher
             Features = features;
             Version = version;
             KeyBatch = keys;
-            KeyHashes = keyHashes;
+            Misses = misses;
             KeyCount = keys.Count;
             MissCount = missCount;
-            IsContext = isContext;
-            _memory = memory;
             Records = memory.Rent<LocalRecordRef>(KeyCount);
+            records.CopyTo(Records);
             MissOf = memory.Rent<int>(KeyCount);
-            MissKey = memory.Rent<int>(missCount);
-            LocalStale = memory.Rent<bool>(missCount);
+            MissOf.AsSpan(0, KeyCount).Fill(-1);
+            var notFound = 0;
+            for (var m = 0; m < missCount; m++)
+            {
+                var key = misses[m].KeyIndex;
+                MissOf[key] = m;
+                if (!records[key].Found)
+                {
+                    notFound++;
+                }
+            }
+
             Sources = memory.RentCleared<CacheSource>(missCount);
             Bytes = memory.RentCleared<ReadOnlyMemory<byte>>(missCount);
-            Stored = memory.RentCleared<ReadOnlyMemory<byte>>(missCount);
-            Rows = memory.Rent<int>(Math.Max(1, rowCapacity));
-            RowMiss = memory.Rent<int>(Math.Max(1, rowCapacity));
+            Stored = Supply.Distributed is null ? [] : memory.RentCleared<ReadOnlyMemory<byte>>(missCount);
+            Rows = rowCapacity == 0 ? [] : memory.Rent<int>(rowCapacity);
+            RowMiss = rowCapacity == 0 ? [] : memory.Rent<int>(rowCapacity);
+
+            MissTexts = Supply.Distributed is null ? null : FormatMissTexts(memory);
+            Cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, KeyCount - missCount);
+            Cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Miss, notFound);
+            Cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Expired, missCount - notFound);
         }
 
         public FetchGroup Group { get; }
@@ -973,18 +981,11 @@ public sealed partial class FeatureFetcher
 
         public TableVersion Version { get; }
 
-        public bool IsContext { get; }
-
-        private readonly RequestMemory _memory;
-
         /// <summary>The read's distinct keys, in first-seen order (a fetch of the same rows takes the same).</summary>
         public int KeyCount { get; }
 
         /// <summary>The read's keys, as the recorded call takes them.</summary>
         public EntityKeyBatch KeyBatch { get; }
-
-        /// <summary>Per key, its canonical hash (<see cref="LocalTableCache.KeyHash(in EntityKeyBatch, int)"/>): its lifetime's jitter.</summary>
-        public ulong[] KeyHashes { get; }
 
         /// <summary>Per key, its table record in <see cref="Version"/>, or none.</summary>
         public LocalRecordRef[] Records { get; }
@@ -995,13 +996,10 @@ public sealed partial class FeatureFetcher
         public int MissCount { get; }
 
         /// <summary>Per miss, its key's text for the distributed tier (<see cref="CacheKeyspace.KeyText"/>); null without a tier.</summary>
-        public string[]? MissTexts { get; private set; }
+        public string[]? MissTexts { get; }
 
-        /// <summary>Per miss, its key.</summary>
-        public int[] MissKey { get; }
-
-        /// <summary>Per miss, whether its table record is past its lifetime but within <c>stale_if_error_ms</c>.</summary>
-        public bool[] LocalStale { get; }
+        /// <summary>Distinct misses in first-seen order, including local stale candidates to recheck at fallback.</summary>
+        public CacheMiss[] Misses { get; }
 
         public CacheSource[] Sources { get; }
 
@@ -1063,17 +1061,12 @@ public sealed partial class FeatureFetcher
         public EntityKeyBatch Batch => KeyBatch;
 
         /// <summary>
-        /// Once the misses are known (<see cref="MissKey"/>): each one's key text, when the read has a distributed tier to
+        /// Each miss's key text, when the read has a distributed tier to
         /// ask. Computed once per miss, for the read and the write-back.
         /// </summary>
-        public void SelectMisses()
+        private string[] FormatMissTexts(RequestMemory memory)
         {
-            if (Supply.Distributed is null || MissCount == 0)
-            {
-                return;
-            }
-
-            var texts = _memory.Rent<string>(MissCount);
+            var texts = memory.Rent<string>(MissCount);
             var partsBuffer = default(KeyPartBuffer);
             Span<EntityKey> parts = partsBuffer;
             parts = parts[..KeyBatch.PartCount];
@@ -1081,13 +1074,13 @@ public sealed partial class FeatureFetcher
             {
                 for (var p = 0; p < parts.Length; p++)
                 {
-                    parts[p] = KeyBatch.Key(MissKey[m], p);
+                    parts[p] = KeyBatch.Key(Misses[m].KeyIndex, p);
                 }
 
                 texts[m] = CacheKeyspace.KeyText(parts);
             }
 
-            MissTexts = texts;
+            return texts;
         }
 
         public void AddRow(int row, int miss)

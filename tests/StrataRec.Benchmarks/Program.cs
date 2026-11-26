@@ -12,6 +12,11 @@ public static class Program
     /// </summary>
     public static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--cache-compare")
+        {
+            return CacheComparison.Run(args[1..]);
+        }
+
         var ran = 0;
         var failed = 0;
         foreach (var summary in BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args))

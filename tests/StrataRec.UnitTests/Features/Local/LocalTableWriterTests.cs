@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Types;
+using StrataRec.Features.Cache;
 using StrataRec.Features.Local;
 using static StrataRec.UnitTests.Features.Local.LocalTableTestSupport;
 
@@ -469,6 +470,39 @@ public class LocalTableWriterTests
         Assert.Same(before, table.Pin());
         Assert.Equal((46512L, before.Generation, 0L), (table.Pin().Bytes, table.Pin().Generation, table.Compactions));
         Assert.False(table.Pin().Find(999L).Found);
+    }
+
+    [Fact]
+    public void CacheWriteBack_CanCollectARejectedCompactionWhileEvicting()
+    {
+        var schema = Schema(mode: LocalTableMode.Cache, fields: [new("l", ColumnType.List(StorageKind.Int32)), new("s", ColumnType.String)]);
+        var clock = new ManualClock();
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
+        {
+            PageSize = 4096, MaxBytes = 46512, CompactionMinBytes = long.MaxValue, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock },
+        });
+        FillPayloadAndCategory(table.Writer);
+        var cache = table.Cache!;
+        var record = new CacheRecordWriter(cache.Layout, 128);
+        record.Begin(clock.NowMs, cache.Fingerprint, absent: false);
+        record.List<int>(0, new int[5_000]); // too large after packing the live records, fits after eviction
+        record.String(1, "category");
+        var (offset, length) = record.End();
+        Assert.True(cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(999)], [record.Bytes.AsMemory(offset, length)], 1)));
+
+        WeakReference? previous = null;
+        table.Writer.CompactedCopyBuilt = copy =>
+        {
+            if (previous is not null)
+            {
+                GC.Collect();
+                Assert.False(previous.IsAlive, "the rejected copy is still alive while the next copy is built");
+            }
+
+            previous = new WeakReference(copy);
+        };
+        cache.WriteQueued(table.Writer);
+        Assert.Equal("category", table.Pin().Read(1, table.Pin().Find(999L)).AsString());
     }
 
     [Fact]

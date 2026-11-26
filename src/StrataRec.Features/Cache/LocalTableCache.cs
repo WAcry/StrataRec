@@ -161,11 +161,10 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 /// engine runs the writer as the table's update source (<see cref="CacheWriterSource"/>), so the table host starts,
 /// restarts and stops it like any other; until it runs, the table counts as loaded at once, since an empty cache is a
 /// complete one (every key misses).</para>
-/// <para><b>Eviction.</b> A write that does not fit <c>max_bytes</c> (after the table compacted its superseded records)
-/// drops the records that are of no use any more (past their lifetime and stale-if-error window), then, while the table
-/// is still above three quarters of <c>max_bytes</c>, the oldest-written ones; then the write is tried again. Reads never
-/// record anything, so the read path stays read-only: a hot key is fetched and written again after each expiry and stays,
-/// a key written once and never again is the first to go.</para>
+/// <para><b>Eviction.</b> The writer reclaims records past the stale window, then aims for three quarters of
+/// <c>max_bytes</c>. A SIEVE hand advances in insertion order. A fresh hit marks the record so the hand can skip
+/// it once. If all remaining candidates are visited, the writer can still admit a new key. Victims are removed only
+/// when the pending record fits.</para>
 /// </remarks>
 public sealed class LocalTableCache
 {
@@ -196,6 +195,7 @@ public sealed class LocalTableCache
         Layout = new CacheRecordLayout(table.Schema);
         Keyspace = new CacheKeyspace(table.Schema.Source, table.Schema.Entity, table.Schema.Key, options.Origin);
         _queueLimit = options.WriteQueueBytes > 0 ? options.WriteQueueBytes : Math.Clamp(table.Options.MaxBytes / 16, 1L << 20, 64L << 20);
+        MinLifetimeMs = LifetimeMs(0UL);
         MaxLifetimeMs = MaxLifetime(options.TtlMs);
         var tags = table.MetricTags.ToArray();
         _keyTags = TagMatrix(tags, Enum.GetValues<CacheKeyOutcome>().Length, static o => OutcomeName((CacheKeyOutcome)o));
@@ -207,6 +207,9 @@ public sealed class LocalTableCache
     public CacheTableOptions Options { get; }
 
     public TimeProvider Clock { get; }
+
+    /// <summary>Even the key with the shortest jittered lifetime stays fresh this long.</summary>
+    internal long MinLifetimeMs { get; }
 
     /// <summary>The longest lifetime of any key: the TTL plus the most jitter.</summary>
     public long MaxLifetimeMs { get; }
@@ -280,11 +283,50 @@ public sealed class LocalTableCache
     /// <summary>How a record of a one-part <paramref name="key"/> written at <paramref name="writtenMs"/> stands at <paramref name="nowMs"/>.</summary>
     internal CacheFreshness Classify(long writtenMs, in EntityKey key, long nowMs) => Classify(writtenMs, KeyHash(key), nowMs);
 
+    /// <summary>Classifies a record from its age alone when every key agrees, otherwise applies this key's jitter.</summary>
+    internal CacheFreshness Classify(long writtenMs, in EntityKeyBatch keys, int index, long nowMs)
+    {
+        var age = AgeMs(writtenMs, nowMs);
+        if (age <= MinLifetimeMs)
+        {
+            return CacheFreshness.Fresh;
+        }
+
+        if (age > MaxLifetimeMs)
+        {
+            if (age > MaxLifetimeMs + Options.StaleIfErrorMs)
+            {
+                return CacheFreshness.Expired;
+            }
+
+            if (age <= MinLifetimeMs + Options.StaleIfErrorMs)
+            {
+                return CacheFreshness.Stale;
+            }
+        }
+
+        return ClassifyAge(age, KeyHash(keys, index));
+    }
+
     /// <summary>How a record of the key with hash <paramref name="keyHash"/> written at <paramref name="writtenMs"/> stands at <paramref name="nowMs"/>.</summary>
     /// <remarks>A write time ahead of the clock (another instance's clock runs ahead) counts as written now.</remarks>
-    internal CacheFreshness Classify(long writtenMs, ulong keyHash, long nowMs)
+    internal CacheFreshness Classify(long writtenMs, ulong keyHash, long nowMs) =>
+        ClassifyAge(AgeMs(writtenMs, nowMs), keyHash);
+
+    private static long AgeMs(long writtenMs, long nowMs)
     {
-        var age = Math.Max(0, nowMs - writtenMs);
+        if (writtenMs >= nowMs)
+        {
+            return 0;
+        }
+
+        // A stored timestamp can span the entire signed range. A past record that overflows the difference is expired.
+        var age = unchecked(nowMs - writtenMs);
+        return age < 0 ? long.MaxValue : age;
+    }
+
+    private CacheFreshness ClassifyAge(long age, ulong keyHash)
+    {
         var lifetime = LifetimeMs(keyHash);
         return age <= lifetime ? CacheFreshness.Fresh : age <= lifetime + Options.StaleIfErrorMs ? CacheFreshness.Stale : CacheFreshness.Expired;
     }
@@ -301,8 +343,8 @@ public sealed class LocalTableCache
     internal TimeSpan StoreTimeToLive(long writtenMs, long nowMs)
     {
         var retention = MaxLifetimeMs + Options.StaleIfErrorMs;
-        var age = writtenMs >= nowMs ? 0 : nowMs - writtenMs;
-        var remaining = age < 0 || age >= retention ? 1 : retention - age; // a negative age is one that overflowed: very old
+        var age = AgeMs(writtenMs, nowMs);
+        var remaining = age >= retention ? 1 : retention - age;
         return TimeSpan.FromTicks(remaining * TimeSpan.TicksPerMillisecond);
     }
 
@@ -415,18 +457,12 @@ public sealed class LocalTableCache
         for (var i = 0; i < batch.Count; i++)
         {
             var result = WriteOne(writer, batch.Key(i), batch.Records[i].Span);
-            if (result == WriteResult.Full)
-            {
-                Evict(writer);
-                result = WriteOne(writer, batch.Key(i), batch.Records[i].Span);
-            }
-
             switch (result)
             {
                 case WriteResult.Written:
                     written++;
                     break;
-                case WriteResult.Full or WriteResult.Corrupt:
+                case WriteResult.Failed:
                     failed++;
                     break;
                 case WriteResult.Ignored:
@@ -440,10 +476,9 @@ public sealed class LocalTableCache
 
     private WriteResult WriteOne(LocalTableWriter writer, ReadOnlySpan<EntityKey> key, ReadOnlySpan<byte> record)
     {
-        if (CacheRecord.ReadHeader(record, Layout.FieldCount, Layout.Fingerprint, out var writtenMs, out _) != CacheRecordHeader.Ok
-            || !CacheRecord.IsWellFormed(record, Layout))
+        if (CacheRecord.ReadHeader(record, Layout.FieldCount, Layout.Fingerprint, out var writtenMs, out _) != CacheRecordHeader.Ok)
         {
-            return WriteResult.Corrupt; // never produced by a read, which checks what it hands over; a defect
+            return WriteResult.Failed; // never produced by a read, which checks what it hands over; a defect
         }
 
         try
@@ -451,60 +486,36 @@ public sealed class LocalTableCache
             var builder = key.Length == 1 ? writer.Begin(key[0], writtenMs) : writer.Begin(key, writtenMs);
             if (builder.IsIgnored)
             {
-                return WriteResult.Ignored;
+                return CacheRecord.IsWellFormed(record, Layout) ? WriteResult.Ignored : WriteResult.Failed;
             }
 
+            // The builder is private until commit, so a malformed field can discard the staged prefix.
             var visitor = new BuilderVisitor(builder, this);
-            CacheRecord.Read(record, Layout, ref visitor);
-            return builder.Commit() ? WriteResult.Written : WriteResult.Ignored;
+            if (!CacheRecord.Read(record, Layout, ref visitor))
+            {
+                writer.Discard();
+                return WriteResult.Failed;
+            }
+
+            return builder.CommitCached(this) ? WriteResult.Written : WriteResult.Ignored;
         }
         catch (LocalTableFullException)
         {
-            return WriteResult.Full; // nothing written; the builder is discarded
+            return WriteResult.Failed; // nothing written; the builder is discarded
         }
     }
 
-    /// <summary>
-    /// Makes room: drops the records no reader can use any more, then, while the table is
-    /// still above three quarters of <c>max_bytes</c>, the oldest-written ones, so that eviction does not run again at the
-    /// very next write.
-    /// </summary>
-    private void Evict(LocalTableWriter writer)
+    /// <summary>Counts only the records removed from a version that was published.</summary>
+    internal void CountEvictions(int expired, int oldest)
     {
-        var maxBytes = _table.Options.MaxBytes;
-        var before = _table.Pin().RecordCount;
-        var deadBefore = NowMs() - MaxLifetimeMs - Options.StaleIfErrorMs;
-        TryCompact(writer, deadBefore);
-        var afterExpired = _table.Pin().RecordCount;
-        if (before > afterExpired)
+        if (expired > 0)
         {
-            StrataRecMetrics.CacheEvictions.Add(before - afterExpired, _evictedExpiredTags);
+            StrataRecMetrics.CacheEvictions.Add(expired, _evictedExpiredTags);
         }
 
-        var target = maxBytes / 4 * 3;
-        var bytes = _table.Pin().Bytes;
-        if (bytes <= target)
+        if (oldest > 0)
         {
-            return;
-        }
-
-        TryCompact(writer, writer.WriteTimeCutoff(bytes - target));
-        var afterOldest = _table.Pin().RecordCount;
-        if (afterExpired > afterOldest)
-        {
-            StrataRecMetrics.CacheEvictions.Add(afterExpired - afterOldest, _evictedOldestTags);
-        }
-    }
-
-    private static void TryCompact(LocalTableWriter writer, long dropWrittenBefore)
-    {
-        try
-        {
-            writer.Compact(dropWrittenBefore);
-        }
-        catch (LocalTableFullException)
-        {
-            // The compacted copy laid its pages out larger than max_bytes (see Compact); the next step drops more.
+            StrataRecMetrics.CacheEvictions.Add(oldest, _evictedOldestTags);
         }
     }
 
@@ -557,8 +568,7 @@ public sealed class LocalTableCache
     {
         Written,
         Ignored,
-        Full,
-        Corrupt,
+        Failed,
     }
 
     /// <summary>Copies a record's fields into the table's record builder: every field, so the table's record is complete.</summary>

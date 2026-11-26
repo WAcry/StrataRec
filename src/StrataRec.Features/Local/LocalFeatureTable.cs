@@ -57,9 +57,10 @@ public sealed class LocalFeatureTableOptions
 /// one <c>long[]</c>; strings are codes into one dictionary. Millions of records are a few dozen arrays to the garbage
 /// collector, which does not scan their contents.</para>
 /// <para><b>Concurrency protocol.</b> One writer (<see cref="LocalTableWriter"/>), any number of readers, no locks.
-/// Everything a reader can reach is either immutable once published or replaced as a whole:</para>
+/// Readers acquire complete record values through the following publication rules.</para>
 /// <list type="number">
-/// <item><b>Records are never modified.</b> The writer builds a record in private buffers, copies it into free space past
+/// <item><b>Published record values are immutable.</b> Cache readers can set a hit flag used only for eviction.
+/// The writer builds a record in private buffers, copies it into free space past
 /// the end of a page's used part, and only then publishes its position into the index slot with
 /// <c>Volatile.Write</c> (release). An update writes a new record and repoints the slot.</item>
 /// <item><b>Index slots.</b> A slot is a (key, position) pair; position 0 means empty. A new key's slot gets its key with
@@ -78,8 +79,8 @@ public sealed class LocalFeatureTableOptions
 /// record, an unpublished page or an out-of-range position.</item>
 /// <item><b>Versions.</b> Pages, index and dictionary belong to a <see cref="TableVersion"/>. A request pins the current
 /// version (<see cref="Pin"/>, acquire) and reads only from it. Compaction and reload build a new version privately and
-/// publish it with one release write of <c>_current</c>; the writer never touches the old one again, and the garbage
-/// collector frees it after the last request that pinned it. Pinning is for memory safety only: keys read in one request
+/// publish it with one release write of <c>_current</c>. Cache versions may share sealed pages: only eviction hints
+/// can change there. The GC frees unreferenced pages. Pinning is for memory safety only: keys read in one request
 /// may reflect updates from different moments, as with a remote fetch.</item>
 /// </list>
 /// <para>On x64 every plain store is a release and every plain load an acquire, so the volatile accesses only stop the JIT

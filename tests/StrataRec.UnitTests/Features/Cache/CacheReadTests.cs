@@ -59,6 +59,61 @@ public class CacheReadTests
         Assert.Equal(new[] { 10.0, 20, 30 }, Values(request, age, 3));
     }
 
+    [Theory]
+    [InlineData(false, false, 1)]
+    [InlineData(true, false, 1)]
+    [InlineData(false, true, 1)]
+    [InlineData(false, false, 100)]
+    public async Task AFreshHitOutlastsAColdRecord_AndYieldsToNewlyAccessedKeys(bool withMiss, bool readEveryResident, int hitCount)
+    {
+        var connector = ScriptedConnector.Values((key, _) => key + new string('x', 512));
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, maxBytes: "32KiB");
+        var name = rig.Physical("item.name", FeatureTestRig.Item, ColumnType.String, "item_store");
+        rig.Build();
+        var table = rig.Tables["item_store"];
+
+        async Task Read(params long[] keys)
+        {
+            var request = rig.NewRequest(keys);
+            Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(name)).State);
+            request.Memory.Release();
+            rig.WriteBack("item_store");
+            rig.Clock.AdvanceMs(1);
+        }
+
+        await Read(1);
+        await Read(2);
+        for (var i = 0; i < hitCount; i++)
+        {
+            await Read(withMiss ? [1, 3] : [1]);
+        }
+        long next = 4;
+        while (table.Pin().Find(2L).Found && next < 100)
+        {
+            await Read(next++);
+        }
+
+        Assert.False(table.Pin().Find(2L).Found);
+        Assert.True(table.Pin().Find(1L).Found);
+        var firstEviction = table.Compactions;
+        while (table.Pin().Find(1L).Found && next < 200)
+        {
+            if (readEveryResident && table.Compactions == firstEviction)
+            {
+                // Exercise one capacity eviction with every resident visited, then switch the reads to new keys.
+                var current = table.Pin();
+                var keys = Enumerable.Range(1, (int)next - 1).Select(k => (long)k).Where(k => current.Find(k).Found);
+                await Read(keys.ToArray());
+            }
+
+            await Read(next);
+            Assert.True(table.Pin().Find(next).Found); // a cache full of visited records still admits a new key
+            await Read(next++); // new keys that are actually reused earn a chance too
+        }
+
+        Assert.False(table.Pin().Find(1L).Found);
+    }
+
     [Fact]
     public async Task ARecord_IsServedForItsLifetime_TheTtlWithinTenPercentByKey_ThenFetchedAgain()
     {
@@ -104,6 +159,30 @@ public class CacheReadTests
         Assert.InRange(lifetimes.Count(l => l < 60_000), 4_500, 5_500);
         Assert.Equal(cache.LifetimeMs(EntityKey.FromInt64(42)), cache.LifetimeMs(EntityKey.FromInt64(42)));
         Assert.Equal(lifetimes[41], cache.LifetimeMs(EntityKey.FromInt64(42)));
+    }
+
+    [Theory]
+    [InlineData(long.MinValue, 1L, false)]
+    [InlineData(long.MaxValue, -2L, true)]
+    public async Task AStoredTimestampAcrossTheSignedRange_KeepsItsAgeDirection(long writtenMs, long nowMs, bool fresh)
+    {
+        var store = new FakeCacheStore();
+        var (rig, connector, clicks) = DistributedRig(store);
+        rig.Clock.AdvanceMs(nowMs - rig.Clock.NowMs);
+        var cache = rig.Tables["item_store"].Cache!;
+        var writer = new CacheRecordWriter(cache.Layout, 32);
+        writer.Begin(writtenMs, cache.Fingerprint, absent: false);
+        writer.Float64(0, 42.0);
+        var (offset, length) = writer.End();
+        store.Put(cache.Keyspace.Prefix + "1", writer.Bytes.AsSpan(offset, length).ToArray());
+
+        var request = rig.NewRequest([1]);
+        await request.EnsureAsync(clicks);
+
+        Assert.Equal(fresh ? 42.0 : 1.0, request.Value(clicks, 0).AsFloat64());
+        Assert.Equal(fresh ? 0 : 1, connector.Calls.Count);
+        Assert.Equal(fresh ? CacheFreshness.Fresh : CacheFreshness.Expired, cache.Classify(writtenMs, EntityKey.FromInt64(1), nowMs));
+        Assert.Equal(TimeSpan.FromMilliseconds(fresh ? cache.MaxLifetimeMs + cache.Options.StaleIfErrorMs : 1), cache.StoreTimeToLive(writtenMs, nowMs));
     }
 
     [Fact]

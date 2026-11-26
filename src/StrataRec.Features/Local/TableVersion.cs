@@ -37,6 +37,18 @@ internal readonly struct LocalRecordRef
     }
 
     public bool Found => Page is not null;
+
+    /// <summary>Only the first fresh hit since the eviction hand passed needs to write the visited bit.
+    /// A race with the writer can lose a hint. The payload, timestamp and other flags are immutable.</summary>
+    internal void MarkCacheHit()
+    {
+        ref var flags = ref Page![Offset + RecordLayout.FlagsOffset];
+        var seen = Volatile.Read(ref flags);
+        if ((seen & RecordLayout.CacheHitFlag) == 0)
+        {
+            Volatile.Write(ref flags, (byte)(seen | RecordLayout.CacheHitFlag));
+        }
+    }
 }
 
 /// <summary>One field to read in a multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{LocalFillCounts})"/>:
@@ -1360,6 +1372,9 @@ public sealed class TableVersion
     // Writer side (single writer thread; see LocalTableWriter)
     // ---------------------------------------------------------------------------------------------------------------
 
+    // Writer-only position of the next SIEVE candidate in this version. Zero starts at the oldest insertion.
+    internal long CacheHand { get; set; }
+
     internal IndexTable Index => _index;
 
     internal byte[][] Pages => _pages;
@@ -1486,11 +1501,11 @@ public sealed class TableVersion
         {
             if (packFor > 0)
             {
-                AddPage((int)Math.Max(bytes, Math.Min(_maxPageSize, packFor)));
+                AddPage(new byte[(int)Math.Max(bytes, Math.Min(_maxPageSize, packFor))]);
             }
             else
             {
-                AddPage(NewPageSize(bytes));
+                AddPage(new byte[NewPageSize(bytes)]);
                 if (_nextPageSize < _maxPageSize)
                 {
                     _nextPageSize = Math.Min(_maxPageSize, _nextPageSize * 2);
@@ -1631,10 +1646,16 @@ public sealed class TableVersion
         return bytes;
     }
 
-    private void AddPage(int size)
+    /// <summary>Indexes an old page whose string codes need no remapping. Only new pages may receive appends.</summary>
+    internal long AttachSealedPage(byte[] page)
     {
-        var page = new byte[size];
+        AddPage(page);
+        _pageUsed = page.Length;
+        return (long)_pageCount << 32;
+    }
 
+    private void AddPage(byte[] page)
+    {
         var directory = _pages;
         if (_pageCount == directory.Length)
         {

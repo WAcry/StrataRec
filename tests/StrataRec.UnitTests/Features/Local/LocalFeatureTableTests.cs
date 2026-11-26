@@ -394,6 +394,7 @@ public class LocalFeatureTableTests
         Assert.NotSame(before, after);
         Assert.Equal(before.Generation + 1, after.Generation);
         Assert.Equal(0, after.SupersededBytes);
+        Assert.Equal(before.RecordBytes - before.SupersededBytes, after.RecordBytes);
         Assert.True(after.Bytes < before.Bytes);
         Assert.Equal(180, after.RecordCount);
         Assert.Equal(20, after.TombstoneCount);
