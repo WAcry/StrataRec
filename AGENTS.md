@@ -34,7 +34,7 @@ StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：一次推荐请求
 
 - 一个概念一个词，文档、配置、公开 API、内部类型相同：`docs/glossary.md`。最容易混的：臂（arm，不写桶、bucket）和变体（variant，节点在某些臂组合下的编译结果）；运行（run，一条流水线对一个请求的一次执行）、尝试（attempt，一个节点的一次执行）和调用（call，对服务或另一条流水线）；行（row）和结果里的项（item）；列（column）和数据源的字段（field）。
 - 文档用中文；代码、标识符、代码注释和提交说明用英文。文档里的反引号只包仓库里现有的名字（门禁会查），已经删掉的、设想中的名字不加反引号。
-- 注释写这段代码为什么这样、契约是什么，不复述代码，不留 `TODO`、`FIXME`、`HACK`。公开类型的 XML 注释是契约；会序列化的配置成员，注释就是 JSON Schema 里给使用者看的描述。
+- 注释写这段代码为什么这样、契约是什么，不复述代码，不留 `TODO`、`FIXME`、`HACK`，不引用仓库里查不到的东西（第几轮评审、哪次对话）。公开类型的 XML 注释是契约；会序列化的配置成员，注释就是 JSON Schema 里给使用者看的描述。
 - 决定和理由记在 `docs/decisions/<领域>.md`，只记读代码看不出来的：为什么、没选的方案、代价、刻意不做的事。怎么判断该不该记、怎么写：`.agents/skills/record-decision`。
 
 ## 4. 验证
@@ -52,6 +52,7 @@ scripts/red-on-base.sh HEAD -- --project tests/StrataRec.UnitTests --filter-clas
 - 测试放在被改动代码旁边：`tests/StrataRec.UnitTests/<Area>/`；基于 `samples/` 的端到端测试在 `tests/StrataRec.IntegrationTests`；宿主示例的在 `tests/StrataRec.Samples.Host.Tests`。
 - 改了配置类型或它们的 XML 注释，重新生成两个示例的 Schema（测试失败的信息里有命令）。改引擎的公开 API 时，`samples/StrataRec.Samples.Host` 和 `docs/guide/` 一起改。
 - 改了按行、按特征的路径：`.agents/skills/perf-check`。
+- 推送之后看 CI 的结果（`gh run watch`）。CI 失败时先修它，再做别的；只在 CI 上失败的测试，先在本地造出那个环境。
 
 ## 5. 什么时候停下来问人
 

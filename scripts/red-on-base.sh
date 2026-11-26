@@ -8,6 +8,7 @@
 # Checks <base> out in a temporary worktree, puts tests/ of the working tree on top (and each --carry path, for a test
 # that needs a changed sample), and runs the given tests there. Exit 0: they fail on <base>. Exit 1: they pass there.
 # Exit 2: they could not be run, which is not a red test; a test of a defect is written against what existed, so it builds.
+# A fix that is itself under tests/ (a helper the tests share) is carried along with them: undo it by hand to see the red.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 usage() { sed -n '2,5p' "$0" >&2; exit 2; }
