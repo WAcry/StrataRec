@@ -41,6 +41,9 @@ public sealed class TimerFaultTests
         Assert.True(exitCode == 0, $"the child exited with {exitCode}:\n{output}");
         Assert.DoesNotContain("UNHANDLED", output);
         Assert.Contains("ended=", output);
+        // The scenario itself: the timer found a callback to run. A machine too slow to reach the call within the budget
+        // would otherwise fail below as if the framework had lost the exception.
+        Assert.True(Value(output, "hung") == "True", "the request ended before it made the call that hangs:\n" + output);
         Assert.Contains(ended, Value(output, "ended"));
         Assert.True(long.Parse(Value(output, "elapsed_ms")) < long.Parse(Value(output, "budget_ms")) + 1_000, output); // its budget, give or take scheduling
         Assert.True(long.Parse(Value(output, "counted")) >= 1, output);
@@ -323,6 +326,18 @@ internal static class TimerFaultChild
             Console.WriteLine($"unobserved task: {e.Exception.InnerException?.Message}");
         };
 
+        if (site == "node")
+        {
+            // The node's budget is the request's deadline, which runs from the request's start: on a cold process the
+            // code between the start and the call can take longer than the deadline to compile (742 ms on one contended
+            // core), and the deadline then passes before there is a callback to run. A request of the same shape first,
+            // whose call registers nothing that throws and which the caller ends once it hangs.
+            Throwing = false;
+            Pipeline(new ListLoggerFactory(), popularTimeoutMs: null, deadlineMs: (int)Patience.TotalMilliseconds, callerTimeoutMs: 1);
+            Throwing = true;
+            Hung.Reset();
+        }
+
         using var capture = new MetricCapture();
         var loggers = new ListLoggerFactory();
         var token = site == "caller" ? "node" : site; // the caller cancels the node token, the one the source holds
@@ -354,6 +369,7 @@ internal static class TimerFaultChild
                 && e.Message.Contains($"CancellationCallbacksFailed for '{token}'", StringComparison.Ordinal)
                 && e.Message.Contains(CleanupFailed, StringComparison.Ordinal)
             || e.EventId.Id == 3005 && e.Exception?.ToString().Contains(CleanupFailed, StringComparison.Ordinal) == true);
+        Console.WriteLine($"hung={Hung.IsSet}");
         Console.WriteLine($"ended={ended}");
         Console.WriteLine($"elapsed_ms={elapsed}");
         Console.WriteLine($"budget_ms={budgetMs}");
@@ -402,7 +418,11 @@ internal static class TimerFaultChild
         return ($"{result.Error} | {details}", deadlineMs, elapsed, events);
     }
 
-    /// <returns>The result, or null when the caller's token (cancelled after <paramref name="callerTimeoutMs"/>) ended the request.</returns>
+    /// <returns>
+    /// The result, or null when the caller's token ended the request. The caller's timer of <paramref name="callerTimeoutMs"/>
+    /// starts once the call hangs, and the elapsed time is counted from there: started with the request, it fired on a
+    /// slow machine before the request had reached the call, and no callback was registered for it to run.
+    /// </returns>
     private static (RecResult? Result, long ElapsedMs) Execute(HomeFeedTestHost host, RequestEventLog events, int deadlineMs,
         IBindingFactory<IServiceClient>? sources = null, IBindingFactory<IFeatureSourceConnector>? connectors = null, int? callerTimeoutMs = null)
     {
@@ -418,11 +438,23 @@ internal static class TimerFaultChild
             throw new InvalidOperationException(string.Join("\n", load.Diagnostics));
         }
 
-        using var caller = callerTimeoutMs is { } ms ? new CancellationTokenSource(ms) : new CancellationTokenSource();
+        using var caller = new CancellationTokenSource();
         var watch = Stopwatch.StartNew();
         try
         {
-            var result = engine.ExecuteAsync(Request("req-timer-fault", deadlineMs), caller.Token).AsTask().WaitAsync(Patience).GetAwaiter().GetResult();
+            var run = engine.ExecuteAsync(Request("req-timer-fault", deadlineMs), caller.Token).AsTask();
+            if (callerTimeoutMs is { } ms)
+            {
+                if (!Hung.Wait(Patience))
+                {
+                    throw new InvalidOperationException("The request did not reach the call that hangs.");
+                }
+
+                watch.Restart();
+                caller.CancelAfter(ms);
+            }
+
+            var result = run.WaitAsync(Patience).GetAwaiter().GetResult();
             return (result, watch.ElapsedMilliseconds);
         }
         catch (OperationCanceledException) when (caller.IsCancellationRequested)
@@ -490,9 +522,20 @@ internal static class TimerFaultChild
     {
         var ended = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         token.Register(static state => ((TaskCompletionSource<T>)state!).TrySetCanceled(), ended);
-        token.Register(static () => throw new InvalidOperationException(CleanupFailed));
+        if (Throwing)
+        {
+            token.Register(static () => throw new InvalidOperationException(CleanupFailed));
+        }
+
+        Hung.Set();
         return ended.Task;
     }
+
+    /// <summary>Set once a call hangs with its callbacks registered: from then on a timer has something to run.</summary>
+    private static readonly ManualResetEventSlim Hung = new(false);
+
+    /// <summary>Whether a hanging call registers the callback that throws; off for a request that only warms the code up.</summary>
+    private static volatile bool Throwing = true;
 
     private sealed class HangingSources : IBindingFactory<IServiceClient>
     {
