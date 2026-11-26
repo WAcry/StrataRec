@@ -418,6 +418,10 @@ public sealed class OperatorContext : IServiceCallScope
     /// The inputs the operator passes, each declared with <see cref="OperatorCompileContext.TryCallInput"/>. Every other
     /// input the pipeline declares gets this request's input of the same name, when it has one.
     /// </param>
+    /// <param name="timeout">
+    /// The most time the called run gets, when less than what is left of the node's budget: for a call the node can do
+    /// without (a page's sponsored rows), so that a slow one fails as a result while the node still has time to go on.
+    /// </param>
     /// <returns>
     /// The result. A call that cannot be answered is a failed result, never an exception: the pipeline is not served, does
     /// not fit the call (an input, a column or the key type the node declared), rejects the inputs, fails, or no time is
@@ -432,7 +436,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// </remarks>
     /// <exception cref="ArgumentException">The handle is another node's, or an input was not declared.</exception>
     /// <exception cref="OperationCanceledException">The caller cancelled the request.</exception>
-    public ValueTask<PipelineCallResult> CallPipelineAsync(PipelineCall call, RequestInputs? inputs = null)
+    public ValueTask<PipelineCallResult> CallPipelineAsync(PipelineCall call, RequestInputs? inputs = null, TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(call);
         if (call.NodeId != NodeId || call.Caller != _state.Plan.PipelineId)
@@ -464,22 +468,28 @@ public sealed class OperatorContext : IServiceCallScope
             return new(replay.PipelineCall(NodeId, sequence, call.PipelineId, inputs)); // answered from the recording: a replay runs no other pipeline
         }
 
-        return _state.Recorder is { } recorder ? RecordedCallAsync(recorder, call, inputs, sequence) : SendAsync(call, inputs, sequence);
+        return _state.Recorder is { } recorder ? RecordedCallAsync(recorder, call, inputs, sequence, timeout) : SendAsync(call, inputs, sequence, timeout);
     }
 
-    private async ValueTask<PipelineCallResult> RecordedCallAsync(Replay.RunRecorder recorder, PipelineCall call, RequestInputs? inputs, int sequence)
+    private async ValueTask<PipelineCallResult> RecordedCallAsync(
+        Replay.RunRecorder recorder, PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout)
     {
         // What was passed, as it is now: the operator may change its inputs for its next call while this one runs.
         var passed = Replay.ReplayJson.Inputs(inputs);
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var result = await SendAsync(call, inputs, sequence).ConfigureAwait(false);
+        var result = await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false);
         recorder.PipelineCall(NodeId, sequence, call.PipelineId, passed, result, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         return result;
     }
 
-    private ValueTask<PipelineCallResult> SendAsync(PipelineCall call, RequestInputs? inputs, int sequence)
+    private ValueTask<PipelineCallResult> SendAsync(PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout)
     {
         var budget = BudgetRemaining;
+        if (timeout is { } most && most < budget)
+        {
+            budget = most;
+        }
+
         if (budget <= TimeSpan.Zero)
         {
             return new(PipelineCallResult.Failed(call.PipelineId, $"pipeline '{call.PipelineId}' was not called: nothing is left of the node's budget"));

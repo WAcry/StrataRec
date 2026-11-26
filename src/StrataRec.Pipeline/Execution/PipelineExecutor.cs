@@ -275,14 +275,29 @@ internal sealed class RequestState
     /// attempt, since a fallback node may run for several nodes, and each of its calls needs a place of its own (a seed, a
     /// record a replay finds). Calls made at once from several threads each get one, in no repeatable order.
     /// </summary>
-    public int NextPipelineCall(string nodeId)
+    public int NextPipelineCall(string nodeId) => SkipPipelineCalls(nodeId, 1);
+
+    /// <summary>
+    /// Passes over <paramref name="count"/> of the node's places, returning the first: the calls an attempt made that a
+    /// replay does not run (one recorded as timed out), so the calls after them find their own records.
+    /// </summary>
+    public int SkipPipelineCalls(string nodeId, int count)
     {
         lock (this)
         {
             _pipelineCalls ??= new Dictionary<string, int>(StringComparer.Ordinal);
             _pipelineCalls.TryGetValue(nodeId, out var next);
-            _pipelineCalls[nodeId] = next + 1;
+            _pipelineCalls[nodeId] = next + count;
             return next;
+        }
+    }
+
+    /// <summary>How many pipeline calls the node has made in the run so far.</summary>
+    public int PipelineCallsOf(string nodeId)
+    {
+        lock (this)
+        {
+            return _pipelineCalls is not null && _pipelineCalls.TryGetValue(nodeId, out var made) ? made : 0;
         }
     }
 
@@ -488,6 +503,7 @@ internal sealed class PipelineExecutor
 
             cancellationToken.ThrowIfCancellationRequested(); // as before each node: before the result is built and logged as returned
             result ??= await BuildResultAsync(state, request, start, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested(); // a result built while the caller cancelled (a fetch it cut short reads as failed) is nobody's
             if (state.Explainer is { } explainer)
             {
                 result.Explanation = explainer.Build(plan.PipelineId, result.Succeeded, result.Items.Count);
@@ -767,7 +783,12 @@ internal sealed class PipelineExecutor
             if (recorded?.Timing == ReplayTiming.TimedOut)
             {
                 MarkParamTriggers(state, node);
-                state.Recorder?.Attempt(node.NodeId, ReplayTiming.TimedOut, recorded.BudgetMs ?? budgetMs);
+                if (recorded.PipelineCalls > 0)
+                {
+                    state.SkipPipelineCalls(node.NodeId, recorded.PipelineCalls); // the calls the attempt made, which is not run again
+                }
+
+                state.Recorder?.Attempt(node.NodeId, ReplayTiming.TimedOut, recorded.BudgetMs ?? budgetMs, recorded.PipelineCalls);
                 return new Attempt(AttemptKind.Failed, $"timed out after {recorded.BudgetMs ?? budgetMs:0} ms");
             }
         }
@@ -791,6 +812,7 @@ internal sealed class PipelineExecutor
                 : long.MaxValue;
             var budget = new AttemptBudget(cancellationToken, deadline, state.Events, state.RequestId);
             var context = new OperatorContext(state, node.NodeId, node.Effects, budget, node.RequestOutputs);
+            var callsBefore = node.Calls.IsEmpty ? 0 : state.PipelineCallsOf(node.NodeId);
             string? failure;
             var timedOut = false;
             try
@@ -829,7 +851,8 @@ internal sealed class PipelineExecutor
                 budget.Release();
             }
 
-            state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs);
+            state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs,
+                node.Calls.IsEmpty ? 0 : state.PipelineCallsOf(node.NodeId) - callsBefore);
 
             if (failure is not null)
             {
@@ -1391,7 +1414,10 @@ internal sealed class PipelineExecutor
                     state.Triggered, state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
             }
 
-            if (expression.ColumnReference is { } column && state.ReadColumn(column.FixedSlot, column.Id) is { } storage && storage.Type == types[c])
+            // The same storage whatever the nullability says: a node's version of a column (col.x@node) is nullable where
+            // the column is not, and a row without a value reads as missing either way.
+            if (expression.ColumnReference is { } column && state.ReadColumn(column.FixedSlot, column.Id) is { } storage
+                && storage.Type.AsNullable() == types[c].AsNullable())
             {
                 // A column is read from its own storage, as a tap reads it: nothing to evaluate, and no buffer of the
                 // table's size for the few rows returned (2 MB for a 128-float embedding over 4,096 rows, audit of f47a255).
@@ -1419,7 +1445,8 @@ internal sealed class PipelineExecutor
                     producers[name] = plan.Nodes[producer].NodeId;
                 }
             }
-            else if (expression.ColumnReference is { FixedSlot: >= 0 } && PinnedProducer(output, name) is { } pinned && TapCapture.Produced(state, pinned))
+            else if (expression.Reads.Count == 1 && expression.Reads[0] is { Kind: SymbolKind.Column, FixedSlot: >= 0 }
+                && PinnedProducer(output, name) is { } pinned && TapCapture.Produced(state, pinned))
             {
                 producers[name] = pinned; // col.x@node always reads that node's version, as a tap's lineage has it
             }
@@ -1438,9 +1465,20 @@ internal sealed class PipelineExecutor
             results = computed!;
         }
 
-        if (state.Batches is not null)
+        // The rows are about to be logged as returned (the output's taps), and the result handed over: not for a caller that
+        // cancelled while it was built (the output's features and values are awaited above). A cancellation that lands
+        // while the taps fire takes back what they captured: the abort delivers what the nodes logged, never an exposure
+        // nobody received.
+        cancellationToken.ThrowIfCancellationRequested();
+        if (state.Batches is { } captured)
         {
+            var before = captured.Count;
             await TapCapture.OutputAsync(state, rows, cancellationToken).ConfigureAwait(false);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                captured.RemoveRange(before, captured.Count - before);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
         }
 
         var ids = new EntityKey[count];

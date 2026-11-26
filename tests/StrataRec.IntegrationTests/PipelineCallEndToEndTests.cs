@@ -747,4 +747,102 @@ public sealed class PipelineCallEndToEndTests
         var complete = PlanCompiler.Compile(request, host.Environment);
         Assert.True(complete.Succeeded, string.Join("\n", complete.Diagnostics));
     }
+
+    // ---- Review of f59fe2a..525e990 ----
+
+    /// <summary>
+    /// A replay that skips an attempt recorded as timed out skips the calls it made: the fallback node's second run finds
+    /// its own call, not the first run's (second review, finding 1: numbered over the run, the second call was answered
+    /// with the first one's failure, and no gap was reported).
+    /// </summary>
+    [Fact]
+    public async Task AReplayThatSkipsATimedOutAttempt_SkipsItsCalls()
+    {
+        const string Nodes = """
+            "a": { "order": 200, "op": "PipelineSource@1", "on_failure": "fallback", "fallback": "backup", "config": { "pipeline": "other", "limit_param": "promoted_k", "columns": { "promo.bid": "bid" }, "mark": "is_promoted" } },
+            "b": { "order": 210, "op": "PipelineSource@1", "on_failure": "fallback", "fallback": "backup", "config": { "pipeline": "other", "limit_param": "promoted_k", "columns": { "promo.bid": "bid" }, "mark": "is_promoted" } },
+            "backup": { "role": "fallback", "op": "PipelineSource@1", "timeout_ms": 400, "on_failure": "skip",
+                        "config": { "pipeline": "promoted", "limit_param": "promoted_k", "inputs": { "slots": "3" }, "columns": { "promo.bid": "bid" }, "mark": "is_promoted" } }
+            """;
+        var host = Host(callNode: Nodes, more: root => File.WriteAllText(Path.Combine(root, "pipelines", "other.jsonc"),
+            Promoted.Replace("\"pipeline_id\": \"promoted\"", "\"pipeline_id\": \"other\"", StringComparison.Ordinal)
+                .Replace("\"slots\": { \"type\": \"int64\" }", "\"slots\": { \"type\": \"int64?\" }", StringComparison.Ordinal)
+                .Replace("+ ctx.request.slots", "+ (ctx.request.slots ?? 0)", StringComparison.Ordinal)));
+        var asked = 0;
+        var provider = new Provider(async (context, token) =>
+        {
+            if (context.PipelineId == "promoted" && Interlocked.Increment(ref asked) == 1)
+            {
+                await Task.Delay(Timeout.Infinite, token); // the first call of promoted waits for its arms until the node's time is up
+            }
+
+            return [];
+        });
+        var engine = EngineWith(host, provider: provider);
+        var ct = TestContext.Current.CancellationToken;
+
+        var recorded = await engine.ExecuteAsync(Recorded(), ct);
+
+        Assert.True(recorded.Succeeded, recorded.Error);
+        Assert.NotEmpty(PromotedRows(recorded)); // from the fallback's second run
+        Assert.Equal(new[] { ("a", 0, false), ("b", 0, false), ("backup", 0, false), ("backup", 1, true) },
+            recorded.Recording!.Runs[0].PipelineCalls.Select(c => (c.Node, c.Seq, c.Succeeded)));
+        var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)), cancellationToken: ct);
+        Assert.Empty(outcome.Report.Gaps);
+        Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
+        Assert.Equal(recorded.Items.Select(i => i.Id), outcome.Result.Items.Select(i => i.Id));
+    }
+
+    /// <summary>
+    /// A forced arm of a pipeline only the request's fallback pipeline calls is that pipeline's to run, not an unknown arm
+    /// (second review): the platform's list was taken, the debugger's refused.
+    /// </summary>
+    [Fact]
+    public async Task AForcedArmOfAPipelineTheFallbackPipelineCalls_IsAccepted()
+    {
+        var host = Host(more: root => File.WriteAllText(Path.Combine(root, "pipelines", "plain.jsonc"),
+            Promoted.Replace("\"pipeline_id\": \"promoted\"", "\"pipeline_id\": \"plain\", \"fallback_pipeline\": \"feed\"", StringComparison.Ordinal)));
+        var engine = EngineWith(host, null, null, "promoted", "feed", "plain");
+
+        var result = await engine.ExecuteAsync(
+            Request("plain", force: ["exp_promoted/few"], inputs: new RequestInputs().Set("user_id", 1001).Set("slots", 3)), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+    }
+
+    /// <summary>
+    /// A run a called run called says the whole path of calls in its logs: a pipeline called twice numbers its own calls
+    /// alike, and its two runs' calls were both <c>feed/promoted#0</c> (second review).
+    /// </summary>
+    [Fact]
+    public async Task ARunCalledByACalledRun_SaysTheWholePathOfCalls()
+    {
+        const string Outer = """
+            {
+              "pipeline_id": "outer",
+              "entity_key_type": "int64",
+              "request_schema": { "user_id": { "type": "int64?" }, "country": { "type": "string?" } },
+              "param_schema": { "k": { "type": "int64", "min": 1, "max": 100 } },
+              "params": { "k": 50 },
+              "nodes": {
+                "x": { "order": 100, "op": "PipelineSource@1", "config": { "pipeline": "feed", "limit_param": "k" } },
+                "y": { "order": 200, "op": "PipelineSource@1", "config": { "pipeline": "feed", "limit_param": "k" } }
+              },
+              "output": { "limit_param": "k", "columns": {} }
+            }
+            """;
+        var host = Host(more: root => File.WriteAllText(Path.Combine(root, "pipelines", "outer.jsonc"), Outer));
+        var engine = EngineWith(host, null, null, "promoted", "feed", "outer");
+        var request = new RecRequest
+        {
+            PipelineId = "outer", RequestId = "req-call", Inputs = new RequestInputs().Set("user_id", 1001), Assignment = ["exp_promoted/few"],
+            Deadline = HomeFeedTestHost.Deadline, TimeMs = 1_767_225_600_000, Debug = new DebugOptions { CaptureLogs = true },
+        };
+
+        var result = await engine.ExecuteAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(new[] { "outer/x#0 > feed/promoted#0", "outer/y#0 > feed/promoted#0" },
+            result.LogBatches!.Where(b => b.PipelineId == "promoted").Select(b => b.CalledBy).Order());
+    }
 }

@@ -19,8 +19,11 @@ public sealed class SlotBlendConfig
     [Description("Parameter (int64) holding the most rows of the blended list.")]
     public required string LimitParam { get; init; }
 
-    [Description("Parameter (int64) holding how many organic rows come before each sponsored row: 3 puts them at ranks 4, 8, …; 0 places none.")]
+    [Description("Parameter (int64) holding how many organic rows come before each sponsored row: 3 puts them at ranks 4, 8, …; 0 places none, and does not call the sponsored pipeline.")]
     public required string EveryParam { get; init; }
+
+    [Description("The most the sponsored pipeline may take, in milliseconds; when it takes longer the page is served without sponsored rows. Without it, as long as the node has.")]
+    public int? SponsoredTimeoutMs { get; init; }
 
     [Description("The organic pipeline's output column to take as a row's score, e.g. score.")]
     public required string OrganicScore { get; init; }
@@ -53,7 +56,11 @@ public sealed class SlotBlendConfig
 /// budget. Both calls are started before either is awaited, so the two pipelines run at once.</item>
 /// <item>A call never throws for a pipeline that failed: its result says so. Here a page without the organic list is no
 /// page (the node fails, and its <c>on_failure</c> decides), while one without sponsored rows is served as it is
-/// (<see cref="OperatorContext.ReportDegraded"/>).</item>
+/// (<see cref="OperatorContext.ReportDegraded"/>). A call the node can do without gets a time limit of its own
+/// (<c>sponsored_timeout_ms</c>): a called run otherwise has all that is left of the node's budget, and a slow one would
+/// time the node out.</item>
+/// <item>It is a row source like any other: it appends only keys the request has not seen
+/// (<c>context.Table.ContainsKey</c>), and says how many rows it may append.</item>
 /// <item>Each called pipeline writes its own logs, and a recording of this request holds what each call returned, so a
 /// replay needs neither pipeline served.</item>
 /// </list>
@@ -93,6 +100,12 @@ public sealed class SlotBlendFactory : IOperatorFactory
             return null;
         }
 
+        if (config.SponsoredTimeoutMs is <= 0)
+        {
+            context.Error("/sponsored_timeout_ms", "SLOT_BLEND_TIMEOUT", "'sponsored_timeout_ms' must be positive.", "leave it out to give the call all the node has");
+            ok = false;
+        }
+
         if (!score.Type.IsFloatStorage || score.Type.IsList)
         {
             context.Error("/score_col", "COLUMN_TYPE_MISMATCH", $"Column '{config.ScoreCol}' is {score.Type}; the blend writes a score.", "declare it as float32");
@@ -109,69 +122,86 @@ public sealed class SlotBlendFactory : IOperatorFactory
         ok &= context.CallAppendsRows(organic!, "/organic") & context.CallAppendsRows(sponsored!, "/sponsored");
         ok = ok && context.TryCallColumn(organic!, config.OrganicScore, "/organic_score", score.Type)
             & context.TryCallColumn(sponsored!, config.SponsoredScore, "/sponsored_score", score.Type);
-        return ok ? new SlotBlend(organic!, sponsored!, config.OrganicScore, config.SponsoredScore, limit, every, score, mark) : null;
+        TimeSpan? wait = config.SponsoredTimeoutMs is { } ms ? TimeSpan.FromMilliseconds(ms) : null;
+        return ok ? new SlotBlend(organic!, sponsored!, config.OrganicScore, config.SponsoredScore, limit, every, score, mark, wait) : null;
     }
 
     private sealed class SlotBlend(
-        PipelineCall organic, PipelineCall sponsored, string organicScore, string sponsoredScore, ParamRef limit, ParamRef every, OutputColumn score, OutputColumn mark)
+        PipelineCall organic, PipelineCall sponsored, string organicScore, string sponsoredScore, ParamRef limit, ParamRef every, OutputColumn score, OutputColumn mark,
+        TimeSpan? sponsoredTimeout)
         : Operator
     {
         /// <summary>A row source says how many rows it may append: the request's memory is sized by it.</summary>
-        public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => (int)parameters[limit.Id].AsInt64();
+        public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => Count(parameters[limit.Id]);
+
+        /// <summary>A parameter's count; none for one without a value (a map's key set to null).</summary>
+        private static int Count(in ScalarValue value) => value.IsMissing ? 0 : (int)Math.Clamp(value.AsInt64(), 0, int.MaxValue);
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
             // Started one after the other, awaited afterwards: the two pipelines run at once, and the calls are numbered
-            // in this order every time, which is what their seeds are derived from.
+            // in this order every time, which is what their seeds are derived from. No sponsored rows, no call.
+            var gap = Count(context.Param(every));
             var organicCall = context.CallPipelineAsync(organic).AsTask();
-            var sponsoredCall = context.CallPipelineAsync(sponsored).AsTask();
+            var sponsoredCall = gap > 0 ? context.CallPipelineAsync(sponsored, timeout: sponsoredTimeout).AsTask() : null;
             var list = await organicCall;
-            var ads = await sponsoredCall;
+            var ads = sponsoredCall is null ? null : await sponsoredCall;
             if (!list.Succeeded)
             {
                 context.Fail(list.Error ?? $"pipeline '{organic.PipelineId}' failed");
                 return;
             }
 
-            if (!ads.Succeeded)
+            if (ads is { Succeeded: false })
             {
                 context.ReportDegraded(ads.Error ?? $"pipeline '{sponsored.PipelineId}' failed"); // the page is served without sponsored rows
+                ads = null;
             }
 
             var organicScores = list.Columns.IndexOf(organicScore);
-            var sponsoredScores = ads.Succeeded ? ads.Columns.IndexOf(sponsoredScore) : -1;
-            if (organicScores < 0 || (ads.Succeeded && sponsoredScores < 0))
+            var sponsoredScores = ads?.Columns.IndexOf(sponsoredScore) ?? 0;
+            if (organicScores < 0 || sponsoredScores < 0)
             {
                 context.Fail("a called pipeline returned no score column");
                 return;
             }
 
-            // The placement: organic rows in their order, a sponsored one after every `gap` of them, none twice.
-            var most = (int)Math.Min(context.Param(limit).AsInt64(), context.Table.FreeRows);
-            var gap = (int)context.Param(every).AsInt64();
+            // The placement: organic rows in their order, a sponsored one after every `gap` of them. A row source appends
+            // only keys the request has not seen: one already there (an earlier node's) is passed over, and takes no place.
+            var table = context.Table;
+            var most = Math.Min(Count(context.Param(limit)), table.FreeRows);
             var keys = new List<long>(most);
-            var scores = new List<double>(most);
+            var scores = new List<ScalarValue>(most);
             var flags = new List<bool>(most);
             var placed = new HashSet<long>();
             var nextAd = 0;
             var sinceAd = 0;
             for (var i = 0; i < list.Columns.Count && keys.Count < most; i++)
             {
-                if (gap > 0 && sinceAd == gap && TakeAd(ads, sponsoredScores, placed, list, ref nextAd, out var ad, out var bid) && keys.Count < most - 1)
+                var key = list.Columns.Ids[i];
+                if (table.ContainsKey(key) || !placed.Add(key.Int64Value))
                 {
-                    keys.Add(ad);
-                    scores.Add(bid);
-                    flags.Add(true);
-                    sinceAd = 0;
+                    continue;
                 }
 
-                var id = list.Columns.Ids[i].Int64Value;
-                if (placed.Add(id))
+                keys.Add(key.Int64Value);
+                scores.Add(list.Columns.Column(organicScores)[i]);
+                flags.Add(false);
+                if (++sinceAd == gap && keys.Count < most && ads is not null)
                 {
-                    keys.Add(id);
-                    scores.Add(list.Columns.Column(organicScores)[i].AsFloat64());
-                    flags.Add(false);
-                    sinceAd++;
+                    sinceAd = 0;
+                    while (nextAd < ads.Columns.Count)
+                    {
+                        var at = nextAd++;
+                        var ad = ads.Columns.Ids[at];
+                        if (!table.ContainsKey(ad) && !Contains(list, ad.Int64Value) && placed.Add(ad.Int64Value))
+                        {
+                            keys.Add(ad.Int64Value);
+                            scores.Add(ads.Columns.Column(sponsoredScores)[at]);
+                            flags.Add(true);
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -185,33 +215,21 @@ public sealed class SlotBlendFactory : IOperatorFactory
             var markColumn = (ScalarColumn<bool>)context.Output(mark);
             for (var i = 0; i < keys.Count; i++)
             {
-                ColumnValues.Set(scoreColumn, first + i, ScalarValue.FromFloat64(scores[i]));
+                // A score that is missing stays missing: the call was declared to read it into this column's type, so a
+                // column that cannot be missing never gets one.
+                if (!ColumnValues.TrySet(scoreColumn, first + i, scores[i]))
+                {
+                    context.Fail($"a called pipeline returned the score {scores[i]}, which '{score.Name}' ({scoreColumn.Type}) cannot hold");
+                    return;
+                }
+
                 markColumn.Set(first + i, flags[i]);
             }
 
-            scoreColumn.SetValid(first, keys.Count);
             markColumn.SetValid(first, keys.Count);
         }
 
-        /// <summary>The next sponsored row that is not in the organic list and was not placed yet.</summary>
-        private static bool TakeAd(PipelineCallResult ads, int scores, HashSet<long> placed, PipelineCallResult list, ref int next, out long id, out double bid)
-        {
-            while (ads.Succeeded && next < ads.Columns.Count)
-            {
-                var at = next++;
-                id = ads.Columns.Ids[at].Int64Value;
-                if (!placed.Contains(id) && !Contains(list, id) && placed.Add(id))
-                {
-                    bid = ads.Columns.Column(scores)[at].AsFloat64();
-                    return true;
-                }
-            }
-
-            id = 0;
-            bid = 0;
-            return false;
-        }
-
+        /// <summary>Whether the organic list has the id: a sponsored row is not one the page shows anyway.</summary>
         private static bool Contains(PipelineCallResult list, long id)
         {
             foreach (var key in list.Columns.Ids)

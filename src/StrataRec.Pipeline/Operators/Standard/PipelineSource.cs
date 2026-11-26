@@ -110,7 +110,7 @@ public sealed class PipelineSourceFactory : IOperatorFactory
             else if (column.Type.Kind != StorageKind.Bool || column.Type.IsList)
             {
                 context.Error("/mark", "COLUMN_TYPE_MISMATCH", $"PipelineSource@1 writes '{config.Mark}' as bool, but it is declared as {column.Type}.",
-                    "declare it as bool, e.g. { \"type\": \"bool\", \"default\": false }, or leave it undeclared");
+                    "declare it as { \"type\": \"bool?\" } and read it as 'col.x ?? false', or leave it undeclared");
                 ok = false;
             }
             else

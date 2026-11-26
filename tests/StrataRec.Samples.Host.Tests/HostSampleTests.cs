@@ -292,6 +292,71 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Empty(home.Json["experiments"]!["ignored"]!.AsArray());
     }
 
+    /// <summary>The home page on a copy of the workspace, edited, as <c>stratarec run</c> serves it with its trace.</summary>
+    private async Task<JsonNode> RunHome(Action<string> edit)
+    {
+        var root = CopyOfTheWorkspace();
+        edit(root);
+        var request = Path.Combine(root, "requests", "home.cli.json");
+        await File.WriteAllTextAsync(request, """{ "pipeline_id": "home", "request_id": "req-home", "inputs": { "user_id": 1001, "region": "us" }, "assignment": [] }""",
+            TestContext.Current.CancellationToken);
+        var (code, result, error) = await Stratarec("run", "-c", root, "-r", request, "--trace", "--deadline-ms", SampleBudgets.UntimedMs.ToString(CultureInfo.InvariantCulture));
+        Assert.True(code == 0, error + result.ToJsonString());
+        return result;
+    }
+
+    private static List<(long Id, bool Sponsored)> HomeItems(JsonNode result) =>
+        result["items"]!.AsArray().Select(i => (i!["id"]!.GetValue<long>(), i["columns"]!["sponsored"]!.GetValue<bool>())).ToList();
+
+    /// <summary>
+    /// SlotBlend@1 as a row source among others, and at its edges (second review): a sponsored row may take the page's last
+    /// place; a key an earlier node appended is not appended again; and without sponsored rows the sponsored pipeline is
+    /// not called.
+    /// </summary>
+    [Fact]
+    public async Task TheBlend_PlacesAtThePagesEnd_AppendsNoKeyTwice_AndCallsOnlyWhatItUses()
+    {
+        var home = Path.Combine("pipelines", "home.jsonc");
+
+        // A page of four with a sponsored row after every three: the fourth place is the sponsored row's.
+        var four = HomeItems(await RunHome(root => Edit(Path.Combine(root, home), "\"page_size\": 10", "\"page_size\": 4")));
+        Assert.Equal(new[] { false, false, false, true }, four.Select(i => i.Sponsored));
+
+        // A pinned sponsored row from a node before the blend: the blend passes over its key.
+        var pinned = HomeItems(await RunHome(root =>
+        {
+            var file = Path.Combine(root, home);
+            Edit(file, "\"nodes\": {", "\"nodes\": {\n    \"pin\": { \"order\": 50, \"op\": \"PipelineSource@1\",\n" +
+                "      \"config\": { \"pipeline\": \"sponsored\", \"limit_param\": \"pinned\", \"columns\": { \"score\": \"bid\" }, \"mark\": \"sponsored\" } },");
+            Edit(file, "\"sponsored_every\": { \"type\": \"int64\", \"min\": 0, \"max\": 50 }",
+                "\"sponsored_every\": { \"type\": \"int64\", \"min\": 0, \"max\": 50 },\n    \"pinned\": { \"type\": \"int64\", \"min\": 0, \"max\": 5 }");
+            Edit(file, "\"sponsored_every\": 3", "\"sponsored_every\": 3,\n    \"pinned\": 1");
+        }));
+        Assert.Equal(pinned.Count, pinned.Select(i => i.Id).Distinct().Count());
+        Assert.True(pinned[0].Sponsored);
+
+        // No sponsored rows: the sponsored pipeline is not called.
+        var none = await RunHome(root => Edit(Path.Combine(root, home), "\"sponsored_every\": 3", "\"sponsored_every\": 0"));
+        Assert.Equal(new[] { "trending_feed" }, none["calls"]!.AsArray().Select(c => c!["pipeline"]!.GetValue<string>()));
+        Assert.DoesNotContain(HomeItems(none), i => i.Sponsored);
+    }
+
+    /// <summary>
+    /// Validating one pipeline validates what serving it serves: the pipelines it calls, and their fallback pipelines
+    /// (second review: <c>validate -p home</c> passed, and running it failed on a called pipeline's fallback).
+    /// </summary>
+    [Fact]
+    public async Task ValidatingOnePipeline_ValidatesThePipelinesItCalls_AndTheirFallbacks()
+    {
+        var root = CopyOfTheWorkspace();
+        Edit(Path.Combine(root, "pipelines", "sponsored.jsonc"), "\"pipeline_id\": \"sponsored\",", "\"pipeline_id\": \"sponsored\",\n  \"fallback_pipeline\": \"lost\",");
+
+        var (code, report, _) = await Stratarec("validate", "-c", root, "-p", "home", "--format", "json");
+
+        Assert.Equal(1, code);
+        Assert.Contains(report["diagnostics"]!.AsArray(), d => d!["code"]!.GetValue<string>() == "FALLBACK_PIPELINE_UNKNOWN");
+    }
+
     [Fact]
     public async Task AnUnknownPipeline_Is404()
     {

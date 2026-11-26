@@ -269,8 +269,10 @@ internal sealed class RunRecorder : IFeatureCallHook
     public void Remaining(double milliseconds) => _remainingMs = double.IsFinite(milliseconds) ? Math.Round(milliseconds, 3) : null;
 
     /// <summary>How the current position's node (or its fallback) ended relative to its budget.</summary>
-    public void Attempt(string node, string timing, double budgetMs) =>
-        (_attempts ??= new List<ReplayAttemptRecord>()).Add(new ReplayAttemptRecord { Node = node, Timing = timing, BudgetMs = Math.Round(budgetMs, 3) });
+    /// <param name="pipelineCalls">How many calls of other pipelines the attempt made (<see cref="ReplayAttemptRecord.PipelineCalls"/>).</param>
+    public void Attempt(string node, string timing, double budgetMs, int pipelineCalls = 0) =>
+        (_attempts ??= new List<ReplayAttemptRecord>()).Add(
+            new ReplayAttemptRecord { Node = node, Timing = timing, BudgetMs = Math.Round(budgetMs, 3), PipelineCalls = pipelineCalls });
 
     /// <summary>Closes the current position with its outcome.</summary>
     public void Position(in NodeOutcome outcome, string category)

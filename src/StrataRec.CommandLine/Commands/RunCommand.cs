@@ -168,7 +168,7 @@ internal static class RunCommand
         // The engine loads the local feature tables (design 6.6) and instances the plan binds before it serves; disposing
         // it stops their sources.
         await using var engine = new RecEngine(reference.PlanEnvironment());
-        var (diagnostics, notice) = await LoadAsync(engine, reference, release, environment, pipelineId, cancellationToken).ConfigureAwait(false);
+        var (diagnostics, notices) = await LoadAsync(engine, reference, release, environment, pipelineId, cancellationToken).ConfigureAwait(false);
         if (diagnostics.HasErrors || !engine.TryGetRequestSchema(pipelineId, out var schema))
         {
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: locator);
@@ -180,9 +180,9 @@ internal static class RunCommand
             return 1;
         }
 
-        if (notice is not null)
+        if (notices.Count > 0)
         {
-            Output.Diagnostics(new[] { notice }, "text", errors);
+            Output.Diagnostics(notices, "text", errors);
         }
 
         // The inputs as a service reads them (RequestSchema.TryRead): the same rules and words, here at file:line:column.
@@ -302,14 +302,14 @@ internal static class RunCommand
     /// workspace, or the manifest read already (<paramref name="release"/>), as a node loads it. Every diagnostic of the
     /// load, and the warning that a manifest's fallback is not loaded, if it has one.
     /// </summary>
-    private static async Task<(DiagnosticBag Diagnostics, ConfigDiagnostic? Notice)> LoadAsync(
+    private static async Task<(DiagnosticBag Diagnostics, List<ConfigDiagnostic> Notices)> LoadAsync(
         RecEngine engine, ConfigRef reference, (ReleaseManifest Manifest, string Id, IArtifactStore Store)? release, string environment, string pipelineId,
         CancellationToken cancellationToken)
     {
         if (release is not { } read)
         {
             return (await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, reference.Text, environment, new[] { pipelineId }, cancellationToken)
-                .ConfigureAwait(false), null);
+                .ConfigureAwait(false), []);
         }
 
         var diagnostics = new DiagnosticBag();
@@ -320,21 +320,23 @@ internal static class RunCommand
             diagnostics.Error("MANIFEST_NOT_APPLIED", "manifest:" + read.Id, string.Empty, $"The manifest was not applied: {loaded.Reason}.");
         }
 
-        ConfigDiagnostic? notice = null;
+        // Each on its own: a pipeline may both fall back and call.
+        var notices = new List<ConfigDiagnostic>();
         if (loaded.Applied && engine.TryGetPipeline(pipelineId, out var served) && served.FallbackPipeline is { } fallback && fallback != pipelineId)
         {
-            notice = new ConfigDiagnostic(DiagnosticSeverity.Warning, "RUN_FALLBACK_NOT_LOADED", "manifest:" + read.Id, string.Empty,
+            notices.Add(new ConfigDiagnostic(DiagnosticSeverity.Warning, "RUN_FALLBACK_NOT_LOADED", "manifest:" + read.Id, string.Empty,
                 $"Pipeline '{pipelineId}' falls back to '{fallback}', which a run on one manifest does not load: a request that fails here does not fall back.",
-                "run on the workspace (-c) to try the fallback too");
-        }
-        else if (loaded.Applied && engine.TryGetPipeline(pipelineId, out var calling) && !calling.Plan.Calls.IsEmpty)
-        {
-            notice = new ConfigDiagnostic(DiagnosticSeverity.Warning, "RUN_CALLED_NOT_LOADED", "manifest:" + read.Id, string.Empty,
-                $"Pipeline '{pipelineId}' calls {string.Join(", ", calling.Plan.Calls)}, which a run on one manifest does not load: those calls fail.",
-                "run on the workspace (-c) to run the pipelines it calls too");
+                "run on the workspace (-c) to try the fallback too"));
         }
 
-        return (diagnostics, notice);
+        if (loaded.Applied && engine.TryGetPipeline(pipelineId, out var calling) && !calling.Plan.Calls.IsEmpty)
+        {
+            notices.Add(new ConfigDiagnostic(DiagnosticSeverity.Warning, "RUN_CALLED_NOT_LOADED", "manifest:" + read.Id, string.Empty,
+                $"Pipeline '{pipelineId}' calls {string.Join(", ", calling.Plan.Calls)}, which a run on one manifest does not load: those calls fail.",
+                "run on the workspace (-c) to run the pipelines it calls too"));
+        }
+
+        return (diagnostics, notices);
     }
 
     private static string AsPath(string path) => path.StartsWith('-') ? "./" + path : path;

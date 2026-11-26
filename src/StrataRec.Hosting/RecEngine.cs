@@ -197,15 +197,19 @@ public sealed class DebugOptions
 }
 
 /// <summary>One run of a pipeline a node of another called, as a request's trace shows it (<see cref="RecResult.Calls"/>).</summary>
+/// <param name="CalledBy">
+/// The calls from the request's pipeline down to this run, as its logs say them (<c>LogBatch.CalledBy</c>):
+/// <c>home/blend#0</c>, or <c>home/blend#1 &gt; inner/blend#0</c> for a run a called run called.
+/// </param>
 /// <param name="Caller">The pipeline whose node called.</param>
 /// <param name="Node">The node that called.</param>
-/// <param name="Sequence">The call's place among the calls of the node's attempt, from 0.</param>
+/// <param name="Sequence">The call's place among the calls the node made in its run, from 0.</param>
 /// <param name="PipelineId">The pipeline called.</param>
 /// <param name="Error">Why the call failed: the pipeline is not served, does not fit the call, rejected its inputs, failed, or had no time.</param>
 /// <param name="Arms">The arms the called run ran; empty when it did not run.</param>
 /// <param name="Trace">The called run's node outcomes; empty when it did not run.</param>
 public sealed record CalledRun(
-    string Caller, string Node, int Sequence, string PipelineId, bool Succeeded, string? Error, double ElapsedMs, IReadOnlyList<string> Arms,
+    string CalledBy, string Caller, string Node, int Sequence, string PipelineId, bool Succeeded, string? Error, double ElapsedMs, IReadOnlyList<string> Arms,
     IReadOnlyList<NodeOutcome> Trace);
 
 /// <summary>Assignment and trigger record of a request (design 12.6).</summary>
@@ -777,7 +781,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         IReadOnlyList<string>? merged = null; // the arms such a plan has merged in: it runs with none of its own
         try
         {
-            cancellationToken.ThrowIfCancellationRequested(); // a caller that cancelled already is not served
             // Entered (see Enter) until the finally below; each run joins the lease for as long as its calls run.
             pipeline = Enter(request.PipelineId, out var disposed);
             if (pipeline is null)
@@ -786,6 +789,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                     ? throw new ObjectDisposedException(nameof(RecEngine), "The engine is disposed: it takes no request.")
                     : result = Rejected(request, RecErrorKind.UnknownPipeline, $"Unknown pipeline '{request.PipelineId}'.");
             }
+
+            // A caller that cancelled already is not served: counted as an aborted request of its pipeline, as one
+            // cancelled while it runs is.
+            cancellationToken.ThrowIfCancellationRequested();
 
             // The caller's mistakes first, against the plan this request runs (a host may have read the inputs with an
             // older one): nothing is asked of the assignment provider for a request that cannot run, and the fallback
@@ -941,7 +948,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// </summary>
     private IReadOnlyList<string> OwnForced(ExecutionPlan plan, IReadOnlyList<string> forced)
     {
-        if (plan.Calls.IsEmpty)
+        if (!Calls(plan, out _))
         {
             return forced;
         }

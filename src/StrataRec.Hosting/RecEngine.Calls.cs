@@ -87,9 +87,7 @@ public sealed partial class RecEngine
                 }
 
                 // Calls end in any order: listed by who called, so the same request lists them alike.
-                _runs?.Sort(static (a, b) => string.CompareOrdinal(a.Caller, b.Caller) is not 0 and var byCaller ? byCaller
-                    : string.CompareOrdinal(a.Node, b.Node) is not 0 and var byNode ? byNode
-                    : a.Sequence.CompareTo(b.Sequence));
+                _runs?.Sort(static (a, b) => string.CompareOrdinal(a.CalledBy, b.CalledBy));
 
                 var ignored = Ignored(result.Experiments.Ignored);
 
@@ -187,17 +185,23 @@ public sealed partial class RecEngine
     /// <param name="pipelineId">The pipeline of the run that calls.</param>
     /// <param name="depth">How many calls led to that run: 0 for a run of the request's own pipeline.</param>
     /// <param name="parent">The calls of the run that called it; null at depth 0.</param>
-    private sealed class RunCalls(RequestCalls scope, string pipelineId, int depth, RunCalls? parent = null) : IPipelineCalls
+    /// <param name="calledBy">Who called that run, as its logs say it (<see cref="Logging.LogBatch.CalledBy"/>); null at depth 0.</param>
+    private sealed class RunCalls(RequestCalls scope, string pipelineId, int depth, RunCalls? parent = null, string? calledBy = null) : IPipelineCalls
     {
         public async ValueTask<PipelineCallResult> CallAsync(PipelineCallRequest call, CancellationToken callerCancellation)
         {
             var started = Stopwatch.GetTimestamp();
             var id = call.Call.PipelineId;
             PipelineResult? ran = null;
+
+            // The calls from the request's pipeline down to this one: a pipeline called twice numbers its own calls alike,
+            // and only the whole path tells its two runs' calls apart.
+            var path = (calledBy is null ? string.Empty : calledBy + " > ")
+                + $"{pipelineId}/{call.Call.NodeId}#{call.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
             var answer = await RunAsync().ConfigureAwait(false);
             if (scope.Traces)
             {
-                scope.Add(new CalledRun(pipelineId, call.Call.NodeId, call.Sequence, id, answer.Succeeded, answer.Error,
+                scope.Add(new CalledRun(path, pipelineId, call.Call.NodeId, call.Sequence, id, answer.Succeeded, answer.Error,
                     Stopwatch.GetElapsedTime(started).TotalMilliseconds, ran?.AssignedArms ?? [], ran?.Outcomes ?? []));
             }
 
@@ -269,8 +273,8 @@ public sealed partial class RecEngine
                         TimeMs = call.TimeMs,
                         CaptureLogs = request.Debug?.CaptureLogs == true,
                         WriteLogs = WritesLogs(request),
-                        Calls = plan.Calls.IsEmpty ? null : new RunCalls(scope, id, depth + 1, this),
-                        CalledBy = $"{pipelineId}/{call.Call.NodeId}#{call.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                        Calls = plan.Calls.IsEmpty ? null : new RunCalls(scope, id, depth + 1, this, path),
+                        CalledBy = path,
                         OnEnd = callee.Bindings.Join(), // last: the executor, called next, ends it on every outcome
                     }, callerCancellation).ConfigureAwait(false);
                     ran = result;
@@ -281,10 +285,16 @@ public sealed partial class RecEngine
                 }
                 finally
                 {
-                    var failed = result is not { Succeeded: true };
-                    callee.Telemetry.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, arms, failed, !failed && result!.Columns.Count == 0,
-                        !failed && result!.Degraded);
-                    callee.Bindings.RequestEnded();
+                    try
+                    {
+                        var failed = result is not { Succeeded: true };
+                        callee.Telemetry.Record(Stopwatch.GetElapsedTime(started).TotalSeconds, arms, failed, !failed && result!.Columns.Count == 0,
+                            !failed && result!.Degraded);
+                    }
+                    finally
+                    {
+                        callee.Bindings.RequestEnded(); // whatever a host's metric listener throws: the plan's lease is not left entered
+                    }
                 }
             }
         }
@@ -404,17 +414,42 @@ public sealed partial class RecEngine
     }
 
     /// <summary>
-    /// The plans served now of the pipelines <paramref name="plan"/>'s nodes call, directly or through the pipelines those
-    /// call, each once.
+    /// The pipelines a request of <paramref name="plan"/> may call: those its nodes call, and those the nodes of its
+    /// fallback pipeline call (the fallback itself runs without experiments; what it calls runs the request's arms).
+    /// </summary>
+    private bool Calls(ExecutionPlan plan, out LoadedPipeline? fallback)
+    {
+        fallback = _pipelines.TryGetValue(plan.PipelineId, out var served) && served.FallbackPipeline is { } id && id != plan.PipelineId
+            && _pipelines.TryGetValue(id, out var loaded) && !loaded.Plan.Calls.IsEmpty ? loaded : null;
+        return !plan.Calls.IsEmpty || fallback is not null;
+    }
+
+    /// <summary>
+    /// The plans served now of the pipelines a request of <paramref name="plan"/> may call (<see cref="Calls"/>),
+    /// directly or through the pipelines those call, each once.
     /// </summary>
     private List<ExecutionPlan> CalledPlans(ExecutionPlan plan)
     {
         var plans = new List<ExecutionPlan>();
+        if (!Calls(plan, out var fallback))
+        {
+            return plans;
+        }
+
         var seen = new HashSet<string>(StringComparer.Ordinal) { plan.PipelineId };
         var pending = new Stack<string>();
         foreach (var called in plan.Calls)
         {
             pending.Push(called);
+        }
+
+        if (fallback is not null)
+        {
+            seen.Add(fallback.Plan.PipelineId);
+            foreach (var called in fallback.Plan.Calls)
+            {
+                pending.Push(called);
+            }
         }
 
         while (pending.TryPop(out var id))
@@ -441,7 +476,7 @@ public sealed partial class RecEngine
     /// <exception cref="ArgumentException">A called pipeline cannot run the arms of it that were forced.</exception>
     private void CheckForcedOfCalled(ExecutionPlan plan, IReadOnlyList<string> forced)
     {
-        if (plan.Calls.IsEmpty || forced.Count < 2)
+        if (forced.Count < 2 || !Calls(plan, out _))
         {
             return;
         }
@@ -471,10 +506,6 @@ public sealed partial class RecEngine
     /// </summary>
     private bool KnownToCalled(ExecutionPlan plan, string armId)
     {
-        if (plan.Calls.IsEmpty)
-        {
-            return false;
-        }
 
         foreach (var called in CalledPlans(plan))
         {
@@ -490,7 +521,7 @@ public sealed partial class RecEngine
     /// <summary>The ids of <paramref name="ignored"/> that no pipeline the plan calls has: what the request really ignored.</summary>
     private IgnoredArm[] WithoutCalled(ExecutionPlan plan, IgnoredArm[] ignored)
     {
-        if (plan.Calls.IsEmpty || ignored.Length == 0)
+        if (ignored.Length == 0 || !Calls(plan, out _))
         {
             return ignored;
         }

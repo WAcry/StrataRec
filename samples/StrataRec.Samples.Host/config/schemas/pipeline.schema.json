@@ -1051,8 +1051,15 @@
                       "type": "string"
                     },
                     "every_param": {
-                      "description": "Parameter (int64) holding how many organic rows come before each sponsored row: 3 puts them at ranks 4, 8, …; 0 places none.",
+                      "description": "Parameter (int64) holding how many organic rows come before each sponsored row: 3 puts them at ranks 4, 8, …; 0 places none, and does not call the sponsored pipeline.",
                       "type": "string"
+                    },
+                    "sponsored_timeout_ms": {
+                      "description": "The most the sponsored pipeline may take, in milliseconds; when it takes longer the page is served without sponsored rows. Without it, as long as the node has.",
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
                     },
                     "organic_score": {
                       "description": "The organic pipeline's output column to take as a row's score, e.g. score.",

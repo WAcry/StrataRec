@@ -13,7 +13,7 @@
 | `Components/CategoryBoost.cs` | `CategoryBoost@1` | `IOperatorFactory` | 配置类即 JSON Schema；只声明 `ColumnWriter`；检查都在编译期；执行时从 `RequestMemory` 租缓冲，不按行分配 |
 | `Components/StockService.cs` | `stock@1` | `IServiceClient` | 过滤节点调用的业务服务：回答关于物品的调用，每项一个 bool（`in_stock`）；一项的回答只取决于这一项，所以引擎可以随意分批、逐项缓存（绑定声明了 `cache`）和逐项回放；回答不了的调用返回失败状态并说明它回答什么 |
 | `Components/StockFilter.cs` | `StockFilter@1` | `IOperatorFactory` | 调用外部服务的自定义算子：编译期按绑定名取服务（`OperatorCompileContext.Service`），执行时把存活行作为调用的物品经 `OperatorContext.CallAsync` 发出（有界等待、缓存、录制和回放都由引擎做），按回答删行；调用失败交给节点的 `on_failure`（示例里 `skip`，保留全部候选），回答用不了也算失败，从不猜；改了流水线之后回放，没有录制过的候选是回放报告里的缺口：录制里这个服务（同一版本，哪个节点调用的都算）有过这个输出时按 bool 缺口的值 false 回答，所以被删掉，看缺口才能和真没库存的区分；录制里这个服务根本没有这个输出（录制时没有调用它）时调用失败，按 `on_failure` 保留全部候选。它还演示算子写请求列：删掉了几个候选写进 `req.stock.dropped`（描述符带 `RequestWriter`，编译期 `TryWriteRequestColumn`，执行时 `SetRequestValue`，节点提交时才发布），流水线用 `output.values` 把它作为 `out_of_stock` 返回给调用方 |
-| `Components/SlotBlend.cs` | `SlotBlend@1` | `IOperatorFactory` | 调用另外两条流水线的自定义算子：编译期声明每次调用和它需要的东西（`TryCallPipeline`、`CallAppendsRows`、`TryCallColumn`），在工作区里对着被调用流水线的接口检查；执行时两次调用先后发起、再一起等（`OperatorContext.CallPipelineAsync`），所以两条流水线并发运行；调用失败是一个结果，没有主列表就让节点失败，没有赞助内容只是降级；怎么把赞助行放进列表是它自己的规则 |
+| `Components/SlotBlend.cs` | `SlotBlend@1` | `IOperatorFactory` | 调用另外两条流水线的自定义算子：编译期声明每次调用和它需要的东西（`TryCallPipeline`、`CallAppendsRows`、`TryCallColumn`），在工作区里对着被调用流水线的接口检查；执行时两次调用先后发起、再一起等（`OperatorContext.CallPipelineAsync`），所以两条流水线并发运行；调用失败是一个结果，没有主列表就让节点失败，没有赞助内容只是降级，可有可无的那次调用可以有自己的时限（`sponsored_timeout_ms`）；它和别的行源一样只追加请求没见过的键；怎么把赞助行放进列表是它自己的规则 |
 
 每个文件的注释写了契约的规则（取消、预算、分配、缺失值）以及这个实现为什么这样写。
 

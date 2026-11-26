@@ -77,7 +77,7 @@ internal static class ResultText
             {
                 var how = call.Succeeded ? "succeeded" : $"failed ({call.Error})";
                 var arms = call.Arms.Count == 0 ? string.Empty : $", arms {string.Join(", ", call.Arms)}";
-                output.WriteLine($"  call      {call.Caller}/{call.Node}#{call.Sequence.ToString(CultureInfo.InvariantCulture)} -> {call.PipelineId}: {how}, " +
+                output.WriteLine($"  call      {call.CalledBy} -> {call.PipelineId}: {how}, " +
                                  $"{call.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture)} ms{arms}");
                 foreach (var node in call.Trace)
                 {

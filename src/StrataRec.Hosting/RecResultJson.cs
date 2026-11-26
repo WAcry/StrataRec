@@ -96,6 +96,7 @@ public static class RecResultJson
             foreach (var call in calls)
             {
                 json.WriteStartObject();
+                json.WriteString("called_by", call.CalledBy);
                 json.WriteString("caller", call.Caller);
                 json.WriteString("node", call.Node);
                 json.WriteNumber("seq", call.Sequence);

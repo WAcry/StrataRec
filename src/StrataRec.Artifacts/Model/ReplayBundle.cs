@@ -60,11 +60,14 @@ public sealed class ReplayBundle
     /// always so; 2026-11-21.15 when it is more than sixteen numbers or bools, or strings. 2026-11-22.1 records the result's
     /// request-level values (<c>values</c>, <c>value_types</c>): a bundle before has none, and its replay would differ by
     /// every value the output returns. 2026-11-25.1 records the calls of other pipelines a run's nodes made
-    /// (<c>pipeline_calls</c>), each with what it returned: a build before cannot read them.
+    /// (<c>pipeline_calls</c>), each with what it returned: a build before cannot read them. 2026-11-26.1 numbers a node's
+    /// calls over the run, not over an attempt (a fallback node that ran for two nodes recorded two calls 0), and records
+    /// how many each attempt made, so a replay that skips an attempt recorded as timed out skips its calls too: a bundle
+    /// before has neither, and its second call would be answered with the first one's result.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-25.1";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-26.1";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-25.1\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-26.1\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -188,7 +191,7 @@ public sealed class ReplayPipelineCall
     [Description("The node that called.")]
     public required string Node { get; init; }
 
-    [Description("The call's place among the calls of the node's attempt, from 0.")]
+    [Description("The call's place among the calls the node made in the run, from 0: over all its attempts (a fallback node may run for several nodes).")]
     public int Seq { get; init; }
 
     [Description("The pipeline called.")]
@@ -259,6 +262,9 @@ public sealed class ReplayAttemptRecord
     public required string Timing { get; init; }
 
     public double? BudgetMs { get; init; }
+
+    [Description("How many calls of other pipelines the attempt made: a replay that skips the attempt (timed_out) skips as many of the node's recorded calls.")]
+    public int PipelineCalls { get; init; }
 }
 
 /// <summary>One feature connector call (one max_batch chunk).</summary>

@@ -46,6 +46,74 @@ public sealed class AuditRegressionTests
         Assert.All(result.LogBatches!, batch => Assert.InRange(batch.TimeMs, provider.EnteredAtMs - 5_000, provider.EnteredAtMs));
     }
 
+    /// <summary><c>cancelling_memory@1</c>: <c>memory@1</c>, cancelling the caller when asked for <paramref name="field"/>.</summary>
+    private sealed class CancellingConnectors(CancellationTokenSource caller, string field) : StrataRec.Core.Bindings.IBindingFactory<StrataRec.Features.Connectors.IFeatureSourceConnector>
+    {
+        public const string TypeName = "cancelling_memory@1";
+
+        private readonly StrataRec.Features.Connectors.MemoryFeatureConnectorFactory _memory = new();
+
+        public string Type => TypeName;
+
+        public Type SettingsType => _memory.SettingsType;
+
+        public StrataRec.Features.Connectors.IFeatureSourceConnector Create(StrataRec.Core.Bindings.BindingContext context) => new Connector(_memory.Create(context), caller, field);
+
+        private sealed class Connector(StrataRec.Features.Connectors.IFeatureSourceConnector inner, CancellationTokenSource caller, string field)
+            : StrataRec.Features.Connectors.IFeatureSourceConnector
+        {
+            public string ConnectorType => TypeName;
+
+            public bool Supports(StrataRec.Core.Keys.EntityKeyLayout layout) => inner.Supports(layout);
+
+            public async ValueTask<StrataRec.Features.Connectors.FetchStatus> FetchAsync(
+                StrataRec.Features.Connectors.EntityKeyBatch keys, ReadOnlyMemory<StrataRec.Features.Connectors.CompiledFieldBinding> fields,
+                StrataRec.Features.Connectors.IFeatureBatchWriter writer, CancellationToken cancellationToken)
+            {
+                var status = await inner.FetchAsync(keys, fields, writer, CancellationToken.None);
+                foreach (var binding in fields.Span)
+                {
+                    if (binding.Field == field)
+                    {
+                        caller.Cancel(); // answered, and the caller is gone
+                    }
+                }
+
+                return status;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A caller that cancels while the result is built (here while the output's own feature is fetched) gets no result,
+    /// and its rows are not logged as returned (second review of the cancellation checks: the last check was before the
+    /// result was built, and the output's tap went to the log).
+    /// </summary>
+    [Fact]
+    public async Task ACallerThatCancelsWhileTheResultIsBuilt_GetsNoResult_AndNoRowIsLoggedAsReturned()
+    {
+        using var caller = new CancellationTokenSource();
+        var host = HomeFeedTestHost.LoadModified(root =>
+        {
+            ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"score\": \"col.score.final\",", "\"score\": \"col.score.final\",\n      \"age\": \"col.item.age_hours\",");
+            ReplayTests.Edit(root, "bindings/local.jsonc", "\"item_store\":   { \"connector\": \"memory@1\"", "\"item_store\":   { \"connector\": \"" + CancellingConnectors.TypeName + "\"");
+        });
+        var sink = new StrataRec.Logging.InMemoryLogSink();
+        await using var logs = new StrataRec.Logging.LogPipeline(sink);
+        await using var engine = new RecEngine(
+            host.Environment with { Bindings = PlanEnvironment.DefaultBindings().Add(new CancellingConnectors(caller, "i_age_h")) }, logs: logs);
+        var load = engine.Load(host.Request);
+        Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "home_feed", RequestId = "req-cancel-output", Inputs = HomeFeedTestHost.Inputs(1001, "home"), Assignment = [], Deadline = HomeFeedTestHost.Deadline,
+        }, caller.Token).AsTask());
+
+        await logs.FlushAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain(sink.Snapshot(), batch => batch.TapId == "served"); // the tap of the rows returned
+    }
+
     private sealed class CancelHereConfig;
 
     /// <summary><c>CancelHere@1</c>: a node that computes without I/O, during which the caller cancels.</summary>
@@ -124,7 +192,7 @@ public sealed class AuditRegressionTests
     public async Task AnOutputColumnReadingANodesVersion_HasThatNodeAsItsProducer()
     {
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
-            "\"score\": \"col.score.final\",", "\"score\": \"col.score.final\",\n      \"fused\": \"col.score.final@fusion\","));
+            "\"score\": \"col.score.final\",", "\"score\": \"col.score.final\",\n      \"fused\": \"col.score.final@fusion\",\n      \"doubled\": \"col.score.final@fusion * 2.0\","));
         var engine = new RecEngine(host.Environment);
         Assert.True(engine.Load(host.Request).Applied);
 
@@ -135,11 +203,11 @@ public sealed class AuditRegressionTests
         }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal(("engagement_boost", "fusion"), (result.ColumnProducers!["score"], result.ColumnProducers["fused"]));
+        Assert.Equal(("engagement_boost", "fusion", "fusion"), (result.ColumnProducers!["score"], result.ColumnProducers["fused"], result.ColumnProducers["doubled"]));
     }
 
     /// <summary>A pipeline whose output returns a column <paramref name="times"/> times, under as many names.</summary>
-    internal static string ColumnOutputOf(string id, int times) => $$"""
+    internal static string ColumnOutputOf(string id, int times, string column = "col.clicks") => $$"""
         {
           "pipeline_id": "{{id}}",
           "entity_key_type": "int64",
@@ -151,7 +219,7 @@ public sealed class AuditRegressionTests
             "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "recall_quotas" } },
             "copy":   { "order": 200, "op": "ExpressionScorer@1", "config": { "output_col": "clicks", "expr": "col.item.clicks_7d" } }
           },
-          "output": { "limit_param": "k", "columns": { {{string.Join(", ", Enumerable.Range(1, times).Select(i => $"\"c{i}\": \"col.clicks\""))}} } }
+          "output": { "limit_param": "k", "columns": { {{string.Join(", ", Enumerable.Range(1, times).Select(i => $"\"c{i}\": \"{column}\""))}} } }
         }
         """;
 }
@@ -165,13 +233,15 @@ public sealed class AuditOutputMemoryTests
     /// buffer of the table's size for each (2 MB for a 128-float embedding over 4,096 rows). Returning a column under
     /// five names rents what returning it once does.
     /// </summary>
-    [Fact]
-    public async Task AnOutputColumnThatIsAColumn_RentsNoBufferOfItsOwn()
+    [Theory]
+    [InlineData("col.clicks")]
+    [InlineData("col.clicks@copy")] // a node's version of the column: nullable where the column is not, the same storage
+    public async Task AnOutputColumnThatIsAColumn_RentsNoBufferOfItsOwn(string column)
     {
         var host = HomeFeedTestHost.LoadModified(root =>
         {
-            File.WriteAllText(Path.Combine(root, "pipelines", "once.jsonc"), AuditRegressionTests.ColumnOutputOf("once", 1));
-            File.WriteAllText(Path.Combine(root, "pipelines", "five.jsonc"), AuditRegressionTests.ColumnOutputOf("five", 5));
+            File.WriteAllText(Path.Combine(root, "pipelines", "once.jsonc"), AuditRegressionTests.ColumnOutputOf("once", 1, column));
+            File.WriteAllText(Path.Combine(root, "pipelines", "five.jsonc"), AuditRegressionTests.ColumnOutputOf("five", 5, column));
         });
         var engine = new RecEngine(host.Environment);
         foreach (var id in new[] { "once", "five" })
