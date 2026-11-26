@@ -9,7 +9,6 @@
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" />
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
   <ItemGroup>

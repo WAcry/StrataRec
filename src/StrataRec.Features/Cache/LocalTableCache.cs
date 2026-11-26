@@ -182,7 +182,7 @@ public sealed class LocalTableCache
     private readonly KeyValuePair<string, object?>[][] _keyTags; // [tier * outcomes + outcome]
     private readonly KeyValuePair<string, object?>[][] _writeTags; // [tier * outcomes + outcome]
     private readonly KeyValuePair<string, object?>[] _evictedExpiredTags;
-    private readonly KeyValuePair<string, object?>[] _evictedOldestTags;
+    private readonly KeyValuePair<string, object?>[] _evictedCapacityTags;
     private long _queuedBytes;
     private char[] _chars = new char[256]; // the writer's UTF-8 decoding buffer
 
@@ -201,7 +201,7 @@ public sealed class LocalTableCache
         _keyTags = TagMatrix(tags, Enum.GetValues<CacheKeyOutcome>().Length, static o => OutcomeName((CacheKeyOutcome)o));
         _writeTags = TagMatrix(tags, Enum.GetValues<CacheWriteOutcome>().Length, static o => OutcomeName((CacheWriteOutcome)o));
         _evictedExpiredTags = [tags[0], tags[1], new(StrataRecTags.Outcome, "expired")];
-        _evictedOldestTags = [tags[0], tags[1], new(StrataRecTags.Outcome, "oldest")];
+        _evictedCapacityTags = [tags[0], tags[1], new(StrataRecTags.Outcome, "capacity")];
     }
 
     public CacheTableOptions Options { get; }
@@ -506,16 +506,16 @@ public sealed class LocalTableCache
     }
 
     /// <summary>Counts only the records removed from a version that was published.</summary>
-    internal void CountEvictions(int expired, int oldest)
+    internal void CountEvictions(int expired, int capacity)
     {
         if (expired > 0)
         {
             StrataRecMetrics.CacheEvictions.Add(expired, _evictedExpiredTags);
         }
 
-        if (oldest > 0)
+        if (capacity > 0)
         {
-            StrataRecMetrics.CacheEvictions.Add(oldest, _evictedOldestTags);
+            StrataRecMetrics.CacheEvictions.Add(capacity, _evictedCapacityTags);
         }
     }
 

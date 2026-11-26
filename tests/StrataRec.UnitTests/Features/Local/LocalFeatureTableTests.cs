@@ -597,7 +597,6 @@ public class LocalFeatureTableTests
 
         Assert.Throws<InvalidOperationException>(() => table.Writer.Begin("k".AsSpan(), 1));
         Assert.Throws<InvalidOperationException>(() => default(RecordBuilder).Commit());
-        Assert.Throws<InvalidOperationException>(() => table.Writer.Compact(dropWrittenBefore: 5));
     }
 
     [Fact]
@@ -819,25 +818,6 @@ public class LocalFeatureTableTests
 
         Assert.Throws<ArgumentException>(() => version.Fill(field, foreign, allRows, target, ScalarValue.Missing));
         memory.Release();
-    }
-
-    [Fact]
-    public void CacheTable_DropsRecordsWrittenBeforeACutoff()
-    {
-        var table = Table(mode: LocalTableMode.Cache, options: new LocalFeatureTableOptions { Cache = new CacheTableOptions { TtlMs = 1000 } });
-        for (var id = 1; id <= 10; id++)
-        {
-            // The version of a cache record is its write time.
-            Write(table.Writer, EntityKey.FromInt64(id), writeTime(id), Values(id));
-        }
-
-        table.Writer.Compact(dropWrittenBefore: writeTime(6));
-        var version = table.Pin();
-        Assert.Equal(5, version.RecordCount);
-        Assert.False(version.Find(5L).Found);
-        Assert.Equal(writeTime(6), version.VersionOf(version.Find(6L)));
-
-        static long writeTime(long id) => 1_700_000_000_000 + (id * 1000);
     }
 
     [Fact]

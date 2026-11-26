@@ -296,7 +296,7 @@ public static class StrataRecMetrics
     /// <summary>
     /// Records the in-process table of a <c>cache</c> source or a service's cache dropped to stay within <c>max_bytes</c>. Tags: <c>stratarec.source</c>,
     /// <c>stratarec.entity</c>, <c>stratarec.outcome</c> = <c>expired</c> (past their TTL and stale-if-error window, dropped
-    /// first) | <c>oldest</c> (capacity eviction in insertion order from the SIEVE hand, giving visited records a second chance).
+    /// first) | <c>capacity</c> (still usable, dropped to make room; records read recently are kept longer).
     /// </summary>
     public static readonly Counter<long> CacheEvictions = Meter.CreateCounter<long>(Names.CacheEvictions, "{record}", "Records evicted from the in-process tables of caches.");
 

@@ -26,7 +26,7 @@ namespace StrataRec.Features.Local;
 /// make up more than half of the record and string bytes (and at least
 /// <see cref="LocalFeatureTableOptions.CompactionMinBytes"/>), or when a write would pass <c>max_bytes</c> and superseded
 /// records could be freed. It copies the current record of every key, tombstones included, into a new version
-/// built aside (<see cref="BuildCompacted(long)"/>), which is published whole only when it fits <c>max_bytes</c> (with the
+/// built aside (<see cref="BuildCompacted()"/>), which is published whole only when it fits <c>max_bytes</c> (with the
 /// pending write, when the write asked for it); otherwise it is dropped and the table stays as it was. Updates wait
 /// while it runs.</para>
 /// </remarks>
@@ -82,7 +82,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     /// <summary>The table written to (a cache's writer finds its queue there).</summary>
     internal LocalFeatureTable Table => _table;
 
-    /// <summary>Sees every version <see cref="BuildCompacted(long)"/> builds, installed or discarded: lets a test check that a
+    /// <summary>Sees every version <see cref="BuildCompacted()"/> builds, installed or discarded: lets a test check that a
     /// discarded copy is not kept alive. Null outside tests.</summary>
     internal Action<TableVersion>? CompactedCopyBuilt { get; set; }
 
@@ -179,21 +179,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
     }
 
-    /// <summary>
-    /// Compacts now: copies the current record of every key (and every tombstone) into a new version and publishes it.
-    /// A <c>cache</c> table can drop the records written before <paramref name="dropWrittenBefore"/> on the way.
-    /// </summary>
+    /// <summary>Compacts now: copies the current record of every key (and every tombstone) into a new version and publishes it.</summary>
     /// <exception cref="LocalTableFullException">The compacted copy would not fit <c>max_bytes</c> (laying records out
     /// anew can leave more of the pages' tails empty); it is discarded and the table is unchanged.</exception>
-    public void Compact(long dropWrittenBefore = long.MinValue)
+    public void Compact()
     {
         Discard();
-        if (dropWrittenBefore != long.MinValue && Schema.Mode != LocalTableMode.Cache)
-        {
-            throw new InvalidOperationException("Only cache tables drop records by write time; a local table's versions are event versions.");
-        }
-
-        var next = BuildCompacted(dropWrittenBefore);
+        var next = BuildCompacted();
         if (next.Bytes > _options.MaxBytes)
         {
             throw new LocalTableFullException(Schema, _options.MaxBytes, next.Bytes);
@@ -594,13 +586,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             var avoidableGrowth = _version.IndexGrowthBytes(newKey) + Math.Max(0, _version.PageGrowthBytes(recordBytes) - recordBytes);
             var toFree = Math.Max(1, Math.Max(headroom, required - avoidableGrowth - _options.MaxBytes));
             var deadBefore = cache.NowMs() - cache.MaxLifetimeMs - cache.Options.StaleIfErrorMs;
-            var compacted = BuildCompacted(deadBefore, toFree, _oldPosition, out var expired, out var oldest);
+            var compacted = BuildCompacted(deadBefore, toFree, _oldPosition, out var expired, out var evicted);
             newKey = newKey || compacted.ProbeForWrite(_indexKey, _key.AsSpan(0, _keyLength), out _) == 0;
             var afterEviction = Required(compacted, recordBytes, newKey, strings, out _);
             if (afterEviction <= _options.MaxBytes)
             {
                 Install(compacted);
-                cache.CountEvictions(expired, oldest);
+                cache.CountEvictions(expired, evicted);
                 return newKey;
             }
 
@@ -614,7 +606,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     [MethodImpl(MethodImplOptions.NoInlining)]
     private bool TryCompactForWrite(int recordBytes, bool newKey, bool strings, ref long required, ref long packedBytes)
     {
-        var compacted = BuildCompacted(long.MinValue);
+        var compacted = BuildCompacted();
         // Its pages are packed and its dictionary now contains only strings still in use.
         var afterCompaction = Required(compacted, recordBytes, newKey, strings, out _);
         if (afterCompaction <= _options.MaxBytes)
@@ -759,7 +751,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         if (freeable > 0 && freeable >= _options.CompactionMinBytes && freeable * 2 > _version.RecordBytes + _version.StringBytes
             && freeable >= 2 * _autoCompactionDeclined)
         {
-            var next = BuildCompacted(long.MinValue);
+            var next = BuildCompacted();
             if (next.Bytes <= _options.MaxBytes)
             {
                 Install(next);
@@ -781,24 +773,30 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     /// are remapped into a dictionary containing only live strings. Tombstones prevent a late update from reviving
     /// a deleted key.
     /// </remarks>
-    private TableVersion BuildCompacted(long dropWrittenBefore) =>
-        BuildCompacted(dropWrittenBefore, 0, 0, out _, out _);
+    private TableVersion BuildCompacted() => BuildCompacted(long.MinValue, 0, 0, out _, out _);
 
-    private TableVersion BuildCompacted(long dropWrittenBefore, long bytesToFree, long replacedPosition, out int expired, out int oldest)
+    /// <summary>
+    /// The build of a cache write that needs room (<paramref name="bytesToFree"/> above zero): it also leaves out the
+    /// records written before <paramref name="dropWrittenBefore"/>, the record at <paramref name="replacedPosition"/>
+    /// and the victims that free the rest (<see cref="SelectSurvivors"/>).
+    /// </summary>
+    private TableVersion BuildCompacted(long dropWrittenBefore, long bytesToFree, long replacedPosition, out int expired, out int evicted)
     {
         var old = _version;
         var index = old.Index;
-        var count = index.Count;
-        var sortKeys = ArrayPool<long>.Shared.Rent(count);
-        var slots = ArrayPool<int>.Shared.Rent(count);
-        var stringMap = ArrayPool<int>.Shared.Rent(old.StringCount);
+        var evicting = bytesToFree > 0;
+        // Eviction leaves most pages nearly whole, and copying them is most of its cost: without sharing them a write
+        // under capacity pressure takes about 70% longer and allocates 2.5 times as much (CacheWriteBenchmarks). A shared
+        // page keeps its string codes, which belong to the old dictionary, so only a table without strings shares.
+        var sharing = evicting && old.StringCount == 0;
+        var slots = ArrayPool<int>.Shared.Rent(index.Count);
+        var codeMap = ArrayPool<int>.Shared.Rent(old.StringCount);
+        var droppedReferences = evicting ? ArrayPool<int>.Shared.Rent(old.StringCount) : null;
+        var pagePlan = sharing ? ArrayPool<long>.Shared.Rent(index.Count) : null;
         try
         {
-            var order = sortKeys.AsSpan(0, count);
-            var kept = slots.AsSpan(0, count);
-            var remaining = old.RecordBytes - old.SupersededBytes;
-            expired = oldest = 0;
-            int live = 0;
+            var kept = slots.AsSpan(0, index.Count);
+            var live = 0;
             for (var s = 0; s < index.SlotCount; s++)
             {
                 if (index.Entries[(2 * s) + 1] != 0)
@@ -807,22 +805,27 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 }
             }
 
-            OrderByPosition(kept, order);
+            kept = kept[..live];
+            OrderByPosition(kept);
+            var liveBytes = old.RecordBytes - old.SupersededBytes;
             var hand = old.CacheHand;
-            if (dropWrittenBefore != long.MinValue || bytesToFree > 0)
+            expired = evicted = 0;
+            if (evicting)
             {
-                live = SelectSurvivors(kept, stringMap, dropWrittenBefore, bytesToFree, replacedPosition, ref remaining, ref hand, out expired, out oldest);
+                live = SelectSurvivors(kept, droppedReferences!, dropWrittenBefore, bytesToFree, replacedPosition, ref liveBytes, ref hand, out expired, out evicted);
+                kept = kept[..live];
             }
 
             var next = NewVersion(live);
-            var share = bytesToFree > 0 && old.StringCount == 0;
-            if (share)
+            next.AddRecordBytes(liveBytes);
+            var plan = pagePlan.AsSpan(0, sharing ? live : 0);
+            if (sharing)
             {
-                PlanPageRuns(kept[..live], order[..live]);
+                PlanPages(kept, plan);
             }
 
-            stringMap.AsSpan(0, old.StringCount).Fill(-1);
-            next.AddRecordBytes(remaining);
+            codeMap.AsSpan(0, old.StringCount).Fill(-1);
+            var toPack = liveBytes; // the bytes still to copy into the pages being laid out: each is sized for what is to come
             int sharedEnd = 0, tombstones = 0;
             long sharedPage = 0;
             for (var i = 0; i < live; i++)
@@ -831,18 +834,14 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 var position = index.Entries[entry + 1];
                 var page = old.PageOf(position);
                 var offset = (int)position;
-                if (share && order[i] != 0)
+                if (sharing && plan[i] < 0)
                 {
-                    var run = order[i];
-                    if (run < 0)
-                    {
-                        sharedPage = next.AttachSealedPage(page);
-                        sharedEnd = i - (int)run;
-                    }
-                    else
-                    {
-                        remaining = run;
-                    }
+                    sharedPage = next.AttachSealedPage(page);
+                    sharedEnd = i - (int)plan[i];
+                }
+                else if (sharing && plan[i] > 0)
+                {
+                    toPack = plan[i];
                 }
 
                 var tombstone = (page[offset + RecordLayout.FlagsOffset] & RecordLayout.TombstoneFlag) != 0;
@@ -854,13 +853,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 else
                 {
                     var length = BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
-                    relocated = next.Reserve(length, out var copy, packFor: remaining);
-                    remaining -= length;
+                    relocated = next.Reserve(length, out var copy, packFor: toPack);
+                    toPack -= length;
                     var copyOffset = (int)relocated;
                     page.AsSpan(offset, length).CopyTo(copy.AsSpan(copyOffset));
                     if (!tombstone)
                     {
-                        RemapStrings(copy, copyOffset, next, old.Strings, stringMap);
+                        RemapStrings(copy, copyOffset, next, old.Strings, codeMap);
                         next.Reference(copy, copyOffset, +1);
                     }
                 }
@@ -881,19 +880,31 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
         finally
         {
-            ArrayPool<int>.Shared.Return(stringMap);
             ArrayPool<int>.Shared.Return(slots);
-            ArrayPool<long>.Shared.Return(sortKeys);
+            ArrayPool<int>.Shared.Return(codeMap);
+            if (droppedReferences is not null)
+            {
+                ArrayPool<int>.Shared.Return(droppedReferences);
+            }
+
+            if (pagePlan is not null)
+            {
+                ArrayPool<long>.Shared.Return(pagePlan);
+            }
         }
     }
 
-    // Keep FIFO order whether records are copied or their dense page is shared. The pooled sort workspace stores a
-    // positive byte count at the start of each sparse run, or the negative record count of one sealed page.
-    private void PlanPageRuns(ReadOnlySpan<int> slots, Span<long> runs)
+    /// <summary>
+    /// Decides, page by page, whether the survivors of a page are copied or the page is shared with the new version as it
+    /// is (at least 15/16 of it still live), in <paramref name="plan"/>: at the first survivor of a shared page, minus
+    /// the number of its survivors; at the first survivor of a run of pages to copy, the bytes of the run, which size the
+    /// pages it is packed into; zero elsewhere. Either way the survivors stay in insertion order.
+    /// </summary>
+    private void PlanPages(ReadOnlySpan<int> slots, Span<long> plan)
     {
         var entries = _version.Index.Entries;
-        runs.Clear();
-        var sparse = 0;
+        plan.Clear();
+        var runStart = 0;
         for (var first = 0; first < slots.Length;)
         {
             var position = entries[(2 * slots[first]) + 1];
@@ -914,39 +925,48 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
             if (liveBytes * 16 < (long)page.Length * 15)
             {
-                runs[sparse] += liveBytes;
+                plan[runStart] += liveBytes;
             }
             else
             {
-                runs[first] = first - end;
-                sparse = end;
+                plan[first] = first - end;
+                runStart = end;
             }
 
             first = end;
         }
     }
 
-    private void OrderByPosition(Span<int> slots, Span<long> scratch)
+    /// <summary>Sorts the slots by the position of their records: page order, which is insertion order.</summary>
+    private void OrderByPosition(Span<int> slots)
     {
-        var entries = _version.Index.Entries;
-        if (slots.Length >= 128 && slots.Length <= int.MaxValue / 2
-            && TryOrderDensePages(slots, MemoryMarshal.Cast<long, int>(scratch)))
+        var scratch = ArrayPool<long>.Shared.Rent(slots.Length);
+        try
         {
-            return;
-        }
+            var positions = scratch.AsSpan(0, slots.Length);
+            if (slots.Length >= 128 && slots.Length <= int.MaxValue / 2 && TryOrderDensePages(slots, MemoryMarshal.Cast<long, int>(positions)))
+            {
+                return;
+            }
 
-        var positions = scratch[..slots.Length];
-        for (var i = 0; i < slots.Length; i++)
+            var entries = _version.Index.Entries;
+            for (var i = 0; i < slots.Length; i++)
+            {
+                positions[i] = entries[(2 * slots[i]) + 1];
+            }
+
+            positions.Sort(slots);
+        }
+        finally
         {
-            positions[i] = entries[(2 * slots[i]) + 1];
+            ArrayPool<long>.Shared.Return(scratch);
         }
-
-        positions.Sort(slots);
     }
 
     // Records of similar width often occupy consecutive cells of their pages. If each occupied cell holds just
     // one record start, scanning the cells yields exact page order in linear time. Sparse pages or a collision
-    // fall back to sorting the original slots. Both paths reuse the same scratch space.
+    // fall back to sorting, which is what this saves: without it a write under capacity pressure takes about 70% longer
+    // (CacheWriteBenchmarks).
     private bool TryOrderDensePages(Span<int> slots, Span<int> scratch)
     {
         var version = _version;
@@ -1000,26 +1020,23 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// Leaves the survivors' slots at the start of the span. Drops expired values, then evicts from the SIEVE hand
-    /// in insertion order until the payload charge reaches the byte target.
+    /// Leaves the survivors' slots at the start of the span. Drops expired values, then evicts from the hand in
+    /// insertion order until the payload charge reaches the byte target: SIEVE (Zhang et al., "SIEVE is Simpler than
+    /// LRU", NSDI 2024), where a record read since the hand last passed it loses its mark and stays one more round.
     /// A full cache write replaces every field of its previous record, whose bytes can therefore make room before any
     /// other key is evicted. A timestamp can cover a whole batch, so victims are selected individually. A shared string
     /// frees space only when the last record referencing it goes.
     /// </summary>
     private int SelectSurvivors(
         Span<int> slots, int[] droppedReferences, long dropWrittenBefore, long bytesToFree, long replacedPosition,
-        ref long remaining, ref long hand, out int expired, out int oldest)
+        ref long liveBytes, ref long hand, out int expired, out int evicted)
     {
         var old = _version;
         var entries = old.Index.Entries;
-        expired = oldest = 0;
-        if (bytesToFree > 0)
-        {
-            droppedReferences.AsSpan(0, old.StringCount).Clear();
-        }
-
-        int candidates = 0;
-        int cursor = 0;
+        expired = evicted = 0;
+        droppedReferences.AsSpan(0, old.StringCount).Clear();
+        var candidates = 0;
+        var cursor = 0;
         for (var i = 0; i < slots.Length; i++)
         {
             var slot = slots[i];
@@ -1033,12 +1050,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 {
                     expired++;
                 }
-                remaining -= BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
-                if (bytesToFree > 0)
-                {
-                    bytesToFree -= old.Drop(page, offset, droppedReferences);
-                }
-
+                liveBytes -= BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
+                bytesToFree -= old.Drop(page, offset, droppedReferences);
                 continue;
             }
 
@@ -1096,10 +1109,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 }
 
                 bytesToFree -= old.Drop(page, offset, droppedReferences);
-                remaining -= BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
+                liveBytes -= BinaryPrimitives.ReadInt32LittleEndian(page.AsSpan(offset + RecordLayout.LengthOffset));
                 slots[at] = -1;
                 hand = position + 1; // the copy maps the next newer survivor, or leaves zero to wrap
-                oldest++;
+                evicted++;
             }
         }
 
@@ -1115,7 +1128,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         return kept;
     }
 
-    /// <summary>Makes a version from <see cref="BuildCompacted(long)"/> the one written to, and current unless a reload is
+    /// <summary>Makes a version from <see cref="BuildCompacted()"/> the one written to, and current unless a reload is
     /// building it.</summary>
     private void Install(TableVersion next)
     {

@@ -283,16 +283,16 @@ public class CacheTableTests
     {
         const long MaxBytes = 256 << 10;
         var (table, cache, clock) = Table(maxBytes: MaxBytes);
-        using var oldest = new Counted(StrataRecMetrics.Names.CacheEvictions, "oldest");
+        using var evicted = new Counted(StrataRecMetrics.Names.CacheEvictions, "capacity");
         long key = 0;
-        while (oldest.Total == 0 && key < 100)
+        while (evicted.Total == 0 && key < 100)
         {
             Write(table, cache, clock.NowMs, key++);
         }
 
         var version = table.Pin();
-        Assert.InRange(oldest.Total, 1, key / 2); // freeing a quarter of the table does not cost its whole batch
-        Assert.Equal(key - oldest.Total, version.RecordCount);
+        Assert.InRange(evicted.Total, 1, key / 2); // freeing a quarter of the table does not cost its whole batch
+        Assert.Equal(key - evicted.Total, version.RecordCount);
         Assert.True(version.Find(key - 1).Found);
         Assert.True(version.Bytes <= MaxBytes);
     }
@@ -378,7 +378,7 @@ public class CacheTableTests
         const long MaxBytes = 256 << 10;
         var (table, cache, clock) = Table(maxBytes: MaxBytes, ttlMs: 1_000, staleIfErrorMs: 1_000);
         using var expired = new Counted(StrataRecMetrics.Names.CacheEvictions, "expired");
-        using var oldest = new Counted(StrataRecMetrics.Names.CacheEvictions, "oldest");
+        using var evicted = new Counted(StrataRecMetrics.Names.CacheEvictions, "capacity");
 
         // Records of about 4 KiB, written 10 ms apart: the first 20 expire (and pass their stale window) by the end.
         var key = 0L;
@@ -399,14 +399,14 @@ public class CacheTableTests
 
         var version = table.Pin();
         Assert.Equal(20, expired.Total);
-        Assert.Equal(0, oldest.Total); // the expired ones made room
+        Assert.Equal(0, evicted.Total); // the expired ones made room
         Assert.Equal(bytesPerRecord * version.RecordCount, version.RecordBytes);
         Assert.All(Enumerable.Range(0, 20), k => Assert.False(version.Find(Id(k)).Found));
         Assert.True(version.Find(Id(key - 1)).Found);
 
         // The hand has not moved yet: the oldest cold insertions now leave first.
         var first = key;
-        while (oldest.Total == 0 && key < first + 120)
+        while (evicted.Total == 0 && key < first + 120)
         {
             Write(table, cache, clock.NowMs, Id(key++));
             clock.AdvanceMs(1);
@@ -414,12 +414,12 @@ public class CacheTableTests
         }
 
         version = table.Pin();
-        Assert.True(oldest.Total > 0);
+        Assert.True(evicted.Total > 0);
         Assert.Equal(bytesPerRecord * version.RecordCount, version.RecordBytes);
         Assert.True(version.Bytes <= MaxBytes * 3 / 4 + (8 << 10), $"{version.Bytes} B");
         for (long k = 20; k < key; k++)
         {
-            Assert.Equal(k >= 20 + oldest.Total, version.Find(Id(k)).Found);
+            Assert.Equal(k >= 20 + evicted.Total, version.Find(Id(k)).Found);
         }
 
         long Id(long k) => k == zeroAt ? 0 : k + 1;
@@ -448,7 +448,7 @@ public class CacheTableTests
         Set(100, new string('x', 20_000));
         Assert.Equal(39, table.Pin().RecordCount);
         clock.AdvanceMs(1);
-        using var evicted = new Counted(StrataRecMetrics.Names.CacheEvictions, "oldest");
+        using var evicted = new Counted(StrataRecMetrics.Names.CacheEvictions, "capacity");
         var replacement = new string('y', 34_000);
         Set(100, replacement);
 
@@ -477,7 +477,7 @@ public class CacheTableTests
         }
 
         using var failed = new Counted(StrataRecMetrics.Names.CacheWrites, "failed");
-        using var oldest = new Counted(StrataRecMetrics.Names.CacheEvictions, "oldest");
+        using var evicted = new Counted(StrataRecMetrics.Names.CacheEvictions, "capacity");
         var before = table.Pin();
         Assert.True(cache.TryWriteBack(Batch(cache, clock.NowMs, new string('x', length), 1000)));
         cache.WriteQueued(table.Writer);
@@ -486,7 +486,7 @@ public class CacheTableTests
         Assert.Equal(58, table.Pin().RecordCount);
         Assert.False(table.Pin().Find(1000L).Found);
         Assert.Equal(1, failed.Total);
-        Assert.Equal(0, oldest.Total);
+        Assert.Equal(0, evicted.Total);
     }
 
     [Fact]
