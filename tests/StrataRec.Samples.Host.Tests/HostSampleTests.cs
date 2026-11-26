@@ -349,8 +349,8 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     /// <summary>
     /// A shelf kept without items (a placeholder: the filter keeps it) has empty lists, which the page's rule passes on.
     /// The ids are a column that is not nullable: <c>DistinctHeads@1</c> refuses one that is where the node names it, so
-    /// "no items" has one spelling, the empty list (two reviews of 5307fe0 found a row, then a whole column, without ids
-    /// that the operator's own handling got wrong).
+    /// "no items" has one spelling, the empty list (a row, then a whole column, without ids were
+    /// what the operator's own handling of them got wrong).
     /// </summary>
     [Fact]
     public async Task AShelfKeptWithoutItems_HasEmptyLists_AndNullableIdsAreRefused()
@@ -408,7 +408,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         result["items"]!.AsArray().Select(i => (i!["id"]!.GetValue<long>(), i["columns"]!["sponsored"]!.GetValue<bool>())).ToList();
 
     /// <summary>
-    /// SlotBlend@1 as a row source among others, and at its edges (second review): a sponsored row may take the page's last
+    /// SlotBlend@1 as a row source among others, and at its edges: a sponsored row may take the page's last
     /// place; a key an earlier node appended is not appended again; and without sponsored rows the sponsored pipeline is
     /// not called.
     /// </summary>
@@ -445,7 +445,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
     /// <summary>
     /// Validating one pipeline validates what serving it serves: the pipelines it calls, and their fallback pipelines
-    /// (second review: <c>validate -p home</c> passed, and running it failed on a called pipeline's fallback).
+    /// (<c>validate -p home</c> passed, and running it failed on a called pipeline's fallback).
     /// </summary>
     [Fact]
     public async Task ValidatingOnePipeline_ValidatesThePipelinesItCalls_AndTheirFallbacks()

@@ -72,7 +72,7 @@ public class ListTakenTests
 
     /// <summary>
     /// A position outside the list leaves the row as it was: an operator that catches it and goes on serves what the row
-    /// held (review of 5307fe0, finding 11: the new length was published first, with whatever the arena held behind it).
+    /// held (the new length was published first, with whatever the arena held behind it).
     /// </summary>
     [Fact]
     public void APositionOutsideTheList_LeavesTheRowAsItWas()

@@ -11,7 +11,7 @@ namespace StrataRec.IntegrationTests;
 /// experiments: the unified plan accepts exactly what every combination accepts (it may refuse more only by a rule across
 /// combinations, such as one type per column), and serves each combination as its merged compile does. The fixed
 /// sample's eight combinations did not find that a baseline could read a column only an arm's node declares (removing the
-/// experiment broke it), or that an arm moving a reader after a writer was refused (external review); generated arms
+/// experiment broke it), or that an arm moving a reader after a writer was refused; generated arms
 /// that add, move, delete and change nodes reading implicit columns do.
 /// </summary>
 public sealed class GeneratedExperimentTests
@@ -161,7 +161,7 @@ public sealed class GeneratedExperimentTests
         {
             var id = "g" + e;
             // Mostly with a control arm, which is the baseline: without one, only the baseline's own check (a request no
-            // experiment assigns, or the experiment's end) refuses a baseline that needs an arm (external review P1).
+            // experiment assigns, or the experiment's end) refuses a baseline that needs an arm.
             var arms = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
             var armIds = new List<string>();
             if (random.Next(4) != 0)
@@ -284,7 +284,7 @@ public sealed class GeneratedExperimentTests
             }
             case 5 or 6:
             {
-                // A baseline node moved after a writer the arm adds, reading what it writes (external review P2).
+                // A baseline node moved after a writer the arm adds, reading what it writes.
                 var column = Stat(random);
                 var producer = Producer(random, column);
                 var after = random.Next(4) == 0 ? Order(random) : (int)producer["order"]! + 1 + random.Next(20);

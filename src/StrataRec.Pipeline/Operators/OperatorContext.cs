@@ -583,7 +583,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// </remarks>
     public Task<ServiceStatus> CallAsync(BoundService service, ServiceCall call, ServiceResponse response)
     {
-        // Not an async method: the shared path's task is the call's (review of IO step 5: awaiting it here cost a second
+        // Not an async method: the shared path's task is the call's (awaiting it here cost a second
         // task per call). A wrong call is still a faulted task, and a cancellation (an operator's output names may be a
         // memory of its own) a cancelled one, as an async method's would be.
         try
@@ -592,7 +592,7 @@ public sealed class OperatorContext : IServiceCallScope
         }
         catch (OperationCanceledException ex)
         {
-            // An async method's builder: the task is cancelled and keeps the exception thrown (review of da5cfe6).
+            // An async method's builder: the task is cancelled and keeps the exception thrown.
             var cancelled = AsyncTaskMethodBuilder<ServiceStatus>.Create();
             cancelled.SetException(ex);
             return cancelled.Task;
@@ -647,8 +647,8 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>
     /// Each input is named once: a service reads an input by its name (<see cref="ServiceCall.TryGetInput"/> finds the
     /// first), and a replay's digests and a cache's keys take every input in name order, so a second of a name is one the
-    /// service never reads that the key does, and two orders of the two were one key (review of 3a0d9e8). By the names'
-    /// hashes, sorted with the inputs' indices: only names of one hash are compared (review of 5e07f1b: one collision
+    /// service never reads that the key does, and two orders of the two were one key. By the names'
+    /// hashes, sorted with the inputs' indices: only names of one hash are compared (one collision
     /// compared every pair of names), and nothing is allocated for up to 256 inputs.
     /// </summary>
     internal static void CheckInputs(ServiceCall call)
@@ -710,7 +710,7 @@ public sealed class OperatorContext : IServiceCallScope
         }
 
         // A missing input too: it keeps its declared shape, which says whether it is per item (missing on every row, cut to
-        // the rows a cache sends) or shared (review of IO step 3).
+        // the rows a cache sends) or shared.
         foreach (var input in call.Inputs.Span)
         {
             if (input.Shape is [var leading, ..] && leading != call.BatchSize && leading != 1)

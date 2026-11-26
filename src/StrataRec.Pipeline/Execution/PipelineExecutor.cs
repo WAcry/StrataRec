@@ -965,8 +965,8 @@ internal sealed class PipelineExecutor
     }
 
     /// <summary>
-    /// Settles what the attempt staged for each request column it writes, as a column's commit settles its rows (design
-    /// 4.3): stored as the column's type holds it (<see cref="ColumnValues.Store"/>), NaN/±∞ and a value outside int32
+    /// Settles what the attempt staged for each request column it writes, as a column's commit settles its rows:
+    /// stored as the column's type holds it (<see cref="ColumnValues.Store"/>), NaN/±∞ and a value outside int32
     /// storage replaced by the column's default or missing, and counted; then a non-nullable column must have a value.
     /// A column the node wrote nothing to is missing, as a column whose slot it never asked for is: the node's write is
     /// the new value, so a nullable flow column written before is missing after it.

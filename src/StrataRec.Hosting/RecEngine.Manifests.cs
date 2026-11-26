@@ -62,12 +62,12 @@ public sealed record ManifestLoadResult(
     public bool Applied => Status == ManifestLoadStatus.Applied;
 
     /// <summary>
-    /// The sequence the pipeline serves after the attempt (the design's <c>applied_seq</c>), whichever manifest it came
+    /// The sequence the pipeline serves after the attempt, whichever manifest it came
     /// from; null when it serves none.
     /// </summary>
     public long? ServedSequence { get; init; }
 
-    /// <summary>The manifest the pipeline serves after the attempt (the design's <c>applied_manifest</c>); null when none.</summary>
+    /// <summary>The manifest the pipeline serves after the attempt; null when none.</summary>
     public string? ServedManifestId { get; init; }
 
     /// <summary>

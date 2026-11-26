@@ -173,7 +173,7 @@ public sealed class IoCallMetricTests
     [Fact]
     public void AListenerThatThrowsOnTheDuration_LosesOnlyThatMeasurement()
     {
-        const string source = "review83_metric_boundaries";
+        const string source = "metric_boundaries";
         using var keys = new MeasurementHook(StrataRecMetrics.Names.IoKeys, static () => { }, (StrataRecTags.IoTarget, source));
         using var errors = new MeasurementHook(StrataRecMetrics.Names.IoErrors, static () => { }, (StrataRecTags.IoTarget, source));
         using var duration = MeasurementHook.Throwing(StrataRecMetrics.Names.IoDuration, (StrataRecTags.IoTarget, source));

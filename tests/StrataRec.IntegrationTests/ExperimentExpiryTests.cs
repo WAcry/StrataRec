@@ -4,8 +4,8 @@ using StrataRec.CommandLine.Commands;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// An experiment's <c>expires_at</c> is checked where a release is decided, <c>validate</c> and <c>build</c> (design
-/// 11.7), with a warning in the last 14 days. Loading, running, explaining and replaying configurations never fail on a
+/// An experiment's <c>expires_at</c> is checked where a release is decided, <c>validate</c> and <c>build</c>,
+/// with a warning in the last 14 days. Loading, running, explaining and replaying configurations never fail on a
 /// calendar date: a service restarting after the date must start, and last week's request must still replay.
 /// </summary>
 public sealed class ExperimentExpiryTests

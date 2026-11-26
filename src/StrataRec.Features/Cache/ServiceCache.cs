@@ -45,7 +45,7 @@ internal sealed class ServiceCache
     /// <param name="answerIdentity">
     /// What the binding answers with, the same on every instance that has the same configuration: part of every key, so a
     /// binding whose client or settings changed (a hot reload, another deployment sharing the store) does not read the
-    /// answers the earlier one left in the distributed tier, which outlive the local table (review of IO step 3).
+    /// answers the earlier one left in the distributed tier, which outlive the local table.
     /// </param>
     public ServiceCache(string service, LocalFeatureTable table, DistributedCacheTier? distributed, int distributedTimeoutMs, string answerIdentity)
     {

@@ -292,14 +292,14 @@ public class CacheStoreCallTests
         var answers = new ClockedStore(() => { });
         var waits = new FirstChunkWaits();
         var connector = ScriptedConnector.Values((key, _) => key * 1.0);
-        var rig = new FeatureTestRig().CacheSource("review80_cache", connector, ttlMs: 10, distributed: synchronously ? answers : waits);
-        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "review80_cache");
+        var rig = new FeatureTestRig().CacheSource("listener_cache", connector, ttlMs: 10, distributed: synchronously ? answers : waits);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "listener_cache");
         rig.Build();
-        answers.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
-        waits.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
+        answers.Prepare(rig.Tables["listener_cache"].Cache!, rig.Clock.NowMs, 111.0);
+        waits.Prepare(rig.Tables["listener_cache"].Cache!, rig.Clock.NowMs, 111.0);
         rig.Clock.HoldTimestamps(); // the tier's time never runs out
         using var listener = new MeasurementHook(StrataRecMetrics.Names.IoDuration, () => rig.Clock.AdvanceMs(50),
-            (StrataRecTags.IoTarget, "review80_cache"), (StrataRecTags.IoRole, IoRoles.Cache));
+            (StrataRecTags.IoTarget, "listener_cache"), (StrataRecTags.IoRole, IoRoles.Cache));
 
         var request = rig.NewRequest([1]);
         var fill = request.EnsureAsync(clicks).AsTask();
@@ -327,13 +327,13 @@ public class CacheStoreCallTests
     {
         var store = new ClockedStore(() => { });
         var connector = ScriptedConnector.Values((key, _) => key * 1.0);
-        var rig = new FeatureTestRig().CacheSource("review80_cache", connector, distributed: store);
-        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "review80_cache");
+        var rig = new FeatureTestRig().CacheSource("listener_cache", connector, distributed: store);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "listener_cache");
         rig.Build();
-        store.Prepare(rig.Tables["review80_cache"].Cache!, rig.Clock.NowMs, 111.0);
+        store.Prepare(rig.Tables["listener_cache"].Cache!, rig.Clock.NowMs, 111.0);
         using var listener = instrument == StrataRecMetrics.Names.CacheKeys
-            ? MeasurementHook.Throwing(instrument, (StrataRecTags.Source, "review80_cache"), (StrataRecTags.CacheTier, "distributed"))
-            : MeasurementHook.Throwing(instrument, (StrataRecTags.IoTarget, "review80_cache"), (StrataRecTags.IoRole, IoRoles.Cache));
+            ? MeasurementHook.Throwing(instrument, (StrataRecTags.Source, "listener_cache"), (StrataRecTags.CacheTier, "distributed"))
+            : MeasurementHook.Throwing(instrument, (StrataRecTags.IoTarget, "listener_cache"), (StrataRecTags.IoRole, IoRoles.Cache));
         var hook = new FeatureCallHookTests.ListHook();
         var request = rig.NewRequest([1], hook: hook);
 

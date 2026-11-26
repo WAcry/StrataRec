@@ -5,12 +5,12 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>The review of IO step 4 (one bounded wait): what a feature fetch keeps of a connector call that it no longer waits for.</summary>
-public sealed class FeatureFetchBoundReviewTests
+/// <summary>One bounded wait: what a feature fetch keeps of a connector call that it no longer waits for.</summary>
+public sealed class FeatureFetchBoundTests
 {
     /// <summary>
     /// A context feature whose connector call was abandoned fails without its staging being read: the connector may
-    /// still be writing there (review of IO step 5: the value was read, and its list copied, before the failure was seen).
+    /// still be writing there (the value was read, and its list copied, before the failure was seen).
     /// </summary>
     [Fact]
     public async Task AnAbandonedContextConnector_FailsItsFeatures_WithoutItsStagingBeingRead()
@@ -51,7 +51,7 @@ public sealed class FeatureFetchBoundReviewTests
 
     /// <summary>
     /// The fetch's time starts before its staging is set up: a staging that takes the time left leaves the chunk unsent
-    /// (review of the IO redesign: the bound started after it, so the chunk was sent past the request's deadline and its
+    /// (the bound started after it, so the chunk was sent past the request's deadline and its
     /// late answer was taken).
     /// </summary>
     [Fact]

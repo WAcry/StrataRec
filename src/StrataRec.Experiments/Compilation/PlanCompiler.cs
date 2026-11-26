@@ -1188,7 +1188,7 @@ internal sealed partial class UnifiedCompilation
         // declaration as it compiles (an implicit output: recall.*, GroupAggregate@1's), and a node that runs after it,
         // in any combination, must know them. By id, a reader named before its writer ('author_cap' before
         // 'author_rank') did not know the column; by a node's lowest order, neither did an arm that moves a reader after
-        // the writer (external review).
+        // the writer.
         var timeline = new List<NodeDefinition>();
         foreach (var id in ids)
         {

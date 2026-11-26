@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>What the call primitive and its types reject or guarantee before and around a client's call (review of IO step 2).</summary>
+/// <summary>What the call primitive and its types reject or guarantee before and around a client's call.</summary>
 public sealed class ServiceCallTests
 {
     [Fact]
@@ -34,7 +34,7 @@ public sealed class ServiceCallTests
         Assert.StartsWith("The call names output 'a' twice", duplicated.Message, StringComparison.Ordinal);
 
         // An input named twice: the service read the first, and a cache's key took both in an order the call did not give
-        // (review of 3a0d9e8: two calls whose first 'x' differed had one key). Of many inputs too, which are compared by hash.
+        // (two calls whose first 'x' differed had one key). Of many inputs too, which are compared by hash.
         foreach (var count in new[] { 2, 300 })
         {
             var inputs = Enumerable.Range(0, count).Select(i => NamedInput.FromFloat32(i == count - 1 ? "f0" : "f" + i, [], new[] { (float)i })).ToArray();

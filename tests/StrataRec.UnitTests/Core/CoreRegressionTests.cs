@@ -9,7 +9,7 @@ using StrataRec.Core.Values;
 namespace StrataRec.UnitTests.Core;
 
 /// <summary>Regression tests for findings from the Core review.</summary>
-public class CoreReviewRegressionTests
+public class CoreRegressionTests
 {
     private static CandidateTable NewTable(int capacity, params ColumnType[] extra)
     {

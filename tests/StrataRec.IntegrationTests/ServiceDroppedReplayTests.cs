@@ -11,7 +11,7 @@ namespace StrataRec.IntegrationTests;
 
 /// <summary>
 /// A node that reads how many items its service added past the limit (<see cref="ServiceResponse.Dropped"/>) replays as it
-/// ran: the recording has the count (review of IO step 4). It replayed with none, and the node took another branch, with no
+/// ran: the recording has the count. It replayed with none, and the node took another branch, with no
 /// gap to say so.
 /// </summary>
 public sealed class ServiceDroppedReplayTests

@@ -107,7 +107,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// An output of another type than the feature's, or of several values for a scalar, fails the call, saying what the
-    /// feature takes: no number is widened or rounded (review of the IO redesign: a float64 output was rounded to the
+    /// feature takes: no number is widened or rounded (a float64 output was rounded to the
     /// float32 feature, and an int32 list widened to an int64 one).
     /// </summary>
     [Theory]
@@ -298,7 +298,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// An element of a list of strings the service left unwritten fails the feature, and an argument reading it sends no
-    /// call (review of IO step 5: the null element reached the later call's digest and failed the recording).
+    /// call (the null element reached the later call's digest and failed the recording).
     /// </summary>
     [Fact]
     public async Task AStringListWithAnUnwrittenElement_FailsTheFeature_AndAnArgumentReadingItSendsNoCall()
@@ -382,7 +382,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// A replay counts a service source's fields in its feature stats, as a fetch's: read once, missing when the service
-    /// left the output unwritten or the call failed (review of the IO redesign: a comparison's missing rate left them out).
+    /// left the output unwritten or the call failed (a comparison's missing rate left them out).
     /// </summary>
     [Theory]
     [InlineData("answered", 0)]
@@ -404,7 +404,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// Two entities of one source each ask with the names their group built once, request after request: they were kept
-    /// for the last group only, and built again at every entity's call (review of the IO redesign).
+    /// for the last group only, and built again at every entity's call.
     /// </summary>
     [Fact]
     public async Task TwoEntitiesOfOneSource_AskWithTheNamesTheirGroupBuiltOnce()
@@ -452,7 +452,7 @@ public sealed class ComputedEntityEndToEndTests
     }
 
     /// <summary>
-    /// Two features of one field ask the service for it once, and both take its answer (review of IO step 5), of the one
+    /// Two features of one field ask the service for it once, and both take its answer, of the one
     /// type both are declared with: an output has one type.
     /// </summary>
     [Fact]
@@ -472,7 +472,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// Two features reading one output as two types is a load error at the second's type, in name order: the service
-    /// answers the output once, and a feature takes only the type it is declared with (review of 43bdf97: the plan
+    /// answers the output once, and a feature takes only the type it is declared with (the plan
     /// loaded, and every call failed, whichever type the service answered).
     /// </summary>
     [Theory]
@@ -495,7 +495,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// Readers that one answer can serve load, and are served by one output: a list and a fixed-length list of its type,
-    /// a scalar and a list (review of f0f6871: the load check compared whole types, and rejected the list read as a
+    /// a scalar and a list (the load check compared whole types, and rejected the list read as a
     /// fixed-length list).
     /// </summary>
     [Fact]
@@ -520,7 +520,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// An argument may read a derived feature of its own entity: what it reads is in its expression, not in the entity
-    /// (review of IO step 5: the catalog reported a key cycle).
+    /// (the catalog reported a key cycle).
     /// </summary>
     [Fact]
     public async Task AnArgumentReadingADerivedFeatureOfItsOwnEntity_IsNoCycle()
@@ -536,7 +536,7 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Equal(["query:String[]=none"], Assert.Single(service.Calls).Inputs);
     }
 
-    /// <summary>The call carries the request's id and seed, as a node's does (review of IO step 5).</summary>
+    /// <summary>The call carries the request's id and seed, as a node's does.</summary>
     [Fact]
     public async Task TheCall_CarriesTheRequestsIdAndSeed()
     {
@@ -551,7 +551,7 @@ public sealed class ComputedEntityEndToEndTests
 
     /// <summary>
     /// A source's call that the caller cancelled in the recording is cancelled in the replay too, whose own caller did not
-    /// cancel (review of IO step 5: it replayed as a timeout).
+    /// cancel (it replayed as a timeout).
     /// </summary>
     [Fact]
     public async Task ARecordedCancellation_ReplaysAsACancellation()

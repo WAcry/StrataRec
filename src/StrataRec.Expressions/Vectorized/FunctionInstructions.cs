@@ -56,8 +56,8 @@ internal readonly ref struct IntListLane
 
 /// <summary>
 /// One lane of a float list operand, viewed in place: float64 elements (<c>list&lt;float64&gt;</c> storage, request-level
-/// values, literals) or float32 elements (<c>list&lt;float32&gt;</c> storage), each meaning the float64 it reads as (design
-/// 4.3), as <see cref="IntListLane"/> does for integers.
+/// values, literals) or float32 elements (<c>list&lt;float32&gt;</c> storage), each meaning the float64 it reads as,
+/// as <see cref="IntListLane"/> does for integers.
 /// </summary>
 internal readonly ref struct FloatListLane
 {

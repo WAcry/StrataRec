@@ -8,7 +8,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>What the project audit of f47a255 found and was fixed, each as the request a host would send.</summary>
-public sealed class AuditRegressionTests
+public sealed class RequestRegressionTests
 {
     private sealed class SlowProvider : IAssignmentProvider
     {
@@ -86,7 +86,7 @@ public sealed class AuditRegressionTests
 
     /// <summary>
     /// A caller that cancels while the result is built (here while the output's own feature is fetched) gets no result,
-    /// and its rows are not logged as returned (second review of the cancellation checks: the last check was before the
+    /// and its rows are not logged as returned (the last check was before the
     /// result was built, and the output's tap went to the log).
     /// </summary>
     [Fact]
@@ -227,7 +227,7 @@ public sealed class AuditRegressionTests
 
 /// <summary>Measured with the process's meter: not beside tests that run requests of their own.</summary>
 [Collection(ProcessWideListenersCollection.Name)]
-public sealed class AuditOutputMemoryTests
+public sealed class OutputMemoryTests
 {
     /// <summary>
     /// An output column that is a column is read from the column's storage, for the rows returned: evaluating it rented a
@@ -241,8 +241,8 @@ public sealed class AuditOutputMemoryTests
     {
         var host = HomeFeedTestHost.LoadModified(root =>
         {
-            File.WriteAllText(Path.Combine(root, "pipelines", "once.jsonc"), AuditRegressionTests.ColumnOutputOf("once", 1, column));
-            File.WriteAllText(Path.Combine(root, "pipelines", "five.jsonc"), AuditRegressionTests.ColumnOutputOf("five", 5, column));
+            File.WriteAllText(Path.Combine(root, "pipelines", "once.jsonc"), RequestRegressionTests.ColumnOutputOf("once", 1, column));
+            File.WriteAllText(Path.Combine(root, "pipelines", "five.jsonc"), RequestRegressionTests.ColumnOutputOf("five", 5, column));
         });
         var engine = new RecEngine(host.Environment);
         foreach (var id in new[] { "once", "five" })

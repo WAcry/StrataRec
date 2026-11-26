@@ -795,7 +795,7 @@ public sealed class FeatureCatalog
     /// eight times each, and a valid chain of ten such entities took 6 s. A cycle that also passes through a
     /// derived feature is found where the plan compiles the derived feature (the catalog does not compile expressions), and
     /// reported there with the same code at a key part on the cycle: a derived feature is no edge here, since what it reads
-    /// is in its expression, not in its entity's key (review of IO step 5: an entity's argument reading a derived feature
+    /// is in its expression, not in its entity's key (an entity's argument reading a derived feature
     /// of its own entity, computed from a request input, was a cycle).
     /// </summary>
     private static void ValidateKeyCycles(

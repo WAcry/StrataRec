@@ -33,10 +33,10 @@ public sealed class CallSiteListenerTests
                 ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
                 return FetchStatus.Ok;
             });
-        var rig = new FeatureTestRig().Source("review80_store", connector);
-        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "review80_store");
+        var rig = new FeatureTestRig().Source("listener_store", connector);
+        var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "listener_store");
         rig.Build();
-        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.IoDuration, (StrataRecTags.IoTarget, "review80_store"));
+        using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.IoDuration, (StrataRecTags.IoTarget, "listener_store"));
         var hook = new FeatureCallHookTests.ListHook();
         var request = rig.NewRequest([1, 2], hook: hook);
 
@@ -63,7 +63,7 @@ public sealed class CallSiteListenerTests
     [InlineData(false)]
     public async Task AReadServedFromATable_IsRecordedBeforeItsValuesAreCounted(bool cache)
     {
-        const string source = "review83_table";
+        const string source = "listener_table";
         var connector = ScriptedConnector.Values((key, _) => key * 1.0);
         var rig = cache
             ? new FeatureTestRig().CacheSource(source, connector)
@@ -104,7 +104,7 @@ public sealed class CallSiteListenerTests
     [InlineData(false)]
     public async Task AContextReadServedFromATable_IsRecordedBeforeItsValuesAreCounted(bool cache)
     {
-        const string source = "review83_context_table";
+        const string source = "listener_context_table";
         var connector = ScriptedConnector.Values((key, _) => key * 1.0);
         var rig = cache
             ? new FeatureTestRig().CacheSource(source, connector)
@@ -151,7 +151,7 @@ public sealed class CallSiteListenerTests
     [Fact]
     public async Task AWriteBackTheQueueDrops_WhoseListenerThrows_LeavesTheFillAndTheRecording()
     {
-        const string source = "review83_write_back";
+        const string source = "listener_write_back";
         var connector = ScriptedConnector.Values((key, _) => key * 1.0);
         var rig = new FeatureTestRig().CacheSource(source, connector, maxBytes: "16MiB"); // a write-back queue of 1 MiB
         var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, source);

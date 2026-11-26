@@ -14,7 +14,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>Regression tests for the feature-runtime findings of the artifacts/feature-runtime review (eb7e005).</summary>
-public class FeatureRuntimeReviewRegressionTests
+public class FeatureRuntimeRegressionTests
 {
     /// <summary>
     /// <see cref="FeaturePlan.Create"/> fills in the infos it is given, so a plan built from another plan's
@@ -43,7 +43,7 @@ public class FeatureRuntimeReviewRegressionTests
 
     private static readonly long[] TwoItems = { 1, 2 };
 
-    // ---- Finding 1: the context prefetch must hold the request memory through its last staging read ----------------
+    // ---- The context prefetch must hold the request memory through its last staging read ----------------
 
     [Fact]
     public async Task ContextPrefetch_OutlivingTheRequest_ReadsStagingBeforeBuffersReturn()
@@ -200,7 +200,7 @@ public class FeatureRuntimeReviewRegressionTests
         Assert.Equal(1.5, request.ContextValue(score).AsFloat64());
     }
 
-    // ---- Finding 2: concurrent max_batch chunks must not share staging state ----------------------------------------
+    // ---- Concurrent max_batch chunks must not share staging state ----------------------------------------
 
     [Fact]
     public async Task Batches_EachChunkWritesItsOwnWindowOfTheFetchStaging()
@@ -352,7 +352,7 @@ public class FeatureRuntimeReviewRegressionTests
         }
     }
 
-    // ---- Finding 3: failed chunks and unwritten fields are never published --------------------------------------------
+    // ---- Failed chunks and unwritten fields are never published --------------------------------------------
 
     [Fact]
     public async Task FailedChunk_FromMemoryConnectorDecodeError_IsNotPublished()
@@ -474,7 +474,7 @@ public class FeatureRuntimeReviewRegressionTests
         Assert.Equal(-1, request.Value(c, 1).AsInt64());
     }
 
-    // ---- Finding 4: derived foreign keys are computed before the groups keyed by them ---------------------------------
+    // ---- Derived foreign keys are computed before the groups keyed by them ---------------------------------
 
     [Fact]
     public void Waves_FollowTheDependencyGraphThroughDerivedKeys()
@@ -568,7 +568,7 @@ public class FeatureRuntimeReviewRegressionTests
         return (rig, raw, creatorId, followers);
     }
 
-    // ---- Finding 5: waits are bounded by the source timeout and the request deadline ----------------------------------
+    // ---- Waits are bounded by the source timeout and the request deadline ----------------------------------
 
     [Fact]
     public async Task HungConnector_WaitEndsAtSourceTimeout_AndMemoryWaitsForTheRealCompletion()
@@ -688,7 +688,7 @@ public class FeatureRuntimeReviewRegressionTests
         await request.Fetcher.WhenIoCompleteAsync();
     }
 
-    // ---- Finding 6: only the required members of a group are fetched -------------------------------------------------
+    // ---- Only the required members of a group are fetched -------------------------------------------------
 
     [Fact]
     public async Task Ensure_FetchesOnlyTheRequestedMembersOfAGroup()
@@ -749,7 +749,7 @@ public class FeatureRuntimeReviewRegressionTests
         Assert.False(request.IsFilled(b, 0));
     }
 
-    // ---- Finding 7: every floating-point feature write is sanitized ---------------------------------------------------
+    // ---- Every floating-point feature write is sanitized ---------------------------------------------------
 
     [Fact]
     public async Task Backfill_NonFiniteValues_BecomeDefaultOrMissing_AndAreCounted()

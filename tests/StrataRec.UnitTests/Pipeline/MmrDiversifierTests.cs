@@ -8,7 +8,7 @@ namespace StrataRec.UnitTests.Pipeline;
 /// <summary>
 /// <c>MmrDiversifier@1</c>'s order is the formula's: each step picks the largest λ·score − (1−λ)·max cosine(picked), the
 /// first by score alone; rows without a score last. The similarity to the rows picked was floored at 0, as if a row unlike
-/// every pick were merely unrelated to them (external review). Compared with a direct reference on small random windows.
+/// every pick were merely unrelated to them. Compared with a direct reference on small random windows.
 /// </summary>
 public sealed class MmrDiversifierTests
 {

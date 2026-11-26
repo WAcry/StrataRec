@@ -132,7 +132,7 @@ public static class ArtifactSchemas
     /// <summary>
     /// An entity declares exactly one of <c>key</c> and <c>args</c>, and args has at least one argument, as the catalog
     /// checks (IO step 5): both members are optional in the type, so an editor accepted an entity the engine refuses
-    /// (review of IO step 5; a key alone was required before). A member written as null is not declared, as for the
+    /// (a key alone was required before). A member written as null is not declared, as for the
     /// catalog; a key is a reference or a list of them.
     /// </summary>
     private static JsonObject CatalogSchema(JsonObject schema)

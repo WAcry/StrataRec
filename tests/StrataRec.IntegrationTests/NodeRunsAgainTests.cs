@@ -15,7 +15,7 @@ namespace StrataRec.IntegrationTests;
 /// </summary>
 /// <remarks>
 /// The pipeline: <c>first</c> marks every row 0; <c>a</c> and <c>b</c> always fail and fall back to <c>backup</c>, which
-/// so runs twice and does what the test says each time. Review of 5307fe0, findings 1 and 2: the second run wrote into
+/// so runs twice and does what the test says each time. The second run wrote into
 /// the buffer the first had committed, so a second run that failed (or timed out, which a replay skips) left its values
 /// or its blanks behind, and one that succeeded kept the first run's values where it wrote none.
 /// </remarks>

@@ -187,7 +187,7 @@ public class DeclaredWidthEndToEndTests
     public async Task AReplayedFallback_BindsTheHostsInput_NotThePrimarysDeclaredTypeOfIt()
     {
         const long W = 9_007_199_791_611_905;
-        var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var root = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         foreach (var (id, type) in new[] { ("primary", "float32"), ("backup", "int64") })
         {
             var file = Path.Combine(root, "pipelines", id + ".jsonc");

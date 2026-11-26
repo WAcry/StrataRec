@@ -8,8 +8,7 @@ namespace StrataRec.IntegrationTests;
 /// <summary>
 /// Each definition of a node is compiled at its own place on the timeline. All of a node's definitions were compiled at
 /// the lowest order any of them has: an arm that moves a node after an implicit writer and reads its column was compiled
-/// before the writer had declared the column, and the unified plan rejected what the arm's own compile accepts (external
-/// review, P2).
+/// before the writer had declared the column, and the unified plan rejected what the arm's own compile accepts.
 /// </summary>
 public sealed class MovedNodeOrderTests
 {

@@ -191,7 +191,7 @@ public sealed class LogPipelineTests
     [Fact]
     public async Task FullDurableQueueReportsTheLossOrSpills()
     {
-        // Finding 3: a full durable queue must not drop silently.
+        // A full durable queue must not drop silently.
         var sink = new BlockingSink();
         var spilled = new List<LogBatch>();
         await using (var plain = new LogPipeline(sink, new LogPipelineOptions { DurableMaxBytes = OneBatch, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50) }))
@@ -330,7 +330,7 @@ public sealed class LogPipelineTests
     [Fact]
     public async Task PermanentlyRejectedBatchDoesNotBlockTheDurableStream()
     {
-        // Finding 4: one poison batch used to be retried forever, blocking everything behind it.
+        // One poison batch used to be retried forever, blocking everything behind it.
         var sink = new RejectingSink(poisonTap: "poison");
         var rejected = new List<LogBatch>();
         await using (var pipeline = new LogPipeline(sink, new LogPipelineOptions { MaxBatchesPerWrite = 1, Rejected = (b, _) => rejected.Add(b) }))

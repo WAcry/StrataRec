@@ -17,8 +17,8 @@ namespace StrataRec.Artifacts.Storage;
 /// directory fsync, so after a power loss a just-written blob may be missing, never partial.
 /// </para>
 /// <para>
-/// Blobs are stored uncompressed. The design's zstd compression for transport and storage is
-/// a planned addition; the content id will stay the hash of the uncompressed canonical bytes.
+/// Blobs are stored uncompressed. A content id is the hash of the uncompressed canonical bytes, so a store that
+/// compresses what it keeps or sends would name every artifact as this one does.
 /// </para>
 /// </remarks>
 public sealed class FileSystemArtifactStore : IArtifactStore

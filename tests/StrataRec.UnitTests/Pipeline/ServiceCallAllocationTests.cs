@@ -12,7 +12,7 @@ namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
 /// What a node's service call costs on the path itself, before the service's own allocations: a call answered at once
-/// allocates only the task it returns, one task for the node and the feature source path alike (review of IO step 5: the
+/// allocates only the task it returns, one task for the node and the feature source path alike (the
 /// node's entry awaited the shared path, a second task per call).
 /// </summary>
 [Collection(AllocationMeasurement.Name)]
@@ -104,7 +104,7 @@ public sealed class ServiceCallAllocationTests
     /// <summary>Output names whose memory throws a cancellation when read (after the memory over it is made).</summary>
     /// <summary>
     /// A rebatched replay builds the index of the recorded rows once, not at each call: a call of 32 items allocates for
-    /// its 32, however many rows the recording has (review of the IO redesign: 4,096 recorded rows replayed in batches of
+    /// its 32, however many rows the recording has (4,096 recorded rows replayed in batches of
     /// 32 allocated 187 MB).
     /// </summary>
     [Fact]

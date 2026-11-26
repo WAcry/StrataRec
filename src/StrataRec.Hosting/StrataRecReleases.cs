@@ -706,7 +706,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         ? $"{result.PipelineId}: applied manifest {result.ManifestId} (sequence {result.Sequence})"
         : $"{result.PipelineId}: {StatusName(result.Status)} manifest {result.ManifestId}: {result.Reason}";
 
-    /// <summary>The status as the design writes it (<c>applied</c>, <c>rejected</c>, <c>incompatible</c>, …).</summary>
+    /// <summary>The status as the messages and logs write it (<c>applied</c>, <c>rejected</c>, <c>incompatible</c>, …).</summary>
     private static string StatusName(ManifestLoadStatus status) => status switch
     {
         ManifestLoadStatus.Applied => "applied",

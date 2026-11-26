@@ -230,7 +230,7 @@ public sealed class RunReplayTests
 
     /// <summary>
     /// A rebatched call of an item the recording has, reading only an output no recorded call has: a gap of that output,
-    /// not of the item (it was reported without its output's name, review of IO step 2).
+    /// not of the item (it was reported without its output's name).
     /// </summary>
     [Fact]
     public void ARebatchedCallReadingOnlyAnUnrecordedOutput_IsAGapOfThatOutput()
@@ -598,7 +598,7 @@ public sealed class RunReplayTests
     /// <summary>
     /// A rebatched call of rows whose recorded call, asking for the same outputs, the service left an output unwritten
     /// in: the output is left unwritten, as recorded, not a gap nor a failure with no recorded output; an output no call
-    /// asked for is still a gap (review of da5cfe6).
+    /// asked for is still a gap.
     /// </summary>
     [Fact]
     public void ARebatchedCall_LeavesUnwrittenAnOutputItsRowsRecordedCallLeftUnwritten_AndAnOutputNeverAskedForIsAGap()
@@ -623,7 +623,7 @@ public sealed class RunReplayTests
 
     /// <summary>
     /// An output a recorded call of other outputs left unwritten does not answer a call of this output that another
-    /// recorded call wrote (review of da5cfe6: a node added by a reload read it as missing).
+    /// recorded call wrote (a node added by a reload read it as missing).
     /// </summary>
     [Fact]
     public void AnOmissionOfAKeyedCallOfOtherOutputs_DoesNotAnswerOverARecordingThatWroteTheOutput()
@@ -643,7 +643,7 @@ public sealed class RunReplayTests
 
     /// <summary>
     /// An item is answered by what it saw of each input, however it is batched: a shared <c>[1, d]</c> input, all of it,
-    /// in a batch of two and in a batch of the item alone (review of the IO redesign: in a batch of one the shared input
+    /// in a batch of two and in a batch of the item alone (in a batch of one the shared input
     /// was per item by its shape, the item's digest changed, and its score was the gap value).
     /// </summary>
     /// <remarks>A view of a few values enters a digest inline, one of more as its own digest (<paramref name="width"/> 64): both alike in a batch of one and of two, for a shared input and for an item's own.</remarks>
@@ -674,7 +674,7 @@ public sealed class RunReplayTests
 
     /// <summary>
     /// The digests of a call's items read each shared input once for the call, not once an item, whatever its size: what
-    /// every item sees alike is encoded once (reviews of 43bdf97 and 3a0d9e8: a recording of 2,048 items hashed a shared
+    /// every item sees alike is encoded once (a recording of 2,048 items hashed a shared
     /// vector 2,048 times, and one item's long string, counted as one value, was encoded again for every item). An item's
     /// digest is still its own.
     /// </summary>
@@ -698,7 +698,7 @@ public sealed class RunReplayTests
     /// <summary>
     /// A call made while another is being answered (an operator's code calls again, here from the getter of the outputs it
     /// hands over) does not change what the first is answered with: each has its own epoch, and the first's is active again
-    /// after (review of 43bdf97: one counter, the first went on with the second's, took its comparison of another output
+    /// after (one counter, the first went on with the second's, took its comparison of another output
     /// list for its own, and missed its recording).
     /// </summary>
     [Fact]

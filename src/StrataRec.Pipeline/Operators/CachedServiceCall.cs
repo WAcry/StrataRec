@@ -293,7 +293,7 @@ internal sealed class CachedServiceCall
             else
             {
                 // Kept for a failure of the service: the newer of a stale local record and this one, which stays within
-                // stale_if_error_ms longer (review of IO step 4: a stale local record hid a newer one here).
+                // stale_if_error_ms longer (a stale local record hid a newer one here).
                 if (_rows[r].State == RowState.Miss || (_rows[r].State == RowState.Stale && decoded.WrittenMs > WrittenMs(r)))
                 {
                     _rows[r] = new Row(RowState.Stale, default, decoded);
@@ -492,7 +492,7 @@ internal sealed class CachedServiceCall
     /// Whether a record is one this code writes (see the remarks): its kind and header, each output's type and element
     /// count, and its lists holding exactly that many values of each type. A record that is not is never read: a type code
     /// out of range, or a list shorter than its layout, would throw while the answer is put together, and a write-back
-    /// would copy it into the local tier (review of IO step 3).
+    /// would copy it into the local tier.
     /// </summary>
     private static bool WellFormed<TRecord>(TRecord record)
         where TRecord : IServiceRecord
@@ -700,8 +700,8 @@ internal sealed class CachedServiceCall
     /// <summary>
     /// A call's answer from its record: outputs, texts, items up to the limit, and whether it was cut short. A record of a
     /// larger limit answers as a service keeping to the call's limit would (ServiceCall.Limit): the start of its list, no
-    /// item dropped; the items the service added past a limit count only for the limit it was asked (review of IO step 4:
-    /// the recorded items past the smaller limit were counted as dropped).
+    /// item dropped; the items the service added past a limit count only for the limit it was asked (the
+    /// recorded items past the smaller limit were counted as dropped).
     /// </summary>
     private ServiceStatus WriteCall<TRecord>(TRecord record)
         where TRecord : IServiceRecord

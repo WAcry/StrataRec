@@ -63,7 +63,7 @@ public class MergePatchAnalyzerTests
     }
 
     [Fact]
-    public void MisspelledNodeWithSubfield_IsAddOfWholeEntry_Design113()
+    public void MisspelledNodeWithSubfield_IsAddOfWholeEntry()
     {
         var analysis = Analyze("""{"nodes": {"diversty_cap": {"config": {"max_per_window": 3}}}}""");
 
@@ -148,7 +148,7 @@ public class MergePatchAnalyzerTests
     }
 
     [Fact]
-    public void AddingAndDeletingMultipliers_Design113()
+    public void AddingAndDeletingMultipliers()
     {
         var analysis = Analyze("""
             {"nodes": {"fusion": {"config": {"multipliers": {"bookmark": "1.0 + 0.3 * col.item.bookmark_rate", "quality": null}}}}}
@@ -161,7 +161,7 @@ public class MergePatchAnalyzerTests
     }
 
     [Fact]
-    public void AddingFeaturesAndLogColumns_Design113()
+    public void AddingFeaturesAndLogColumns()
     {
         var analysis = Analyze("""
             {
@@ -357,7 +357,7 @@ public class MergePatchAnalyzerTests
     }
 
     [Fact]
-    public void Conflicts_DifferentLeavesOfSameObjectDoNotConflict_Design118()
+    public void Conflicts_DifferentLeavesOfSameObjectDoNotConflict()
     {
         var a = Ops((PatchOpKind.Replace, "/params/recall_quotas/cf"));
         var b = Ops((PatchOpKind.Replace, "/params/recall_quotas/two_tower"));

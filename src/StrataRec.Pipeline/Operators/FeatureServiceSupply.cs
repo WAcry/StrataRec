@@ -46,8 +46,8 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
         }
         catch (OperationCanceledException ex)
         {
-            // The fetch's bound ran out, or the caller cancelled, live or where the recorded call was (review of IO step 5:
-            // a recorded cancellation replayed as a timeout, the replay's caller not having cancelled): the features fail,
+            // The fetch's bound ran out, or the caller cancelled, live or where the recorded call was (a
+            // recorded cancellation replayed as a timeout, the replay's caller not having cancelled): the features fail,
             // as a connector's cut off at its bound do; the caller's cancellation is the request's to throw.
             var cancelled = ex is ReplayedCutOff replayed ? replayed.Outcome == IoOutcome.Cancelled : call.Bound.Caller.IsCancellationRequested;
             return Counted(FetchStatus.Failed(cancelled ? $"source '{source}' was cancelled" : $"source '{source}' timed out"), scope, call);
@@ -84,7 +84,7 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
     /// The value of <paramref name="field"/> in the answer: missing when the service did not write the output; one element
     /// for a scalar, the elements for a list, a text or a string element for a string. The output is of the type the
     /// feature is declared with, as a model's output is of its column's: no number is widened or rounded on the way
-    /// (docs/development.md, boundaries; review of the IO redesign: an int32 output was widened, and a float64 one rounded
+    /// (docs/development.md, boundaries; an int32 output was widened, and a float64 one rounded
     /// to a float32 feature). An output of another type, or of several elements for a scalar, is no answer the feature can
     /// take: the call fails, and says what the feature takes.
     /// </summary>
@@ -152,7 +152,7 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
                 value = ScalarValue.FromFloat64List(values.Float64.ToArray());
                 return true;
             default:
-                // An element the service left unwritten is null, which no list of strings holds (review of IO step 5: one
+                // An element the service left unwritten is null, which no list of strings holds (one
                 // reached a later call's digest as an argument, and failed the recording).
                 var strings = values.String.Span;
                 for (var i = 0; i < strings.Length; i++)
@@ -181,7 +181,7 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
     }
 
     /// <summary>
-    /// The outputs the call reads: each field's name once, though two features may read one field (review of IO step 5: a
+    /// The outputs the call reads: each field's name once, though two features may read one field (a
     /// service was asked for an output twice); each feature still takes the output as its own type does. A whole group's,
     /// built once for it; a subset's (a request that needs only some of the group), for it.
     /// </summary>

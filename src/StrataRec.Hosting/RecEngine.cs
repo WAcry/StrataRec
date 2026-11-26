@@ -468,8 +468,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// <summary>Operators, connectors and clients this binary provides.</summary>
     public PlanEnvironment Environment { get; }
 
-    /// <summary>What the served plans bind: local feature tables, service clients and connectors (design
-    /// 6.4).</summary>
+    /// <summary>What the served plans bind: local feature tables, service clients and connectors.</summary>
     public BindingHost Bindings { get; }
 
     /// <inheritdoc/>
@@ -881,8 +880,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             }
 
             // The caller's cancellation is thrown as the caller's: a client or a provider that honoured the token the engine
-            // gave it (linked to the caller's) threw that one, which a host matching its own token missed (review of IO step 4).
-            // Its message is not read: an extension's exception may throw from it (review of IO step 4b).
+            // gave it (linked to the caller's) threw that one, which a host matching its own token missed.
+            // Its message is not read: an extension's exception may throw from it.
             if (ex is OperationCanceledException cancelled && cancellationToken.IsCancellationRequested && cancelled.CancellationToken != cancellationToken)
             {
                 throw new OperationCanceledException(CallerCancelled, cancelled, cancellationToken);

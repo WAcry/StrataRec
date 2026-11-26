@@ -46,7 +46,7 @@ public sealed class ObservedCancellationSourceTests
 
     /// <summary>
     /// A delay past what timers accept is capped, a negative one cancels at once, and <see cref="Timeout.InfiniteTimeSpan"/>
-    /// sets no time, as for <c>CancelAfter</c> (review of IO step 4b: the cap made it cancel at once).
+    /// sets no time, as for <c>CancelAfter</c> (the cap made it cancel at once).
     /// </summary>
     [Fact]
     public async Task AnInfiniteDelay_SetsNoTime_ANegativeOneCancelsAtOnce()

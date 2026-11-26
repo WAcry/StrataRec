@@ -463,8 +463,8 @@ public readonly record struct ServiceStatus(bool Succeeded, string? Error = null
 public interface IServiceClient
 {
     /// <summary>
-    /// The inputs and outputs of a version of the service, for checking the operators that call it at load time (design
-    /// 6.9). It may need I/O (a model server's metadata): the engine asks only when it loads a plan, after the client's
+    /// The inputs and outputs of a version of the service, for checking the operators that call it at load time.
+    /// It may need I/O (a model server's metadata): the engine asks only when it loads a plan, after the client's
     /// own load (<see cref="Bindings.ILoadable"/>), for every version the plan's nodes may call, concurrently, on the
     /// thread pool (synchronous work before the first await included) and within the load's bound; the token is cancelled
     /// when nobody waits for the answer any more, and the instance is not disposed before the method returned. A plan

@@ -12,8 +12,8 @@ namespace StrataRec.Features.Bindings;
 /// </summary>
 /// <remarks>
 /// Errors are reported here, at the binding, never at whatever reads it: an unknown type at the entry's selector (the
-/// binding is what to fix), wrong settings at the setting. A caller gets null and reports nothing more (design: one error
-/// is reported once).
+/// binding is what to fix), wrong settings at the setting. A caller gets null and reports nothing more: one error is
+/// reported once.
 /// </remarks>
 public sealed class BindingResolver
 {

@@ -223,7 +223,7 @@ public sealed class EditorSchemaTests
 
     /// <summary>
     /// An entity declares a key or args, exactly one, and args has an argument: the catalog schema says so as the catalog
-    /// does (review of IO step 5: with both members optional, an editor took an entity the engine refuses).
+    /// does (with both members optional, an editor took an entity the engine refuses).
     /// </summary>
     [Theory]
     [InlineData("""{ "key": "ctx.request.user_id" }""", true)]

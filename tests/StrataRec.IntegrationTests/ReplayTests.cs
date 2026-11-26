@@ -303,7 +303,7 @@ public sealed class ReplayTests
     [Fact]
     public async Task FallbackPipeline_IsRecordedAsItsOwnRun_AndReplayedFromIt()
     {
-        var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var root = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
         ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", new[] { "primary" }).ThrowIfErrors("load");
         var recorded = await engine.ExecuteAsync(new RecRequest

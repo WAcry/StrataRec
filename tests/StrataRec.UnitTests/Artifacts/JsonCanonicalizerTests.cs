@@ -303,7 +303,7 @@ public class JsonCanonicalizerTests
         Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.Canonicalize(node));
     }
 
-    // Review finding 9: TryGetValue<float> converts a parsed number, turning finite binary64 values beyond the float32
+    // TryGetValue<float> converts a parsed number, turning finite binary64 values beyond the float32
     // range into +∞; only CLR-held doubles/floats can actually be non-finite.
     [Theory]
     [InlineData("1e100", "1e+100")]

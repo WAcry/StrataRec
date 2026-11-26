@@ -7,12 +7,12 @@ using StrataRec.Hosting;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The review of IO step 4b (the assignment provider on the one bounded wait), at the engine's boundary: a call the host's
+/// The assignment provider on the one bounded wait, at the engine's boundary: a call the host's
 /// tracing cancels as it starts is not sent, the caller's cancellation is thrown as the caller's, and the longest
 /// deadline is no deadline on every path.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
-public sealed class EngineBoundaryReviewTests
+public sealed class EngineBoundaryTests
 {
     /// <summary>
     /// The bound is looked at again after the call starts: a host's sampler that cancels the request as the provider's
@@ -61,7 +61,7 @@ public sealed class EngineBoundaryReviewTests
     /// <summary>
     /// A provider that honours the token the engine gave it after the caller cancelled throws that token: the engine
     /// throws the caller's, as a host matching its own token expects (it threw the provider's). The message of what the
-    /// provider threw is not read, so one whose message throws is still a cancellation (review of IO step 4b).
+    /// provider threw is not read, so one whose message throws is still a cancellation.
     /// </summary>
     [Theory]
     [InlineData(false)]

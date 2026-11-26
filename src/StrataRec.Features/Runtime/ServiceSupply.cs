@@ -57,7 +57,7 @@ internal sealed class ServiceSupplyCall
     /// <summary>The request's recorder or replay, when it records or replays.</summary>
     public IFeatureCallHook? Hook { get; init; }
 
-    /// <summary>The request's id and seed, which a service call carries as a node's does (review of IO step 5).</summary>
+    /// <summary>The request's id and seed, which a service call carries as a node's does.</summary>
     public string? RequestId { get; init; }
 
     /// <inheritdoc cref="RequestId"/>

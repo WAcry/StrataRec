@@ -368,7 +368,7 @@ public sealed class PipelineCallEndToEndTests
         Assert.NotEmpty(result.Items);
     }
 
-    // ---- Review of f59fe2a ----
+    // ---- Loading, cancellation, replay and limits ----
 
     private sealed class ProbeConfig
     {
@@ -423,7 +423,7 @@ public sealed class PipelineCallEndToEndTests
         Deadline = HomeFeedTestHost.Deadline, TimeMs = 1_767_225_600_000, Debug = new DebugOptions { Record = true, Trace = true },
     };
 
-    /// <summary>The pipelines a workspace load is asked for bring the ones they call (finding 1): what <c>stratarec run</c> loads.</summary>
+    /// <summary>The pipelines a workspace load is asked for bring the ones they call: what <c>stratarec run</c> loads.</summary>
     [Fact]
     public async Task AWorkspaceLoad_ServesThePipelinesALoadedOneCalls()
     {
@@ -439,7 +439,7 @@ public sealed class PipelineCallEndToEndTests
         Assert.NotEmpty(PromotedRows(result));
     }
 
-    /// <summary>A caller that cancelled before the call is made gets its cancellation, not a failed call an operator may shrug off (finding 3).</summary>
+    /// <summary>A caller that cancelled before the call is made gets its cancellation, not a failed call an operator may shrug off.</summary>
     [Fact]
     public async Task ACallMadeAfterTheCallerCancelled_IsCancelled_NotAFailedCall()
     {
@@ -464,7 +464,7 @@ public sealed class PipelineCallEndToEndTests
 
     /// <summary>
     /// A fallback node that runs for two nodes makes each of its calls at a place of its own: the recording has both, and
-    /// replays (finding 5: both were call 0 of the node, which a replay refused as a duplicate).
+    /// replays (both were call 0 of the node, which a replay refused as a duplicate).
     /// </summary>
     [Fact]
     public async Task AFallbackNodeUsedTwice_RecordsEachOfItsCalls_AndReplays()
@@ -506,9 +506,9 @@ public sealed class PipelineCallEndToEndTests
         });
 
     /// <summary>
-    /// A list passed to a call is compared as a value on replay, however the bundle's file spelled it (finding 6: a file
+    /// A list passed to a call is compared as a value on replay, however the bundle's file spelled it (a file
     /// writes a list over several lines, and the call was a gap); and a list of integers read into one of floats, which
-    /// the check allows, is stored as floats (finding 15: the node threw at the first row).
+    /// the check allows, is stored as floats (the node threw at the first row).
     /// </summary>
     [Fact]
     public async Task AListPassedAndReturned_IsConvertedAsChecked_AndReplaysFromAFile()
@@ -528,7 +528,7 @@ public sealed class PipelineCallEndToEndTests
 
     /// <summary>
     /// A provider that fails for a called pipeline fails the call, as a result the operator sees and the recording holds
-    /// (finding 8: it was thrown through the operator, and the replay found no call).
+    /// (it was thrown through the operator, and the replay found no call).
     /// </summary>
     [Fact]
     public async Task AProviderThatFailsForACalledPipeline_FailsTheCall_AsAResult()
@@ -548,7 +548,7 @@ public sealed class PipelineCallEndToEndTests
         Assert.Contains(call.Error!, result.Trace!.Single(n => n.NodeId == "promoted").Detail);
     }
 
-    /// <summary>Two forced arms of one layer of a called pipeline are refused, as two of the request's own are (finding 9: the layer ran its baseline).</summary>
+    /// <summary>Two forced arms of one layer of a called pipeline are refused, as two of the request's own are (the layer ran its baseline).</summary>
     [Fact]
     public async Task TwoForcedArmsOfOneLayerOfACalledPipeline_AreRefused()
     {
@@ -561,8 +561,8 @@ public sealed class PipelineCallEndToEndTests
     }
 
     /// <summary>
-    /// What the request ignored is each arm once, by id (finding 19), and an arm only the provider's answer for a called
-    /// pipeline names, which no pipeline has, is among them (finding 11: it vanished).
+    /// What the request ignored is each arm once, by id, and an arm only the provider's answer for a called
+    /// pipeline names, which no pipeline has, is among them (it vanished).
     /// </summary>
     [Fact]
     public async Task TheIgnoredArms_AreEachOnce_ById_WithACalledPipelinesOwn()
@@ -579,7 +579,7 @@ public sealed class PipelineCallEndToEndTests
         Assert.Equal(("typo/x", IgnoredArmReason.Unknown), Assert.Single(asked.Experiments.Ignored.Select(a => (a.Id, a.Reason))));
     }
 
-    /// <summary>A call an arm adds counts for a cycle (finding 12: the called pipeline was compiled without its experiments, and the cycle loaded).</summary>
+    /// <summary>A call an arm adds counts for a cycle (the called pipeline was compiled without its experiments, and the cycle loaded).</summary>
     [Fact]
     public void ACycleThroughACallAnArmAdds_IsRefused()
     {
@@ -595,7 +595,7 @@ public sealed class PipelineCallEndToEndTests
 
     /// <summary>
     /// A value that may be missing is not passed as an input the called pipeline requires, whether the operator passes it
-    /// or the request's own is passed on (finding 13: both compiled, and a request without it failed the call).
+    /// or the request's own is passed on (both compiled, and a request without it failed the call).
     /// </summary>
     [Theory]
     [InlineData(true, "/nodes/promoted/config/inputs/slots", "?? <default>")]
@@ -615,7 +615,7 @@ public sealed class PipelineCallEndToEndTests
         Assert.Contains(hint, error.Hint);
     }
 
-    /// <summary>An int32 input passed on as it is, is an int32 (finding 14: it was taken as the int64 an expression computes with, and refused).</summary>
+    /// <summary>An int32 input passed on as it is, is an int32 (it was taken as the int64 an expression computes with, and refused).</summary>
     [Fact]
     public void AnInt32InputPassedOn_IsAnInt32()
     {
@@ -632,7 +632,7 @@ public sealed class PipelineCallEndToEndTests
 
     /// <summary>
     /// An operator that changes its inputs for its next call while one runs has each call recorded with what it passed
-    /// (finding 16: both were recorded with the last values, and the replay found neither).
+    /// (both were recorded with the last values, and the replay found neither).
     /// </summary>
     [Fact]
     public async Task ACallsInputs_AreRecordedAsPassed_ThoughTheOperatorChangesThemMeanwhile()
@@ -668,7 +668,7 @@ public sealed class PipelineCallEndToEndTests
         Assert.Equal(new[] { (0, "1"), (1, "2") }, result.Recording!.Runs[0].PipelineCalls.Select(c => (c.Seq, c.Inputs["slots"].Value!.Value.GetRawText())));
     }
 
-    /// <summary>Calls made at once from several threads each get a place of their own (finding 4: two could get the same, and the recording did not replay).</summary>
+    /// <summary>Calls made at once from several threads each get a place of their own (two could get the same, and the recording did not replay).</summary>
     [Fact]
     public async Task CallsMadeAtOnceFromSeveralThreads_EachGetAPlace()
     {
@@ -702,8 +702,8 @@ public sealed class PipelineCallEndToEndTests
     }
 
     /// <summary>
-    /// The limit is of the rows appended: a row the request has already does not use one up (finding 27), and a
-    /// parameter without a value appends none instead of throwing before the first node (finding 18).
+    /// The limit is of the rows appended: a row the request has already does not use one up, and a
+    /// parameter without a value appends none instead of throwing before the first node.
     /// </summary>
     [Fact]
     public async Task TheLimit_IsOfTheRowsAppended_AndAMissingOneAppendsNone()
@@ -728,8 +728,8 @@ public sealed class PipelineCallEndToEndTests
     }
 
     /// <summary>
-    /// A request compiled again keeps the pipelines it may call (finding 23: the copies the compiler makes dropped them,
-    /// and a misspelled pipeline built), and asks about them again for another binary's operators (finding 24).
+    /// A request compiled again keeps the pipelines it may call (the copies the compiler makes dropped them,
+    /// and a misspelled pipeline built), and asks about them again for another binary's operators.
     /// </summary>
     [Fact]
     public void ACompileRequest_KeepsItsPipelines_AndAsksAgainForAnotherEnvironment()
@@ -750,7 +750,7 @@ public sealed class PipelineCallEndToEndTests
 
     /// <summary>
     /// A call's ids are read as one key type. An operator that declares two is refused where it declares the second,
-    /// also when the called pipeline is not known at compile time (review of 5307fe0, finding 8: each declaration replaced
+    /// also when the called pipeline is not known at compile time (each declaration replaced
     /// the one before, so only the last was checked when the call was made, and the other reading went unchecked).
     /// </summary>
     [Fact]
@@ -794,11 +794,11 @@ public sealed class PipelineCallEndToEndTests
         }
     }
 
-    // ---- Review of f59fe2a..525e990 ----
+    // ---- Calls of a fallback, forced arms, explain ----
 
     /// <summary>
     /// A replay that skips an attempt recorded as timed out skips the calls it made: the fallback node's second run finds
-    /// its own call, not the first run's (second review, finding 1: numbered over the run, the second call was answered
+    /// its own call, not the first run's (numbered over the run, the second call was answered
     /// with the first one's failure, and no gap was reported).
     /// </summary>
     [Fact]
@@ -841,7 +841,7 @@ public sealed class PipelineCallEndToEndTests
 
     /// <summary>
     /// A forced arm of a pipeline only the request's fallback pipeline calls is that pipeline's to run, not an unknown arm
-    /// (second review): the platform's list was taken, the debugger's refused.
+    ///: the platform's list was taken, the debugger's refused.
     /// </summary>
     [Fact]
     public async Task AForcedArmOfAPipelineTheFallbackPipelineCalls_IsAccepted()
@@ -858,7 +858,7 @@ public sealed class PipelineCallEndToEndTests
 
     /// <summary>
     /// A pipeline that is both called and the fallback pipeline, and calls another itself, is still one whose arms a
-    /// request may force (third review: following the fallback's calls marked it seen, and its own arms were unknown).
+    /// request may force (following the fallback's calls marked it seen, and its own arms were unknown).
     /// </summary>
     [Fact]
     public async Task AForcedArmOfAPipelineThatIsCalledAndTheFallback_IsAccepted()
@@ -880,7 +880,7 @@ public sealed class PipelineCallEndToEndTests
 
     /// <summary>
     /// A run a called run called says the whole path of calls in its logs: a pipeline called twice numbers its own calls
-    /// alike, and its two runs' calls were both <c>feed/promoted#0</c> (second review).
+    /// alike, and its two runs' calls were both <c>feed/promoted#0</c>.
     /// </summary>
     [Fact]
     public async Task ARunCalledByACalledRun_SaysTheWholePathOfCalls()

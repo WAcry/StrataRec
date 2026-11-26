@@ -10,7 +10,7 @@ namespace StrataRec.IntegrationTests;
 /// experiment and does not compile it again, and a node keeps serving its plan when the new one fails to load. The bare
 /// baseline was compiled on its own only when an arm added schema entries or parameter leaves, but a node an arm adds can
 /// declare a column implicitly: the baseline resolved it in the unified schema, and the revocation was published, then
-/// rejected by every node (external review, P1).
+/// rejected by every node.
 /// </summary>
 public sealed class BaselineAloneTests
 {

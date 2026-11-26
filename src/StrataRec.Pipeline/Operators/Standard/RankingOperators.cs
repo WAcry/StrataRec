@@ -424,7 +424,7 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             return null;
         }
 
-        // λ outside [0, 1] turns the similarity penalty into a reward (or the score into a penalty) (external review).
+        // λ outside [0, 1] turns the similarity penalty into a reward (or the score into a penalty).
         if (config.Lambda is { } fixedLambda && !(fixedLambda >= 0 && fixedLambda <= 1))
         {
             context.Error("/lambda", "MMR_LAMBDA", $"lambda must be between 0 and 1, got {fixedLambda}.", "1 ranks by score alone, 0 by diversity alone");
@@ -462,7 +462,7 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
     /// </summary>
     /// <remarks>
     /// The similarity was floored at 0 (the largest started at 0), so a row opposite every pick counted as merely
-    /// unrelated (external review). A row without a score had relevance −∞, which λ = 0 turned into 0 (to avoid 0·−∞),
+    /// unrelated. A row without a score had relevance −∞, which λ = 0 turned into 0 (to avoid 0·−∞),
     /// so it went before rows with a score. With λ = 1, vectors whose norm overflows float made every
     /// similarity NaN, and 0·NaN left the order to the incoming one instead of the score. Rows without a
     /// score are kept out of the choice while one with a score is left, not given the lowest value: a NaN value compares

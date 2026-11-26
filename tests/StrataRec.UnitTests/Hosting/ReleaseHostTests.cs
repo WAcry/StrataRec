@@ -587,7 +587,7 @@ public sealed class ReleaseHostTests : IDisposable
     }
 
     /// <summary>
-    /// The external review: the polling took pipelines one after another and waited for each report, so a reporter that
+    /// The polling took pipelines one after another and waited for each report, so a reporter that
     /// blocked on pipeline A held a newer release of pipeline B for 25 polls. Each pipeline polls on its own now, and the
     /// reports wait in a queue: while the reporter is stuck on A's outcome, B's and A's next releases are applied.
     /// </summary>

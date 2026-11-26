@@ -18,7 +18,7 @@ namespace StrataRec.Expressions.Runtime;
 /// starts on a caller-provided stack buffer, so the scalar path never touches the array pool. Float64 values go through
 /// <see cref="StableHash.CanonicalFloat64Bits"/> like the builder's (−0.0 as 0.0, every NaN as one quiet NaN), so the
 /// optimizer's and the SIMD kernels' freedom over NaN sign and payload cannot change a hash. The hash01 parity tests
-/// (<c>SemanticsTests</c>, <c>ExpressionReviewRegressionTests</c>) pin both writers to the same bytes.
+/// (<c>SemanticsTests</c>, <c>ExpressionRegressionTests</c>) pin both writers to the same bytes.
 /// </remarks>
 internal ref struct Hash01Encoder
 {

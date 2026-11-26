@@ -94,8 +94,8 @@ public sealed class FeatureRuntimeInfo
     internal void DependOnKey(ImmutableArray<int> keyFeatures) => _dependencies = keyFeatures;
 
     /// <summary>
-    /// A derived context feature that a key reads, or an operator awaits while it runs (a recall source's query, design
-    /// 5.4), directly or through other derived features (set by <see cref="FeaturePlan.Create"/>): the context prefetch
+    /// A derived context feature that a key reads, or an operator awaits while it runs (a recall source's query),
+    /// directly or through other derived features (set by <see cref="FeaturePlan.Create"/>): the context prefetch
     /// computes it as soon as its inputs are stored, so the groups keyed by it start then and the operator's call is sent
     /// then; other derived context features are computed once the whole prefetch is.
     /// </summary>
@@ -194,7 +194,7 @@ public sealed class FetchGroup
     /// <summary>
     /// The names of <see cref="Fields"/>, each once, in field order (two features may read one field): what a source in
     /// mode <c>service</c> asks its service for when it fetches the whole group. Built once per plan on first use, for each
-    /// group: a source of several entities asks for each one's (review of the IO redesign: one kept for the last group
+    /// group: a source of several entities asks for each one's (one kept for the last group
     /// was built again at each entity's call).
     /// </summary>
     internal string[] FieldNames => _fieldNames ?? Interlocked.CompareExchange(ref _fieldNames, DistinctNames(FieldArray), null) ?? _fieldNames!;

@@ -93,7 +93,7 @@ public sealed class MemoryVectorsServiceTests
     public async Task TheVectorsLength_IsItsShapes_NotItsBuffers()
     {
         // A longer buffer than the shape holds is allowed (a rented one): a vector of shape [0] with two values in its
-        // buffer has no elements. It searched with the two (review of IO step 2).
+        // buffer has no elements. It searched with the two.
         var source = Create($$"""{ "query": "user_embedding", {{Items}} }""");
 
         var (status, found) = await RetrieveAsync(source, [NamedInput.FromFloat64("user_embedding", [0], new[] { 1.0, 0.5 })]);

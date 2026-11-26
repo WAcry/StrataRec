@@ -10,12 +10,12 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>Regression tests for findings of the logging/expressions/e2e review (cf06c43).</summary>
-public sealed class Review4RegressionTests
+public sealed class PipelineRegressionTests
 {
     [Fact]
     public void ReloadWithAnUnknownFallbackPipelineKeepsTheCurrentPlan()
     {
-        // Finding 5: the FALLBACK_PIPELINE_UNKNOWN error must block the primary's publication.
+        // The FALLBACK_PIPELINE_UNKNOWN error must block the primary's publication.
         var host = HomeFeedTestHost.LoadModified(_ => { });
         var engine = new RecEngine(host.Environment);
         ServiceCollectionExtensions.LoadWorkspace(engine, host.Root, "local", new[] { "home_feed" }).ThrowIfErrors("initial load");
@@ -45,7 +45,7 @@ public sealed class Review4RegressionTests
     [InlineData(false)]
     public async Task ExternalAssignmentIsBoundedByTheRequestDeadline(bool honorCancellation)
     {
-        // Finding 10: a slow provider (cooperative or not) must not hold the request past its deadline.
+        // A slow provider (cooperative or not) must not hold the request past its deadline.
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment, new SlowProvider(TimeSpan.FromMinutes(1), honorCancellation));
         Assert.True(engine.Load(host.Request).Applied);
@@ -64,7 +64,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public async Task CallerCancellationStillPublishesTheExperimentRecord()
     {
-        // Finding 6: a cancelled request was assigned (and maybe exposed); its durable record must not vanish.
+        // A cancelled request was assigned (and maybe exposed); its durable record must not vanish.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
@@ -99,7 +99,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public async Task ColumnsFromLogsTheInputsOfTheModelVariantThatServed()
     {
-        // Findings 1 and 7: a treatment that rewires a model input must log its own inputs, under its own schema id.
+        // A treatment that rewires a model input must log its own inputs, under its own schema id.
         var host = HomeFeedTestHost.Load();
         var swap = new ExperimentPlacement(ArtifactSerializer.Deserialize<ExperimentArtifact>("""
             { "experiment_id": "exp_inputs", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
@@ -130,7 +130,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public void TapCannotReadAVersionProducedAfterItsAttachPoint()
     {
-        // Finding 9: col.score.final@fusion does not exist yet right after recall.
+        // Col.score.final@fusion does not exist yet right after recall.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
@@ -156,7 +156,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public void FunnelKeysCannotWaitForFetchedFeatures()
     {
-        // Finding 8: the sampling decision is made at request start; a fetched key would block every request on I/O.
+        // The sampling decision is made at request start; a fetched key would block every request on I/O.
         var host = WithPipelineEdit("\"deep_trace\": { \"key\": [", "\"deep_trace\": { \"key\": [\"ctx.user.tenure_days\", ");
 
         var compilation = host.Compile();
@@ -167,7 +167,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public async Task TapsArePassiveForContextFeatures()
     {
-        // Finding 8: a tap may log a context feature the pipeline reads anyway, but must not add a fetch of its own.
+        // A tap may log a context feature the pipeline reads anyway, but must not add a fetch of its own.
         var logOnly = WithPipelineEdit("\"context\": { \"user_id\": \"ctx.request.user_id\",", "\"context\": { \"tenure\": \"ctx.user.tenure_days\", \"user_id\": \"ctx.request.user_id\",");
         Assert.Contains(logOnly.Compile().Diagnostics, d => d.IsError && d.Code == "TAP_FEATURE_NOT_FETCHED" && d.Message.Contains("user.tenure_days"));
 
@@ -188,7 +188,7 @@ public sealed class Review4RegressionTests
     [Fact]
     public void NodeCannotReadItsOwnPinnedVersion()
     {
-        // Found while fixing finding 15: col.x@self resolves to the slot the node is about to write.
+        // col.x@self resolves to the slot the node is about to write.
         var host = WithPipelineEdit("\"output_col\": \"score.coarse\", \"expr\": \"col.item.smoothed_ctr\"",
             "\"output_col\": \"score.coarse\", \"expr\": \"col.item.smoothed_ctr + (col.score.coarse@coarse_score ?? 0.0)\"");
 

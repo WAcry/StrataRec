@@ -118,8 +118,8 @@ public sealed class SampleTimingTests
     {
         // A trace has only the run that served; a recording has the primary's too. Both compare by the served pipeline and
         // its run, and a request the primary served differs in which pipeline served.
-        var failing = Engine(ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0));
-        var healthyRoot = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var failing = Engine(ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0));
+        var healthyRoot = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         ReplayTests.Edit(healthyRoot, "bindings/local.jsonc", "\"fail\": true", "\"fail\": false");
         var healthy = Engine(healthyRoot);
 

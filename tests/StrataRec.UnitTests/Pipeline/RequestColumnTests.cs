@@ -175,7 +175,7 @@ public sealed class RequestColumnTests
 
     /// <summary>
     /// An output column may read a request column, per item (here the count beside each item); a non-nullable one needs a
-    /// producer, as the output's values do (review of 1102725: a plan was accepted and threw building the result).
+    /// producer, as the output's values do (a plan was accepted and threw building the result).
     /// </summary>
     [Fact]
     public async Task AnOutputColumn_ReadsARequestColumn_AndANonNullableOneNeedsAProducer()
@@ -196,7 +196,7 @@ public sealed class RequestColumnTests
     }
 
     /// <summary>
-    /// Integer sums and means are exact until the end (review of 1102725): a sum whose running total leaves int64 on the way
+    /// Integer sums and means are exact until the end: a sum whose running total leaves int64 on the way
     /// is the sum, the mean of the extremes is -0.5, and only a sum outside int64 fails the node. Rows 1, 2, 3 in order.
     /// </summary>
     [Theory]
@@ -232,7 +232,7 @@ public sealed class RequestColumnTests
     }
 
     /// <summary>
-    /// A node's <c>when</c> reads no parameter (review of 1102725): an experiment overriding it would decide
+    /// A node's <c>when</c> reads no parameter: an experiment overriding it would decide
     /// whether the node runs before its trigger is recorded, which only a running node's read records.
     /// </summary>
     [Fact]
@@ -248,7 +248,7 @@ public sealed class RequestColumnTests
     }
 
     /// <summary>
-    /// A defective operator's value fails its own node, which its <c>on_failure</c> handles (review of 1102725): one set
+    /// A defective operator's value fails its own node, which its <c>on_failure</c> handles: one set
     /// through a handle it changed is checked against what the node resolved, and a list with a null element is refused.
     /// Committed, either broke a later reader instead: the output threw, the replay refused the recording.
     /// </summary>
@@ -271,7 +271,7 @@ public sealed class RequestColumnTests
     }
 
     /// <summary>
-    /// The aggregate's values share its buffers (review of 1102725: each value rented its own, held to the request's
+    /// The aggregate's values share its buffers (each value rented its own, held to the request's
     /// end): twenty values with a <c>where</c> and an <c>of</c> rent no more of the request's memory than one.
     /// </summary>
     [Fact]

@@ -58,7 +58,7 @@ public sealed class RequestColumnEndToEndTests
     [Fact]
     public async Task AFallbackPipelinesValues_AreTheResults_LiveAndReplayed()
     {
-        var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var root = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         ReplayTests.Edit(root, "pipelines/backup.jsonc", "\"params\":", "\"request_columns\": { \"n\": { \"type\": \"int64\" } }, \"params\":");
         ReplayTests.Edit(root, "pipelines/backup.jsonc", "\"config\": { \"quotas_param\": \"recall_quotas\" } } },",
             "\"config\": { \"quotas_param\": \"recall_quotas\" } }, \"count\": { \"order\": 200, \"op\": \"RequestAggregate@1\", \"config\": { \"values\": { \"n\": { \"fn\": \"count\" } } } } },");
@@ -190,7 +190,7 @@ public sealed class RequestColumnEndToEndTests
     }
 
     /// <summary>
-    /// A request column's producers are checked together only where a rule needs them together (review of 1102725): a
+    /// A request column's producers are checked together only where a rule needs them together: a
     /// nullable flow column only nodes write, one optional writer in each of 13 layers (8,192 combinations, past the
     /// default limit of 4,096), needs no combination of them.
     /// </summary>
@@ -214,7 +214,7 @@ public sealed class RequestColumnEndToEndTests
     }
 
     /// <summary>
-    /// Request columns interact between experiments as columns do (review of 1102725): an added node reading
+    /// Request columns interact between experiments as columns do: an added node reading
     /// what another layer's added node writes, two added nodes writing one flow column. The review names it req.&lt;name&gt;.
     /// </summary>
     [Fact]
@@ -257,7 +257,7 @@ public sealed class RequestColumnEndToEndTests
     /// <summary>
     /// A tap binding a request column only another layer's arm declares, in a branch the optimizer drops, is refused
     /// where that arm is not assigned, also when the combinations are checked by scope (past the limit): the name decides
-    /// which combinations the tap is checked in (second review of 1102725). gate's named input reads the column only when
+    /// which combinations the tap is checked in. gate's named input reads the column only when
     /// a and b both switch it on, and only the tap c adds compiles it (columns_from); d declares it. The same for a
     /// parameter only d declares (audit of f47a255: the scope left parameters out, the plan loaded, and the tap threw when
     /// it captured a request in a, b and c).
@@ -295,7 +295,7 @@ public sealed class RequestColumnEndToEndTests
 
     /// <summary>
     /// A tap only binding a request column (in a branch the optimizer drops) is checked with the arms that decide the tap,
-    /// not with every writer of the column (third review of 1102725): thirteen layers each declaring and writing one nullable
+    /// not with every writer of the column: thirteen layers each declaring and writing one nullable
     /// flow column, the first also adding the tap, are 8,192 combinations, and no rule needs the writers together.
     /// </summary>
     [Fact]

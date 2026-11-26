@@ -8,15 +8,15 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// The review of 43bdf97: what setting up a fetch may do to its bound. Here with the allocation measurements, which run
+/// The what setting up a fetch may do to its bound. Here with the allocation measurements, which run
 /// alone: a test counts the process's live timers.
 /// </summary>
 [Collection(AllocationMeasurement.Name)]
-public sealed class FetchSetupReviewTests
+public sealed class FetchSetupTests
 {
     /// <summary>
     /// A pool that refuses a staging buffer fails the fetch without leaving its bound behind: no timer and no registration
-    /// on the caller's token outlive it (review of 43bdf97: the bound was made before the staging, outside the code that
+    /// on the caller's token outlive it (the bound was made before the staging, outside the code that
     /// releases it, and each refusal left a live timer for the request's deadline).
     /// </summary>
     [Theory]
@@ -71,7 +71,7 @@ public sealed class FetchSetupReviewTests
 
     /// <summary>
     /// A hook that is slow to say whether it replays does not move the fetch's deadline: the bound ends when the request's
-    /// deadline or the source's timeout comes, taken with the budget (review of 43bdf97: the bound was made from the
+    /// deadline or the source's timeout comes, taken with the budget (the bound was made from the
     /// budget after the hook was asked, so its time was added, and the connector was called past the request's deadline).
     /// </summary>
     [Fact]
@@ -102,7 +102,7 @@ public sealed class FetchSetupReviewTests
     /// <summary>
     /// A host's clock that throws when a cache read takes its time fails the read without leaving its bound behind, and
     /// one that stalls there does not move the deadline: the clock is read before the bound is made, and the bound ends
-    /// at the deadline taken with the budget (review of f0f6871: the bound was made first, and each throw left a timer).
+    /// at the deadline taken with the budget (the bound was made first, and each throw left a timer).
     /// </summary>
     [Theory]
     [InlineData(false, false)]

@@ -89,7 +89,7 @@ public class CompilerTests
         utility * (1.0 + param.w_fresh * freshness) * cold_boost
         """;
 
-    public static TheoryData<string, string> DesignExamples() => new()
+    public static TheoryData<string, string> FormulaExamples() => new()
     {
         // derived features
         { "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)", "float64" },
@@ -115,8 +115,8 @@ public class CompilerTests
     };
 
     [Theory]
-    [MemberData(nameof(DesignExamples))]
-    public void DesignExamples_Compile_AsNonNullable(string source, string expected)
+    [MemberData(nameof(FormulaExamples))]
+    public void FormulaExamples_Compile_AsNonNullable(string source, string expected)
     {
         var f = HomeFeed();
         var options = expected == "bool" ? CompileOptions.Predicate : CompileOptions.Score;

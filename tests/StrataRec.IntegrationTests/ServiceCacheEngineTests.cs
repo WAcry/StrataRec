@@ -90,7 +90,7 @@ public sealed class ServiceCacheEngineTests
     /// <summary>
     /// A hot reload that changes the model's settings (its bias) under the same name and version serves the new model's
     /// scores at once, though the distributed tier still holds the earlier binding's answers: they are keyed by what the
-    /// binding answers with (review of IO step 3). The new plan read them, and served the old scores for their TTL.
+    /// binding answers with. The new plan read them, and served the old scores for their TTL.
     /// </summary>
     [Fact]
     public async Task AReloadThatChangesTheModelsSettings_DoesNotReadTheEarlierAnswersFromTheDistributedTier()

@@ -178,7 +178,7 @@ internal enum CallEnd : byte
     /// <summary>
     /// The call's own deadline: the call was cut off at it (the wait ended, or the client completed only after it), or the
     /// client honoured it. A client that cancels on its own, with none of the framework's tokens cancelled, has
-    /// <see cref="Threw"/> (review of the IO redesign: a cache store that cancelled itself was taken for the service's
+    /// <see cref="Threw"/> (a cache store that cancelled itself was taken for the service's
     /// deadline, and the service, with its time left, was not called).
     /// </summary>
     TimedOut,
@@ -290,10 +290,10 @@ internal static class BoundedCall
         }
 
         // Starting the call runs the host's code (an ActivityListener's sampler and start callback), which may cancel the
-        // request or take the time that was left: the bound is looked at again after it (review of IO step 4: a sampler
+        // request or take the time that was left: the bound is looked at again after it (a sampler
         // that cancelled the request still had the provider called). The span the host saw start ends cancelled, which
         // no metric or health counts. A call cut off there is the deadline's that passed; when both did, the one that came
-        // first, which is told before, while both are ahead (review of IO step 4b). The deadlines may be on other clocks
+        // first, which is told before, while both are ahead. The deadlines may be on other clocks
         // (a cache's, which the host may move), so which comes first is told again for the client's token.
         var ownFirst = deadline.IsSet && deadline.Remaining < bound.Remaining;
         var io = target.Start();
@@ -410,7 +410,7 @@ internal static class BoundedCall
             // its outcome says nothing about who came first. The client completed after Send returned pending and before
             // the wait (while its ValueTask became a task, say): the framework observes it now, as an answer that came
             // before Send returned. A wait that was set up and has ended already (with the client just after it) is
-            // another task, whose outcome says who won (review of IO step 4: both being complete did not tell them apart).
+            // another task, whose outcome says who won (both being complete did not tell them apart).
             return EndObserved(call, client, io, bound, lease, own, token, deadline);
         }
 
@@ -589,15 +589,15 @@ internal static class BoundedCall
     /// cancellation the client's task ended with (an async method that threw one, as an HTTP client's own timeout does;
     /// the client never gets the caller's token itself, only one linked to it). Neither is read from the caller's token
     /// as it is when the call is classified: a caller that cancels after the client's cancellation won the wait came
-    /// second (review of 1158d00), and one that ended the wait before the client's cancellation reached it came first
-    /// (review of 378b594, which read who came first from the lease's snapshot instead, unlike for a client that failed).
+    /// second, and one that ended the wait before the client's cancellation reached it came first
+    /// (which read who came first from the lease's snapshot instead, unlike for a client that failed).
     /// </summary>
     private static Winner Waited(Task wait, Task client, CancellationToken caller) => wait.Status switch
     {
         TaskStatus.RanToCompletion => Winner.Client,
         TaskStatus.Faulted => IsClientFailure(wait.Exception!, client) ? Winner.Client : Winner.Bound,
         // Only a caller that has cancelled can have ended the wait: a client's cancellation with no token, or with any
-        // token while the caller passed none, is not the caller's because the tokens are equal (review of 110adac).
+        // token while the caller passed none, is not the caller's because the tokens are equal.
         _ => client.IsCanceled && !(caller.IsCancellationRequested && CancelledWith(wait, caller)) ? Winner.Client : Winner.Caller,
     };
 
@@ -644,7 +644,7 @@ internal static class BoundedCall
     /// cancellation (gRPC's <c>RpcException</c> with status <c>Cancelled</c>), and one that does so before its wait ends is
     /// recorded as when the wait ends first, the exception dropped (2026-11-22: it was the client's error, a timeout
     /// recorded as one only when the wait's timer came first). A token cancelled after the client completed changes
-    /// nothing: the client was first, and what it threw is its own (review of 763fcbd: a failure that had won became the
+    /// nothing: the client was first, and what it threw is its own (a failure that had won became the
     /// caller's cancellation, or the budget's, when they came before the call was classified). With none cancelled, a
     /// cancellation, or a <see cref="TimeoutException"/>, is a timeout of its own (an HTTP client's timeout is a
     /// cancellation, say); anything else, an error.
@@ -682,7 +682,7 @@ internal static class BoundedCall
     /// first ended it: the call's own when it was the earlier when the call was sent (it had a token source of its own),
     /// or when it has passed by its clock while the scope's bound has not (a cache's clock is not the bound's); otherwise
     /// the scope's bound ran out (even if its timer has not fired yet). A client that returns only after both have passed
-    /// is cut off by the earlier, not by whichever is checked first (review of IO step 4).
+    /// is cut off by the earlier, not by whichever is checked first.
     /// </summary>
     /// <param name="honoured">A cancellation the client threw after it lost, thrown on to the operator as its own.</param>
     /// <param name="ownSet">The call had a token source of its own for its deadline.</param>

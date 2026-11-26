@@ -40,7 +40,7 @@ public sealed class ServiceDigestCostTests
 
     /// <summary>
     /// Two different input names of one hash are compared with each other only: a call of many inputs is checked as fast
-    /// as one without (review of 5e07f1b: one collision compared every pair, and 16,384 inputs took 381 ms), and a real
+    /// as one without (one collision compared every pair, and 16,384 inputs took 381 ms), and a real
     /// duplicate elsewhere is still found.
     /// </summary>
     [Fact]

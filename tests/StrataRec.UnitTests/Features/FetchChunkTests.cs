@@ -188,7 +188,7 @@ public class FetchChunkTests
     public async Task ChunksNotSentBeforeTheBudgetRanOut_AreNotSent_AndFailAsTimeouts(bool cached)
     {
         // The first chunk answers synchronously, but only once the fetch's budget has run out. The fetch has control back
-        // then: the other chunks are not sent (external review: each was sent with no time left, its synchronous part
+        // then: the other chunks are not sent (each was sent with no time left, its synchronous part
         // run in turn), and fail as timeouts. Recorded as not sent, a replay fails them alike without a connector.
         var sent = new ConcurrentQueue<long>();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>

@@ -245,7 +245,7 @@ public sealed class PipelineColumnsEndToEndTests
 
     /// <summary>
     /// Every row's inputs are read before any call is made: one that cannot be read fails the node with nothing started
-    /// (review of 5307fe0, finding 5: the calls of the rows before it were under way and left behind, and whether the
+    /// (the calls of the rows before it were under way and left behind, and whether the
     /// recording had them depended on how fast they ended).
     /// </summary>
     [Fact]
@@ -364,7 +364,7 @@ public sealed class PipelineColumnsEndToEndTests
     [InlineData("\"bids\": \"bid\"", "\"tags\": \"bid\"", "PIPELINE_CALL_OUTPUT", "/nodes/content/config/columns/tags")]
     [InlineData("\"bids\": \"bid\"", "\"bids\": \"bud\"", "PIPELINE_CALL_OUTPUT", "/nodes/content/config/columns/bids")]
     [InlineData("\"count\": \"count\"", "\"wrong\": \"count\"", "COLUMN_TYPE_MISMATCH", "/nodes/content/config/values/wrong")]
-    // A list of a fixed length has no empty value for a row without a result (review of 5307fe0, finding 4: such a row got a list of none).
+    // A list of a fixed length has no empty value for a row without a result (such a row got a list of none).
     [InlineData("\"count\": \"count\"", "\"pair\": \"count\"", "COLUMN_TYPE_MISMATCH", "/nodes/content/config/values/pair")]
     [InlineData("\"bids\": \"bid\"", "\"games\": \"bid\"", "COLUMN_WRITTEN_TWICE", "/nodes/content/config/columns/games")]
     [InlineData("\"count\": \"count\"", "\"bids\": \"count\"", "COLUMN_WRITTEN_TWICE", "/nodes/content/config/values/bids")]

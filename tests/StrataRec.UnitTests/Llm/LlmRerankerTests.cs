@@ -281,7 +281,7 @@ public sealed class LlmMetricsTests
     /// <summary>
     /// A host's listener that throws on the generation counts loses those measurements, not the answer or its record: the
     /// counts ran before the call was recorded, without the boundary the call's other metrics have, so the node failed
-    /// and the call was left outstanding in the recording (review of IO step 2).
+    /// and the call was left outstanding in the recording.
     /// </summary>
     [Fact]
     public async Task AListenerThatThrowsOnTheGenerationCounts_LosesThoseMeasurements_NotTheAnswerOrItsRecord()

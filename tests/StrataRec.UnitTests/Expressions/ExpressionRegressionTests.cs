@@ -13,10 +13,9 @@ using StrataRec.Expressions;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>
-/// Regression tests for the external review of the ColumnExpr engine (findings #11, #12, #13, #15, #16). Every test
-/// asserts the expected value, not only agreement between the backends.
+/// Regression tests of the ColumnExpr engine. Every test asserts the expected value, not only agreement between the backends.
 /// </summary>
-public class ExpressionReviewRegressionTests
+public class ExpressionRegressionTests
 {
     // ------------------------------------------------------------------------------------------------------------
     // #11: desugared built-ins must lift every argument.

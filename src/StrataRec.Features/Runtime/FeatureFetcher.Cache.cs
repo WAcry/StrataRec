@@ -270,7 +270,7 @@ public sealed partial class FeatureFetcher
         if (read.BudgetMs > 0)
         {
             // The host's clock is read before the bound is made, which ResolveAsync releases: a clock that throws leaves no
-            // bound behind (review of f0f6871). The bound ends at the deadline taken with the budget all the same.
+            // bound behind. The bound ends at the deadline taken with the budget all the same.
             read.StoreBudgetMs = Math.Min(read.BudgetMs, read.Supply.DistributedTimeoutMs ?? Math.Max(1, read.BudgetMs / 2));
             var clock = read.Cache.Clock; // the cache's clock times the tier too (a test moves it by hand)
             read.StoreDeadline = clock.GetTimestamp() + (read.StoreBudgetMs * clock.TimestampFrequency / 1000);

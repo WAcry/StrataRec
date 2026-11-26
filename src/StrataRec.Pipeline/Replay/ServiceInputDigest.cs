@@ -15,14 +15,14 @@ namespace StrataRec.Pipeline.Replay;
 /// of it; any other input (a scalar, a text prompt) is whole too. Each input contributes its name, element type and
 /// shape, so the same values in another layout do not collide; the leading dimension of a row-wise or shared
 /// <c>[1, ...]</c> input is left out, so the same row in a differently sized batch has the same digest, a batch of one
-/// too, whose shared input is row-wise by its shape (review of the IO redesign: there its leading dimension was kept,
+/// too, whose shared input is row-wise by its shape (there its leading dimension was kept,
 /// and the row's digest changed with the batch). What a row saw of an input enters its digest inline when it is a few
 /// numbers or bools (at most <see cref="MaxInlineValues"/>) or missing, and as a 128-bit digest of that encoding otherwise
 /// (strings and a text always: a string's size is not its count): which, depends only on what the row saw, so the same
 /// row has the same digest whether it saw a slice or all of a shared input. What every row sees alike is encoded once for
 /// the call and copied into each row's (<see cref="Segments"/>): a shared vector is not hashed again for every row
-/// (review of 43bdf97: a call of 2,048 rows hashed a shared vector of 4,096 values 2,048 times, which a full cache hit
-/// spent its node's budget on), and a row's scalar is not hashed twice (review of f0f6871: every view as a digest made a
+/// (a call of 2,048 rows hashed a shared vector of 4,096 values 2,048 times, which a full cache hit
+/// spent its node's budget on), and a row's scalar is not hashed twice (every view as a digest made a
 /// call of many per-row inputs half as slow again). A missing input contributes its name, element
 /// type and declared shape, and that it is missing: it is neither a zero nor an absent input; its declared shape says
 /// whether it is row-wise, as a present one's does (missing on every row). A call's
@@ -183,7 +183,7 @@ internal static class ServiceInputDigest
     /// or a text, enters as a 128-bit digest of its own. A row's own view as a digest costs the row one more hash; a shared
     /// view inline is copied into every row's bytes (encoded once, <see cref="Segments"/>) and hashed with each, where its
     /// digest is 16 bytes. Sixteen: for 2,048 rows, 32 per-row vectors of 5 values take 1.8 ms inline and 6.5 ms as
-    /// digests, and 32 shared vectors of 16 values 0.4 ms inline and 0.1 ms as digests (review of 5e07f1b; at 3a0d9e8 a
+    /// digests, and 32 shared vectors of 16 values 0.4 ms inline and 0.1 ms as digests (at 3a0d9e8 a
     /// shared view inline was encoded again for every row, and four was the better bound then).
     /// </summary>
     private const int MaxInlineValues = 16;
@@ -230,7 +230,7 @@ internal static class ServiceInputDigest
                 continue;
             }
 
-            // A string's size is not its count: one string may be long (review of 3a0d9e8: one of 196 KB, shared, was
+            // A string's size is not its count: one string may be long (one of 196 KB, shared, was
             // encoded again for every row). Numbers and bools are of a fixed size.
             var view = new View(input, call.BatchSize, 0); // the count and the header are every row's
             var inline = input.IsMissing || (input.ElementType is not (TensorElementType.Text or TensorElementType.String) && view.Count <= MaxInlineValues);

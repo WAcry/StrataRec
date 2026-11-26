@@ -55,7 +55,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     /// <summary>
     /// One read of the store (<see cref="ICacheStore.GetAsync"/>), for a bounded call's send: true once it answered, its
     /// failure thrown. The store's task is consumed once, also when it completed at once: a store may pool what backs it
-    /// and take it back only then (review of the IO redesign: a service's cache read a completed one's status only).
+    /// and take it back only then (a service's cache read a completed one's status only).
     /// </summary>
     internal ValueTask<bool> ReadAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
     {

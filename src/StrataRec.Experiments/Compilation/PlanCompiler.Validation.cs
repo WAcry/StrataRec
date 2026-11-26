@@ -681,7 +681,7 @@ internal sealed partial class UnifiedCompilation
     /// arm declares, so an invalid baseline could resolve there, and removing that experiment (a revocation, which does
     /// not compile again) would publish a release no node can load. Not only when arms add schema entries or parameter
     /// leaves: a node an arm adds declares its outputs implicitly, and listing the ways an arm can declare a name missed
-    /// that one (external review, P1). One more compile of the baseline, without building a plan, per plan compile.
+    /// that one. One more compile of the baseline, without building a plan, per plan compile.
     /// </summary>
     private void ValidateBaselineAlone()
     {

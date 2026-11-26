@@ -568,7 +568,7 @@ public sealed class RecallQueryTests
 
     /// <summary>
     /// A recall reads only the items a service adds: what else it writes is not recorded. An empty list of outputs read
-    /// meant "all", so a service's extra tensor and text went into the recording (review of IO step 2).
+    /// meant "all", so a service's extra tensor and text went into the recording.
     /// </summary>
     [Fact]
     public async Task ARecall_RecordsTheItems_NotOutputsTheServiceWroteBesides()

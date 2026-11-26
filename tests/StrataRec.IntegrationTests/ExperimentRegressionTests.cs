@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>Regression tests for findings of the experiments/hosting review (c84900e).</summary>
-public sealed class ReviewRegressionTests
+public sealed class ExperimentRegressionTests
 {
     private static ExperimentArtifact Experiment(string json) => ArtifactSerializer.Deserialize<ExperimentArtifact>(json);
 
@@ -33,7 +33,7 @@ public sealed class ReviewRegressionTests
     [Fact]
     public void CombinationSpaceOverTheLimitIsAnErrorNotAWarning()
     {
-        // score.final is written or read by nodes touched in four layers: 16 combinations > limit 4 (finding 1).
+        // score.final is written or read by nodes touched in four layers: 16 combinations > limit 4.
         var host = HomeFeedTestHost.Load();
         var request = With(host.Request, new[] { FusionMultiplier("exp_a", "layer_a"), FusionMultiplier("exp_b", "layer_b") }, maxCombinations: 4);
 
@@ -47,7 +47,7 @@ public sealed class ReviewRegressionTests
     [Fact]
     public void ArmAdditionsCannotRepairABrokenBaseline()
     {
-        // The baseline reads a feature only an experiment adds (finding 2): removing the experiment would break it.
+        // The baseline reads a feature only an experiment adds: removing the experiment would break it.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
@@ -73,7 +73,7 @@ public sealed class ReviewRegressionTests
     [Fact]
     public async Task ParameterExposureTriggersEvenWhenTheNodeFails()
     {
-        // Finding 3: recall reads the overridden quota, then fails; the experiment was still exposed.
+        // Recall reads the overridden quota, then fails; the experiment was still exposed.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
@@ -196,7 +196,7 @@ public sealed class ReviewRegressionTests
     [Fact]
     public void ArmsOfDifferentLayersAreValidatedTogetherAndArmsOfOneLayerNever()
     {
-        // Finding 6, without traffic domains: rerank deletes diversity_cap and another experiment edits one of its fields.
+        // Without traffic domains: rerank deletes diversity_cap and another experiment edits one of its fields.
         // In its own layer the two arms may be assigned together, which is a conflict; experiments the platform keeps
         // exclusive share a layer, whose arms are never assigned together and so are not checked together.
         ExperimentPlacement Edit(string layer) => new(Experiment("""
@@ -239,7 +239,7 @@ public sealed class ReviewRegressionTests
     public async Task FallbackPipelineOnlyGetsTheRemainingBudget()
     {
         // The primary hangs until the 400 ms deadline; the backup needs 200 ms. With the remaining budget (~0 ms) the
-        // backup cannot finish; with a fresh 400 ms budget (finding 12) it would have succeeded at ~600 ms.
+        // backup cannot finish; with a fresh 400 ms budget it would have succeeded at ~600 ms.
         var root = FallbackWorkspace(brokenLatencyMs: 60_000, backupLatencyMs: 200);
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
         ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", new[] { "primary" }).ThrowIfErrors("load");

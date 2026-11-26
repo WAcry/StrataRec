@@ -283,7 +283,7 @@ public sealed partial class FeatureFetcher
 
     /// <summary>
     /// A group whose key (or arguments) reads context features: started once each of them is stored, or failed as soon as
-    /// one of them failed, as its key state would fail it (review of the IO redesign: an entity whose argument had failed
+    /// one of them failed, as its key state would fail it (an entity whose argument had failed
     /// waited for its other arguments). One whose store failed with an exception is not started (the exception is the
     /// prefetch's failure); one whose key is stored after the request ended is not sent, its features failed for anyone
     /// who looks.
@@ -333,7 +333,7 @@ public sealed partial class FeatureFetcher
     internal ValueTask<int> StoredOrFailedAsync(ReadOnlySpan<int> features)
     {
         // The common case, everything stored already (a synchronous source), without a state machine or a closure: the
-        // wait is static, given what it reads (review of 43bdf97: a closure over them was allocated on every call).
+        // wait is static, given what it reads (a closure over them was allocated on every call).
         var ready = _contextReady!;
         foreach (var k in features)
         {
@@ -466,7 +466,7 @@ public sealed partial class FeatureFetcher
                 // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or its
                 // time is up (an earlier group's connector ran its synchronous part): BoundedCall's rule 8.
                 // The bound ends at the deadline taken with the budget, and the staging is set up inside the try, as a
-                // candidate fetch's (review of 43bdf97).
+                // candidate fetch's.
                 var bound = _hook is { Replays: true } ? null : new CallBound(CancellationSite.Fetch, cancellationToken, deadline, _events, _requestId);
                 StagingBuffer staging;
                 ValueTask<CallResult<FetchStatus>> call;
@@ -505,7 +505,7 @@ public sealed partial class FeatureFetcher
             }
         }
 
-        // A failed call's staging is not read: an abandoned connector may still be writing it (review of IO step 5).
+        // A failed call's staging is not read: an abandoned connector may still be writing it.
         var staging = status.Outcome != FetchOutcome.Failed ? fetch.Staging : null;
         for (var i = 0; i < fetch.Features.Length; i++)
         {

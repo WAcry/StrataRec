@@ -108,7 +108,7 @@ public sealed class ExplainEndToEndTests
     public async Task ARequestItsFallbackPipelineServed_ExplainsTheRunThatServed()
     {
         // primary's only source fails; backup recalls the popular list (5, 8, 11, ...), of which it returns 5.
-        var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var root = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root });
         ServiceCollectionExtensions.LoadWorkspace(engine, root, "local", new[] { "primary" }).ThrowIfErrors("load");
 

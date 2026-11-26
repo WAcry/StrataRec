@@ -102,7 +102,7 @@ public sealed class ManifestRefCliTests
     public async Task Replay_OfARequestThatFailedOver_RunsTheFallbackPipelineOnTheManifestItRecorded()
     {
         // Two pipelines released separately: 'primary' (its source fails) falls back to 'backup'.
-        var root = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var root = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"fixtures/recall_popular.json\"",
             JsonSerializer.Serialize(Path.Combine(root, "fixtures", "recall_popular.json")), StringComparison.Ordinal));
@@ -391,7 +391,7 @@ public sealed class ManifestRefCliTests
         Assert.Contains($"relative paths in a manifest's bindings resolve against the current directory, {Environment.CurrentDirectory}", errors);
 
         // 'primary' falls back to 'backup', which a run on primary's manifest does not load.
-        var fallback = ReviewRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
+        var fallback = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         var bindings = Path.Combine(fallback, "bindings", "local.jsonc");
         File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"fixtures/recall_popular.json\"",
             JsonSerializer.Serialize(Path.Combine(fallback, "fixtures", "recall_popular.json")), StringComparison.Ordinal));

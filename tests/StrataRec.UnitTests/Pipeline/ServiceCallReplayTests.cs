@@ -106,7 +106,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// Two nodes asked the same query for 1 and 3 items; a node that replaces them asks for 3. It borrowed the first call
-    /// with that digest, the shorter one, and reported a shortfall the bundle could answer (review of IO step 2).
+    /// with that digest, the shorter one, and reported a shortfall the bundle could answer.
     /// </summary>
     [Fact]
     public void ANodeWithoutACall_BorrowsTheSameInputsAnswerThatAnswersIt_NotTheFirst()
@@ -149,8 +149,8 @@ public sealed class ServiceCallReplayTests
     /// <summary>
     /// Of two partial answers with as much of what a call reads, the one that can tell its items is borrowed: both answered
     /// text <c>a</c> and no items, the second asked for 3 (the service had none), the first for 0 (it says nothing). The
-    /// first was borrowed and the replay reported 3 items it could not tell besides the missing <c>b</c> (verification 2 of
-    /// IO step 2). Since the review of IO step 3 a call reading outputs is digested with its limit, so the first is not even
+    /// first was borrowed and the replay reported 3 items it could not tell besides the missing <c>b</c>.
+    /// A call reading outputs is digested with its limit, so the first is not even
     /// a candidate: its text may say it was asked for none.
     /// </summary>
     [Fact]
@@ -191,7 +191,7 @@ public sealed class ServiceCallReplayTests
     /// <summary>
     /// A call that reads a named output more or less than its recording, with the same inputs and limit, still meets its
     /// recording: its list is answered, and an output the recording lacks is a <c>not_recorded</c> gap. The limit in the
-    /// digest made such a call another call, its inputs reported changed (review of IO step 4).
+    /// digest made such a call another call, its inputs reported changed.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -244,7 +244,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// The items a service added past the call's limit are replayed for that limit, as the node saw them; a call of a
-    /// smaller limit answered from the start of the list has none (review of IO step 4: they were not recorded).
+    /// smaller limit answered from the start of the list has none (they were not recorded).
     /// </summary>
     [Theory]
     [InlineData(2, 3)]
@@ -275,7 +275,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A failure or a cut-off recorded at another limit does not end a call reading outputs that has an answer of its own
-    /// limit (review of IO step 4: the first call of the same inputs was taken, whatever its limit).
+    /// limit (the first call of the same inputs was taken, whatever its limit).
     /// </summary>
     [Theory]
     [InlineData("error", false)]
@@ -300,7 +300,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A call takes the node's recording of its own limit first, though recorded later. A failure answers only a call of
-    /// its limit: of another, the service may have failed only past some limit (review of IO step 4b), so a success that
+    /// its limit: of another, the service may have failed only past some limit, so a success that
     /// another node recorded at the call's limit answers it, and with none the call is a <c>limit_changed</c> gap, each time.
     /// </summary>
     [Fact]
@@ -336,7 +336,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A recording of another limit that cannot answer the call is not used up by it: a later call of its limit still gets
-    /// it (review of IO step 4b: it was consumed, and that call got the failure recorded after it).
+    /// it (it was consumed, and that call got the failure recorded after it).
     /// </summary>
     [Fact]
     public void ARecordingThatCannotAnswerTheCall_IsLeftForACallOfItsLimit()
@@ -362,7 +362,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// The generation details of a recorded call (tokens, truncation) describe what it generated for its limit: a call of
-    /// another limit answered from the start of its list does not get them (review of IO step 4).
+    /// another limit answered from the start of its list does not get them.
     /// </summary>
     [Theory]
     [InlineData(3, 20, true)]
@@ -382,8 +382,8 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A service drops items only past a full list, and a recording holds the count only when there were some: any other
-    /// count is no answer a service gave, rejected at its pointer (review of IO step 4); nor is one of a failure, even of
-    /// a call that asked for no items (review of IO step 4b).
+    /// count is no answer a service gave, rejected at its pointer; nor is one of a failure, even of
+    /// a call that asked for no items.
     /// </summary>
     [Theory]
     [InlineData(-1, 2, 2, "ok")]
@@ -425,7 +425,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A node whose id spells a source's key (a plan built without the plan compiler's id checks) is still another caller
-    /// than the source (review of IO step 5: the source took the node's recorded failure).
+    /// than the source (the source took the node's recorded failure).
     /// </summary>
     [Fact]
     public void ANodeWhoseIdSpellsASourcesKey_IsNotTheSource()
@@ -449,7 +449,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A source's caller is its source and entity, each name as it is: source <c>a/b</c>'s entity <c>intent</c> is not
-    /// source <c>a</c>'s entity <c>b/intent</c> (review of e5cd1c5: the two joined by a slash were one key, and one took
+    /// source <c>a</c>'s entity <c>b/intent</c> (the two joined by a slash were one key, and one took
     /// the other's recorded failure).
     /// </summary>
     [Fact]
@@ -475,7 +475,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// An output left unwritten by a call of another limit and other outputs says nothing of it: <c>not_recorded</c>, not
-    /// <c>limit_changed</c>, which the same outputs at another limit are (review of e5cd1c5).
+    /// <c>limit_changed</c>, which the same outputs at another limit are.
     /// </summary>
     [Fact]
     public void AnOutputLeftUnwrittenAtAnotherLimit_ByACallOfOtherOutputs_IsNotRecorded()
@@ -493,7 +493,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A call of many outputs, all left unwritten as recorded, compares the outputs with the recorded call's once, not once
-    /// an output (review of e5cd1c5: 512 outputs read the call's list 1,027 times, the replay of it took 359 ms).
+    /// an output (512 outputs read the call's list 1,027 times, the replay of it took 359 ms).
     /// </summary>
     [Fact]
     public void ACallOfManyOutputsLeftUnwritten_ComparesItsOutputsOnce()
@@ -514,7 +514,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A caller may reuse its call object and its arrays for its next call (the call's contents are its own): each call is
-    /// answered by what it asks for then (review of the IO redesign: the comparison of outputs was kept by the call object,
+    /// answered by what it asks for then (the comparison of outputs was kept by the call object,
     /// and a reused one asking for other outputs took the answer of the call before).
     /// </summary>
     [Fact]
@@ -566,7 +566,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// An output a recorded call asked for and the service left unwritten is that call's answer only: a call of other
-    /// outputs takes it from a recorded call that wrote it (review of da5cfe6: the omission answered first, as missing).
+    /// outputs takes it from a recorded call that wrote it (the omission answered first, as missing).
     /// </summary>
     [Fact]
     public void AnOmissionOfACallOfOtherOutputs_DoesNotAnswerOverARecordingThatWroteTheOutput()
@@ -587,7 +587,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// An output asked for at another limit is recorded there, though the service left it unwritten: a call of this limit
-    /// has a <c>limit_changed</c> gap of it, not <c>not_recorded</c> (review of da5cfe6).
+    /// has a <c>limit_changed</c> gap of it, not <c>not_recorded</c>.
     /// </summary>
     [Fact]
     public void AnOutputLeftUnwrittenAtAnotherLimit_IsALimitChangedGap()
@@ -606,7 +606,7 @@ public sealed class ServiceCallReplayTests
 
     /// <summary>
     /// A recorded call names each output it asked for once, and holds only those, as the recorder writes it; any other
-    /// is rejected at its pointer (review of da5cfe6).
+    /// is rejected at its pointer.
     /// </summary>
     [Theory]
     [InlineData("twice", "/runs/0/service_calls/0/requested/1")]

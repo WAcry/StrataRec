@@ -709,9 +709,9 @@ public sealed partial class FeatureFetcher : IIoTracker
         }
 
         // The bound ends at the deadline taken with the budget, so neither the staging's setup nor the hook delays it
-        // (reviews of the IO redesign and of 43bdf97: set up first, and then made from the budget, the time before the bound
+        // (set up first, and then made from the budget, the time before the bound
         // was added to it, and a chunk was sent past the deadline). The staging is set up inside the try: a pool that throws
-        // leaves no bound behind, with its timer and its registration on the caller's token (review of 43bdf97).
+        // leaves no bound behind, with its timer and its registration on the caller's token.
         var bound = _hook is { Replays: true } ? null : new CallBound(CancellationSite.Fetch, cancellationToken, deadline, _events, _requestId);
         StagingArea staging;
         StagingBuffer? writer = null;
@@ -721,8 +721,8 @@ public sealed partial class FeatureFetcher : IIoTracker
             for (var c = 0; c < chunkCount; c++)
             {
                 // A connector's synchronous part runs here, unbounded (see IFeatureSourceConnector.FetchAsync): once the
-                // fetch's time is up or the caller has cancelled, the chunks not sent yet are not sent (external review:
-                // each was sent with no time left, its synchronous part run in turn). They fail as a late answer would,
+                // fetch's time is up or the caller has cancelled, the chunks not sent yet are not sent (each
+                // was sent with no time left, its synchronous part run in turn). They fail as a late answer would,
                 // recorded as not sent, so a replay fails them alike without a connector or a clock (BoundedCall, rule 8).
                 writer ??= new StagingBuffer(staging);
                 writer.Bind(c);
@@ -788,7 +788,7 @@ public sealed partial class FeatureFetcher : IIoTracker
             new ConnectorCall(this, group, batch, fields, writer, budgetMs, sequence), bound, _memory, group.Io, CallDeadline.None);
 
         // A call whose wait ended at once (the caller had cancelled while the connector's task was pending) has abandoned a
-        // connector that may still write through the view: it is not the next chunk's (review of IO step 4). The result is
+        // connector that may still write through the view: it is not the next chunk's. The result is
         // a plain value or a task, so reading it here does not consume it.
         writerHeld = !call.IsCompletedSuccessfully || call.Result.Abandoned;
         return call;

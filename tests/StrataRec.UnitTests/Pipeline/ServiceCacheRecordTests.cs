@@ -16,10 +16,10 @@ using static StrataRec.UnitTests.Pipeline.ServiceCacheRig;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// The review of IO step 3 (a service's cache): what a record must be to be read, when the cache may answer at all, when
+/// A service's cache: what a record must be to be read, when the cache may answer at all, when
 /// it judges a record, what it keeps of an answer, and which answers one key may share.
 /// </summary>
-public sealed class ServiceCacheReviewTests
+public sealed class ServiceCacheRecordTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
@@ -108,7 +108,7 @@ public sealed class ServiceCacheReviewTests
 
     /// <summary>
     /// An item is cached by what it saw of each input: a shared <c>[1, d]</c> input is all of it, in a call of two items
-    /// and in a call of the item alone, whose record the other answers (review of the IO redesign: in a batch of one the
+    /// and in a call of the item alone, whose record the other answers (in a batch of one the
     /// shared input was per item by its shape, and the item's key changed with the batch).
     /// </summary>
     /// <remarks>A view of a few values enters a key inline, one of more as its own digest (<paramref name="width"/> 64): both alike in a batch of one and of two, for a shared input and for an item's own.</remarks>
@@ -149,10 +149,10 @@ public sealed class ServiceCacheReviewTests
 
     /// <summary>
     /// A call whose items share an input (a user vector, <c>[1, d]</c>) reads it once for their keys, not once for every
-    /// item (review of 43bdf97: a full hit of 2,048 items hashed a vector of 4,096 values 2,048 times, which used up its
+    /// item (a full hit of 2,048 items hashed a vector of 4,096 values 2,048 times, which used up its
     /// node's budget). The per-item input is still read per item, and every item still hits.
     /// </summary>
-    /// <remarks>A shared string is one value, of any size (review of 3a0d9e8: one was encoded again for every item); a few shared values are encoded once too.</remarks>
+    /// <remarks>A shared string is one value, of any size (one was encoded again for every item); a few shared values are encoded once too.</remarks>
     [Fact]
     public async Task ASharedInput_IsHashedOnceForTheItemsKeys_NotOnceAnItem()
     {
@@ -189,7 +189,7 @@ public sealed class ServiceCacheReviewTests
 
     /// <summary>
     /// A store that cancels its own read, with the service's time left, leaves its rows to the service: only the service's
-    /// deadline uses up its time (review of the IO redesign: the store's own cancellation was taken for that deadline, and
+    /// deadline uses up its time (the store's own cancellation was taken for that deadline, and
     /// a healthy service was not called).
     /// </summary>
     [Theory]
@@ -218,7 +218,7 @@ public sealed class ServiceCacheReviewTests
 
     /// <summary>
     /// A store's read that completed at once is consumed once, as one that completed later: a store may pool what backs
-    /// it and take it back only then (review of the IO redesign: a service's cache read only its status).
+    /// it and take it back only then (a service's cache read only its status).
     /// </summary>
     [Fact]
     public async Task AStoreReadThatCompletedAtOnce_IsConsumed()
@@ -365,7 +365,7 @@ public sealed class ServiceCacheReviewTests
     /// <summary>
     /// The items a service added past the limit are counted on a cached call as on the service's own answer, cold and from
     /// the record. A record answering a smaller limit answers as a service keeping to that limit would: the start of its
-    /// list, none dropped (review of IO step 4: its items past the smaller limit were counted as dropped, 2 here).
+    /// list, none dropped (its items past the smaller limit were counted as dropped, 2 here).
     /// </summary>
     [Fact]
     public async Task TheItemsAServiceAddsPastTheLimit_AreCountedOnACachedCall()
@@ -524,7 +524,7 @@ public sealed class ServiceCacheReviewTests
     /// <summary>
     /// A stale distributed record newer than the stale local one is kept for a failure of the service: when the service
     /// fails after the local record has left <c>stale_if_error_ms</c>, the newer one still answers, as it does for a
-    /// reader with no local record (review of IO step 4). The local record hid it, and the call failed.
+    /// reader with no local record. The local record hid it, and the call failed.
     /// </summary>
     [Fact]
     public async Task ANewerDistributedStaleRecord_AnswersWhenTheOlderLocalOneHasExpired()
@@ -642,7 +642,7 @@ public sealed class ServiceCacheReviewTests
     /// <summary>
     /// Stale values answer a call only if the node could still send it then, as an answer of the tiers alone is: a caller
     /// that cancelled while the distributed tier used up the service's time got them, and the node succeeded Degraded
-    /// (review of IO step 4).
+    ///.
     /// </summary>
     [Fact]
     public async Task ACallCancelledWhileTheDistributedTierUsesUpTheServicesTime_IsNotAnsweredWithStaleValues()

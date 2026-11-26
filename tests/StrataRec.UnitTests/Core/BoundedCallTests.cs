@@ -339,7 +339,7 @@ public sealed class BoundedCallTests
 
     /// <summary>
     /// A synchronous client that returns only after both the node's budget and its own, later, timeout have passed was cut
-    /// off by the earlier, the budget: the operator gets the budget's cancellation (review of IO step 4). It was classified
+    /// off by the earlier, the budget: the operator gets the budget's cancellation. It was classified
     /// by its own timeout, which was checked first, and the operator got a failed status instead.
     /// </summary>
     [Fact]
@@ -389,7 +389,7 @@ public sealed class BoundedCallTests
 
     /// <summary>
     /// A client that cancels its own call, with none of the framework's tokens cancelled and its deadline ahead, threw: a
-    /// timeout of its own, said so without reading the exception's message (review of 43bdf97: the message, a getter an
+    /// timeout of its own, said so without reading the exception's message (the message, a getter an
     /// exception may override, was read on the request's thread, and a cancellation's message does not say whose it was).
     /// </summary>
     [Theory]
@@ -449,7 +449,7 @@ public sealed class BoundedCallTests
 
     /// <summary>
     /// A client's failure that came before any of the framework's tokens was cancelled stays its own, type and message,
-    /// when the caller cancels or the budget runs out after it and before the call is classified (review of 763fcbd: the
+    /// when the caller cancels or the budget runs out after it and before the call is classified (the
     /// tokens were read when the call was classified, so the failure became the caller's cancellation, or the budget's).
     /// The client completes on a thread of its own with its continuations inline: the lease reads the tokens, then the
     /// wait ends and its continuation, which alone carries the gate's mark, is held there.
@@ -501,7 +501,7 @@ public sealed class BoundedCallTests
     /// <summary>
     /// A client whose task ended cancelled on its own (its transport's token: an HTTP client's own timeout ends its async
     /// method cancelled, not faulted) cancelled the call itself, though the caller cancels after it and before the call is
-    /// classified (review of 1158d00: the caller was read when the call was classified, and the client, done, was said to
+    /// classified (the caller was read when the call was classified, and the client, done, was said to
     /// be abandoned). Set up as the failure that came first: its wait's continuation is held until the caller cancelled.
     /// </summary>
     [Fact]
@@ -591,7 +591,7 @@ public sealed class BoundedCallTests
 
     /// <summary>
     /// A client whose task ended cancelled with no token cancelled the call itself, with a caller that passed no token,
-    /// as with one that never cancels (review of 110adac: the wait's token, none, equalled the caller's, none, so the call
+    /// as with one that never cancels (the wait's token, none, equalled the caller's, none, so the call
     /// was the caller's cancellation, which never came).
     /// </summary>
     [Theory]
@@ -620,7 +620,7 @@ public sealed class BoundedCallTests
 
     /// <summary>
     /// A client that answered the call's own deadline (an exception of its protocol) timed out, though the node's budget
-    /// ran out too before the call was classified: the call's own deadline came first (review of 763fcbd: it was the
+    /// ran out too before the call was classified: the call's own deadline came first (it was the
     /// budget's, and the operator was thrown a cancellation instead of a failed status).
     /// </summary>
     [Fact]
@@ -953,7 +953,7 @@ public sealed class BoundedCallListenerTests
     [InlineData(false)]
     public async Task AListenerThatThrowsWhenACallCompletes_LosesItsMeasurement_AndTheCallIsStillRecorded(bool synchronously)
     {
-        var target = new IoTarget(IoRoles.Recall, "review80_listener");
+        var target = new IoTarget(IoRoles.Recall, "metric_listener");
         using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.IoDuration, (StrataRecTags.IoTarget, target.Name));
         var memory = new RequestMemory();
         var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (600L * Stopwatch.Frequency));
@@ -1016,7 +1016,7 @@ public sealed class BoundedCallListenerTests
 
     /// <summary>
     /// A host's sampler that takes the time of both deadlines as the call starts leaves it not sent, cut off at the one
-    /// that came first, the call's own: as a sent call would have been (review of IO step 4b: it was put down to the
+    /// that came first, the call's own: as a sent call would have been (it was put down to the
     /// scope's bound, which the operator sees as its budget running out rather than the service timing out).
     /// </summary>
     [Fact]
@@ -1227,7 +1227,7 @@ public sealed class BoundedCallAllocationTests
 /// <summary>A candidate buffer abandoned with its source still running reads as empty and takes no more candidates.</summary>
 public sealed class CandidateBufferTests
 {
-    /// <summary>The items dropped past the limit stay at most int.MaxValue, however a recorded count adds to them (review of IO step 4).</summary>
+    /// <summary>The items dropped past the limit stay at most int.MaxValue, however a recorded count adds to them.</summary>
     [Fact]
     public void TheDroppedCount_StaysAtMostIntMaxValue()
     {

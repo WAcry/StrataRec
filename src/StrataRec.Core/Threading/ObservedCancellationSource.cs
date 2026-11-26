@@ -152,7 +152,7 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// </remarks>
     /// <param name="delay">
     /// Capped to what a timer accepts (<see cref="CallBound.MaxWait"/>, just under 49.7 days), so a budget of any length
-    /// is one (a request's <see cref="TimeSpan.MaxValue"/> deadline threw out of the timer: review of IO step 4); a
+    /// is one (a request's <see cref="TimeSpan.MaxValue"/> deadline threw out of the timer); a
     /// negative one cancels at once, except <see cref="Timeout.InfiniteTimeSpan"/>, which sets no time, as for
     /// <c>CancelAfter</c>.
     /// </param>

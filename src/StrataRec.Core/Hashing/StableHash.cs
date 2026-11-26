@@ -164,7 +164,7 @@ public static class StableHash
         /// <summary>Adds bytes this encoding produced already (<see cref="Encoded"/>), as if their values were added again.</summary>
         public void AddEncoded(scoped ReadOnlySpan<byte> encoded)
         {
-            if (!encoded.IsEmpty) // nothing to add: no buffer rented for it (review of 5e07f1b)
+            if (!encoded.IsEmpty) // nothing to add: no buffer rented for it
             {
                 encoded.CopyTo(Reserve(encoded.Length));
             }

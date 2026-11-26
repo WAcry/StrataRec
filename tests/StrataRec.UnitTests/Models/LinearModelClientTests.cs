@@ -116,7 +116,7 @@ public sealed class LinearModelClientTests
     [Fact]
     public async Task AMissingInput_FailsTheCall_NamingIt()
     {
-        // It read the missing value's empty buffer and threw (review of IO step 2).
+        // It read the missing value's empty buffer and threw.
         var status = await Create().CallAsync(Call(2, NamedInput.FromMissing("x", TensorElementType.Float32, [2])), new Outputs(), CancellationToken.None);
 
         Assert.Equal(ServiceStatus.Failed("Input 'x' is missing; linear@1 needs a value per row."), status);
