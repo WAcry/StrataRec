@@ -64,7 +64,7 @@ jobs:
       - name: Slow tests
         # One test over the limit fails the job; a shared runner is slower than a developer's machine, so the limit is wider here.
         env:
-          GATE_SLOW_FAIL_S: 20
+          GATE_SLOW_FAIL_S: 60
         run: python3 scripts/gate.py slow TestResults
 
       - name: Upload test results

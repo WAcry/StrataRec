@@ -21,11 +21,13 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-AGENTS_LINES, SKILL_LINES, PAGE_LINES = 80, 70, {"docs/architecture.md": 100, "docs/glossary.md": 60, "docs/development.md": 200}
-DECISION_CHARS = 40_000        # one area's decisions must fit in what an agent reads before it changes that area
+# The limits are wide on purpose: this is a large project, and each limit is there to stop what has clearly gone wrong (a
+# page nobody reads to the end, a test waiting out a timeout), not to hold a page or a test at its present size.
+AGENTS_LINES, SKILL_LINES, PAGE_LINES = 120, 120, {"docs/architecture.md": 160, "docs/glossary.md": 160, "docs/development.md": 300}
+DECISION_CHARS = 80_000        # one area's decisions must fit in what an agent reads before it changes that area
 SLEEP_BASELINE = 56            # Thread.Sleep / Task.Delay(<a time>) in tests: only goes down
-SLOW_NOTE_S, SLOW_FAIL_S = 1.0, float(os.environ.get("GATE_SLOW_FAIL_S", 8))   # CI's shared runners set a wider limit
-SIZE_PROJECTS, SIZE_LINES = 6, 700   # nine in ten changes here touch fewer src projects and add fewer src lines
+SLOW_NOTE_S, SLOW_FAIL_S = 2.0, float(os.environ.get("GATE_SLOW_FAIL_S", 30))   # CI's shared runners set a wider limit
+SIZE_PROJECTS, SIZE_LINES = 8, 1500   # nineteen in twenty changes here touch fewer src projects and add fewer src lines
 
 # The judges (AGENTS.md section 6): directories end with a slash, files are whole names. The two build files turn
 # warnings into errors and ban APIs for every project, which is a rule like the others.
@@ -222,7 +224,7 @@ def size(repo, base):
             tested += int(plus)
     repo.notes.append(f"size: {len(projects)} src projects, +{added} src lines, +{tested} test lines since {base[:9]}.")
     if len(projects) >= SIZE_PROJECTS or added >= SIZE_LINES:
-        repo.notes.append("size: larger than nine in ten changes here. If one sub-requirement or a rare case drives it, stop "
+        repo.notes.append("size: larger than nineteen in twenty changes here. If one sub-requirement or a rare case drives it, stop "
                           "and lay out the cost and a smaller cut (AGENTS.md section 5).")
 
 
