@@ -146,7 +146,7 @@ public sealed class FetchGroup
     public EntityKeyLayout KeyLayout => Entity.KeyLayout;
 
     /// <summary>
-    /// Where a request reads each argument of an entity with args, in declared order (IO step 5): the service call's inputs.
+    /// Where a request reads each argument of an entity with args, in declared order: the service call's inputs.
     /// Empty for a keyed entity.
     /// </summary>
     internal ServiceArgSource[] Args { get; init; } = [];

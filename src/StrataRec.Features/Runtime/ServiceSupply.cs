@@ -7,7 +7,7 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The service a source in mode <c>service</c> is bound to (IO step 5), as the plan's service call path gives it: asked
+/// The service a source in mode <c>service</c> is bound to, as the plan's service call path gives it: asked
 /// once per request for the features of an entity with args, bounded, cached, recorded and replayed as every service call
 /// is. The pipeline implements it; the fetcher only gathers the call's arguments and stores what it answers.
 /// </summary>
@@ -33,7 +33,7 @@ internal delegate IServiceSupply? ServiceSupplyResolver(string source, string se
 /// <summary>One argument of a call (<see cref="ServiceSupplyCall.Args"/>): its name, declared type and this request's value.</summary>
 internal readonly record struct ServiceArg(string Name, ColumnType Type, ScalarValue Value);
 
-/// <summary>One request's call of a <see cref="SupplyMode.Service"/> group (IO step 5).</summary>
+/// <summary>One request's call of a <see cref="SupplyMode.Service"/> group.</summary>
 internal sealed class ServiceSupplyCall
 {
     /// <summary>The group: its source, entity and members.</summary>

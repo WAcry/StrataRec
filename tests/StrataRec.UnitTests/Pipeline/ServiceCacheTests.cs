@@ -4,7 +4,7 @@ using static StrataRec.UnitTests.Pipeline.ServiceCacheRig;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>A service's cache (IO step 3): what it answers, what it sends the service, what it keeps.</summary>
+/// <summary>A service's cache: what it answers, what it sends the service, what it keeps.</summary>
 public sealed class ServiceCacheTests
 {
     [Fact]

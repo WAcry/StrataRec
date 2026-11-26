@@ -17,7 +17,7 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Entities with args (IO step 5): a service computes their features once per request from the arguments, a request input
+/// Entities with args: a service computes their features once per request from the arguments, a request input
 /// or a context feature of any type, through the service's own path: its cache, the source's and its own timeout, the
 /// recording and the replay. A failed argument fails the entity without a call; a failed call fails its features.
 /// </summary>
@@ -576,8 +576,8 @@ public sealed class ComputedEntityEndToEndTests
     }
 
     /// <summary>
-    /// The fetch's drain waits for a source's call it abandoned at the source's timeout, as for a connector's (review of
-    /// IO step 5); the call holds the request memory until then either way.
+    /// The fetch's drain waits for a source's call it abandoned at the source's timeout, as for a connector's;
+    /// the call holds the request memory until then either way.
     /// </summary>
     [Fact]
     public async Task TheFetchsDrain_WaitsForASourcesCallItAbandoned()

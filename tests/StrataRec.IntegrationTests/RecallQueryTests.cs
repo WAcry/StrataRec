@@ -529,7 +529,7 @@ public sealed class RecallQueryTests
     /// <summary>
     /// A float32 request field in a query is sent as float32, its declared type: <c>memory_list@1</c> picks the list of
     /// "0.1", as it did reading the request field before queries. The query was sent at the expression's promoted type,
-    /// float64, the value printed as 0.10000000149011612 and picked another list (verification 2 of IO step 2).
+    /// float64, the value printed as 0.10000000149011612 and picked another list.
     /// </summary>
     [Fact]
     public async Task AFloat32RequestFieldInAQuery_IsSentAsFloat32_AndPicksTheListOfItsValue()

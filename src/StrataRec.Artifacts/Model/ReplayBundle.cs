@@ -48,7 +48,7 @@ public sealed class ReplayBundle
     /// as served since: a bundle before could replay identical to a run whose answers changed. 2026-11-21.7 digests every
     /// call about no items without its limit again (a recorded call answers the named outputs a call reads only at the
     /// call's limit), and records the items a service added past a call's limit. 2026-11-21.8 records the service call of
-    /// a feature source in mode <c>service</c> (IO step 5) with its source and no node. 2026-11-21.9 records the outputs each
+    /// a feature source in mode <c>service</c> with its source and no node. 2026-11-21.9 records the outputs each
     /// call asked for (an output the service left unwritten is replayed so, and a failure answers only a call asking for the
     /// same), and a feature source's call carries the request's seed: a bundle before replayed a source's failure for a
     /// call asking for other outputs, and the answer of a call made without the seed. 2026-11-21.10 records the entity a

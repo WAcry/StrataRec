@@ -108,8 +108,8 @@ public sealed class RunReplayTests
 
     /// <summary>
     /// Two nodes call one model with the same rows and inputs, each reading its own output. Swapped in the replay, the one
-    /// that asks first took the other's recording (matched by items and inputs alone) and lacked its own output (review of
-    /// IO step 2): a node's own recorded call answers it, another node's only when it has what the call reads.
+    /// that asks first took the other's recording (matched by items and inputs alone) and lacked its own output:
+    /// a node's own recorded call answers it, another node's only when it has what the call reads.
     /// </summary>
     [Fact]
     public void TwoNodesCallingOneModelWithTheSameRows_EachGetTheirOwnOutputs_InEitherOrder()
@@ -143,7 +143,7 @@ public sealed class RunReplayTests
     /// <summary>
     /// A recorded call of the same items and inputs answers as recorded when it lacks an output the call reads now: its
     /// text and the order of repeated items stay, and only the new output is a gap. It was synthesized item by item, which
-    /// lost the text (a gap, and a failed call) and took the first row for each repeat (verification of IO step 2).
+    /// lost the text (a gap, and a failed call) and took the first row for each repeat.
     /// </summary>
     [Fact]
     public void AnExactRecording_ThatLacksAnOutputReadNow_AnswersAsRecorded_WithAGapOfThatOutputOnly()
@@ -185,7 +185,7 @@ public sealed class RunReplayTests
     /// <summary>
     /// A row's digest covers its own values: built from a longer (pooled) buffer, an input is its shape's elements, so the
     /// slack does not shift the rows (a buffer of 4 for a shape of [2] made each row two values wide: row 41's digest covered
-    /// both rows' values and row 42's the slack, verification of IO step 2).
+    /// both rows' values and row 42's the slack).
     /// </summary>
     [Fact]
     public void ARowsDigest_IsOfItsOwnValues_WhateverTheBufferHoldsBeyondTheShape()

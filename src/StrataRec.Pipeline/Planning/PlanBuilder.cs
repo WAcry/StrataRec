@@ -2498,7 +2498,7 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// The supply of a feature source in mode <c>service</c> (IO step 5): the service its binding names, called in role
+    /// The supply of a feature source in mode <c>service</c>: the service its binding names, called in role
     /// <c>fetch</c>; null when the service has no binding (a <c>SERVICE_UNBOUND</c> at the source's <c>service</c>) or a
     /// wrong one (reported at the binding).
     /// </summary>

@@ -158,7 +158,7 @@ public sealed class RandomModelClientTests
         Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.CallAsync(int64Input, new Outputs(), CancellationToken.None));
         Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.CallAsync(vectorInput, new Outputs(), CancellationToken.None));
 
-        // A missing value of the declared type and shape fails for being missing, which the message says (verification 2 of IO step 2).
+        // A missing value of the declared type and shape fails for being missing, which the message says.
         var missingValue = new ServiceCall
         {
             Service = "ctr_model",

@@ -9,7 +9,7 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
-/// Who makes a service call: a node, or the feature prefetch for a source in mode <c>service</c> (IO step 5). The
+/// Who makes a service call: a node, or the feature prefetch for a source in mode <c>service</c>. The
 /// recording says which, and a replay answers a caller's own recorded calls first.
 /// </summary>
 internal readonly struct ServiceCaller
@@ -73,14 +73,14 @@ internal interface IServiceCallScope
 
     /// <summary>
     /// An external call of this scope (to the service, or its cache's distributed tier) did not complete synchronously;
-    /// <paramref name="done"/> completes once it really has: a feature fetch tracks it, as its connectors' calls (review of
-    /// IO step 5). The call holds the request memory until then either way.
+    /// <paramref name="done"/> completes once it really has: a feature fetch tracks it, as its connectors' calls.
+    /// The call holds the request memory until then either way.
     /// </summary>
     void Pending(Task done);
 }
 
 /// <summary>
-/// The one path of a service call (IO steps 2–5), whoever makes it: a replay answers it from the recording;
+/// The one path of a service call, whoever makes it: a replay answers it from the recording;
 /// otherwise its cache, then its client through <see cref="BoundedCall"/>, recorded when the request records. A node's
 /// calls (<see cref="OperatorContext.CallAsync"/>) and a feature source's (<see cref="FeatureServiceSupply"/>) go through
 /// it, so both are bounded, cached, measured, recorded and replayed alike.

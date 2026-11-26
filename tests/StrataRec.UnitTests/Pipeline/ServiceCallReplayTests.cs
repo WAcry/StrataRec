@@ -123,8 +123,7 @@ public sealed class ServiceCallReplayTests
     /// <summary>
     /// A recorded call that asked for no items says nothing about the items the service has: it does not answer a call
     /// asking for 3, which another call with the same inputs answers, nor, alone, the same node asking for 3 now (a shortfall
-    /// the recording cannot tell, <c>limit_exceeds_recording</c>). It answered both with no items and no gap (verification
-    /// of IO step 2).
+    /// the recording cannot tell, <c>limit_exceeds_recording</c>). It answered both with no items and no gap.
     /// </summary>
     [Fact]
     public void ACallThatAskedForNoItems_AnswersNoCallThatAsksForSome()
@@ -402,7 +401,7 @@ public sealed class ServiceCallReplayTests
     }
 
     /// <summary>
-    /// A feature source's call (IO step 5) is recorded with its source and no node: its failure answers the source, not a
+    /// A feature source's call is recorded with its source and no node: its failure answers the source, not a
     /// node whose id is the source's name.
     /// </summary>
     [Fact]

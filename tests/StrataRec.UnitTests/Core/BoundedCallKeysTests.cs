@@ -9,9 +9,9 @@ namespace StrataRec.UnitTests.Core;
 
 /// <summary>
 /// <c>stratarec.io.keys</c> counts the items of a call sent. One whose bound passed before it was sent is no I/O at all
-/// (rule 8): the dependency never saw it, so it counts no keys (it counted 7 of a call never sent, verification of IO step
-/// 2) and no timeout against the dependency, as feature fetches always did with the chunks they had no time to send (IO
-/// step 4); it is recorded as not sent.
+/// (rule 8): the dependency never saw it, so it counts no keys (it counted 7 of a call never sent) and
+/// no timeout against the dependency, as feature fetches always did with the chunks they had no time to send; it is
+/// recorded as not sent.
 /// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class BoundedCallKeysTests

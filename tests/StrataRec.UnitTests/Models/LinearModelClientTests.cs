@@ -36,7 +36,7 @@ public sealed class LinearModelClientTests
 
     /// <summary>
     /// A call of no batch is one row of float32 scalars (shape <c>[]</c>), one value per output: what a feature source in
-    /// mode <c>service</c> sends for an entity with args (IO step 5). A list in such a call fails.
+    /// mode <c>service</c> sends for an entity with args. A list in such a call fails.
     /// </summary>
     [Fact]
     public async Task ACallOfNoBatch_OfScalars_IsComputedOnce()

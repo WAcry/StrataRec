@@ -14,7 +14,7 @@ using StrataRec.UnitTests.Features;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// One service, <c>m</c>, with a cache (IO step 3): its in-process table, written back by hand
+/// One service, <c>m</c>, with a cache: its in-process table, written back by hand
 /// (<see cref="Apply"/>, what the table's writer does in the background), an optional distributed tier, a clock the test
 /// moves, and the service itself (<see cref="CountingService"/>). Calls go through <see cref="OperatorContext.CallAsync"/>
 /// as an operator's do.

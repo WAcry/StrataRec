@@ -12,7 +12,7 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
-/// A feature source in mode <c>service</c> (IO step 5): asks its service, once per request, for the features of an entity
+/// A feature source in mode <c>service</c>: asks its service, once per request, for the features of an entity
 /// with args, through the one service call path (<see cref="ServiceCallPath"/>). The call has no items and adds none:
 /// its inputs are the arguments (a scalar of shape <c>[]</c>, a list of shape <c>[n]</c>, a missing value sent as
 /// missing), and it reads one output per feature, the feature's field. It is waited for within the fetch's bound and the
@@ -71,8 +71,8 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
 
     /// <summary>
     /// A replay counts the fields it served, as it counts a fetch's (the feature-missing rate a comparison reports): each
-    /// read once, missing when the call failed or the service left its output unwritten, before any default (review of
-    /// the IO redesign: they were left out of the rate).
+    /// read once, missing when the call failed or the service left its output unwritten, before any default (they
+    /// were once left out of the rate).
     /// </summary>
     private FetchStatus Counted(FetchStatus status, Scope scope, ServiceSupplyCall call)
     {

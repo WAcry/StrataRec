@@ -11,7 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- A service's cache (docs/decisions.md, IO step 3) stores its answers with the feature cache's engine-internal parts: the
+    <!-- A service's cache (docs/decisions/external-calls.md) stores its answers with the feature cache's engine-internal parts: the
          local table's lookups, the cache record codec and the write-back queues. No user implements or calls them. -->
     <InternalsVisibleTo Include="StrataRec.Pipeline" />
     <InternalsVisibleTo Include="StrataRec.UnitTests" />

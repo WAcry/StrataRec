@@ -88,7 +88,7 @@ public sealed class MemoryListServiceTests
 
     /// <summary>
     /// −0 picks the list of 0, as a call's digest has them equal: it picked the list of "-0", and a replay of a call with
-    /// −0 borrowed the answer to 0 and called it identical (verification 2 of IO step 2).
+    /// −0 borrowed the answer to 0 and called it identical.
     /// </summary>
     [Fact]
     public async Task ByInput_NegativeZero_PicksTheListOfZero()

@@ -54,7 +54,7 @@ public class FeatureFetchAllocationTests
     /// state machine that awaits it, besides the connector's own async method. Measured over every thread, since the
     /// continuations run on the pool; the same 2,000 keys in 100 or in 200 chunks, so the difference is 100 chunks' worth.
     /// About 1.19 KB a chunk on .NET 10, the yielding connector's own included; 1.14 KB before the waits were merged into
-    /// one (IO step 4), 1.31 KB when the merged wait's state machine also kept the result, the memory and the client's
+    /// one, 1.31 KB when the merged wait's state machine also kept the result, the memory and the client's
     /// token across the wait.
     /// </summary>
     [Fact]

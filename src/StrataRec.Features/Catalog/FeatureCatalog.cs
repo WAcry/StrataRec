@@ -80,7 +80,7 @@ public sealed class EntityKeyPartDefinition
 }
 
 /// <summary>
-/// One argument of an entity a service computes (IO step 5): the name the service gets it under, the request input or
+/// One argument of an entity a service computes: the name the service gets it under, the request input or
 /// context feature it takes, and that value's type.
 /// </summary>
 public sealed class EntityArgDefinition
@@ -126,7 +126,7 @@ public readonly record struct EntityFeatureRead(string Feature, bool Context, st
 
 /// <summary>
 /// A compiled entity declaration: its name and its key, an ordered tuple of 1 to 8 parts; or, for an entity
-/// a service computes, its arguments and no key (IO step 5).
+/// a service computes, its arguments and no key.
 /// </summary>
 /// <remarks>
 /// The key decides the rest. The entity is context-scoped (one key per request, <c>ctx.&lt;entity&gt;.*</c>) when every part
@@ -144,7 +144,7 @@ public sealed class EntityDefinition
     public required IReadOnlyList<EntityKeyPartDefinition> Key { get; init; }
 
     /// <summary>
-    /// What a service computes the entity's features from, in declared order (IO step 5); empty for a keyed entity. An
+    /// What a service computes the entity's features from, in declared order; empty for a keyed entity. An
     /// entity with arguments is per request, and its features come from a source bound to a service.
     /// </summary>
     public IReadOnlyList<EntityArgDefinition> Args { get; init; } = [];
@@ -543,7 +543,7 @@ public sealed class FeatureCatalog
     }
 
     /// <summary>
-    /// An entity a service computes (IO step 5): its arguments, each a request input or a context feature of any type, in
+    /// An entity a service computes: its arguments, each a request input or a context feature of any type, in
     /// declared order. Every problem is an <c>ENTITY_BAD_ARGS</c> at the argument with a hint; a context feature is typed
     /// (and checked) when the features are built.
     /// </summary>

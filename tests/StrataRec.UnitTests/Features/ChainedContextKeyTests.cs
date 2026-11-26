@@ -451,8 +451,8 @@ public class ChainedContextKeyTests
 
     /// <summary>
     /// A group whose key reads two context features fails as soon as one of them failed, without waiting for the other:
-    /// it cannot change that, and what waits for the group's task (a recall's query values) learns it at once (review of
-    /// the IO redesign: an entity whose argument had failed waited for its other one). A fill waits for its whole closure,
+    /// it cannot change that, and what waits for the group's task (a recall's query values) learns it at once (an
+    /// entity whose argument had failed used to wait for its other one). A fill waits for its whole closure,
     /// whose worst state it returns, as for a derived feature computed early.
     /// </summary>
     [Fact]

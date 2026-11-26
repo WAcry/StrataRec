@@ -530,7 +530,7 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Asks the service of a service group (IO step 5) for <paramref name="features"/>, once, with the entity's arguments
+    /// Asks the service of a service group for <paramref name="features"/>, once, with the entity's arguments
     /// read from the request's context values (a missing one is sent as missing), and returns the task that stores its
     /// answer. The call goes through the service's own path (its cache, its <c>timeout_ms</c>, the recording and the
     /// replay), within this fetch's bound: the request's deadline, and the caller's token.

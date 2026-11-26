@@ -378,7 +378,7 @@ internal static class BoundedCall
     /// <summary>
     /// The rest of a call whose client did not answer synchronously; <paramref name="lease"/> holds the memory and the
     /// bound already. Only what the decision after the wait needs lives across it: the state machine is allocated for
-    /// every pending call, so the result and the memory are not kept in it (IO step 4 measured about 170 B a call more
+    /// every pending call, so the result and the memory are not kept in it (measured: about 170 B a call more
     /// when they were, with a copy of the token besides). The token, a parameter, is: the decision reads whether it was
     /// cancelled, to tell the call's own deadline from a client that cancelled on its own.
     /// </summary>

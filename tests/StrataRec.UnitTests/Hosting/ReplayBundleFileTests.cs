@@ -39,7 +39,7 @@ public sealed class ReplayBundleFileTests
         // 2026-11-21.11 digests an item by what it saw of each input;
         // 2026-11-21.10 records the entity of a source's call;
         // 2026-11-21.9 records the outputs each call asked for, and a source's call carries the request's seed;
-        // 2026-11-21.8 records a feature source's service call with its source (IO step 5);
+        // 2026-11-21.8 records a feature source's service call with its source;
         // 2026-11-21.7 digests every call without its limit again and records the items a service dropped past the limit;
         // 2026-11-21.6 digests an output-reading call with its limit and a per-item missing input by its rows, and records a
         // call's degraded reason; .5 sent a recall query of -0.0 or a declared float32 otherwise, so it could replay identical

@@ -345,7 +345,7 @@ public sealed class AssignmentProviderTests
     }
 
     /// <summary>
-    /// The provider is an external call like a connector or a model (IO step 4): its duration and its timeouts are
+    /// The provider is an external call like a connector or a model: its duration and its timeouts are
     /// measured under <c>assignment provider</c>, and its health is tracked. It had no telemetry of its own.
     /// </summary>
     [Fact]

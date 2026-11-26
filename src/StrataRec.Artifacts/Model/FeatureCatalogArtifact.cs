@@ -24,7 +24,7 @@ public sealed class FeatureCatalogArtifact
 /// type. A key of request inputs only keys a context entity; any other a candidate entity. Declaring scope and key type
 /// as well only gave them a way to disagree: a <c>key_type</c> of int64 on <c>col.entity_id</c> in a pipeline of string
 /// ids made every lookup miss without an error. An entity with <see cref="Args"/> instead is per request: a service
-/// computes its features from the arguments (IO step 5).
+/// computes its features from the arguments.
 /// </remarks>
 public sealed class EntitySpec
 {

@@ -258,7 +258,7 @@ internal sealed class RunReplay : IFeatureCallHook
     /// success the recording has for its own inputs. A node's own answer of the call's limit is consumed even
     /// when another answers the call better, so its later calls still meet their own recorded calls in order.
     /// </remarks>
-    /// <param name="caller">The calling node, or the feature source (IO step 5): its own recorded calls answer it first,
+    /// <param name="caller">The calling node, or the feature source: its own recorded calls answer it first,
     /// and a synthesized call whose items all changed takes its outputs' widths from them before another caller's.</param>
     /// <param name="degraded">
     /// Why the recorded call that answers left its node Degraded (its cache answered with stale values), which the node
@@ -991,8 +991,8 @@ internal sealed class RunReplay : IFeatureCallHook
     /// another limit ended the call that had a full answer) asking for the same outputs; else a success that answers it (a
     /// list long enough, or all the service had; the outputs it reads). Consumed. A failure or a cut-off recorded at another
     /// limit, or asking for other outputs, answers nothing: a service may fail only past some limit, or for some output (one
-    /// it does not know), so it says nothing of this call, and a success another caller recorded answers instead (reviews of
-    /// IO step 4b and of the step 5 fixes); nor is a recording consumed that does not answer, which a later call of its own
+    /// it does not know), so it says nothing of this call, and a success another caller recorded answers instead;
+    /// nor is a recording consumed that does not answer, which a later call of its own
     /// would then miss.
     /// </summary>
     private static ServiceEntry? TakeOwn(List<ServiceEntry>? calls, Predicate<ServiceEntry> match, ServiceCall call) =>
@@ -1176,7 +1176,7 @@ internal sealed class RunReplay : IFeatureCallHook
         Gap(kind, source, field, reason).Add(count, example);
 
     /// <summary>
-    /// Counts the fields a feature source in mode <c>service</c> served (IO step 5) in <see cref="FieldStats"/>, as a
+    /// Counts the fields a feature source in mode <c>service</c> served in <see cref="FieldStats"/>, as a
     /// fetch's: each read once, missing when the call failed or the value is missing.
     /// </summary>
     internal void CountServed(string source, ReadOnlySpan<CompiledFieldBinding> fields, ReadOnlySpan<ScalarValue> values, bool failed)

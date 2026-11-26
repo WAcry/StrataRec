@@ -30,7 +30,7 @@ public enum SupplyMode : byte
     Cache,
 
     /// <summary>
-    /// Asked of a service, once per request, for the features of an entity with args (IO step 5): the arguments are the
+    /// Asked of a service, once per request, for the features of an entity with args: the arguments are the
     /// call's inputs, the fields its outputs, and the service's own timeout and cache apply.
     /// </summary>
     Service,
@@ -308,7 +308,7 @@ internal sealed class FeatureSourceResolver
 
     /// <summary>
     /// A service computes the features of an entity with args, and only those: a stored entity's are looked up by its key
-    /// (a connector, a table), and an entity with args has no key to look up (IO step 5). A source may compute several: each
+    /// (a connector, a table), and an entity with args has no key to look up. A source may compute several: each
     /// entity's call is its own, by its arguments and the outputs its features read. A pair that does not match is a
     /// <c>SOURCE_SERVICE_ENTITY</c> at the binding.
     /// </summary>
@@ -533,7 +533,7 @@ internal sealed class FeatureSourceResolver
         return ok;
     }
 
-    /// <summary>A service binding (IO step 5): the service it names, as the plan resolves it; null (diagnosed) without one.</summary>
+    /// <summary>A service binding: the service it names, as the plan resolves it; null (diagnosed) without one.</summary>
     private SourceSupply? ResolveService(string sourceName, FeatureSourceBinding binding, string pointer)
     {
         if (binding.Service is not { } service)

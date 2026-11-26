@@ -27,8 +27,7 @@ public sealed class ServiceCallTests
         var mixed = await Assert.ThrowsAsync<ArgumentException>(() => context.CallAsync(service, both, new ServiceResponse(memory, 2)));
         Assert.StartsWith("A call about items adds none", mixed.Message, StringComparison.Ordinal);
 
-        // An output named twice counted twice when a replay chose the recording with the most of what the call reads
-        // (verification 2 of IO step 2).
+        // An output named twice counted twice when a replay chose the recording with the most of what the call reads.
         var twice = new ServiceCall { Service = "s", Outputs = new[] { "a", "b", "a" } };
         var duplicated = await Assert.ThrowsAsync<ArgumentException>(() => context.CallAsync(service, twice, new ServiceResponse(memory)));
         Assert.StartsWith("The call names output 'a' twice", duplicated.Message, StringComparison.Ordinal);

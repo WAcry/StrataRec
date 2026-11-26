@@ -844,7 +844,7 @@ public sealed partial class FeatureFetcher : IIoTracker
         }
     }
 
-    /// <summary>A source in mode service's call, or its cache's read, still running (IO step 5).</summary>
+    /// <summary>A source in mode service's call, or its cache's read, still running.</summary>
     void IIoTracker.Track(Task done) => TrackIo(done);
 
     private async ValueTask CompleteAsync(PendingFetch pending)
