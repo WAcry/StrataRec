@@ -23,10 +23,10 @@ internal static class SampleBindings
     /// <summary>Replaces the binding of service <paramref name="service"/> (a model, a recall source) in <c>bindings/local.jsonc</c>.</summary>
     public static void RebindService(string root, string service, string binding) => Replace(root, "services", service, JsonNode.Parse(binding)!);
 
-    /// <summary>Binds pipeline <paramref name="pipeline"/> (where the results of its cached calls are kept) in <c>bindings/local.jsonc</c>.</summary>
-    public static void BindPipeline(string root, string pipeline, string binding)
+    /// <summary>Binds pipeline <paramref name="pipeline"/> (where the results of its cached calls are kept) in <c>bindings/local.jsonc</c>, or another bindings file.</summary>
+    public static void BindPipeline(string root, string pipeline, string binding, string bindings = "local")
     {
-        var path = Path.Combine(root, "bindings", "local.jsonc");
+        var path = Path.Combine(root, "bindings", bindings + ".jsonc");
         var document = (JsonObject)Jsonc.Parse(File.ReadAllBytes(path), path)!;
         if (document["pipelines"] is not JsonObject pipelines)
         {
@@ -35,6 +35,15 @@ internal static class SampleBindings
 
         pipelines[pipeline] = JsonNode.Parse(binding)!;
         File.WriteAllText(path, document.ToJsonString());
+    }
+
+    /// <summary>Writes <c>bindings/local.jsonc</c> again as the bindings named <paramref name="bindings"/>, for a release to bind others.</summary>
+    public static void CopyAs(string root, string bindings)
+    {
+        var path = Path.Combine(root, "bindings", "local.jsonc");
+        var document = (JsonObject)Jsonc.Parse(File.ReadAllBytes(path), path)!;
+        document["environment"] = bindings;
+        File.WriteAllText(Path.Combine(root, "bindings", bindings + ".jsonc"), document.ToJsonString());
     }
 
     private static void Replace(string root, string section, string name, JsonNode binding)

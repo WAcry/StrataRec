@@ -35,11 +35,7 @@ internal sealed class RequestReads
     /// The request's read of the record <paramref name="key"/> of <paramref name="table"/>'s cache from its origin: the
     /// one under way or done, or a new one whose reader the caller is.
     /// </summary>
-    /// <param name="table">
-    /// The cache's table: records of one table are of one layout, whichever plan reads them. For a call of a pipeline,
-    /// whose origin is a run, the plan that would run: a run of the plan served before may itself make calls that wait
-    /// for this one's result.
-    /// </param>
+    /// <param name="table">The cache's table: records of one table are of one layout, whichever plan reads them.</param>
     /// <param name="key">The record's key in its cache.</param>
     /// <param name="limit">
     /// How much of the record the read asks its origin for, when that is not in the key (a service call's limit: a longer
@@ -48,9 +44,14 @@ internal sealed class RequestReads
     /// kept for the request would leave those that ask for more nothing to share.
     /// </param>
     /// <param name="reader">The caller asks the origin, and must end the read (<see cref="SharedRead.Withdraw"/> at the least).</param>
-    public SharedRead Join(object table, UInt128 key, long limit, out bool reader)
+    /// <param name="plan">
+    /// For a record whose origin is a run of a plan (a call of a pipeline): that plan. A call of the plan published
+    /// since is not the same read as one of the plan before, whose run may itself make calls that wait for this one's.
+    /// Null for a record a connector or a service answers, which is the same whichever plan asks.
+    /// </param>
+    public SharedRead Join(object table, UInt128 key, long limit, out bool reader, object? plan = null)
     {
-        var slot = new Slot(table, key, limit);
+        var slot = new Slot(table, plan, key, limit);
         lock (_gate)
         {
             ref var read = ref CollectionsMarshal.GetValueRefOrAddDefault(_reads, slot, out var joined);
@@ -68,13 +69,15 @@ internal sealed class RequestReads
         }
     }
 
-    internal readonly struct Slot(object table, UInt128 key, long limit) : IEquatable<Slot>
+    internal readonly struct Slot(object table, object? plan, UInt128 key, long limit) : IEquatable<Slot>
     {
         private readonly object _table = table;
+        private readonly object? _plan = plan;
         private readonly UInt128 _key = key;
         private readonly long _limit = limit;
 
-        public bool Equals(Slot other) => ReferenceEquals(_table, other._table) && _key == other._key && _limit == other._limit;
+        public bool Equals(Slot other) =>
+            ReferenceEquals(_table, other._table) && ReferenceEquals(_plan, other._plan) && _key == other._key && _limit == other._limit;
 
         public override bool Equals(object? obj) => obj is Slot other && Equals(other);
 

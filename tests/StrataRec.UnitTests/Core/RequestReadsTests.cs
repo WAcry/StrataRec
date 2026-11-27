@@ -33,17 +33,24 @@ public class RequestReadsTests
     }
 
     [Fact]
-    public void AReadIsOfOneTablesOneKey_ToOneLimit()
+    public void AReadIsOfOneTablesOneKey_ToOneLimit_ByOnePlanWhereAPlansRunIsItsOrigin()
     {
         var reads = new RequestReads();
+        var plan = new object();
         reads.Join(Table, 7, 0, out _);
+        reads.Join(Table, 9, 0, out _, plan);
 
         reads.Join(Table, 8, 0, out var otherKey);
         reads.Join(new object(), 7, 0, out var otherTable);
         reads.Join(Table, ((UInt128)1 << 64) + 7, 0, out var otherHalf);
         reads.Join(Table, 7, 20, out var otherLimit); // one record, asked for to another limit
+        reads.Join(Table, 9, 0, out var otherPlan, new object()); // a plan published since
+        reads.Join(new object(), 9, 0, out var planElsewhere, plan); // the plan's results as another caller keeps them
+        reads.Join(Table, 9, 0, out var noPlan);
+        reads.Join(Table, 9, 0, out var samePlan, plan);
 
-        Assert.True(otherKey && otherTable && otherHalf && otherLimit);
+        Assert.True(otherKey && otherTable && otherHalf && otherLimit && otherPlan && planElsewhere && noPlan);
+        Assert.False(samePlan);
     }
 
     /// <summary>
@@ -129,30 +136,35 @@ public class RequestReadsTests
         var reads = new RequestReads();
         reads.Join(Table, 7, 0, out _);
         using var release = new ManualResetEventSlim();
+        using var registered = new ManualResetEventSlim();
         var called = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var bound = CallBound.After(CancellationSite.Call, TestContext.Current.CancellationToken, 20);
+        using var bound = CallBound.After(CancellationSite.Call, TestContext.Current.CancellationToken, 500);
         var waiting = reads.Join(Table, 7, 0, out _).WaitAsync(bound, CallDeadline.None);
 
-        // Registered last: called first, and it stays. On another thread: a token whose time is already up calls on the
-        // thread that registers.
-        var blocking = Task.Run(() => bound.Token.Register(() =>
+        // Registered after the wait began and before the bound's time is up: the token calls it first, and it stays.
+        // Were the time up already, the token would call it here, where it is registered: it then returns, and the
+        // test fails below for want of the call it is about.
+        var blocking = bound.Token.Register(() =>
         {
-            called.SetResult();
-            release.Wait(TimeSpan.FromSeconds(60));
-        }), TestContext.Current.CancellationToken);
+            if (registered.IsSet)
+            {
+                called.TrySetResult();
+                release.Wait(TimeSpan.FromSeconds(60));
+            }
+        });
+        registered.Set();
         try
         {
-            await called.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
-
             var answer = await waiting.AsTask().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(SharedEnd.CutOff, answer.End);
-            Assert.False(release.IsSet); // ended while the callback held the token's other callbacks up
+            await called.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // the token did call it, and it is held there
+            Assert.False(release.IsSet);
         }
         finally
         {
             release.Set(); // before the registration is disposed, which waits for its callback
-            (await blocking).Dispose();
+            blocking.Dispose();
         }
     }
 

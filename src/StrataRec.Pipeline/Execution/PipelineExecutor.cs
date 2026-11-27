@@ -173,8 +173,9 @@ internal sealed class PipelineResult
     public bool Degraded { get; init; }
 
     /// <summary>
-    /// A call of a pipeline made in the run was not answered, or was answered by a run of which this is true: the
-    /// result lacks what that call was for, whatever its node did without it. Not a result for a cache to keep.
+    /// A call of a pipeline made in the run was not answered when its node ended, or was answered by a run of which
+    /// this is true: the result lacks what that call was for, whatever its node did without it. Not a result for a
+    /// cache to keep.
     /// </summary>
     public bool CallsUnanswered { get; init; }
 
@@ -252,7 +253,7 @@ internal sealed class RequestState
     /// <summary>Set by any outcome other than success or a <c>when</c> skip.</summary>
     public bool Degraded { get; set; }
 
-    /// <summary>A call of a pipeline a node made was not answered (<see cref="PipelineResult.CallsUnanswered"/>). Set by nodes on any thread.</summary>
+    /// <summary>A call of a pipeline a node made was not answered when the node ended (<see cref="PipelineResult.CallsUnanswered"/>).</summary>
     public volatile bool CallsUnanswered;
 
     /// <summary>Windowed failure summaries and source health; null when the executor has no logger.</summary>
@@ -916,8 +917,14 @@ internal sealed class PipelineExecutor
                 budget.Release();
             }
 
-            state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs,
-                node.Calls.IsEmpty ? 0 : state.PipelineCallsOf(node.NodeId) - callsBefore);
+            var calls = node.Calls.IsEmpty ? 0 : state.PipelineCallsOf(node.NodeId) - callsBefore;
+            state.Recorder?.Attempt(node.NodeId, timedOut ? ReplayTiming.TimedOut : ReplayTiming.Ran, budgetMs, calls);
+            if (calls > context.CallsAnswered)
+            {
+                // Judged here, when the node ends, whatever became of the call and whatever the operator did about it:
+                // a failed result it went on without, an exception it caught, a call it did not wait for.
+                state.CallsUnanswered = true;
+            }
 
             if (failure is not null)
             {

@@ -1305,24 +1305,28 @@ public sealed class PipelineCallCacheEndToEndTests
     [InlineData("not served")]
     [InlineData("no time")]
     [InlineData("in a called run")]
+    [InlineData("not waited for")]
     public Task AResultOfARunWithACallThatWasNotAnswered_IsNotKept_WhateverItsNodeDidWithoutIt(string how) => ARunWithACallThatWasNotAnswered(how);
 
     /// <param name="how">
     /// <c>not served</c>: the engine does not serve the pipeline. <c>no time</c>: the operator gives the call no time.
     /// <c>throws</c>: the call throws (the caller arranges that) and the operator catches it. <c>in a called run</c>:
-    /// promoted's own call is answered, by a run that made the call that was not.
+    /// promoted's own call is answered, by a run that made the call that was not. <c>not waited for</c>: the operator
+    /// makes the call and ends its node while the called run is under way.
     /// </param>
     internal static async Task ARunWithACallThatWasNotAnswered(string how)
     {
-        // promoted asks another pipeline for more, and goes on without it; or other does, which promoted calls.
+        // promoted asks another pipeline for more, and goes on without it; or other does, which promoted calls. Not for
+        // a request from nz, whose run of promoted makes no call and is whole.
         var optional = new OptionalCall();
         var below = how == "in a called run";
-        var config = how switch { "no time" => ", \"no_time\": true", "throws" => ", \"catches\": true", _ => "" };
+        var config = how switch { "no time" => ", \"no_time\": true", "throws" => ", \"catches\": true", "not waited for" => ", \"leaves\": true", _ => "" };
         var host = PageHost(slots: "3", more: root =>
         {
-            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"nodes\": {", "\"nodes\": {\n \"more\": { \"order\": 150, " + (below
-                ? "\"op\": \"PipelineSource@1\", \"config\": { \"pipeline\": \"other\", \"limit_param\": \"top_k\" } },"
-                : "\"op\": \"OptionalCall@1\", \"config\": { \"pipeline\": \"other\"" + config + " } },"));
+            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"nodes\": {",
+                "\"nodes\": {\n \"more\": { \"order\": 150, \"when\": \"(ctx.request.country ?? 'us') != 'nz'\", " + (below
+                    ? "\"op\": \"PipelineSource@1\", \"config\": { \"pipeline\": \"other\", \"limit_param\": \"top_k\" } },"
+                    : "\"op\": \"OptionalCall@1\", \"config\": { \"pipeline\": \"other\"" + config + " } },"));
             WriteOther(root);
             if (below)
             {
@@ -1330,24 +1334,44 @@ public sealed class PipelineCallCacheEndToEndTests
                     "\"nodes\": {\n \"further\": { \"order\": 150, \"op\": \"OptionalCall@1\", \"config\": { \"pipeline\": \"elsewhere\" } },");
             }
         });
-        await using var rig = new Rig(host, operators: [optional], alone: true, pipelines: how == "not served" ? ["promoted", "page"] : ["other", "promoted", "page"]);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        rig.Probe.Hold = release.Task;
-
-        var running = Start(rig, "req-1"); // the page's other rows wait for the first one's result
-        release.SetResult();
-        var result = await running;
-
-        Assert.True(result.Succeeded, result.Error);
-        Assert.Equal(3, optional.Unanswered);
-        Assert.Equal(3, rig.Probe.Runs); // what the first run returned was not given to the calls that waited for it
-        var runs = result.Calls!.Where(c => c.PipelineId == "promoted").ToList();
-        Assert.Equal(3, runs.Count);
-        Assert.All(runs, c =>
+        var letGo = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var rig = new Rig(host, operators: [optional], alone: true, pipelines: how == "not served" ? ["promoted", "page"] : ["other", "promoted", "page"]);
+        try
         {
-            Assert.True(c.Succeeded && c.Cached is null, c.Error);
-            Assert.Equal("succeeded", NodeOutcomeNames.Name(Assert.Single(c.Trace, n => n.NodeId == "more").Kind));
-        });
+            rig.Probe.Hold = release.Task;
+            rig.Probe.HoldNamed = how == "not waited for" ? letGo.Task : null; // the runs of other stay under way to the end
+
+            var running = Start(rig, "req-1"); // the page's other rows wait for the first one's result
+            release.SetResult();
+            var result = await running;
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.Equal(how == "not waited for" ? 0 : 3, optional.Unanswered);
+            Assert.Equal(3, rig.Probe.Runs); // what the first run returned was not given to the calls that waited for it
+            var runs = result.Calls!.Where(c => c.PipelineId == "promoted").ToList();
+            Assert.Equal(3, runs.Count);
+            Assert.All(runs, c =>
+            {
+                Assert.True(c.Succeeded && c.Cached is null, c.Error);
+                Assert.Equal("succeeded", NodeOutcomeNames.Name(Assert.Single(c.Trace, n => n.NodeId == "more").Kind));
+            });
+
+            // Nor was it kept for the requests after. One whose run is whole is kept, after it in the cache's queue:
+            // once that is there, the first one's would be.
+            var whole = await rig.Run("req-elsewhere", inputs: Elsewhere, pipeline: "page");
+            await CacheEngineTests.Eventually(() => rig.Results(holder: "page").Pin().RecordCount >= 1, () => "the result of req-elsewhere");
+            var after = await rig.Run("req-2", pipeline: "page");
+
+            Assert.True(whole.Succeeded && after.Succeeded, whole.Error ?? after.Error);
+            Assert.Equal(1, rig.Results(holder: "page").Pin().RecordCount);
+            Assert.Equal(7, rig.Probe.Runs); // one for the three rows of the whole run, and three again
+            Assert.DoesNotContain(after.Calls!, c => c.Cached is not null);
+        }
+        finally
+        {
+            letGo.TrySetResult();
+        }
     }
 
     /// <summary>
@@ -1400,6 +1424,42 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.All(result.Calls!, c => Assert.True(c.Succeeded, c.CalledBy + ": " + c.Error));
         Assert.Equal(4, result.Calls!.Count);
         Assert.Equal(4, rig.Probe.Runs); // each run of a plan before ran the other's new plan itself
+    }
+
+    /// <summary>
+    /// The request's read of a call's result is of one cache's record. A caller that keeps the pipeline's results in
+    /// a cache of its own (another environment's tiers) runs the pipeline and keeps its own: taking the result another
+    /// caller's run computed, it wrote nothing to its cache, and had no record to fall back to when the pipeline failed.
+    /// </summary>
+    [Fact]
+    public async Task CallsOfOnePipelineThroughTwoCaches_EachRunIt_AndKeepTheirOwn()
+    {
+        // The page calls promoted for one row, with the cache its bindings give it (in process), and second for
+        // another; second calls promoted with the same inputs, and its release binds another cache (the shared store).
+        var stores = new SharedStores();
+        var host = PageHost(content: """
+            "config": { "by": "col.entity_id", "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
+                        "pipelines": { "5": { "pipeline": "promoted", "inputs": { "slots": "3" }, "cache": { "ttl_ms": 3600000 } },
+                                       "8": { "pipeline": "second", "inputs": { "slots": "3" } } },
+                        "computed_by": { "request_id": "games.from", "time_ms": "games.at", "called_by": "games.by" } }
+            """, more: root =>
+            {
+                File.WriteAllText(Path.Combine(root, "pipelines", "second.jsonc"), PipelineCallEndToEndTests.Promoted
+                    .Replace("\"pipeline_id\": \"promoted\"", "\"pipeline_id\": \"second\"", StringComparison.Ordinal)
+                    .Replace("\"nodes\": {", "\"nodes\": {\n \"on\": { \"order\": 150, \"op\": \"PipelineSource@1\","
+                        + " \"config\": { \"pipeline\": \"promoted\", \"limit_param\": \"top_k\", \"inputs\": { \"slots\": \"3\" }, \"cache\": " + Hour + " } },", StringComparison.Ordinal));
+                File.WriteAllText(Path.Combine(root, "releases", "second.local.jsonc"), """{ "pipeline_id": "second", "environment": "local", "catalog": "home_feed", "bindings": "apart" }""");
+                SampleBindings.CopyAs(root, "apart");
+                SampleBindings.BindPipeline(root, "promoted", """{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""", "apart");
+            });
+        await using var rig = new Rig(host, stores: stores, pipelines: ["promoted", "second", "page"]);
+
+        var result = await rig.Run("req-1", pipeline: "page");
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.All(result.Calls!, c => Assert.True(c.Succeeded && c.Cached is null, c.Error));
+        Assert.Equal(2, rig.Probe.Runs);
+        await CacheEngineTests.Eventually(() => stores.Records == 1 && rig.Results(holder: "page").Pin().RecordCount == 1, () => "the result in each caller's cache");
     }
 
     /// <summary>
@@ -1572,6 +1632,7 @@ public sealed class PipelineCallCacheEndToEndTests
         private volatile string? _degradeAt;
         private volatile Action? _onRun;
         private volatile Task? _hold;
+        private volatile Task? _holdNamed;
 
         public int Runs => Volatile.Read(ref _runs);
 
@@ -1615,6 +1676,13 @@ public sealed class PipelineCallCacheEndToEndTests
             set => _hold = value;
         }
 
+        /// <summary>Awaited by each run of a probe with a name: the run of the pipeline it is in stays under way.</summary>
+        public Task? HoldNamed
+        {
+            get => _holdNamed;
+            set => _holdNamed = value;
+        }
+
         public OperatorDescriptor Descriptor { get; } = new("Probe", 1, Effects.None, typeof(ProbeConfig), "Counts its runs, and fails or degrades when told.");
 
         public Operator? Compile(OperatorCompileContext context) => context.BindConfig<ProbeConfig>() is { } config ? new Node(this, config.Name) : null;
@@ -1628,6 +1696,11 @@ public sealed class PipelineCallCacheEndToEndTests
                     if (probe.DegradeAt == name)
                     {
                         context.ReportDegraded("probe degraded");
+                    }
+
+                    if (probe.HoldNamed is { } held)
+                    {
+                        await held;
                     }
 
                     return;
@@ -1676,6 +1749,12 @@ public sealed class PipelineCallCacheEndToEndTests
         {
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
+                if (config.Leaves)
+                {
+                    _ = context.CallPipelineAsync(call).AsTask();
+                    return;
+                }
+
                 try
                 {
                     if ((await context.CallPipelineAsync(call, timeout: config.NoTime ? TimeSpan.Zero : null)).Succeeded)
@@ -1702,6 +1781,9 @@ public sealed class PipelineCallCacheEndToEndTests
 
         /// <summary>What the call throws is caught, and the node goes on.</summary>
         public bool Catches { get; init; }
+
+        /// <summary>The node ends without waiting for the call it made.</summary>
+        public bool Leaves { get; init; }
     }
 
     /// <summary>

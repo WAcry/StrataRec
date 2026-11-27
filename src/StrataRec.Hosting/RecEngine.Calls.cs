@@ -401,10 +401,11 @@ public sealed partial class RecEngine
                     if (hit is null && lookup is { Key: { } asked, CutOff: null })
                     {
                         // The tiers did not have the result: another call of the request for it may be running the
-                        // pipeline, or have run it, and this one takes what that one computes (RequestReads). A run of
-                        // this plan: a call of a pipeline published since the other's began does not wait for the run
-                        // of the plan before, which may make calls that wait for this one's.
-                        var joined = scope.Reads.Join(callee, asked, limit: 0, out var reader);
+                        // pipeline, or have run it, and this one takes what that one computes (RequestReads). The
+                        // same record of the same cache, by a run of this plan: a caller that keeps the pipeline's
+                        // results elsewhere runs it and keeps its own, and a call of a pipeline published since the
+                        // other's began does not wait for the run of the plan before.
+                        var joined = scope.Reads.Join(cache!.Table, asked, limit: 0, out var reader, plan: callee);
                         if (reader)
                         {
                             reading = joined;

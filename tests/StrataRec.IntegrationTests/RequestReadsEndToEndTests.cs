@@ -368,8 +368,8 @@ public class RequestReadsEndToEndTests
     public async Task ACallWhoseTimeEndsWhileItWaitsForAnothersRun_ServesTheStaleResultItReadItself()
     {
         const string Distributed = """{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""";
-        // The shorter call's time: long enough to read the tiers in, on a machine that is busy, before it ends.
-        var pair = new TwoBudgets(shorter: TimeSpan.FromMilliseconds(250));
+        // The shorter call's time is real: a second, to read the tiers in on a machine that is busy, before it ends.
+        var pair = new TwoBudgets(shorter: TimeSpan.FromSeconds(1));
         var host = PageHost(content: Uncached, more: root =>
         {
             SampleBindings.BindPipeline(root, "promoted", Distributed);

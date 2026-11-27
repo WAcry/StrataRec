@@ -41,6 +41,7 @@ namespace StrataRec.Pipeline.Operators;
 public sealed class OperatorContext : IServiceCallScope
 {
     private readonly RequestState _state;
+    private int _callsAnswered;
     private readonly Effects _effects;
     private readonly ImmutableArray<RequestOutput> _requestOutputs;
 
@@ -120,6 +121,13 @@ public sealed class OperatorContext : IServiceCallScope
     internal string? FailureReason { get; private set; }
 
     internal string? DegradedReason { get; private set; }
+
+    /// <summary>
+    /// How many of the calls of pipelines this attempt made were answered, by a run that had every call of its own
+    /// answered. Fewer than it made when the attempt ends: one failed, was refused, threw, or is still under way
+    /// (<see cref="PipelineResult.CallsUnanswered"/>).
+    /// </summary>
+    internal int CallsAnswered => Volatile.Read(ref _callsAnswered);
 
     /// <summary>The committed version of a column (or its fixed slot); null when not produced in this request.</summary>
     public ColumnBuffer? Read(in ColumnRef column) => _state.ReadColumn(column.FixedSlot, column.LogicalId);
@@ -526,31 +534,21 @@ public sealed class OperatorContext : IServiceCallScope
         return HeardAsync(call, inputs, sequence, timeout);
     }
 
-    private async ValueTask<PipelineCallResult> HeardAsync(PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout)
-    {
-        try
-        {
-            return Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
-        }
-        catch
-        {
-            _state.CallsUnanswered = true; // an operator may catch what the call threw and go on, as after a failed result
-            throw;
-        }
-    }
+    private async ValueTask<PipelineCallResult> HeardAsync(PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout) =>
+        Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
 
     /// <summary>
     /// A result as the node gets it: one its cache served past its <c>ttl_ms</c> because the pipeline failed, or one of a
     /// run that was itself degraded, degrades the node, as a service's stale or partial answer does, whatever the
     /// operator does with it. The request's result is then degraded too, and is not kept by a cache of a call of it.
-    /// A call that was not answered, for whatever reason and wherever that was decided, is the run's
-    /// (<see cref="PipelineResult.CallsUnanswered"/>): every call's result comes to its node through here.
+    /// Every call's result comes to its node through here, and one that answers the call whole is counted
+    /// (<see cref="CallsAnswered"/>).
     /// </summary>
     private PipelineCallResult Heard(PipelineCallResult result)
     {
-        if (!result.Succeeded || result.CallsUnanswered)
+        if (result.Succeeded && !result.CallsUnanswered)
         {
-            _state.CallsUnanswered = true;
+            Interlocked.Increment(ref _callsAnswered);
         }
 
         if (result.Cached is { Stale: true } from)
