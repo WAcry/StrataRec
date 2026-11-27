@@ -43,6 +43,12 @@ export DOTNET_ROOT="${DOTNET_ROOT:-$(dirname "$(readlink -f "$(command -v dotnet
 dotnet tool restore >/dev/null || cannot "dotnet tool restore failed (dotnet-tools.json pins dotnet-stryker)."
 out="$(mktemp -d "${TMPDIR:-/tmp}/mutate.XXXXXX")"
 trap 'rm -rf "$out"' EXIT
+# The tool reads each test's coverage from files the test process writes to its temporary directory. The tests give
+# every process a directory of its own (tests/Shared/TestTemp.cs): the tool then found no coverage, said so in its log
+# only, and ran every test for every mutant, hours for a large file. So the tests are told to stay in the directory
+# they are started with, and that is one of this run's, removed with the rest of it.
+mkdir "$out/tmp"
+export TMPDIR="$out/tmp" STRATAREC_TEST_TMPDIR=inherit
 printf '{ "stryker-config": { "ignore-mutations": ["string"], "additional-timeout": 60000, "test-case-filter": "FullyQualifiedName!~ConcurrencyTests" } }\n' > "$out/config.json"
 
 for project in "${projects[@]}"; do
@@ -55,6 +61,8 @@ for project in "${projects[@]}"; do
   (cd "$tests" && dotnet stryker -f "$out/config.json" -p "$project.csproj" "${only[@]}" -t mtp --configuration Release \
       -r json -O "$out/$project" --skip-version-check > "$out/$project.log" 2>&1) ||
     { tail -n 25 "$out/$project.log" >&2; cannot "Stryker did not finish for $project (its log is above)."; }
+  ! grep -q "coverage capture failed" "$out/$project.log" ||
+    echo "mutate: $project: the tool could not tell which tests run which lines, and ran every test for every mutant: slow, and nothing is reported as on lines no test runs."
   python3 - "$out/$project/reports/mutation-report.json" "$root" <<'PY'
 import json, os, sys
 report, root = json.load(open(sys.argv[1], encoding="utf-8")), sys.argv[2]
