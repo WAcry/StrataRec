@@ -225,6 +225,16 @@ public sealed class PipelineCallCacheEndToEndTests
                 + " \"config\": { \"pipeline\": \"other\", \"limit_param\": \"top_k\", \"columns\": { \"other.bid\": \"bid\" }"
                 + (otherCache is null ? string.Empty : ", \"cache\": " + otherCache) + " } },", StringComparison.Ordinal)
             .Replace("+ ctx.request.slots", "+ ctx.request.slots + (col.other.bid ?? 0.0)", StringComparison.Ordinal));
+        WriteOther(root);
+        if (otherCache is not null)
+        {
+            SampleBindings.BindPipeline(root, "other", Memory);
+        }
+    }
+
+    /// <summary>The pipeline <c>other</c>, with a probe of its own name, its release and its experiment.</summary>
+    private static void WriteOther(string root)
+    {
         File.WriteAllText(Path.Combine(root, "pipelines", "other.jsonc"), PipelineCallEndToEndTests.Promoted
             .Replace("\"pipeline_id\": \"promoted\"", "\"pipeline_id\": \"other\"", StringComparison.Ordinal)
             .Replace("\"slots\": { \"type\": \"int64\" }", "\"slots\": { \"type\": \"int64?\" }", StringComparison.Ordinal)
@@ -232,10 +242,6 @@ public sealed class PipelineCallCacheEndToEndTests
             .Replace("\"nodes\": {", "\"nodes\": {\n \"probe\": { \"order\": 50, \"op\": \"Probe@1\", \"config\": { \"name\": \"other\" } },", StringComparison.Ordinal));
         File.WriteAllText(Path.Combine(root, "releases", "other.local.jsonc"), PipelineCallEndToEndTests.Releases.Replace("PIPELINE", "other", StringComparison.Ordinal));
         File.WriteAllText(Path.Combine(root, "experiments", "exp_other.jsonc"), PipelineCallEndToEndTests.Experiments.Replace("PIPELINE", "other", StringComparison.Ordinal));
-        if (otherCache is not null)
-        {
-            SampleBindings.BindPipeline(root, "other", Memory);
-        }
     }
 
     /// <summary>What <c>other</c> adds to an item's clicks for its bid, and what a release of it that bids more does.</summary>
@@ -1289,19 +1295,42 @@ public sealed class PipelineCallCacheEndToEndTests
 
     /// <summary>
     /// A result is kept only when every call made under its run was answered. An operator may go on without a call that
-    /// was not (its pipeline is not served, the calls nest too deep or lead back, its run failed), and its node is then
-    /// as the operator says; but what the run returns lacks what the call was for, and why depends on where and when the
-    /// run was made, which the key does not say. Kept, a list without its sponsored rows was served for the cache's hour
-    /// to requests whose own run would have got them.
+    /// was not (its pipeline is not served, the calls nest too deep or lead back, its run failed, no time was left for
+    /// it, it threw), and its node is then as the operator says; but what the run returns lacks what the call was for,
+    /// and why depends on where and when the run was made, which the key does not say. Kept, a list without its
+    /// sponsored rows was served for the cache's hour to requests whose own run would have got them. Whatever left the
+    /// call unanswered, and wherever that was decided: a call refused before it reached the engine was not counted.
     /// </summary>
-    [Fact]
-    public async Task AResultOfARunWithACallThatWasNotAnswered_IsNotKept_WhateverItsNodeDidWithoutIt()
+    [Theory]
+    [InlineData("not served")]
+    [InlineData("no time")]
+    [InlineData("in a called run")]
+    public Task AResultOfARunWithACallThatWasNotAnswered_IsNotKept_WhateverItsNodeDidWithoutIt(string how) => ARunWithACallThatWasNotAnswered(how);
+
+    /// <param name="how">
+    /// <c>not served</c>: the engine does not serve the pipeline. <c>no time</c>: the operator gives the call no time.
+    /// <c>throws</c>: the call throws (the caller arranges that) and the operator catches it. <c>in a called run</c>:
+    /// promoted's own call is answered, by a run that made the call that was not.
+    /// </param>
+    internal static async Task ARunWithACallThatWasNotAnswered(string how)
     {
-        // promoted asks a pipeline this engine does not serve for more, and goes on without it.
+        // promoted asks another pipeline for more, and goes on without it; or other does, which promoted calls.
         var optional = new OptionalCall();
-        var host = PageHost(slots: "3", more: root => ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"nodes\": {",
-            "\"nodes\": {\n \"more\": { \"order\": 150, \"op\": \"OptionalCall@1\", \"config\": { \"pipeline\": \"other\" } },"));
-        await using var rig = new Rig(host, operators: [optional], alone: true, pipelines: ["promoted", "page"]);
+        var below = how == "in a called run";
+        var config = how switch { "no time" => ", \"no_time\": true", "throws" => ", \"catches\": true", _ => "" };
+        var host = PageHost(slots: "3", more: root =>
+        {
+            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"nodes\": {", "\"nodes\": {\n \"more\": { \"order\": 150, " + (below
+                ? "\"op\": \"PipelineSource@1\", \"config\": { \"pipeline\": \"other\", \"limit_param\": \"top_k\" } },"
+                : "\"op\": \"OptionalCall@1\", \"config\": { \"pipeline\": \"other\"" + config + " } },"));
+            WriteOther(root);
+            if (below)
+            {
+                ReplayTests.Edit(root, "pipelines/other.jsonc", "\"nodes\": {",
+                    "\"nodes\": {\n \"further\": { \"order\": 150, \"op\": \"OptionalCall@1\", \"config\": { \"pipeline\": \"elsewhere\" } },");
+            }
+        });
+        await using var rig = new Rig(host, operators: [optional], alone: true, pipelines: how == "not served" ? ["promoted", "page"] : ["other", "promoted", "page"]);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         rig.Probe.Hold = release.Task;
 
@@ -1312,13 +1341,101 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(3, optional.Unanswered);
         Assert.Equal(3, rig.Probe.Runs); // what the first run returned was not given to the calls that waited for it
-        var runs = result.Calls!.Where(c => !c.CalledBy.Contains(" > ", StringComparison.Ordinal)).ToList();
+        var runs = result.Calls!.Where(c => c.PipelineId == "promoted").ToList();
         Assert.Equal(3, runs.Count);
         Assert.All(runs, c =>
         {
             Assert.True(c.Succeeded && c.Cached is null, c.Error);
             Assert.Equal("succeeded", NodeOutcomeNames.Name(Assert.Single(c.Trace, n => n.NodeId == "more").Kind));
         });
+    }
+
+    /// <summary>
+    /// The request's read of a call's result is of the plan that would run. Two pipelines that called each other were
+    /// each published again without that call while a request's runs of the plans before were under way: each run's
+    /// call was then of a plan that calls nothing, joined the other branch's run of the plan before for the same result
+    /// (with a version, the key is the same), and the two waited for each other until their nodes' time was up.
+    /// </summary>
+    [Fact]
+    public async Task ACallOfAPlanPublishedSince_DoesNotWaitForARunOfThePlanBefore()
+    {
+        const string Versioned = """{ "ttl_ms": 3600000, "version": "v" }""";
+        static string Calling(string id, string? next) => Called
+            .Replace("\"pipeline_id\": \"promoted\"", $"\"pipeline_id\": \"{id}\"", StringComparison.Ordinal)
+            .Replace("\"nodes\": {", next is null ? "\"nodes\": {" : "\"nodes\": {\n \"cross\": { \"order\": 150, \"op\": \"PipelineSource@1\", \"on_failure\": \"fail_request\","
+                + " \"timeout_ms\": 2000, \"config\": { \"pipeline\": \"" + next + "\", \"limit_param\": \"top_k\", \"cache\": " + Versioned + " } },", StringComparison.Ordinal);
+        var host = PageHost(content: $$"""
+            "config": { "by": "col.entity_id", "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
+                        "pipelines": { "5": { "pipeline": "promoted", "inputs": { "slots": "3" }, "cache": {{Versioned}} },
+                                       "8": { "pipeline": "other", "inputs": { "slots": "3" }, "cache": {{Versioned}} } },
+                        "computed_by": { "request_id": "games.from", "time_ms": "games.at", "called_by": "games.by" } }
+            """, more: root =>
+            {
+                // Each calls the other with the inputs the page passes: under one branch, for the result the other computes.
+                File.WriteAllText(Path.Combine(root, "pipelines", "promoted.jsonc"), Calling("promoted", "other"));
+                File.WriteAllText(Path.Combine(root, "pipelines", "other.jsonc"), Calling("other", "promoted"));
+                File.WriteAllText(Path.Combine(root, "releases", "other.local.jsonc"), """{ "pipeline_id": "other", "environment": "local", "catalog": "home_feed", "bindings": "local" }""");
+                SampleBindings.BindPipeline(root, "other", Memory);
+            });
+        await using var rig = new Rig(host, alone: true, pipelines: ["promoted", "other", "page"]);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Probe.Hold = release.Task;
+        var running = rig.Engine.ExecuteAsync(new RecRequest
+        {
+            PipelineId = "page", RequestId = "req-1", Inputs = new RequestInputs().Set("user_id", 1001), Assignment = [], Deadline = TimeSpan.FromSeconds(20), TimeMs = T0,
+            Debug = new DebugOptions { Trace = true },
+        }, TestContext.Current.CancellationToken).AsTask();
+        Assert.Equal(2, rig.Probe.Runs); // both runs are under way, before either calls on
+
+        foreach (var id in new[] { "promoted", "other" })
+        {
+            File.WriteAllText(Path.Combine(host.Root, "pipelines", id + ".jsonc"), Calling(id, null));
+        }
+
+        rig.Load("promoted");
+        rig.Load("other");
+        release.SetResult();
+        var result = await running;
+
+        Assert.All(result.Calls!, c => Assert.True(c.Succeeded, c.CalledBy + ": " + c.Error));
+        Assert.Equal(4, result.Calls!.Count);
+        Assert.Equal(4, rig.Probe.Runs); // each run of a plan before ran the other's new plan itself
+    }
+
+    /// <summary>
+    /// A call that leads back has no cache, and that is told before the request's arms in the pipelines its run may reach
+    /// are asked for: asked first, the platform was asked about a pipeline no run got to, for a key that was not built.
+    /// </summary>
+    [Fact]
+    public async Task ACallThatLeadsBack_AsksForNoArmsOfAPipelineItsRunDoesNotGetTo()
+    {
+        // other calls promoted, with a cache. promoted may call other and one more pipeline, and here calls neither.
+        static string Never(string node, string pipeline, int order) =>
+            $"\n \"{node}\": {{ \"order\": {order}, \"op\": \"PipelineSource@1\", \"when\": \"false\", \"config\": {{ \"pipeline\": \"{pipeline}\", \"limit_param\": \"top_k\" }} }},";
+        var host = Host(more: root =>
+        {
+            File.WriteAllText(Path.Combine(root, "pipelines", "promoted.jsonc"), Called.Replace("\"nodes\": {", "\"nodes\": {" + Never("back", "other", 150) + Never("further", "unused", 160), StringComparison.Ordinal));
+            WriteOther(root);
+            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"config\": { \"name\": \"other\" } },", "\"config\": { \"name\": \"other\" } },\n \"on\": { \"order\": 150, \"op\": \"PipelineSource@1\","
+                + " \"config\": { \"pipeline\": \"promoted\", \"limit_param\": \"top_k\", \"inputs\": { \"slots\": \"3\" }, \"cache\": " + Hour + " } },");
+            File.WriteAllText(Path.Combine(root, "pipelines", "unused.jsonc"), Called.Replace("\"pipeline_id\": \"promoted\"", "\"pipeline_id\": \"unused\"", StringComparison.Ordinal));
+            File.WriteAllText(Path.Combine(root, "releases", "unused.local.jsonc"), PipelineCallEndToEndTests.Releases.Replace("PIPELINE", "unused", StringComparison.Ordinal));
+            File.WriteAllText(Path.Combine(root, "experiments", "exp_unused.jsonc"), PipelineCallEndToEndTests.Experiments.Replace("PIPELINE", "unused", StringComparison.Ordinal));
+        });
+        var asked = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var provider = new Asked((pipeline, _) =>
+        {
+            asked.Enqueue(pipeline);
+            return [];
+        });
+        await using var rig = new Rig(host, provider: provider, alone: true, pipelines: ["promoted", "other"]);
+        rig.Load("unused"); // with its experiment: the request's arms in it are the platform's to say
+
+        var result = await rig.Run("req-1", pipeline: "other", ask: true, inputs: new RequestInputs().Set("user_id", 1001).Set("slots", 3));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.True(Assert.Single(result.Calls!).Succeeded);
+        Assert.Equal(["other"], asked); // the request's own pipeline; promoted, loaded alone, has no experiment to ask about
     }
 
     /// <summary>
@@ -1544,7 +1661,7 @@ public sealed class PipelineCallCacheEndToEndTests
     /// <c>OptionalCall@1</c>: calls a pipeline and goes on without its result when the call is not answered, as an
     /// operator may.
     /// </summary>
-    private sealed class OptionalCall : IOperatorFactory
+    internal sealed class OptionalCall : IOperatorFactory
     {
         private int _unanswered;
 
@@ -1553,23 +1670,38 @@ public sealed class PipelineCallCacheEndToEndTests
         public OperatorDescriptor Descriptor { get; } = new("OptionalCall", 1, Effects.None, typeof(OptionalCallConfig), "Calls a pipeline, and goes on without it when the call fails.");
 
         public Operator? Compile(OperatorCompileContext context) =>
-            context.BindConfig<OptionalCallConfig>() is { } config && context.TryCallPipeline(config.Pipeline, "/pipeline", out var call) ? new Node(this, call) : null;
+            context.BindConfig<OptionalCallConfig>() is { } config && context.TryCallPipeline(config.Pipeline, "/pipeline", out var call) ? new Node(this, call, config) : null;
 
-        private sealed class Node(OptionalCall owner, PipelineCall call) : Operator
+        private sealed class Node(OptionalCall owner, PipelineCall call, OptionalCallConfig config) : Operator
         {
             public override async ValueTask ExecuteAsync(OperatorContext context)
             {
-                if (!(await context.CallPipelineAsync(call)).Succeeded)
+                try
                 {
-                    Interlocked.Increment(ref owner._unanswered);
+                    if ((await context.CallPipelineAsync(call, timeout: config.NoTime ? TimeSpan.Zero : null)).Succeeded)
+                    {
+                        return;
+                    }
                 }
+                catch (InvalidOperationException) when (config.Catches)
+                {
+                    // gone on without, as after a failed result
+                }
+
+                Interlocked.Increment(ref owner._unanswered);
             }
         }
     }
 
-    private sealed class OptionalCallConfig
+    internal sealed class OptionalCallConfig
     {
         public string Pipeline { get; init; } = "";
+
+        /// <summary>The call is given no time: it is not made.</summary>
+        public bool NoTime { get; init; }
+
+        /// <summary>What the call throws is caught, and the node goes on.</summary>
+        public bool Catches { get; init; }
     }
 
     /// <summary>

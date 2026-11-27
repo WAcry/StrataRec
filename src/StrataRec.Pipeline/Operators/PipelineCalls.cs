@@ -405,6 +405,9 @@ public sealed class PipelineCallResult
     /// </summary>
     public bool Degraded { get; internal init; }
 
+    /// <summary>The run that returned this made a call that was not answered (<see cref="PipelineResult.CallsUnanswered"/>).</summary>
+    internal bool CallsUnanswered { get; init; }
+
     internal static PipelineCallResult Failed(string pipelineId, string error) => new(pipelineId, false, error, ResultColumns.Empty, ResultValues.Empty);
 }
 

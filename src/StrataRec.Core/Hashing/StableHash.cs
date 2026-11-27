@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using System.Text;
-using System.Text.Unicode;
 using StrataRec.Core.Values;
 
 namespace StrataRec.Core.Hashing;
@@ -23,9 +22,6 @@ namespace StrataRec.Core.Hashing;
 ///   payload of a NaN produced by a domain error (<c>sqrt(-1)</c>, <c>0/0</c>) to the hardware and the operand order, so
 ///   an optimizer or SIMD rewrite may change them; the hash must not.</item>
 ///   <item><c>0x03</c> string: 4-byte little-endian UTF-8 length, then the UTF-8 bytes.</item>
-///   <item><c>0x06</c> a string that is not well-formed UTF-16 (an unpaired surrogate), which UTF-8 has no bytes for:
-///   4-byte little-endian count of UTF-16 code units, then the code units, 2 bytes little-endian each. Written as UTF-8
-///   with the replacement character, it was the string that has that character there, and took its record.</item>
 ///   <item><c>0x04</c> bool: 1 byte (0 or 1).</item>
 ///   <item><c>0x05</c> list index: 4 bytes little-endian (which expression in a key list matched).</item>
 /// </list>
@@ -38,7 +34,6 @@ public static class StableHash
     private const byte TagString = 0x03;
     private const byte TagBool = 0x04;
     private const byte TagIndex = 0x05;
-    private const byte TagIllFormedString = 0x06;
     private const double Unit = 1.0 / (1UL << 53);
 
     /// <summary>The one NaN the canonical encoding writes: the positive quiet NaN <c>0x7FF8000000000000</c>.</summary>
@@ -121,25 +116,11 @@ public static class StableHash
 
         public void Add(string value)
         {
-            var start = _length;
             var byteCount = Encoding.UTF8.GetByteCount(value);
             var span = Reserve(5 + byteCount);
             span[0] = TagString;
             BinaryPrimitives.WriteInt32LittleEndian(span[1..], byteCount);
-            if (Utf8.FromUtf16(value, span[5..], out _, out _, replaceInvalidSequences: false) == OperationStatus.Done)
-            {
-                return;
-            }
-
-            // Not well-formed: its code units, under a tag of their own, so that it is no other string's hash.
-            _length = start;
-            span = Reserve(5 + (2 * value.Length));
-            span[0] = TagIllFormedString;
-            BinaryPrimitives.WriteInt32LittleEndian(span[1..], value.Length);
-            for (var i = 0; i < value.Length; i++)
-            {
-                BinaryPrimitives.WriteUInt16LittleEndian(span[(5 + (2 * i))..], value[i]);
-            }
+            Encoding.UTF8.GetBytes(value, span[5..]);
         }
 
         public void AddIndex(int index)

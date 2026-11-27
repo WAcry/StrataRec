@@ -35,7 +35,11 @@ internal sealed class RequestReads
     /// The request's read of the record <paramref name="key"/> of <paramref name="table"/>'s cache from its origin: the
     /// one under way or done, or a new one whose reader the caller is.
     /// </summary>
-    /// <param name="table">The cache's table: records of one table are of one layout, whichever plan reads them.</param>
+    /// <param name="table">
+    /// The cache's table: records of one table are of one layout, whichever plan reads them. For a call of a pipeline,
+    /// whose origin is a run, the plan that would run: a run of the plan served before may itself make calls that wait
+    /// for this one's result.
+    /// </param>
     /// <param name="key">The record's key in its cache.</param>
     /// <param name="limit">
     /// How much of the record the read asks its origin for, when that is not in the key (a service call's limit: a longer

@@ -431,7 +431,7 @@ public sealed class PlanBuilder
             ok = false;
         }
 
-        if (spec.MinRemainingMs is < 0)
+        if (spec.MinRemainingMs is < 0 && !isFallback) // on a fallback the member itself is the error
         {
             _diagnostics.Error("NODE_BAD_TIMING", artifact, pointer + "/min_remaining_ms", $"min_remaining_ms is {spec.MinRemainingMs}; the time left is never negative.",
                 "give the least time the node is worth starting with, or remove min_remaining_ms to start it whatever is left");
@@ -446,7 +446,7 @@ public sealed class PlanBuilder
         }
 
         CompiledExpression? when = null;
-        if (spec.When is not null)
+        if (spec.When is not null && !isFallback) // on a fallback the member itself is the error
         {
             if (!ExpressionCompiler.TryCompile(spec.When, _scope!, CompileOptions.RequestCondition, out when, out var whenErrors))
             {

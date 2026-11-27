@@ -129,19 +129,30 @@ public class RequestReadsTests
         var reads = new RequestReads();
         reads.Join(Table, 7, 0, out _);
         using var release = new ManualResetEventSlim();
+        var called = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var bound = CallBound.After(CancellationSite.Call, TestContext.Current.CancellationToken, 20);
         var waiting = reads.Join(Table, 7, 0, out _).WaitAsync(bound, CallDeadline.None);
-        var blocking = bound.Token.Register(() => release.Wait(TimeSpan.FromSeconds(60))); // registered last: called first
+
+        // Registered last: called first, and it stays. On another thread: a token whose time is already up calls on the
+        // thread that registers.
+        var blocking = Task.Run(() => bound.Token.Register(() =>
+        {
+            called.SetResult();
+            release.Wait(TimeSpan.FromSeconds(60));
+        }), TestContext.Current.CancellationToken);
         try
         {
+            await called.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
             var answer = await waiting.AsTask().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(SharedEnd.CutOff, answer.End);
+            Assert.False(release.IsSet); // ended while the callback held the token's other callbacks up
         }
         finally
         {
             release.Set(); // before the registration is disposed, which waits for its callback
-            blocking.Dispose();
+            (await blocking).Dispose();
         }
     }
 

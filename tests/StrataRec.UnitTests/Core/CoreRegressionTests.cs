@@ -87,12 +87,12 @@ public class CoreRegressionTests
     }
 
     /// <summary>
-    /// Two strings that differ have hashes that differ. A string with an unpaired surrogate has no UTF-8 bytes: written
-    /// with the replacement character's, it hashed as the string that has that character there, and a record found by
-    /// the hash (an entity's, a service call's) was one's for the other. A well-formed string's hash is what it was.
+    /// A string is hashed by its UTF-8 bytes, the documented encoding another language computes too. A string with an
+    /// unpaired surrogate has none of its own and is written as UTF-8 writes it everywhere, with the replacement
+    /// character: it is the string that has that character there, here as in a store's key or a log.
     /// </summary>
     [Fact]
-    public void StableHash_OfAStringThatIsNotWellFormed_IsNoOtherStrings()
+    public void StableHash_OfAString_IsOfItsUtf8Bytes()
     {
         static ulong Of(string value)
         {
@@ -102,14 +102,12 @@ public class CoreRegressionTests
             return builder.Finish();
         }
 
-        var hashes = new[] { Of("u\uD800"), Of("u\uFFFD"), Of("u\uDC00"), Of("u\uD800\uDC00"), Of("u"), Of("\uD800u") };
-
-        Assert.Equal(hashes.Length, hashes.Distinct().Count());
-
-        // The documented encoding of a well-formed string and an int64: tag, UTF-8 length, UTF-8 bytes; tag, 8 bytes.
+        // Tag, UTF-8 length, UTF-8 bytes; tag, 8 bytes.
         var utf8 = System.Text.Encoding.UTF8.GetBytes("u\uFFFD");
         byte[] encoded = [0x03, (byte)utf8.Length, 0, 0, 0, .. utf8, 0x01, 7, 0, 0, 0, 0, 0, 0, 0];
-        Assert.Equal(System.IO.Hashing.XxHash3.HashToUInt64(encoded), hashes[1]);
+
+        Assert.Equal(System.IO.Hashing.XxHash3.HashToUInt64(encoded), Of("u\uFFFD"));
+        Assert.Equal(Of("u\uFFFD"), Of("u\uD800"));
     }
 
     [Fact]

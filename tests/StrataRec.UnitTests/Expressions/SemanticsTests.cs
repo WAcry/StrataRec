@@ -530,7 +530,8 @@ public class SemanticsTests
             .Col("col.s", "string")
             .Ctx("ctx.request.seed", "int64", ScalarValue.FromInt64(42))
             .Build(5);
-        f.FillStrings("col.s", "a", "b", "é", string.Empty, new string('x', 600));
+        // The second has an unpaired surrogate: both writers of the encoding write it as UTF-8 does, with U+FFFD.
+        f.FillStrings("col.s", "a", "u\uD800", "é", string.Empty, new string('x', 600));
 
         ExprAssert.Rows(f, "hash01(ctx.request.seed, col.entity_id)", Enumerable.Range(0, 5).Select(r => (object?)StableHash.Hash01(42, 1000 + r)).ToArray());
         ExprAssert.Rows(f, "hash01(col.entity_id, ctx.request.seed)", Enumerable.Range(0, 5).Select(r => (object?)StableHash.Hash01(1000 + r, 42)).ToArray());
@@ -538,7 +539,7 @@ public class SemanticsTests
         ExprAssert.Rows(f, "hash01(col.s, col.entity_id, -0.0, col.entity_id > 1002)", Enumerable.Range(0, 5).Select(r =>
         {
             var b = new StableHash.Builder();
-            b.Add(r switch { 0 => "a", 1 => "b", 2 => "é", 3 => string.Empty, _ => new string('x', 600) });
+            b.Add(r switch { 0 => "a", 1 => "u\uD800", 2 => "é", 3 => string.Empty, _ => new string('x', 600) });
             b.Add((long)(1000 + r));
             b.Add(0.0);
             b.Add(r > 2);

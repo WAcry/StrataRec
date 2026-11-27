@@ -172,6 +172,12 @@ internal sealed class PipelineResult
     /// </summary>
     public bool Degraded { get; init; }
 
+    /// <summary>
+    /// A call of a pipeline made in the run was not answered, or was answered by a run of which this is true: the
+    /// result lacks what that call was for, whatever its node did without it. Not a result for a cache to keep.
+    /// </summary>
+    public bool CallsUnanswered { get; init; }
+
     /// <summary>Log batches of the request when <see cref="PipelineRequest.CaptureLogs"/> was set.</summary>
     public IReadOnlyList<Logging.LogBatch> LogBatches { get; set; } = Array.Empty<Logging.LogBatch>();
 
@@ -245,6 +251,9 @@ internal sealed class RequestState
 
     /// <summary>Set by any outcome other than success or a <c>when</c> skip.</summary>
     public bool Degraded { get; set; }
+
+    /// <summary>A call of a pipeline a node made was not answered (<see cref="PipelineResult.CallsUnanswered"/>). Set by nodes on any thread.</summary>
+    public volatile bool CallsUnanswered;
 
     /// <summary>Windowed failure summaries and source health; null when the executor has no logger.</summary>
     public RequestEventLog? Events { get; init; }
@@ -1617,6 +1626,7 @@ internal sealed class PipelineExecutor
             NonFiniteValues = state.NonFinite + state.Features.NonFiniteReplaced,
             OutOfRangeValues = state.Counters.OutOfRange,
             Degraded = state.Degraded,
+            CallsUnanswered = state.CallsUnanswered,
         };
     }
 

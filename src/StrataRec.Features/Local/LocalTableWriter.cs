@@ -665,14 +665,11 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         // pages. A packed copy has neither, and keeps every key when it fits. When it does not, the share to evict is
         // taken of the smaller of the two sizes: a packed copy may be the larger one (a record that did not fit a
         // page's end starts the next), and a share taken of that emptied a table that was a byte over its limit.
-        var packed = BuildCompacted();
-        if (packed.Bytes <= max)
+        if (TryCompactToLimit(max, out var packedBytes))
         {
-            Install(packed);
             return;
         }
 
-        var packedBytes = Math.Min(_version.Bytes, packed.Bytes);
         var livePayload = LivePayload;
         var deadBefore = cache.NowMs() - cache.Policy.RetentionMs;
         var toFree = BytesToFree(packedBytes, 0);
@@ -688,6 +685,22 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
             toFree = More(toFree, livePayload, attempt);
         }
+    }
+
+    // As for a write: a rejected copy can be as large as the original, and its stack lifetime ends before an eviction
+    // candidate is built.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool TryCompactToLimit(long max, out long packedBytes)
+    {
+        var packed = BuildCompacted();
+        packedBytes = Math.Min(_version.Bytes, packed.Bytes);
+        if (packed.Bytes > max)
+        {
+            return false;
+        }
+
+        Install(packed);
+        return true;
     }
 
     // A rejected copy can be as large as the original. End its stack lifetime before building an eviction candidate.

@@ -526,16 +526,33 @@ public sealed class OperatorContext : IServiceCallScope
         return HeardAsync(call, inputs, sequence, timeout);
     }
 
-    private async ValueTask<PipelineCallResult> HeardAsync(PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout) =>
-        Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
+    private async ValueTask<PipelineCallResult> HeardAsync(PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout)
+    {
+        try
+        {
+            return Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
+        }
+        catch
+        {
+            _state.CallsUnanswered = true; // an operator may catch what the call threw and go on, as after a failed result
+            throw;
+        }
+    }
 
     /// <summary>
     /// A result as the node gets it: one its cache served past its <c>ttl_ms</c> because the pipeline failed, or one of a
     /// run that was itself degraded, degrades the node, as a service's stale or partial answer does, whatever the
     /// operator does with it. The request's result is then degraded too, and is not kept by a cache of a call of it.
+    /// A call that was not answered, for whatever reason and wherever that was decided, is the run's
+    /// (<see cref="PipelineResult.CallsUnanswered"/>): every call's result comes to its node through here.
     /// </summary>
     private PipelineCallResult Heard(PipelineCallResult result)
     {
+        if (!result.Succeeded || result.CallsUnanswered)
+        {
+            _state.CallsUnanswered = true;
+        }
+
         if (result.Cached is { Stale: true } from)
         {
             ReportDegraded($"pipeline '{result.PipelineId}' failed, and its cached result of request '{from.RequestId}', past its ttl_ms, was served");
@@ -554,7 +571,7 @@ public sealed class OperatorContext : IServiceCallScope
         // What was passed, as it is now: the operator may change its inputs for its next call while this one runs.
         var passed = Replay.ReplayJson.Inputs(inputs);
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var result = Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
+        var result = await HeardAsync(call, inputs, sequence, timeout).ConfigureAwait(false);
         recorder.PipelineCall(NodeId, sequence, call.PipelineId, passed, result, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         return result;
     }

@@ -35,11 +35,14 @@ public sealed class NodeFallbackConfigTests
 
     /// <summary>
     /// A fallback runs whenever the node that names it fails: what decides whether a node on the timeline runs was
-    /// accepted on a fallback and never looked at, so a fallback whose <c>when</c> was false served all the same.
+    /// accepted on a fallback and never looked at, so a fallback whose <c>when</c> was false served all the same. The
+    /// member is the one error, whatever its value: correcting the value would not make it apply.
     /// </summary>
     [Theory]
     [InlineData("\"when\": \"ctx.request.n == 1\"", "/nodes/backup/when")]
+    [InlineData("\"when\": \"ctx.request.missing ==\"", "/nodes/backup/when")]
     [InlineData("\"min_remaining_ms\": 50", "/nodes/backup/min_remaining_ms")]
+    [InlineData("\"min_remaining_ms\": -1", "/nodes/backup/min_remaining_ms")]
     public void WhatDecidesWhetherANodeRuns_IsAnErrorOnAFallback(string setting, string pointer)
     {
         var pipeline = Pipeline("\"on_failure\": \"fallback\", \"fallback\": \"backup\"")

@@ -15,7 +15,12 @@ namespace StrataRec.Testing;
 /// </summary>
 internal static class TestTemp
 {
-    private const string Prefix = "stratarec-tests-";
+    /// <summary>
+    /// What the directories of the processes this one can see begin with. A process id means something only among those:
+    /// on Linux the processes of one PID namespace, which the name says, so that a container sharing the temporary
+    /// directory with another (whose ids it cannot look up) leaves the other's directories alone.
+    /// </summary>
+    private static readonly string Prefix = "stratarec-tests-" + ProcessNamespace() + "-";
 
     [ModuleInitializer]
     internal static void Use()
@@ -54,6 +59,21 @@ internal static class TestTemp
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Another process's directory, or one going as it is listed: its own to remove.
+        }
+    }
+
+    /// <summary>The PID namespace's number on Linux (the link reads <c>pid:[4026531836]</c>); 0 where there is none to tell.</summary>
+    private static string ProcessNamespace()
+    {
+        try
+        {
+            var link = File.ResolveLinkTarget("/proc/self/ns/pid", returnFinalTarget: false)?.Name ?? string.Empty;
+            var digits = string.Concat(link.Where(char.IsAsciiDigit));
+            return digits.Length > 0 ? digits : "0";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return "0";
         }
     }
 

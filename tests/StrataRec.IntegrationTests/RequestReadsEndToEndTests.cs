@@ -23,6 +23,36 @@ namespace StrataRec.IntegrationTests;
 [Collection(ProcessWideListenersCollection.Name)] // one test reads the process's metrics
 public class RequestReadsEndToEndTests
 {
+    /// <summary>
+    /// A call that threw is a call that was not answered, for the operator that catches it and goes on as for one that
+    /// got a failed result: its run's result is not kept. Here a host's metric listener throws as the called run ends.
+    /// </summary>
+    [Fact]
+    public async Task AResultOfARunWithACallThatThrew_IsNotKept_WhateverItsNodeDidWithoutIt()
+    {
+        using var listener = new System.Diagnostics.Metrics.MeterListener();
+        listener.InstrumentPublished = (instrument, own) =>
+        {
+            if (instrument.Meter.Name == StrataRecTelemetry.Name && instrument.Name == StrataRecMetrics.Names.RequestDuration)
+            {
+                own.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<double>(static (_, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (Equals(tag.Value, "other"))
+                {
+                    throw new InvalidOperationException("metric outage");
+                }
+            }
+        });
+        listener.Start();
+
+        await ARunWithACallThatWasNotAnswered("throws");
+    }
+
     /// <summary>A cache with the distributed tier alone: no run finds in process what another has just read.</summary>
     private const string Shared = """
         "cache": { "ttl_ms": 60000, "stale_if_error_ms": 600000, "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } }
@@ -338,7 +368,8 @@ public class RequestReadsEndToEndTests
     public async Task ACallWhoseTimeEndsWhileItWaitsForAnothersRun_ServesTheStaleResultItReadItself()
     {
         const string Distributed = """{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""";
-        var pair = new TwoBudgets(shorter: TimeSpan.FromMilliseconds(50));
+        // The shorter call's time: long enough to read the tiers in, on a machine that is busy, before it ends.
+        var pair = new TwoBudgets(shorter: TimeSpan.FromMilliseconds(250));
         var host = PageHost(content: Uncached, more: root =>
         {
             SampleBindings.BindPipeline(root, "promoted", Distributed);
