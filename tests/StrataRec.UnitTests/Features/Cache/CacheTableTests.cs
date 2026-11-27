@@ -641,6 +641,7 @@ public class CacheTableTests
     {
         var (table, cache, clock) = Scores(1 << 20, 9_000);
         Assert.Equal(9_000, table.Pin().RecordCount);
+        using var evicted = new Counted(StrataRecMetrics.Names.CacheEvictions, "capacity");
 
         table.Retune(ScoreOptions(512 << 10, clock));
         Assert.Equal(1, cache.WriteQueued(table.Writer)); // the writer was woken, with nothing to write
@@ -648,6 +649,7 @@ public class CacheTableTests
         var kept = table.Pin();
         Assert.InRange(kept.Bytes, 1, 512 << 10);
         Assert.InRange(kept.RecordCount, 3_000, 8_999);
+        Assert.Equal(9_000 - kept.RecordCount, evicted.Total); // counted, as the records a write makes room with are
 
         // None was read, so what went is the oldest, as when a write needs room; and writes go on within the limit.
         Assert.True(kept.Find(EntityKey.FromInt64(8_999)).Found);
