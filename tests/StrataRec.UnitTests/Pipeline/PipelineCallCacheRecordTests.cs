@@ -86,7 +86,8 @@ public sealed class PipelineCallCacheRecordTests
         var values = valueTypes.Select((t, v) => new ResultValue("v" + v, t, Value(random, t, mayBeMissing: true))).ToArray();
         var exposures = Enumerable.Range(0, random.Next(3)).Select(e => new CallExposure(
             "pipeline" + e, "manifest" + e, e == 0 ? null : "p/n#" + e, Enumerable.Range(0, random.Next(3)).Select(a => $"exp{a}/arm").ToArray(),
-            Enumerable.Range(0, random.Next(2)).Select(a => "exp" + a).ToArray())).ToArray();
+            Enumerable.Range(0, random.Next(2)).Select(a => "exp" + a).ToArray(),
+            random.Next(3) == 0 ? new CachedFrom("earlier-" + e, random.NextInt64(), "other/n#" + e) : null)).ToArray(); // one a cache answered when the result was computed
         var shape = new PipelineInterface
         {
             PipelineId = "p",
@@ -123,7 +124,7 @@ public sealed class PipelineCallCacheRecordTests
 
         foreach (var exposure in exposures)
         {
-            text.AppendLine($"{exposure.PipelineId}|{exposure.ManifestId}|{exposure.Path ?? "-"}|{string.Join(",", exposure.Arms)}|{string.Join(",", exposure.Triggered)}");
+            text.AppendLine($"{exposure.PipelineId}|{exposure.ManifestId}|{exposure.Path ?? "-"}|{string.Join(",", exposure.Arms)}|{string.Join(",", exposure.Triggered)}|{exposure.From}");
         }
 
         return text.ToString();
@@ -142,7 +143,7 @@ public sealed class PipelineCallCacheRecordTests
         {
             var random = new Random(seed);
             var (shape, columns, values, exposures) = Result(random);
-            var from = new CachedFrom("req-" + seed, random.NextInt64());
+            var from = new CachedFrom("req-" + seed, random.NextInt64(), "feed/n#" + seed);
             var key = new UInt128((ulong)random.NextInt64(), (ulong)seed);
 
             rig.Cache.Write(key, columns, values, from, exposures, rig.Clock.NowMs);
@@ -193,11 +194,11 @@ public sealed class PipelineCallCacheRecordTests
             Columns = [new PipelineOutput("score", types[0]), new PipelineOutput("tags", types[1])], Values = [new PipelineOutput("count", ColumnType.Int64)],
         };
         var builder = new ServiceRecordBuilder(rig.Tiers, 1, rig.Clock.NowMs);
-        PipelineCallCache.Encode(builder, columns, values, new CachedFrom("req", 1), [new CallExposure("p", "m", null, ["e/a"], ["e"])]);
+        PipelineCallCache.Encode(builder, columns, values, new CachedFrom("req", 1, "feed/n#0"), [new CallExposure("p", "m", null, ["e/a"], ["e"])]);
 
         // The layout: kind, rows, id kind, columns, values, exposures; then score's tag (float64 on every row), tags' (per
-        // value: a list of two, then none), count's, and the exposure's counts.
-        Assert.Equal(new[] { 3, 2, 1, 2, 1, 1, 3, 0, 7, 2, 0, 2, 0, 1, 1 }, builder.Layout);
+        // value: a list of two, then none), count's, and the exposure's: no path, a run of the computing request, its counts.
+        Assert.Equal(new[] { 3, 2, 1, 2, 1, 1, 3, 0, 7, 2, 0, 2, 0, 0, 1, 1 }, builder.Layout);
         switch (damage)
         {
             case "kind": builder.Layout[0] = 1; break;
@@ -228,6 +229,59 @@ public sealed class PipelineCallCacheRecordTests
         Assert.Equal(default, rig.Cache.ReadMemory(Key, shape));
     }
 
+    /// <summary>
+    /// A record whose counts add up, but not to a result of the reader's pipeline, is a miss too: it was written for
+    /// another shape, or changed so that every list is still read to its end. Read as it was, two rows of a fixed-length
+    /// list came back as lists of one and three elements, a string as the value of an int64 column, and string ids as
+    /// the rows of a pipeline with int64 keys.
+    /// </summary>
+    [Theory]
+    [InlineData("list lengths moved")]
+    [InlineData("a string in an int64 column")]
+    [InlineData("a list in a scalar column")]
+    [InlineData("string ids")]
+    [InlineData("a value of another type")]
+    public void ARecordThatIsNotAResultOfTheReadersShape_IsAMiss(string damage)
+    {
+        var rig = NewRig();
+        var pair = ColumnType.List(StorageKind.Int64, fixedLength: 2);
+        var written = damage switch
+        {
+            "a string in an int64 column" => ColumnType.String,
+            "a list in a scalar column" => ColumnType.List(StorageKind.Int64),
+            _ => pair,
+        };
+        var read = damage is "a string in an int64 column" or "a list in a scalar column" ? ColumnType.Int64 : pair;
+        ScalarValue[] cells = written.IsList
+            ? [ScalarValue.FromInt64List([10, 11]), ScalarValue.FromInt64List([20, 21])]
+            : [ScalarValue.FromString("wrong"), ScalarValue.FromString("too")];
+        EntityKey[] ids = damage == "string ids" ? [EntityKey.FromString("a"), EntityKey.FromString("b")] : [EntityKey.FromInt64(7), EntityKey.FromInt64(8)];
+        var columns = new ResultColumns(ids, ["c"], [written], [cells]);
+        var total = damage == "a value of another type" ? ScalarValue.FromFloat64(1.5) : ScalarValue.FromInt64(2);
+        var values = ResultValues.OfOutput([new ResultValue("count", ColumnType.Int64, total)]);
+        var shape = new PipelineInterface
+        {
+            PipelineId = "p", KeyType = EntityKeyType.Int64, Inputs = new RequestSchema("p", new Dictionary<string, ColumnType>()),
+            Columns = [new PipelineOutput("c", read)], Values = [new PipelineOutput("count", ColumnType.Int64)],
+        };
+        var builder = new ServiceRecordBuilder(rig.Tiers, 1, rig.Clock.NowMs);
+        PipelineCallCache.Encode(builder, columns, values, new CachedFrom("req", 1, "feed/n#0"), []);
+        if (damage == "list lengths moved")
+        {
+            // The column's tag (per value), then each value's tag and length: 2 and 2 become 1 and 3, the elements stay.
+            Assert.Equal(new[] { 0, 7, 2, 7, 2 }, builder.Layout.GetRange(6, 5));
+            builder.Layout[8] = 1;
+            builder.Layout[10] = 3;
+        }
+
+        builder.End(Key);
+        builder.WriteBack(rig.Clock.NowMs);
+        rig.Apply();
+
+        Assert.Equal(1, rig.Table.Pin().RecordCount);
+        Assert.Equal(default, rig.Cache.ReadMemory(Key, shape));
+    }
+
     /// <summary>The same record, undamaged, is read: the damage above is what makes each a miss.</summary>
     [Fact]
     public void TheRecordOfTheDamageCases_IsReadWhenWhole_AndNotAsAResultOfAnotherShape()
@@ -242,7 +296,7 @@ public sealed class PipelineCallCacheRecordTests
             Columns = [new PipelineOutput("score", ColumnType.Float64), new PipelineOutput("more", ColumnType.Float64)],
         };
 
-        rig.Cache.Write(Key, columns, ResultValues.Empty, new CachedFrom("req", 1), [], rig.Clock.NowMs);
+        rig.Cache.Write(Key, columns, ResultValues.Empty, new CachedFrom("req", 1, "feed/n#0"), [], rig.Clock.NowMs);
         rig.Apply();
 
         Assert.NotNull(rig.Cache.ReadMemory(Key, shape).Fresh);
@@ -264,7 +318,7 @@ public sealed class PipelineCallCacheRecordTests
             PipelineId = "p", KeyType = EntityKeyType.Int64, Inputs = new RequestSchema("p", new Dictionary<string, ColumnType>()),
             Columns = [new PipelineOutput("score", ColumnType.Float64)],
         };
-        rig.Cache.Write(Key, columns, ResultValues.Empty, new CachedFrom("req", 1), [], rig.Clock.NowMs);
+        rig.Cache.Write(Key, columns, ResultValues.Empty, new CachedFrom("req", 1, "feed/n#0"), [], rig.Clock.NowMs);
         rig.Apply();
 
         rig.Clock.AdvanceMs(800); // within the ttl whatever its jitter (±10%)

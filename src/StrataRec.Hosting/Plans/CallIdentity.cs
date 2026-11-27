@@ -21,7 +21,9 @@ namespace StrataRec.Hosting.Plans;
 /// outside it where they are. The features and bindings are those of every arm, so an experiment that reads a feature or
 /// binds a service nothing read before changes the baseline once, for everyone.</para>
 /// <para>Computed from the configuration, not from the files' bytes or the loader's content ids: every instance that
-/// serves the same configuration has the same one, however it loaded it.</para>
+/// serves the same configuration has the same one, however it loaded it. With a digest every configuration has
+/// (<see cref="JsonDigest"/>): a plan that compiled is loaded, and a typed host's parameter of 2^53 + 1, which has no
+/// content id, threw out of the load of a pipeline that cached nothing.</para>
 /// </remarks>
 internal sealed class CallIdentity
 {
@@ -35,7 +37,7 @@ internal sealed class CallIdentity
 
     public string Baseline { get; }
 
-    /// <summary>By the index of the plan's experiment (<see cref="ExecutionPlan.Experiments"/>): the content id of its artifact.</summary>
+    /// <summary>By the index of the plan's experiment (<see cref="ExecutionPlan.Experiments"/>): the digest of its artifact.</summary>
     public string[] Experiments { get; }
 
     /// <summary>The plan's interface: a record is decoded as a result of it.</summary>
@@ -70,7 +72,7 @@ internal sealed class CallIdentity
             tables.Add(ArtifactSerializer.ToNode(table));
         }
 
-        var baseline = ContentHash.Compute(new JsonObject
+        var baseline = JsonDigest.Of(new JsonObject
         {
             ["pipeline"] = ArtifactSerializer.ToNode(source.Pipeline),
             ["entities"] = ArtifactSerializer.ToNode(source.Catalog.Entities),
@@ -87,7 +89,7 @@ internal sealed class CallIdentity
             {
                 if (placed.Experiment.ExperimentId == experiment.Id)
                 {
-                    experiments[experiment.Index] = ContentHash.Compute(ArtifactSerializer.ToNode(placed.Experiment));
+                    experiments[experiment.Index] = JsonDigest.Of(ArtifactSerializer.ToNode(placed.Experiment));
                     break;
                 }
             }

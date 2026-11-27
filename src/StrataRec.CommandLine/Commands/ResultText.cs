@@ -77,8 +77,8 @@ internal static class ResultText
             {
                 var how = call switch
                 {
-                    { Cached: { Stale: true } stale } => $"failed ({call.Error}), served the cached result of request {stale.RequestId}, past its ttl_ms",
-                    { Cached: { } origin } => $"not run, served the cached result of request {origin.RequestId}",
+                    { Cached: { Stale: true } stale } => $"failed ({call.Error}), served the cached result {Computed(stale)}, past its ttl_ms",
+                    { Cached: { } origin } => $"not run, served the cached result {Computed(origin)}",
                     { Succeeded: true } => "succeeded",
                     _ => $"failed ({call.Error})",
                 };
@@ -115,6 +115,10 @@ internal static class ResultText
             ExplanationText.Write(output, explanation, "  explain   ");
         }
     }
+
+    /// <summary>Which run computed a cached result: the request, the call that ran the pipeline in it, and when.</summary>
+    private static string Computed(StrataRec.Pipeline.Operators.CachedFrom from) =>
+        $"of request {from.RequestId} ({from.CalledBy}, {DateTimeOffset.FromUnixTimeMilliseconds(from.TimeMs).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture)})";
 
     private static void WriteItems(TextWriter output, RecResult result)
     {

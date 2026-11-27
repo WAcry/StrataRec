@@ -113,6 +113,7 @@ public static class RecResultJson
                     json.WriteStartObject("cached_from");
                     json.WriteString("request_id", origin.RequestId);
                     json.WriteNumber("time_ms", origin.TimeMs);
+                    json.WriteString("called_by", origin.CalledBy);
                     if (origin.Stale)
                     {
                         json.WriteBoolean("stale", true);

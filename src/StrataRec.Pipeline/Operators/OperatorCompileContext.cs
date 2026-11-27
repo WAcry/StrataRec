@@ -578,15 +578,10 @@ public sealed class OperatorCompileContext
                 _diagnostics.Error("PIPELINE_CALL_CACHE_UNBOUND", Artifact, at, unbound, hint);
             }
         }
-        else if (ok && tiers.Distributed is not null && Features.Cache.CachePolicy.RetentionOf(ttlMs, staleMs) > Features.Cache.CachePolicy.MaxRetentionMs)
+        else if (tiers.Distributed is not null)
         {
-            // The store is given a record's longest use as a time to live (a TimeSpan), as for a source's and a service's cache.
-            ok = false;
-            var setting = Features.Cache.CachePolicy.MaxLifetime(ttlMs) > Features.Cache.CachePolicy.MaxRetentionMs ? "ttl_ms" : "stale_if_error_ms";
-            _diagnostics.Error("CACHE_RETENTION", Artifact, at + "/" + setting,
-                $"The distributed cache of pipeline '{call.PipelineId}' would keep a result for up to {Features.Cache.CachePolicy.RetentionOf(ttlMs, staleMs)} ms, "
-                + $"more than the {Features.Cache.CachePolicy.MaxRetentionMs} ms a time to live can be.",
-                $"lower ttl_ms or stale_if_error_ms so that ttl_ms × 1.1 + stale_if_error_ms is at most {Features.Cache.CachePolicy.MaxRetentionMs}");
+            // The store is given a record's longest use as a time to live, as for a source's and a service's cache: the same check.
+            ok &= Features.Cache.CacheSettings.TryRetention("pipeline", call.PipelineId, ttlMs, staleMs, _diagnostics, Artifact, at);
         }
 
         if (!ok)

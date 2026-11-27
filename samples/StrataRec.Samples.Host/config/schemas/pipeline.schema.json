@@ -1128,6 +1128,13 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "called_by": {
+                          "description": "The column (string?) that gets the call that ran the pipeline in that request, as that run's logs name it (called_by, e.g. feed/promoted#2): a request that calls a pipeline for several rows logs each run under its call, and the request's id alone does not say which of them computed a row.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         }
                       },
                       "additionalProperties": false
@@ -1244,6 +1251,13 @@
                         },
                         "time_ms": {
                           "description": "The column (int64?) that gets that request's time, in Unix milliseconds.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "called_by": {
+                          "description": "The column (string?) that gets the call that ran the pipeline in that request, as that run's logs name it (called_by, e.g. feed/promoted#2): a request that calls a pipeline for several rows logs each run under its call, and the request's id alone does not say which of them computed a row.",
                           "type": [
                             "string",
                             "null"

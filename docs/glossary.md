@@ -109,4 +109,4 @@
 | diff、compare | `stratarec diff` 比两份配置编译出的计划；`stratarec compare` 在录制的请求上比两份配置的结果 | 两个词不混用 |
 | 调试选项 / debug options（`DebugOptions`） | 随请求带的排查开关，谁能用由宿主决定：强制臂、配置覆盖、trace、解释、录制。改变服务内容的两项（强制臂、配置覆盖）不写持久的日志 | 不叫 dry run、shadow |
 | 种子、请求时间 / seed、request time（`time_ms`） | 种子是请求的确定性种子，默认是请求 id 的哈希；请求里的随机都由它经 `StableHash` 得出。请求时间是请求看到的“现在”，默认是到达的时刻，回放时设成录制的值 | 不用进程级的随机数 |
-| 结果的来源 / `cached_from`、`computed_by` | 缓存回答一次流水线调用时，结果是哪个请求的运行算出来的（请求 id 和时间）。`cached_from` 只在缓存回答时有：`$experiments` 记录、追踪的 `calls`、回放包里；`computed_by` 是调用的算子写在行上的列，流水线这一次运行了就是本请求 | 不叫 origin：代码和 Schema 里 origin 指缓存背后的连接器、服务或流水线 |
+| 结果的来源 / `cached_from`、`computed_by` | 缓存回答一次流水线调用时，结果是哪个请求的哪次调用算出来的（请求 id、时间和调用）。`cached_from` 只在缓存回答时有：`$experiments` 记录、追踪的 `calls`、回放包里；`computed_by` 是调用的算子写在行上的列，流水线这一次运行了就是本请求 | 不叫 origin：代码和 Schema 里 origin 指缓存背后的连接器、服务或流水线 |

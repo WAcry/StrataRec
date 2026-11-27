@@ -341,9 +341,13 @@ internal static class ReplayJson
             values[v] = new Execution.ResultValue(call.Values[v].Name, type, Values(call.Values[v].Values, type, 1, at + "/values")[0]);
         }
 
-        var cached = call.CachedFrom is { } from ? new Operators.CachedFrom(from.RequestId, from.TimeMs, from.Stale == true) : null;
+        var cached = call.CachedFrom is { } from ? new Operators.CachedFrom(from.RequestId, from.TimeMs, from.CalledBy, from.Stale == true) : null;
         return new Operators.PipelineCallResult(
-            call.Pipeline, true, null, new Execution.ResultColumns(ids, names, types, columns), Execution.ResultValues.OfOutput(values), cached);
+            call.Pipeline, true, null, new Execution.ResultColumns(ids, names, types, columns), Execution.ResultValues.OfOutput(values), cached)
+        {
+            CalledBy = call.CalledBy,
+            Degraded = call.Degraded,
+        };
     }
 
     public static ColumnType Type(string? text, string pointer)

@@ -418,6 +418,7 @@ internal sealed class RunRecorder : IFeatureCallHook
             Node = node,
             Seq = sequence,
             Pipeline = pipelineId,
+            CalledBy = result.CalledBy,
             Inputs = passed,
             Succeeded = result.Succeeded,
             Error = result.Error,
@@ -425,7 +426,10 @@ internal sealed class RunRecorder : IFeatureCallHook
             Ids = result.Succeeded ? ReplayJson.Keys(result.Columns.Ids) : null,
             Columns = ReplayJson.Columns(result.Columns),
             Values = ReplayJson.Columns(result.Values),
-            CachedFrom = result.Cached is { } from ? new ReplayCachedFrom { RequestId = from.RequestId, TimeMs = from.TimeMs, Stale = from.Stale ? true : null } : null,
+            Degraded = result.Degraded,
+            CachedFrom = result.Cached is { } from
+                ? new ReplayCachedFrom { RequestId = from.RequestId, TimeMs = from.TimeMs, CalledBy = from.CalledBy, Stale = from.Stale ? true : null }
+                : null,
         };
         lock (_gate)
         {

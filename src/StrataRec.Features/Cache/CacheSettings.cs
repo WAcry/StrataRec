@@ -78,7 +78,7 @@ internal static class CacheSettings
         ok &= TryStale(cache.StaleIfErrorMs, owner.Origin, diagnostics, artifact, pointer, out var staleMs);
         ok &= TryVersion(cache.Version, diagnostics, artifact, pointer);
         ok &= TryTiers(cache.Memory, cache.Distributed, owner, resolver, pointer, ownerTimeoutMs, out var memoryBytes, out var distributed, out var distributedTimeoutMs);
-        ok &= distributed is null || TryRetention(owner, ttlMs, staleMs, pointer, resolver);
+        ok &= distributed is null || TryRetention(owner.Noun, owner.Name, ttlMs, staleMs, diagnostics, artifact, pointer);
         if (ok)
         {
             spec = new CacheSpec(new CachePolicy(ttlMs, staleMs), cache.Version, memoryBytes, distributed, distributedTimeoutMs);
@@ -135,7 +135,8 @@ internal static class CacheSettings
             {
                 ok = false;
                 diagnostics.Error("DISTRIBUTED_CACHE_CONFIG", artifact, at + "/timeout_ms", $"timeout_ms {shared.TimeoutMs} is not positive.",
-                    $"give the longest a request waits for the distributed cache, in milliseconds, or leave it out (half the {owner.Noun}'s timeout_ms)");
+                    "give the longest a request waits for the distributed cache, in milliseconds"
+                    + (ownerTimeoutMs is null ? ", e.g. \"timeout_ms\": 10" : $", or leave it out (half the {owner.Noun}'s timeout_ms)"));
             }
             else if (shared.TimeoutMs is null && ownerTimeoutMs is null)
             {
@@ -217,19 +218,21 @@ internal static class CacheSettings
     }
 
     /// <summary>
-    /// Whether the distributed tier can be given the longest time to live a record of this binding needs (the TTL with all
-    /// its jitter, plus the stale window): a <see cref="TimeSpan"/>. Diagnosed at the setting that takes it past.
+    /// Whether the distributed tier can be given the longest time to live a record of this cache needs (the TTL with all
+    /// its jitter, plus the stale window): a <see cref="TimeSpan"/>. Diagnosed at the setting that takes it past, of the
+    /// <c>cache</c> member at <paramref name="pointer"/>: a binding's, or for a pipeline's results the calling node's.
     /// </summary>
-    public static bool TryRetention(CacheOwner owner, long ttlMs, long staleMs, string pointer, BindingResolver resolver)
+    /// <param name="ttlMs">0 for one that is missing or wrong: diagnosed already, and nothing more is said of it here.</param>
+    public static bool TryRetention(string noun, string name, long ttlMs, long staleMs, DiagnosticBag diagnostics, string artifact, string pointer)
     {
         if (ttlMs == 0 || CachePolicy.RetentionOf(ttlMs, staleMs) <= CachePolicy.MaxRetentionMs)
         {
-            return true; // a ttl_ms that is missing or wrong is diagnosed already
+            return true;
         }
 
         var setting = CachePolicy.MaxLifetime(ttlMs) > CachePolicy.MaxRetentionMs ? "ttl_ms" : "stale_if_error_ms";
-        resolver.Diagnostics.Error("CACHE_RETENTION", resolver.Artifact, pointer + "/" + setting,
-            $"The distributed cache of {owner.Noun} '{owner.Name}' would keep a record for up to {CachePolicy.RetentionOf(ttlMs, staleMs)} ms "
+        diagnostics.Error("CACHE_RETENTION", artifact, pointer + "/" + setting,
+            $"The distributed cache of {noun} '{name}' would keep a record for up to {CachePolicy.RetentionOf(ttlMs, staleMs)} ms "
             + $"(ttl_ms with its 10% jitter, plus stale_if_error_ms), more than the {CachePolicy.MaxRetentionMs} ms a time to live can be.",
             $"lower ttl_ms or stale_if_error_ms so that ttl_ms × 1.1 + stale_if_error_ms is at most {CachePolicy.MaxRetentionMs} (about 29,000 years)");
         return false;

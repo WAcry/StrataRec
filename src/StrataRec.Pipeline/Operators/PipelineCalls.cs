@@ -392,6 +392,19 @@ public sealed class PipelineCallResult
     /// </summary>
     public CachedFrom? Cached { get; }
 
+    /// <summary>
+    /// This call as the called run's logs name it (<c>called_by</c>): the calls from the request's pipeline down to it,
+    /// e.g. <c>feed/promoted#2</c>. Empty for a call that was not made (no time left, a run outside an engine).
+    /// </summary>
+    public string CalledBy { get; internal set; } = string.Empty;
+
+    /// <summary>
+    /// The pipeline ran and returned a result with a node of its own degraded, failed and skipped, or skipped for lack of
+    /// time or input. The calling node is degraded with it, whatever the operator does with the rows: what a node
+    /// builds on an incomplete answer is incomplete, as with a service's partial answer.
+    /// </summary>
+    public bool Degraded { get; internal init; }
+
     internal static PipelineCallResult Failed(string pipelineId, string error) => new(pipelineId, false, error, ResultColumns.Empty, ResultValues.Empty);
 }
 
@@ -402,8 +415,9 @@ public sealed class PipelineCallResult
 /// <param name="Seed">The calling run's seed; the called run's is derived from it, the node and <paramref name="Sequence"/>.</param>
 /// <param name="TimeMs">The calling run's request time, which is the called run's.</param>
 /// <param name="Budget">What is left of the node's budget: the called run's deadline.</param>
+/// <param name="Memory">The calling run's request memory: held for a read of the call's cache that outlives its wait.</param>
 internal readonly record struct PipelineCallRequest(
-    PipelineCall Call, RequestInputs? Given, RequestInputs CallerInputs, int Sequence, long Seed, long TimeMs, TimeSpan Budget);
+    PipelineCall Call, RequestInputs? Given, RequestInputs CallerInputs, int Sequence, long Seed, long TimeMs, TimeSpan Budget, Core.Memory.RequestMemory Memory);
 
 /// <summary>Runs the pipelines a run's nodes call: the engine's, since it serves them.</summary>
 internal interface IPipelineCalls

@@ -40,12 +40,16 @@ public sealed class LogBatch
     /// <summary>
     /// For the record of a run that did not happen because a cache answered its call (<c>$experiments</c> of a called
     /// pipeline, written so that exposure counts do not depend on the hit rate): the request whose run computed the
-    /// result, and that request's time. The called pipeline's other taps wrote under that request. Null for a run.
+    /// result, that request's time, and the call that ran it there, which is the <see cref="CalledBy"/> of what that
+    /// run logged. The called pipeline's other taps wrote under that request and that call. Null for a run.
     /// </summary>
     public string? CachedFromRequestId { get; init; }
 
     /// <inheritdoc cref="CachedFromRequestId"/>
     public long CachedFromTimeMs { get; init; }
+
+    /// <inheritdoc cref="CachedFromRequestId"/>
+    public string? CachedFromCalledBy { get; init; }
 
     /// <summary>
     /// The tap variant's schema (columns, types, expressions), shared by its batches; its <see cref="LogSchema.Id"/> is what

@@ -44,6 +44,7 @@ public static class LogBatchJson
             json.WriteStartObject("cached_from");
             json.WriteString("request_id", cachedFrom);
             json.WriteNumber("time_ms", batch.CachedFromTimeMs);
+            json.WriteString("called_by", batch.CachedFromCalledBy);
             json.WriteEndObject();
         }
 

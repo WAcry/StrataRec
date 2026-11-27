@@ -426,6 +426,9 @@ internal sealed class SharedStores : IBindingFactory<ICacheStore>
 
     public ConcurrentQueue<Store> Created { get; } = new();
 
+    /// <summary>Awaited by every read before it answers, when set: a store that is slow for as long as the test says.</summary>
+    public Func<Task>? BeforeGet { get; set; }
+
     /// <summary>Whether every key any store was asked for has a record: what was missed has been written back.</summary>
     public bool HoldsEveryKeyRead() => !_read.IsEmpty && _read.Keys.All(_records.ContainsKey);
 
@@ -455,8 +458,13 @@ internal sealed class SharedStores : IBindingFactory<ICacheStore>
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
+        public async ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
         {
+            if (shared.BeforeGet is { } hold)
+            {
+                await hold(); // not the read's token: a store that goes on after its caller gave up
+            }
+
             for (var i = 0; i < keys.Length; i++)
             {
                 var name = Name(keyspace, keys.Span[i]);
@@ -466,8 +474,6 @@ internal sealed class SharedStores : IBindingFactory<ICacheStore>
                     records.Span[i] = record;
                 }
             }
-
-            return ValueTask.CompletedTask;
         }
 
         public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken)

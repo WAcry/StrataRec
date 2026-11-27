@@ -31,7 +31,7 @@ public sealed partial class RecEngine
         private List<IgnoredArm>? _ignored;
         private List<Logging.LogBatch>? _batches;
         private List<CalledRun>? _runs;
-        private Dictionary<LoadedPipeline, (RequestArms Arms, IgnoredArm[] Ignored, bool Shared)>? _assignments;
+        private Dictionary<LoadedPipeline, CallAssignment>? _assignments;
 
         public RecEngine Engine => engine;
 
@@ -49,32 +49,54 @@ public sealed partial class RecEngine
         }
 
         /// <summary>
-        /// The request's arms in a pipeline its nodes call (<see cref="AssignCallAsync"/>), kept for the request and the
-        /// plan once answered: the arms a cached call's key was built with are the arms its run then runs, and a
-        /// pipeline called again is not asked about again. Calls that start before the first answer each ask; a failed
-        /// assignment is not kept, and the next call asks again.
+        /// The request's arms in a pipeline its nodes call (<see cref="AssignCallAsync"/>): one answer for the request and
+        /// the plan. The arms a cached call's key was built with are the arms the runs under it run, a pipeline called
+        /// again is not asked about again, and what the plan ignores of the answer is reported once, whether its calls
+        /// are then run or answered by a cache. Calls that start before the first answer each ask, and all take the
+        /// answer that came first: a provider that answered two of them differently had one call's key built with arms
+        /// the runs under it did not run. A failed assignment is not kept, and the next call asks again.
         /// </summary>
-        public async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, bool Shared)> AssignAsync(
-            LoadedPipeline callee, long deadline, CancellationToken cancellationToken)
+        public async ValueTask<(CallAssignment? Assignment, string? Error)> AssignAsync(LoadedPipeline callee, long deadline, CancellationToken cancellationToken)
         {
+            if (callee.Plan.Arms.IsEmpty)
+            {
+                return (CallAssignment.None, null); // nothing to ask about, nothing to keep
+            }
+
             lock (_gate)
             {
                 if (_assignments is not null && _assignments.TryGetValue(callee, out var known))
                 {
-                    return (known.Arms, known.Ignored, null, known.Shared);
+                    return (known, null);
                 }
             }
 
-            var assignment = await engine.AssignCallAsync(callee, request, deadline, cancellationToken).ConfigureAwait(false);
-            if (assignment.Error is null)
+            var asked = await engine.AssignCallAsync(callee, request, deadline, cancellationToken).ConfigureAwait(false);
+            if (asked.Error is not null)
             {
-                lock (_gate)
+                return (null, asked.Error);
+            }
+
+            // An arm the pipeline does not have, in a list every pipeline of the request shares, is another pipeline's;
+            // in the provider's answer for this pipeline it is a mistake, and reported.
+            var arms = ExternalArms.Yield(callee.Plan, asked.Arms, asked.Ignored, out var ignored);
+            var assignment = new CallAssignment(arms, asked.Shared ? NotUnknown(ignored) : ignored);
+            lock (_gate)
+            {
+                _assignments ??= new(ReferenceEqualityComparer.Instance);
+                if (_assignments.TryGetValue(callee, out var first))
                 {
-                    (_assignments ??= new(ReferenceEqualityComparer.Instance))[callee] = (assignment.Arms, assignment.Ignored, assignment.Shared);
+                    return (first, null);
+                }
+
+                _assignments.Add(callee, assignment);
+                if (assignment.Ignored.Length > 0)
+                {
+                    (_ignored ??= new List<IgnoredArm>()).AddRange(assignment.Ignored);
                 }
             }
 
-            return assignment;
+            return (assignment, null);
         }
 
         /// <summary>
@@ -103,19 +125,7 @@ public sealed partial class RecEngine
             }
         }
 
-        /// <summary>The platform's arms a called pipeline ignored, when its call was answered without a run.</summary>
-        public void Add(IgnoredArm[] ignored)
-        {
-            if (ignored.Length > 0)
-            {
-                lock (_gate)
-                {
-                    (_ignored ??= new List<IgnoredArm>()).AddRange(ignored);
-                }
-            }
-        }
-
-        public void Add(PipelineResult result, IgnoredArm[] ignored)
+        public void Add(PipelineResult result)
         {
             lock (_gate)
             {
@@ -127,11 +137,6 @@ public sealed partial class RecEngine
                 foreach (var experiment in result.TriggeredExperiments)
                 {
                     _triggered.Add(experiment);
-                }
-
-                if (ignored.Length > 0)
-                {
-                    (_ignored ??= new List<IgnoredArm>()).AddRange(ignored);
                 }
 
                 if (result.LogBatches.Count > 0)
@@ -251,6 +256,12 @@ public sealed partial class RecEngine
         }
     }
 
+    /// <summary>The request's arms in a plan its nodes call: what the plan runs of the answer, and what it reports as ignored.</summary>
+    private sealed record CallAssignment(RequestArms Arms, IgnoredArm[] Ignored)
+    {
+        public static readonly CallAssignment None = new(RequestArms.None, []);
+    }
+
     /// <summary>
     /// The runs under one cached call that had experiments, gathered while its pipeline runs: what the record of its
     /// result keeps of them (<see cref="CallExposure"/>). Runs end on any thread.
@@ -278,10 +289,12 @@ public sealed partial class RecEngine
 
     /// <summary>What the tiers of a call's cache had of it.</summary>
     /// <param name="Key">The call's key; null when the call is not cached, or cannot be now.</param>
+    /// <param name="Keyed">The plans of the pipelines under the called one that the key was built with.</param>
     /// <param name="Stale">A result past its time to live that may still serve if the run fails.</param>
     /// <param name="StaleShared">The stale result is the distributed tier's.</param>
     /// <param name="CutOff">The read was cut off by the node's budget or the caller.</param>
-    private readonly record struct CacheLookup(UInt128? Key, CachedCall? Fresh, CachedCall? Stale, bool StaleShared, Exception? CutOff);
+    private readonly record struct CacheLookup(
+        UInt128? Key, List<(LoadedPipeline Pipeline, RequestArms Arms)>? Keyed, CachedCall? Fresh, CachedCall? Stale, bool StaleShared, Exception? CutOff);
 
     /// <summary>
     /// The calls of one run (<see cref="OperatorContext.CallPipelineAsync"/>): each runs the pipeline this engine serves
@@ -309,6 +322,7 @@ public sealed partial class RecEngine
             var path = (calledBy is null ? string.Empty : calledBy + " > ")
                 + $"{pipelineId}/{call.Call.NodeId}#{call.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
             var answer = await RunAsync().ConfigureAwait(false);
+            answer.CalledBy = path;
             if (scope.Traces)
             {
                 scope.Add(new CalledRun(path, pipelineId, call.Call.NodeId, call.Sequence, id, answer.Succeeded, answer.Error ?? failure,
@@ -361,17 +375,14 @@ public sealed partial class RecEngine
                     }
 
                     var deadline = CallBound.DeadlineAfter(started, call.Budget);
-                    var assignment = await scope.AssignAsync(callee, deadline, callerCancellation).ConfigureAwait(false);
-                    if (assignment.Error is { } assignmentError)
+                    var (assignment, assignmentError) = await scope.AssignAsync(callee, deadline, callerCancellation).ConfigureAwait(false);
+                    if (assignment is null)
                     {
                         return PipelineCallResult.Failed(id, $"pipeline '{id}' was not called: {assignmentError}");
                     }
 
-                    // An arm the pipeline does not have, in a list every pipeline of the request shares, is another
-                    // pipeline's; in the provider's answer for this pipeline it is a mistake, and reported.
-                    arms = ExternalArms.Yield(plan, assignment.Arms, assignment.Ignored, out var ignored);
-                    ignored = assignment.Shared ? NotUnknown(ignored) : ignored;
-                    callee.Telemetry.RecordIgnored(ignored);
+                    arms = assignment.Arms;
+                    callee.Telemetry.RecordIgnored(assignment.Ignored);
 
                     // A request that runs a configuration of its own (DebugOptions.ConfigOverride) neither reads nor
                     // writes: what it computes is not what the served configuration computes.
@@ -385,14 +396,13 @@ public sealed partial class RecEngine
                     if (lookup.Fresh is { } hit)
                     {
                         answered = true;
-                        scope.Add(ignored); // of this request's assignment, as a run reports them
                         return Serve(hit, stale: false);
                     }
 
                     var remaining = call.Budget - Stopwatch.GetElapsedTime(started);
                     if (remaining <= TimeSpan.Zero || lookup.CutOff is not null)
                     {
-                        failure = $"pipeline '{id}' was not called: nothing was left of the node's budget after its assignment" + (cache is null ? string.Empty : " and the read of its cache");
+                        failure = $"pipeline '{id}' was not called: nothing was left of the call's time after its assignment" + (cache is null ? string.Empty : " and the read of its cache");
                     }
                     else
                     {
@@ -413,9 +423,10 @@ public sealed partial class RecEngine
                             OnEnd = callee.Bindings.Join(), // last: the executor, called next, ends it on every outcome
                         }, callerCancellation).ConfigureAwait(false);
                         ran = result;
-                        scope.Add(result, ignored);
-                        if (plan.Experiments.Length > 0)
+                        scope.Add(result);
+                        if (plan.Experiments.Length > 0 && (runCapture is not null || Captured))
                         {
+                            // Kept by the cached calls this run is under, its own included; a run under none makes none.
                             var exposure = new CallExposure(id, plan.ManifestId, null, result.AssignedArms, result.TriggeredExperiments);
                             runCapture?.Add(exposure);
                             Expose(exposure, path);
@@ -424,15 +435,18 @@ public sealed partial class RecEngine
                         if (result.Succeeded)
                         {
                             // Only what a run computed whole is kept: a list one recall source was missing from is not
-                            // served for an hour. And only of a request whose runs write the logs (not one with forced
-                            // arms or captured logs): a result served later says it comes from this request, and what
-                            // the run logged must be there under it.
-                            if (lookup.Key is { } key && !result.Degraded && WritesLogs(request))
+                            // served for an hour, and a degraded run under this one made this one degraded. Only of a
+                            // request whose runs write the logs (not one with forced arms or captured logs): a result
+                            // served later says it comes from this request, and what the run logged must be there under
+                            // it. And only while the plans the key was built with are the ones served: a pipeline under
+                            // this one that was replaced since may have run as the new one, and its result is not the
+                            // old key's, for this instance or for the others that share the record.
+                            if (lookup.Key is { } key && !result.Degraded && WritesLogs(request) && engine.Serves(lookup.Keyed!))
                             {
-                                cache!.Write(key, result.Columns, result.Values, new CachedFrom(request.RequestId, call.TimeMs), runCapture!.Snapshot(), startedMs);
+                                cache!.Write(key, result.Columns, result.Values, new CachedFrom(request.RequestId, call.TimeMs, path), runCapture!.Snapshot(), startedMs);
                             }
 
-                            return new PipelineCallResult(id, true, null, result.Columns, result.Values);
+                            return new PipelineCallResult(id, true, null, result.Columns, result.Values) { Degraded = result.Degraded };
                         }
 
                         failure = $"pipeline '{id}' failed: {result.Error}";
@@ -478,22 +492,22 @@ public sealed partial class RecEngine
                     var memory = cache.ReadMemory(key, shape);
                     if (memory.Fresh is not null || !cache.HasDistributed)
                     {
-                        return new CacheLookup(key, memory.Fresh, memory.Stale, false, null);
+                        return new CacheLookup(key, called, memory.Fresh, memory.Stale, false, null);
                     }
 
                     var bound = new CallBound(CancellationSite.Call, callerCancellation, deadline, engine._executor.Events, request.RequestId);
                     try
                     {
-                        var shared = await cache.ReadDistributedAsync(key, shape, bound).ConfigureAwait(false);
+                        var shared = await cache.ReadDistributedAsync(key, shape, bound, call.Memory).ConfigureAwait(false);
                         if (shared.CutOff is not null || shared.Fresh is not null)
                         {
-                            return new CacheLookup(key, shared.Fresh, memory.Stale, false, shared.CutOff);
+                            return new CacheLookup(key, called, shared.Fresh, memory.Stale, false, shared.CutOff);
                         }
 
                         // Kept for a failure of the run: the newer of the two, which stays within the window longer.
                         return shared.Stale is { } other && (memory.Stale is null || other.WrittenMs > memory.Stale.WrittenMs)
-                            ? new CacheLookup(key, null, other, true, null)
-                            : new CacheLookup(key, null, memory.Stale, false, null);
+                            ? new CacheLookup(key, called, null, other, true, null)
+                            : new CacheLookup(key, called, null, memory.Stale, false, null);
                     }
                     finally
                     {
@@ -501,17 +515,26 @@ public sealed partial class RecEngine
                     }
                 }
 
-                // A result the cache answers: the runs that computed it are this request's exposure too, logged with
-                // where the result comes from and listed in the request's result.
+                // A result the cache answers: the runs that computed it are this request's exposure too, each logged with
+                // the run it comes from and listed in the request's result.
                 PipelineCallResult Serve(CachedCall cached, bool stale)
                 {
                     var from = stale ? cached.From with { Stale = true } : cached.From;
                     var captures = request.Debug?.CaptureLogs == true;
+                    var captured = Captured;
                     foreach (var exposure in cached.Exposures)
                     {
+                        // The run of a pipeline under the called one: the computing request's, under the call that
+                        // computed the record, unless a cache answered it there too and it is an earlier request's.
                         var by = exposure.Path is null ? path : path + " > " + exposure.Path;
-                        scope.Add(exposure, engine._executor.PublishCachedExposure(request.RequestId, call.TimeMs, by, exposure, from, captures, WritesLogs(request)));
-                        Expose(exposure, path);
+                        var computed = exposure.From ?? (exposure.Path is null ? cached.From : cached.From with { CalledBy = cached.From.CalledBy + " > " + exposure.Path });
+                        scope.Add(exposure, engine._executor.PublishCachedExposure(
+                            request.RequestId, call.TimeMs, by, exposure, stale ? computed with { Stale = true } : computed, captures, WritesLogs(request)));
+                        if (captured)
+                        {
+                            Expose(exposure with { From = computed }, path);
+                        }
+
                         served = exposure.Path is null ? exposure.Arms : served;
                     }
 
@@ -537,6 +560,23 @@ public sealed partial class RecEngine
         }
 
         private CallCapture? Capture => capture;
+
+        /// <summary>This run is under a call whose result will be cached: the runs under it are kept for that record.</summary>
+        private bool Captured
+        {
+            get
+            {
+                for (var run = this; run is not null; run = run.Parent)
+                {
+                    if (run.Capture is not null)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
 
         private string? CalledBy => calledBy;
 
@@ -590,36 +630,36 @@ public sealed partial class RecEngine
 
             return inputs;
         }
+    }
 
-        /// <summary>
-        /// The ignored arms that are the called pipeline's to report: an arm it does not have is another pipeline's (the
-        /// request's own, or another one it calls), not a mistake.
-        /// </summary>
-        private static IgnoredArm[] NotUnknown(IgnoredArm[] ignored)
+    /// <summary>
+    /// The ignored arms that are the called pipeline's to report: an arm it does not have is another pipeline's (the
+    /// request's own, or another one it calls), not a mistake.
+    /// </summary>
+    private static IgnoredArm[] NotUnknown(IgnoredArm[] ignored)
+    {
+        var kept = 0;
+        foreach (var arm in ignored)
         {
-            var kept = 0;
-            foreach (var arm in ignored)
-            {
-                kept += arm.Reason == IgnoredArmReason.Unknown ? 0 : 1;
-            }
-
-            if (kept == ignored.Length)
-            {
-                return ignored;
-            }
-
-            var own = new IgnoredArm[kept];
-            var next = 0;
-            foreach (var arm in ignored)
-            {
-                if (arm.Reason != IgnoredArmReason.Unknown)
-                {
-                    own[next++] = arm;
-                }
-            }
-
-            return own;
+            kept += arm.Reason == IgnoredArmReason.Unknown ? 0 : 1;
         }
+
+        if (kept == ignored.Length)
+        {
+            return ignored;
+        }
+
+        var own = new IgnoredArm[kept];
+        var next = 0;
+        foreach (var arm in ignored)
+        {
+            if (arm.Reason != IgnoredArmReason.Unknown)
+            {
+                own[next++] = arm;
+            }
+        }
+
+        return own;
     }
 
     /// <summary>
@@ -628,8 +668,8 @@ public sealed partial class RecEngine
     /// (its assignment failed or timed out): the call is then not cached, and the run finds out as it would.
     /// </summary>
     /// <remarks>
-    /// A pipeline replaced between this and the run is run as the new one, and the result kept under the old one's key:
-    /// for one result at each release, which the other instances compute alike once they serve the new one.
+    /// A pipeline replaced between this and the run is run as the new one: what the run returns is then not kept
+    /// (<see cref="Serves"/>).
     /// </remarks>
     private async ValueTask<List<(LoadedPipeline Pipeline, RequestArms Arms)>?> CalledArmsAsync(
         RequestCalls scope, LoadedPipeline callee, long deadline, CancellationToken cancellationToken)
@@ -650,13 +690,13 @@ public sealed partial class RecEngine
                 continue;
             }
 
-            var assignment = await scope.AssignAsync(loaded, deadline, cancellationToken).ConfigureAwait(false);
-            if (assignment.Error is not null)
+            var (assignment, _) = await scope.AssignAsync(loaded, deadline, cancellationToken).ConfigureAwait(false);
+            if (assignment is null)
             {
                 return null;
             }
 
-            called.Add((loaded, ExternalArms.Yield(loaded.Plan, assignment.Arms, assignment.Ignored, out _)));
+            called.Add((loaded, assignment.Arms));
             foreach (var next in loaded.Plan.Calls)
             {
                 pending.Push(next);
@@ -665,6 +705,24 @@ public sealed partial class RecEngine
 
         called.Sort(static (a, b) => string.CompareOrdinal(a.Pipeline.Plan.PipelineId, b.Pipeline.Plan.PipelineId));
         return called;
+    }
+
+    /// <summary>
+    /// Whether the plans a call's key was built with (<see cref="CalledArmsAsync"/>) are the ones served now: only then is
+    /// what the run returned a result of that key. A pipeline loaded again, to the same configuration too, is another
+    /// plan: one result is computed once more.
+    /// </summary>
+    private bool Serves(List<(LoadedPipeline Pipeline, RequestArms Arms)> called)
+    {
+        foreach (var (pipeline, _) in called)
+        {
+            if (!_pipelines.TryGetValue(pipeline.Plan.PipelineId, out var served) || !ReferenceEquals(served, pipeline))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -685,13 +743,20 @@ public sealed partial class RecEngine
             builder.Add(callee.CallIdentity.ShapeHash);
             builder.Add(derived);
             builder.Add(cache.Version ?? string.Empty);
-            AddRun(ref builder, callee, arms, derived);
-            builder.Add(called.Count);
+            AddRun(ref builder, callee, callee.Plan.ArmIds(arms), derived);
             foreach (var (pipeline, itsArms) in called)
             {
-                builder.Add(pipeline.Plan.PipelineId);
-                AddRun(ref builder, pipeline, itsArms, derived);
+                // With a version, a pipeline the request has no arm in adds nothing: an experiment that adds a call in
+                // an arm, released, leaves the results of the requests outside it where they are.
+                var ids = pipeline.Plan.ArmIds(itsArms);
+                if (derived || ids.Count > 0)
+                {
+                    builder.Add(pipeline.Plan.PipelineId);
+                    AddRun(ref builder, pipeline, ids, derived);
+                }
             }
+
+            builder.Add(string.Empty); // no pipeline has this id: the inputs' names start after it
 
             foreach (var name in callee.Plan.RequestSchema.Names)
             {
@@ -706,7 +771,7 @@ public sealed partial class RecEngine
             builder.Dispose();
         }
 
-        static void AddRun(ref StableHash.Builder builder, LoadedPipeline pipeline, in RequestArms arms, bool derived)
+        static void AddRun(ref StableHash.Builder builder, LoadedPipeline pipeline, List<string> ids, bool derived)
         {
             var identity = derived ? pipeline.CallIdentity : null;
             if (identity is not null)
@@ -714,7 +779,6 @@ public sealed partial class RecEngine
                 builder.Add(identity.Baseline);
             }
 
-            var ids = pipeline.Plan.ArmIds(arms);
             builder.Add(ids.Count);
             foreach (var id in ids)
             {

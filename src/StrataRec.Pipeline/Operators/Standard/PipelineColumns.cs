@@ -187,9 +187,17 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
             ok = false;
         }
 
+        if (config.Cache is not null && config.Pipeline is null)
+        {
+            // Said here: left alone it was read by nothing, and a wrong one (no ttl_ms, no tier bound) loaded and cached nothing.
+            context.Error("/cache", "PIPELINE_COLUMNS_CONFIG", "'cache' is the cache of the calls of 'pipeline', and there is none.",
+                "give each entry of 'pipelines' its cache under the entry");
+            ok = false;
+        }
+
         var build = new Builder(context);
-        OutputColumn? computedById = null, computedByTime = null;
-        ok &= config.ComputedBy?.TryWrite(context, "/computed_by", out computedById, out computedByTime) ?? true;
+        var computedBy = default(ComputedByOutputs);
+        ok &= config.ComputedBy?.TryWrite(context, "/computed_by", out computedBy) ?? true;
         Callee? all = null;
         if (config.Pipeline is not null)
         {
@@ -227,7 +235,7 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
         }
 
         return ok
-            ? new PipelineColumns([.. build.Targets], all, byKey, by, config.MaxCalls, config.TimeoutMs is { } ms ? TimeSpan.FromMilliseconds(ms) : null, computedById, computedByTime)
+            ? new PipelineColumns([.. build.Targets], all, byKey, by, config.MaxCalls, config.TimeoutMs is { } ms ? TimeSpan.FromMilliseconds(ms) : null, computedBy)
             : null;
     }
 
@@ -413,7 +421,7 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
 
     private sealed class PipelineColumns(
         OutputColumn[] targets, Callee? all, Dictionary<string, Callee> byKey, CompiledExpression? by, int maxCalls, TimeSpan? timeout,
-        OutputColumn? computedById, OutputColumn? computedByTime)
+        ComputedByOutputs computedBy)
         : Operator
     {
         public override async ValueTask ExecuteAsync(OperatorContext context)
@@ -457,9 +465,6 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                 buffers[t] = context.Output(targets[t]);
             }
 
-            // Where each row's result comes from: this request's run, or the one whose result the cache answered with.
-            var intoId = computedById is { } idColumn ? context.Output(idColumn) : null;
-            var intoTime = computedByTime is { } timeColumn ? context.Output(timeColumn) : null;
             var written = new bool[targets.Length];
             var failed = 0;
             string? firstError = null;
@@ -481,15 +486,8 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                     }
                     else
                     {
-                        if (intoId is not null)
-                        {
-                            ColumnValues.TrySet(intoId, rows[i], ScalarValue.FromString(result.Cached?.RequestId ?? context.RequestId));
-                        }
-
-                        if (intoTime is not null)
-                        {
-                            ColumnValues.TrySet(intoTime, rows[i], ScalarValue.FromInt64(result.Cached?.TimeMs ?? context.RequestTimeMs));
-                        }
+                        // Which run computed the row's result: this request's, or the one whose result the cache answered with.
+                        computedBy.Write(context, rows[i], 1, result);
                     }
                 }
 

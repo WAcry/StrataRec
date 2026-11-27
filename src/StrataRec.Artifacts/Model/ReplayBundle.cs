@@ -65,11 +65,13 @@ public sealed class ReplayBundle
     /// how many each attempt made, so a replay that skips an attempt recorded as timed out skips its calls too: a bundle
     /// before has neither, and its second call would be answered with the first one's result. 2026-11-27.1 records where
     /// a pipeline call's cached result comes from (<c>cached_from</c>): a build before cannot read it, and its replay would
-    /// lack what the node wrote of it.
+    /// lack what the node wrote of it. 2026-11-27.2 records how each call is named (<c>called_by</c>, of the call and of
+    /// the run a cached result comes from) and whether what it returned was degraded: a bundle before has neither, and
+    /// its replay would not degrade the node nor write which call computed a row.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-27.1";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-27.2";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-27.1\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-27.2\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -199,6 +201,9 @@ public sealed class ReplayPipelineCall
     [Description("The pipeline called.")]
     public required string Pipeline { get; init; }
 
+    [Description("The call as the called run's logs name it: the calls from the request's pipeline down to it, e.g. feed/promoted#2.")]
+    public required string CalledBy { get; init; }
+
     [Description("The inputs the operator passed, with their types; the called pipeline's other inputs were the request's of the same name.")]
     public Dictionary<string, ReplayTypedValue> Inputs { get; init; } = new();
 
@@ -218,7 +223,10 @@ public sealed class ReplayPipelineCall
     [Description("The pipeline's request-level output values (output.values), each as a column of one value.")]
     public List<ReplayCallColumn> Values { get; init; } = new();
 
-    [Description("For a result the node's cache answered: the request whose run computed it. The pipeline did not run for this call.")]
+    [Description("The pipeline's run returned its result with a node of its own degraded: the calling node was degraded with it.")]
+    public bool Degraded { get; init; }
+
+    [Description("For a result the node's cache answered: the run that computed it. A fresh one was served without running the pipeline; a stale one after the pipeline failed for this call.")]
     public ReplayCachedFrom? CachedFrom { get; init; }
 }
 
@@ -227,7 +235,10 @@ public sealed class ReplayCachedFrom
     public required string RequestId { get; init; }
 
     [Description("That request's time, in Unix milliseconds.")]
-    public long TimeMs { get; init; }
+    public required long TimeMs { get; init; }
+
+    [Description("The call that ran the pipeline in that request, as that run's logs name it.")]
+    public required string CalledBy { get; init; }
 
     [Description("True when the result was past its ttl_ms and served because the pipeline failed: the node was degraded.")]
     public bool? Stale { get; init; }

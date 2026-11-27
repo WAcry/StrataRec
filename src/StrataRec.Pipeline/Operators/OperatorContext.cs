@@ -523,21 +523,26 @@ public sealed class OperatorContext : IServiceCallScope
             return RecordedCallAsync(recorder, call, inputs, sequence, timeout);
         }
 
-        return call.Cache is null ? SendAsync(call, inputs, sequence, timeout) : CachedCallAsync(call, inputs, sequence, timeout);
+        return HeardAsync(call, inputs, sequence, timeout);
     }
 
-    private async ValueTask<PipelineCallResult> CachedCallAsync(PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout) =>
+    private async ValueTask<PipelineCallResult> HeardAsync(PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout) =>
         Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
 
     /// <summary>
-    /// A result as the node gets it: one its cache served past its <c>ttl_ms</c> because the pipeline failed degrades the
-    /// node, as a service's stale answer does, whatever the operator does with it.
+    /// A result as the node gets it: one its cache served past its <c>ttl_ms</c> because the pipeline failed, or one of a
+    /// run that was itself degraded, degrades the node, as a service's stale or partial answer does, whatever the
+    /// operator does with it. The request's result is then degraded too, and is not kept by a cache of a call of it.
     /// </summary>
     private PipelineCallResult Heard(PipelineCallResult result)
     {
         if (result.Cached is { Stale: true } from)
         {
             ReportDegraded($"pipeline '{result.PipelineId}' failed, and its cached result of request '{from.RequestId}', past its ttl_ms, was served");
+        }
+        else if (result.Degraded)
+        {
+            ReportDegraded($"pipeline '{result.PipelineId}' returned a degraded result");
         }
 
         return result;
@@ -572,7 +577,7 @@ public sealed class OperatorContext : IServiceCallScope
             return new(PipelineCallResult.Failed(call.PipelineId, $"pipeline '{call.PipelineId}' was not called: this run is not an engine's, which serves the pipelines a node calls"));
         }
 
-        return calls.CallAsync(new PipelineCallRequest(call, inputs, _state.Inputs, sequence, _state.Seed, RequestTimeMs, budget), _state.CallerCancellation);
+        return calls.CallAsync(new PipelineCallRequest(call, inputs, _state.Inputs, sequence, _state.Seed, RequestTimeMs, budget, _state.Memory), _state.CallerCancellation);
     }
 
     /// <summary>

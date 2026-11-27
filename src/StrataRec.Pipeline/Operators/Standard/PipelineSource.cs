@@ -132,9 +132,9 @@ public sealed class PipelineSourceFactory : IOperatorFactory
             }
         }
 
-        OutputColumn? computedById = null, computedByTime = null;
-        ok &= config.ComputedBy?.TryWrite(context, "/computed_by", out computedById, out computedByTime) ?? true;
-        return ok ? new PipelineSource(call, [.. inputs], limit, [.. columns], mark, computedById, computedByTime) : null;
+        var computedBy = default(ComputedByOutputs);
+        ok &= config.ComputedBy?.TryWrite(context, "/computed_by", out computedBy) ?? true;
+        return ok ? new PipelineSource(call, [.. inputs], limit, [.. columns], mark, computedBy) : null;
     }
 
     private static List<string> Sorted(Dictionary<string, string>? map)
@@ -151,7 +151,7 @@ public sealed class PipelineSourceFactory : IOperatorFactory
 
     private sealed class PipelineSource(
         PipelineCall call, (string Name, CompiledExpression Expression)[] inputs, ParamRef limit, (OutputColumn Into, string From)[] columns, OutputColumn? mark,
-        OutputColumn? computedById, OutputColumn? computedByTime)
+        ComputedByOutputs computedBy)
         : Operator
     {
         public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => Limit(parameters[limit.Id]);
@@ -178,7 +178,7 @@ public sealed class PipelineSourceFactory : IOperatorFactory
                 return;
             }
 
-            Append(context, result.Columns, result.Cached);
+            Append(context, result);
         }
 
         /// <summary>
@@ -186,9 +186,9 @@ public sealed class PipelineSourceFactory : IOperatorFactory
         /// their columns. A column the result lacks, or a value its column cannot hold, fails the node: the call was
         /// checked against the pipeline's interface, so either is a defect, not data.
         /// </summary>
-        /// <param name="cached">Where the rows come from when the node's cache answered; null for a run of this request.</param>
-        private void Append(OperatorContext context, ResultColumns rows, CachedFrom? cached)
+        private void Append(OperatorContext context, PipelineCallResult result)
         {
+            var rows = result.Columns;
             var most = Limit(context.Param(limit));
 
             var from = new int[columns.Length];
@@ -268,25 +268,7 @@ public sealed class PipelineSourceFactory : IOperatorFactory
                 marked.SetValid(first, taken.Count);
             }
 
-            if (computedById is { } idColumn)
-            {
-                var into = context.Output(idColumn);
-                var id = ScalarValue.FromString(cached?.RequestId ?? context.RequestId);
-                for (var i = 0; i < taken.Count; i++)
-                {
-                    ColumnValues.TrySet(into, first + i, id);
-                }
-            }
-
-            if (computedByTime is { } timeColumn)
-            {
-                var into = context.Output(timeColumn);
-                var time = ScalarValue.FromInt64(cached?.TimeMs ?? context.RequestTimeMs);
-                for (var i = 0; i < taken.Count; i++)
-                {
-                    ColumnValues.TrySet(into, first + i, time);
-                }
-            }
+            computedBy.Write(context, first, taken.Count, result);
         }
     }
 }

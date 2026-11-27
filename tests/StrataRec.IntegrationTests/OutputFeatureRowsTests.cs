@@ -143,6 +143,36 @@ public class OutputFeatureRowsTests
         Assert.Equal(new long[][] { [1], [2] }, calls);
     }
 
+    /// <summary>
+    /// A feature the output reads that its source answered in part leaves defaults where values were: the result says it
+    /// is degraded, as it does when a node reads such a feature. It said nothing, and a cache of a call of the pipeline
+    /// kept those defaults for its ttl after the source had recovered.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFeatureTheOutputReads_AnsweredInPart_DegradesTheResult(bool inPart)
+    {
+        var (plan, _) = Compile(
+            1,
+            1,
+            """{ "pool": { "client": "memory_list@1", "items": [1, 2] } }""",
+            """
+            { "pipeline_id": "p",
+              "param_schema": { "recall_quotas": { "type": "map<string,int64>" }, "k": { "type": "int64" } },
+              "params": { "recall_quotas": { "pool": 10 }, "k": 2 },
+              "nodes": { "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "recall_quotas" } } },
+              "output": { "limit_param": "k", "columns": { "narrow": "col.item.narrow" } } }
+            """,
+            inPart: inPart);
+
+        var result = await Execute(plan);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(2, result.Items.Count);
+        Assert.Equal(inPart, result.Degraded);
+    }
+
     private static Task<PipelineResult> Execute(ExecutionPlan plan) => new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest
     {
         RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000,
@@ -193,7 +223,7 @@ public class OutputFeatureRowsTests
             failing: 2);
 
     private static (ExecutionPlan Plan, ConcurrentQueue<long[]> Calls) Compile(
-        long baseOf1, long baseOf2, string candidateSources, string pipeline, long? failing = null)
+        long baseOf1, long baseOf2, string candidateSources, string pipeline, long? failing = null, bool inPart = false)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-output-rows-").FullName;
         foreach (var dir in new[] { "catalog", "bindings", "pipelines" })
@@ -218,7 +248,7 @@ public class OutputFeatureRowsTests
         var diagnostics = new DiagnosticBag();
         var request = ConfigWorkspace.Load(root, diagnostics).CreateCompileRequest("p", "local", diagnostics);
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        var connectors = new CountingConnectors(failing);
+        var connectors = new CountingConnectors(failing, inPart);
         var compilation = PlanCompiler.Compile(request!, new PlanEnvironment
         {
             BaseDirectory = root,
@@ -229,10 +259,10 @@ public class OutputFeatureRowsTests
     }
 
     /// <summary>
-    /// <c>counting_memory@1</c>: <c>memory@1</c>, recording the keys of every call, and failing a call that asks for
-    /// <paramref name="failing"/>.
+    /// <c>counting_memory@1</c>: <c>memory@1</c>, recording the keys of every call, failing a call that asks for
+    /// <paramref name="failing"/>, and answering every call as one answered in part when <paramref name="inPart"/>.
     /// </summary>
-    private sealed class CountingConnectors(long? failing = null) : IBindingFactory<IFeatureSourceConnector>
+    private sealed class CountingConnectors(long? failing = null, bool inPart = false) : IBindingFactory<IFeatureSourceConnector>
     {
         public const string TypeName = "counting_memory@1";
 
@@ -244,22 +274,26 @@ public class OutputFeatureRowsTests
 
         public Type SettingsType => _memory.SettingsType;
 
-        public IFeatureSourceConnector Create(BindingContext context) => new Connector(_memory.Create(context), Calls, failing);
+        public IFeatureSourceConnector Create(BindingContext context) => new Connector(_memory.Create(context), Calls, failing, inPart);
 
-        private sealed class Connector(IFeatureSourceConnector inner, ConcurrentQueue<long[]> calls, long? failing) : IFeatureSourceConnector
+        private sealed class Connector(IFeatureSourceConnector inner, ConcurrentQueue<long[]> calls, long? failing, bool inPart) : IFeatureSourceConnector
         {
             public string ConnectorType => TypeName;
 
             public bool Supports(EntityKeyLayout layout) => inner.Supports(layout);
 
-            public ValueTask<FetchStatus> FetchAsync(
+            public async ValueTask<FetchStatus> FetchAsync(
                 EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
             {
                 var asked = Enumerable.Range(0, keys.Count).Select(k => keys.Key(k, 0).Int64Value).ToArray();
                 calls.Enqueue(asked);
-                return asked.Contains(failing ?? long.MinValue)
-                    ? ValueTask.FromResult(FetchStatus.Failed($"key {failing} failed"))
-                    : inner.FetchAsync(keys, fields, writer, cancellationToken);
+                if (asked.Contains(failing ?? long.MinValue))
+                {
+                    return FetchStatus.Failed($"key {failing} failed");
+                }
+
+                var status = await inner.FetchAsync(keys, fields, writer, cancellationToken);
+                return inPart ? new FetchStatus(FetchOutcome.Partial, 1, "a shard did not answer") : status;
             }
         }
     }

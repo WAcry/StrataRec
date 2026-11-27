@@ -1,5 +1,7 @@
+using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Threading;
 using StrataRec.Core.Types;
 using StrataRec.Core.Values;
@@ -59,19 +61,26 @@ public sealed class ComputedByColumns
     public string? TimeMs { get; init; }
 
     /// <summary>
+    /// The column (<c>string?</c>) that gets the call that ran the pipeline in that request, as that run's logs name it
+    /// (<c>called_by</c>, e.g. <c>feed/promoted#2</c>): a request that calls a pipeline for several rows logs each run
+    /// under its call, and the request's id alone does not say which of them computed a row.
+    /// </summary>
+    public string? CalledBy { get; init; }
+
+    /// <summary>
     /// Declares the columns for a node to write: undeclared, <c>string?</c> and <c>int64?</c>; declared, they must be
     /// those types (rows the node does not write have no value in them). False after reporting at
     /// <paramref name="configKey"/>.
     /// </summary>
-    public bool TryWrite(OperatorCompileContext context, string configKey, out OutputColumn? requestId, out OutputColumn? timeMs)
+    public bool TryWrite(OperatorCompileContext context, string configKey, out ComputedByOutputs outputs)
     {
         ArgumentNullException.ThrowIfNull(context);
-        requestId = null;
-        timeMs = null;
+        outputs = default;
+        OutputColumn? requestId = null, timeMs = null, calledBy = null;
         var ok = true;
-        if (RequestId is null && TimeMs is null)
+        if (RequestId is null && TimeMs is null && CalledBy is null)
         {
-            context.Error(configKey, "COMPUTED_BY_CONFIG", "'computed_by' names no column.", "set 'request_id', 'time_ms' or both to a column, or remove 'computed_by'");
+            context.Error(configKey, "COMPUTED_BY_CONFIG", "'computed_by' names no column.", "set 'request_id', 'called_by' or 'time_ms' to a column, or remove 'computed_by'");
             return false;
         }
 
@@ -85,6 +94,12 @@ public sealed class ComputedByColumns
             ok &= Column(context, TimeMs, configKey + "/time_ms", ColumnType.Int64.AsNullable(), out timeMs);
         }
 
+        if (CalledBy is not null)
+        {
+            ok &= Column(context, CalledBy, configKey + "/called_by", ColumnType.String.AsNullable(), out calledBy);
+        }
+
+        outputs = new ComputedByOutputs(requestId, timeMs, calledBy);
         return ok;
 
         static bool Column(OperatorCompileContext context, string name, string key, ColumnType type, out OutputColumn? column)
@@ -108,19 +123,79 @@ public sealed class ComputedByColumns
     }
 }
 
-/// <summary>Where the cached result of a pipeline call comes from: the request whose run computed it.</summary>
-/// <param name="RequestId">That request's id: the called pipeline's log taps wrote under it.</param>
+/// <summary>
+/// The declared <c>computed_by</c> columns of a node (<see cref="ComputedByColumns.TryWrite"/>): writes, for rows a call
+/// returned, which run computed them.
+/// </summary>
+public readonly struct ComputedByOutputs
+{
+    private readonly OutputColumn? _requestId;
+    private readonly OutputColumn? _timeMs;
+    private readonly OutputColumn? _calledBy;
+
+    internal ComputedByOutputs(OutputColumn? requestId, OutputColumn? timeMs, OutputColumn? calledBy)
+    {
+        _requestId = requestId;
+        _timeMs = timeMs;
+        _calledBy = calledBy;
+    }
+
+    /// <summary>The node declared none: <see cref="Write"/> writes nothing.</summary>
+    public bool IsEmpty => _requestId is null && _timeMs is null && _calledBy is null;
+
+    /// <summary>
+    /// Writes the columns of <paramref name="count"/> rows from <paramref name="firstRow"/> that <paramref name="result"/>
+    /// gave: the run of the request that computed it when the node's cache answered
+    /// (<see cref="PipelineCallResult.Cached"/>), this request's run otherwise.
+    /// </summary>
+    public void Write(OperatorContext context, int firstRow, int count, PipelineCallResult result)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(result);
+        var cached = result.Cached;
+        if (_requestId is { } requestId)
+        {
+            Set(context.Output(requestId), firstRow, count, ScalarValue.FromString(cached?.RequestId ?? context.RequestId));
+        }
+
+        if (_timeMs is { } timeMs)
+        {
+            Set(context.Output(timeMs), firstRow, count, ScalarValue.FromInt64(cached?.TimeMs ?? context.RequestTimeMs));
+        }
+
+        if (_calledBy is { } calledBy)
+        {
+            Set(context.Output(calledBy), firstRow, count, ScalarValue.FromString(cached?.CalledBy ?? result.CalledBy));
+        }
+
+        static void Set(ColumnBuffer into, int firstRow, int count, in ScalarValue value)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                ColumnValues.TrySet(into, firstRow + i, value);
+            }
+        }
+    }
+}
+
+/// <summary>Where the cached result of a pipeline call comes from: the run that computed it.</summary>
+/// <param name="RequestId">The id of the request that ran it: the called pipeline's log taps wrote under it.</param>
 /// <param name="TimeMs">That request's time (Unix milliseconds): when the result was computed.</param>
+/// <param name="CalledBy">The call that ran it in that request, as the run's logs name it (<c>called_by</c>, e.g.
+/// <c>feed/promoted#2</c>): with the request's id, the one run among those the request made of the pipeline.</param>
 /// <param name="Stale">The result is past its <c>ttl_ms</c> and was served because the pipeline failed now
 /// (<c>stale_if_error_ms</c>): the calling node is degraded.</param>
-public sealed record CachedFrom(string RequestId, long TimeMs, bool Stale = false);
+public sealed record CachedFrom(string RequestId, long TimeMs, string CalledBy, bool Stale = false);
 
 /// <summary>
 /// One run of a cached result's computation that had experiments: the called pipeline's, or one of a pipeline it called.
 /// A request served the result was exposed to these arms as the request that computed it was.
 /// </summary>
 /// <param name="Path">The calls from the called pipeline down to this run (<c>rank/recall#0</c>); null for the called pipeline's own run.</param>
-internal sealed record CallExposure(string PipelineId, string ManifestId, string? Path, IReadOnlyList<string> Arms, IReadOnlyList<string> Triggered);
+/// <param name="From">For a run that did not happen in the computing request either, because a cache answered its call
+/// there: the run that did compute it. Null for a run of the computing request.</param>
+internal sealed record CallExposure(
+    string PipelineId, string ManifestId, string? Path, IReadOnlyList<string> Arms, IReadOnlyList<string> Triggered, CachedFrom? From = null);
 
 /// <summary>A cached result as a record holds it.</summary>
 /// <param name="WrittenMs">When its computation started, by the cache's clock: what its freshness is judged from.</param>
@@ -153,7 +228,7 @@ internal sealed class PipelineCallCache
     /// The format of the keys and records. A change of what a record holds or of what a key is built from changes it: the
     /// records another build wrote are then misses, never misread.
     /// </summary>
-    public const string Format = "stratarec.pipeline_call_cache/2026-11-27.1";
+    public const string Format = "stratarec.pipeline_call_cache/2026-11-27.2";
 
     private const int Kind = 3; // 1 and 2 are a service's call and item records (CachedServiceCall)
     private const int Header = 6; // kind, rows, id kind, columns, values, exposures
@@ -221,13 +296,17 @@ internal sealed class PipelineCallCache
     /// <paramref name="bound"/>. A fresh result goes to the in-process tier too. A read that fails or is late finds
     /// nothing: the pipeline runs.
     /// </summary>
-    public async ValueTask<CachedCallRead> ReadDistributedAsync(UInt128 key, PipelineInterface shape, CallBound bound)
+    /// <param name="memory">
+    /// The calling run's request memory, held for the read: a store that answers after the wait ended is still in use,
+    /// and the plan's bindings, the store among them, are not released while a request of the plan holds its memory.
+    /// </param>
+    public async ValueTask<CachedCallRead> ReadDistributedAsync(UInt128 key, PipelineInterface shape, CallBound bound, RequestMemory memory)
     {
         var tier = _tiers.Distributed!;
         var records = new ReadOnlyMemory<byte>[1];
         var answeredAt = new long[1];
         var read = await BoundedCall.RunAsync<bool, StoreRead>(
-            new StoreRead(tier, _tiers.TableCache, [ServiceCache.KeyText(key)], records, answeredAt), bound, memory: null, _tiers.Io,
+            new StoreRead(tier, _tiers.TableCache, [ServiceCache.KeyText(key)], records, answeredAt), bound, memory, _tiers.Io,
             CallDeadline.After(_tiers.DistributedTimeoutMs)).ConfigureAwait(false);
         switch (read.End)
         {
@@ -350,6 +429,7 @@ internal sealed class PipelineCallCache
         builder.Layout.Add(values.Count);
         builder.Layout.Add(exposures.Count);
         builder.Strings.Add(from.RequestId);
+        builder.Strings.Add(from.CalledBy);
         builder.Int64s.Add(from.TimeMs);
         foreach (var id in ids)
         {
@@ -377,6 +457,7 @@ internal sealed class PipelineCallCache
         foreach (var exposure in exposures)
         {
             builder.Layout.Add(exposure.Path is null ? 0 : 1);
+            builder.Layout.Add(exposure.From is null ? 0 : 1);
             builder.Layout.Add(exposure.Arms.Count);
             builder.Layout.Add(exposure.Triggered.Count);
             builder.Strings.Add(exposure.PipelineId);
@@ -384,6 +465,13 @@ internal sealed class PipelineCallCache
             if (exposure.Path is { } path)
             {
                 builder.Strings.Add(path);
+            }
+
+            if (exposure.From is { } computed)
+            {
+                builder.Strings.Add(computed.RequestId);
+                builder.Strings.Add(computed.CalledBy);
+                builder.Int64s.Add(computed.TimeMs);
             }
 
             builder.Strings.AddRange(exposure.Arms);
@@ -455,7 +543,9 @@ internal sealed class PipelineCallCache
 
     /// <summary>
     /// The result a record holds, as a result of <paramref name="shape"/>; false for a record this code did not write
-    /// whole (another kind, counts that do not add up, a value left over): nothing of it is used.
+    /// whole for that shape (another kind, counts that do not add up, a value left over, ids of the other key type, a
+    /// value that is not of its column's type or a fixed-length list of another length): nothing of it is used. A
+    /// record whose counts were changed so that they still add up would otherwise move values between rows.
     /// </summary>
     internal static bool TryDecode<TRecord>(TRecord record, PipelineInterface shape, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CachedCall? result)
         where TRecord : IServiceRecord
@@ -474,8 +564,10 @@ internal sealed class PipelineCallCache
         var exposureCount = layout[5];
         reader.Skip(Header);
         var requestId = reader.String();
+        var calledBy = reader.String();
         var timeMs = reader.Int64();
-        if (reader.Broken || rows > (strings ? reader.StringsLeft : reader.Int64sLeft))
+        if (reader.Broken || rows > (strings ? reader.StringsLeft : reader.Int64sLeft)
+            || (rows > 0 && strings != (shape.KeyType == EntityKeyType.String))) // a result without rows says nothing of its ids
         {
             return false;
         }
@@ -494,14 +586,14 @@ internal sealed class PipelineCallCache
             names[c] = shape.Columns[c].Name;
             types[c] = shape.Columns[c].Type;
             columns[c] = new ScalarValue[rows];
-            DecodeColumn(ref reader, columns[c]);
+            DecodeColumn(ref reader, columns[c], types[c]);
         }
 
         var values = new ResultValue[shape.Values.Length];
         var one = new ScalarValue[1];
         for (var v = 0; v < values.Length && !reader.Broken; v++)
         {
-            DecodeColumn(ref reader, one);
+            DecodeColumn(ref reader, one, shape.Values[v].Type);
             values[v] = new ResultValue(shape.Values[v].Name, shape.Values[v].Type, one[0]);
         }
 
@@ -509,12 +601,14 @@ internal sealed class PipelineCallCache
         for (var e = 0; e < exposures.Length && !reader.Broken; e++)
         {
             var hasPath = reader.Int32();
+            var hasFrom = reader.Int32();
             var arms = reader.Int32();
             var triggered = reader.Int32();
             var pipeline = reader.String();
             var manifest = reader.String();
             var path = hasPath == 1 ? reader.String() : null;
-            exposures[e] = new CallExposure(pipeline, manifest, path, reader.Strings(arms), reader.Strings(triggered));
+            var computed = hasFrom == 1 ? new CachedFrom(reader.String(), reader.Int64(), reader.String()) : null;
+            exposures[e] = new CallExposure(pipeline, manifest, path, reader.Strings(arms), reader.Strings(triggered), computed);
         }
 
         if (reader.Broken || exposures.Length != exposureCount || !reader.AtEnd)
@@ -522,17 +616,42 @@ internal sealed class PipelineCallCache
             return false;
         }
 
-        result = new CachedCall(new ResultColumns(ids, names, types, columns), ResultValues.OfOutput(values), new CachedFrom(requestId, timeMs), record.WrittenMs, exposures);
+        result = new CachedCall(
+            new ResultColumns(ids, names, types, columns), ResultValues.OfOutput(values), new CachedFrom(requestId, timeMs, calledBy), record.WrittenMs, exposures);
         return true;
     }
 
-    private static void DecodeColumn<TRecord>(ref Reader<TRecord> reader, Span<ScalarValue> values)
+    /// <summary>
+    /// Whether a value written with <paramref name="tag"/> is one a column of <paramref name="type"/> holds: no value,
+    /// or a value of the type's kind (an integer of either declared width, a float of either width: the widths are the
+    /// writer's), a list of its element kind.
+    /// </summary>
+    private static bool Fits(Tag tag, ColumnType type) => tag == Tag.Missing || (type.ValueKind, type.IsList) switch
+    {
+        (StorageKind.Bool, false) => tag == Tag.Bool,
+        (StorageKind.Int32 or StorageKind.Int64, false) => tag == Tag.Int64,
+        (StorageKind.Float32 or StorageKind.Float64, false) => tag is Tag.Float32 or Tag.Float64,
+        (StorageKind.String, false) => tag == Tag.String,
+        (StorageKind.Bool, true) => tag == Tag.BoolList,
+        (StorageKind.Int32 or StorageKind.Int64, true) => tag == Tag.Int64List,
+        (StorageKind.Float32 or StorageKind.Float64, true) => tag is Tag.Float32List or Tag.Float64List,
+        (StorageKind.String, true) => tag == Tag.StringList,
+        _ => false,
+    };
+
+    private static void DecodeColumn<TRecord>(ref Reader<TRecord> reader, Span<ScalarValue> values, ColumnType type)
         where TRecord : IServiceRecord
     {
         var uniform = reader.Int32();
         for (var r = 0; r < values.Length && !reader.Broken; r++)
         {
             var tag = uniform == PerValue ? reader.Int32() : uniform;
+            if (!Fits((Tag)tag, type))
+            {
+                reader.Break();
+                return;
+            }
+
             switch ((Tag)tag)
             {
                 case Tag.Missing: values[r] = ScalarValue.Missing; break;
@@ -547,6 +666,11 @@ internal sealed class PipelineCallCache
                 case Tag.Float32List: values[r] = ScalarValue.FromFloat32List(reader.Float32s(reader.Int32())); break;
                 case Tag.StringList: values[r] = ScalarValue.FromStringList(reader.Strings(reader.Int32())); break;
                 default: reader.Break(); break;
+            }
+
+            if (type.IsFixedLength && tag != (int)Tag.Missing && values[r].ListLength != type.FixedLength)
+            {
+                reader.Break();
             }
         }
     }
@@ -651,7 +775,7 @@ internal sealed class PipelineCallCache
         }
     }
 
-    /// <summary>The distributed tier's read of one key as a bounded call; nothing of the request is held, so nothing waits for an abandoned one.</summary>
+    /// <summary>The distributed tier's read of one key as a bounded call, which holds the calling run's request memory until the store has answered.</summary>
     private readonly struct StoreRead(DistributedCacheTier tier, LocalTableCache table, string[] keys, ReadOnlyMemory<byte>[] records, long[] answeredAt)
         : IBoundedCall<bool>
     {

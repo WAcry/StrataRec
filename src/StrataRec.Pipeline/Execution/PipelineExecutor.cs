@@ -160,7 +160,8 @@ internal sealed class PipelineResult
 
     /// <summary>
     /// The request succeeded with a node that was degraded, served by its fallback, failed and was skipped, or was skipped
-    /// for lack of time or input (metric <c>stratarec.request.degraded</c>).
+    /// for lack of time or input, or with features its output reads that were answered in part or stale (metric
+    /// <c>stratarec.request.degraded</c>).
     /// </summary>
     public bool Degraded { get; init; }
 
@@ -1432,6 +1433,10 @@ internal sealed class PipelineExecutor
                     return Failed(plan, request, "output reads a feature that failed: " + fill.Error, start, state.Outcomes, state.Triggered,
                         state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
                 }
+
+                // Answered in part or stale: the rows carry defaults where values were, as a node's reads would have
+                // made the node degraded. The output is no node, so the result says it.
+                state.Degraded |= fill.State == FeatureState.Degraded;
             }
         }
 
@@ -1574,6 +1579,8 @@ internal sealed class PipelineExecutor
             {
                 return (null, "output reads a feature that failed: " + fill.Error);
             }
+
+            state.Degraded |= fill.State == FeatureState.Degraded; // as for the output's columns
         }
 
         var values = new ResultValue[output.Values.Length];
@@ -1685,6 +1692,7 @@ internal sealed class PipelineExecutor
             ManifestId = exposure.ManifestId,
             CachedFromRequestId = from.RequestId,
             CachedFromTimeMs = from.TimeMs,
+            CachedFromCalledBy = from.CalledBy,
             Schema = Logging.LogSchema.Experiments,
             TimeMs = timeMs,
             Delivery = Logging.LogDelivery.Durable,
