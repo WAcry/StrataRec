@@ -578,13 +578,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         {
             // Plan the eviction while the fully decoded write is still staged. A copy that cannot admit it leaves
             // the old cache and its metrics intact, including the record being replaced.
-            var target = _table.MaxBytes / 4 * 3;
             // Victims release records and unshared strings. Charging a whole index doubling or the next append page
             // against those bytes can evict every small record, even though rebuilding avoids that growth.
-            var livePayload = _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
-            var headroom = Math.Min(packedBytes - target, livePayload / 4);
             var avoidableGrowth = _version.IndexGrowthBytes(newKey) + Math.Max(0, _version.PageGrowthBytes(recordBytes) - recordBytes);
-            var toFree = Math.Max(1, Math.Max(headroom, required - avoidableGrowth - _table.MaxBytes));
+            var toFree = BytesToFree(packedBytes, required - avoidableGrowth - _table.MaxBytes);
             var deadBefore = cache.NowMs() - cache.Policy.RetentionMs;
             var compacted = BuildCompacted(deadBefore, toFree, _oldPosition, out var expired, out var evicted);
             newKey = newKey || compacted.ProbeForWrite(_indexKey, _key.AsSpan(0, _keyLength), out _) == 0;
@@ -600,6 +597,62 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
 
         throw new LocalTableFullException(Schema, _table.MaxBytes, required);
+    }
+
+    /// <summary>
+    /// What a cache eviction is to free, counted as its victims are: by the payload they release (records and unshared
+    /// strings). It aims for three quarters of <c>max_bytes</c>, and frees at least what the pending write lacks.
+    /// </summary>
+    /// <param name="packedBytes">The table's size without its superseded records.</param>
+    /// <param name="lacking">What the table with the pending write would be over <c>max_bytes</c>.</param>
+    private long BytesToFree(long packedBytes, long lacking)
+    {
+        var max = _table.MaxBytes;
+        var target = max / 4 * 3;
+        var livePayload = _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
+        if (packedBytes <= max)
+        {
+            return Math.Max(1, Math.Max(Math.Min(packedBytes - target, livePayload / 4), lacking));
+        }
+
+        // The limit was lowered under what the table holds (LocalFeatureTable.Retune). What it is over is of its whole
+        // size (pages, index, dictionary), of which the payload is a part: the share of the payload to free is the
+        // share of the size to lose. Taken as payload, the excess evicted every record of a table of small ones, where
+        // a table created with the lower limit keeps most of them.
+        var share = (double)(packedBytes - target) / packedBytes;
+        return Math.Max(1, Math.Max((long)(livePayload * share), lacking - (packedBytes - max)));
+    }
+
+    /// <summary>
+    /// Brings a cache's table under a limit that was lowered under what it holds (<see cref="LocalFeatureTable.Retune"/>),
+    /// with no write pending: it evicts as a write under pressure does. An estimate that falls short (an index that does
+    /// not get smaller with its keys) frees half of what is left, and a limit no record fits under leaves the table
+    /// empty, as a table created with that limit stays. One comparison for a table within its limit.
+    /// </summary>
+    internal void ShrinkToLimit(LocalTableCache cache)
+    {
+        var max = _table.MaxBytes;
+        if (_version.Bytes <= max)
+        {
+            return;
+        }
+
+        Discard();
+        var livePayload = _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
+        var deadBefore = cache.NowMs() - cache.Policy.RetentionMs;
+        var toFree = BytesToFree(_version.Bytes, 0);
+        for (var attempt = 0; ; attempt++)
+        {
+            var compacted = BuildCompacted(deadBefore, toFree, 0, out var expired, out var evicted);
+            if (compacted.Bytes <= max || toFree == long.MaxValue)
+            {
+                Install(compacted);
+                cache.CountEvictions(expired, evicted);
+                return;
+            }
+
+            toFree = attempt < 4 && toFree < livePayload ? toFree + ((livePayload - toFree + 1) / 2) : long.MaxValue;
+        }
     }
 
     // A rejected copy can be as large as the original. End its stack lifetime before building an eviction candidate.

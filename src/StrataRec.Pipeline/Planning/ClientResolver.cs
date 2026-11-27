@@ -187,7 +187,7 @@ public sealed class ClientResolver
         // (PipelineCallCache.Format), so the table is kept across every change of the configuration.
         var spec = new CacheSpec(new CachePolicy(CacheSettings.MaxMs), null, memoryBytes, distributed, distributedTimeoutMs);
         var table = LocalTableSpec.CreateCache(
-            ServiceCache.Schema(pipelineId, PipelineCallCache.Entity), spec.TableOptions(_clock, origin: null), PipelineCallCache.Entity, _resolver.Registry,
+            ServiceCache.Schema(pipelineId, PipelineCallCache.Entity), spec.TableOptions(_clock, origin: null), PipelineCallCache.Entity, "pipeline", _resolver.Registry,
             _resolver.Artifact, entry, _resolver.BaseDirectory);
         try
         {
@@ -225,7 +225,7 @@ public sealed class ClientResolver
         // limits keeps the table.
         var identity = read.Origin(AnswerIdentity(binding));
         var spec = LocalTableSpec.CreateCache(
-            ServiceCache.Schema(name), read.TableOptions(_clock, origin: null), identity, _resolver.Registry, _resolver.Artifact, entry, _resolver.BaseDirectory);
+            ServiceCache.Schema(name), read.TableOptions(_clock, origin: null), identity, "service", _resolver.Registry, _resolver.Artifact, entry, _resolver.BaseDirectory);
         LocalFeatureTable table;
         try
         {

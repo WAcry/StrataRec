@@ -225,15 +225,16 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         return pending;
     }
 
-    /// <summary>The held table of the spec's key with <paramref name="holder"/> as one more holder, or a new one.</summary>
+    /// <summary>The held table of the spec's key with one more reference, or a new one.</summary>
     /// <remarks>
-    /// A held table takes the limits the spec asks for: a cache's table is kept when only its times or <c>max_bytes</c>
-    /// change (<see cref="LocalTableSpec.CreateCache"/>). The limits are those of the holder that took the table last, so
-    /// when that one lets go first (a plan that was compiled and not applied), the table goes back to the limits of the
-    /// one before it.
+    /// A cache's table is kept when only its times or <c>max_bytes</c> change (<see cref="LocalTableSpec.CreateCache"/>),
+    /// so the spec may ask for other limits than the held table has. Here they are only checked: the table takes them
+    /// when the plan that asks serves (<see cref="Serve"/>), so a plan that was compiled and never served changes
+    /// nothing of a table another plan serves from. It took them here once, and a candidate with a lower limit that was
+    /// then discarded had evicted the serving plan's records down to it.
     /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException">The held table cannot take the spec's <c>max_bytes</c>; the holder does not hold it.</exception>
-    internal TableEntry Acquire(LocalTableSpec spec, object holder)
+    /// <exception cref="ArgumentOutOfRangeException">The held table cannot take the spec's limits; it is not held for the caller.</exception>
+    internal TableEntry Acquire(LocalTableSpec spec)
     {
         ArgumentNullException.ThrowIfNull(spec);
         lock (_gate)
@@ -241,41 +242,39 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_tables.TryGetValue(spec.Key, out var held) && !held.FirstLoadFailed)
             {
-                held.Table.Retune(spec.Options);
-                held.Holders.Add((holder, spec.Options));
+                held.Table.CheckRetune(spec.Options);
+                held.References++;
                 return held;
             }
 
             // New, or the held one failed its first load: a fresh table, so another load really retries. The failed one
             // stays with the leases that hold it until they let go.
-            var entry = new TableEntry(this, spec, new LocalFeatureTable(spec.Schema, spec.Options));
-            entry.Holders.Add((holder, spec.Options));
+            var entry = new TableEntry(this, spec, new LocalFeatureTable(spec.Schema, spec.Options)) { References = 1 };
             _tables[spec.Key] = entry;
             _entries.Add(entry);
             return entry;
         }
     }
 
-    internal void Release(TableEntry entry, object holder)
+    /// <summary>
+    /// The plan that holds <paramref name="entry"/> with <paramref name="options"/> now serves: the table has its limits
+    /// from here on, until another plan that holds it serves. Under the host's lock, so two plans published at once
+    /// leave the limits of one of them whole.
+    /// </summary>
+    internal void Serve(TableEntry entry, LocalFeatureTableOptions options)
     {
         lock (_gate)
         {
-            var holders = entry.Holders;
-            var at = holders.Count - 1;
-            while (!ReferenceEquals(holders[at].Holder, holder))
-            {
-                at--; // a lease releases only what it holds
-            }
+            entry.Table.Retune(options); // checked when the table was acquired
+        }
+    }
 
-            var tookItLast = at == holders.Count - 1;
-            holders.RemoveAt(at);
-            if (holders.Count > 0)
+    internal void Release(TableEntry entry)
+    {
+        lock (_gate)
+        {
+            if (--entry.References > 0)
             {
-                if (tookItLast)
-                {
-                    entry.Table.Retune(holders[^1].Options);
-                }
-
                 return;
             }
 
@@ -329,8 +328,8 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
 
         public LocalFeatureTable Table { get; }
 
-        /// <summary>The leases holding the table and the options each took it with, in the order they took it; guarded by the host's lock.</summary>
-        public List<(object Holder, LocalFeatureTableOptions Options)> Holders { get; } = new();
+        /// <summary>Leases holding the table; guarded by the host's lock.</summary>
+        public int References { get; set; }
 
         /// <summary>Completes when the first load is complete; faults with <see cref="LocalTableLoadException"/> when it
         /// failed; is cancelled when the table was released or the host stopped before.</summary>

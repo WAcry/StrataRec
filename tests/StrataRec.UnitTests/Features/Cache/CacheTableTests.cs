@@ -628,6 +628,105 @@ public class CacheTableTests
         }
     }
 
+    /// <summary>
+    /// A limit lowered under what the table holds is met at once, by evicting the share of the records that is over it:
+    /// what is left is about what a table created with the lower limit holds after an eviction. The excess was of the
+    /// table's whole size and was taken as payload to free, which for small records is more than all of them: the next
+    /// write of a new key evicted every other record.
+    /// </summary>
+    [Fact]
+    public void ALimitLoweredUnderWhatTheTableHolds_EvictsTheShareOverIt_AndKeepsTheRest()
+    {
+        var (table, cache, clock) = Scores(1 << 20, 9_000);
+        Assert.Equal(9_000, table.Pin().RecordCount);
+
+        table.Retune(ScoreOptions(512 << 10, clock));
+        Assert.Equal(1, cache.WriteQueued(table.Writer)); // the writer was woken, with nothing to write
+
+        var kept = table.Pin();
+        Assert.InRange(kept.Bytes, 1, 512 << 10);
+        Assert.InRange(kept.RecordCount, 3_000, 8_999);
+
+        // None was read, so what went is the oldest, as when a write needs room; and writes go on within the limit.
+        Assert.True(kept.Find(EntityKey.FromInt64(8_999)).Found);
+        Assert.False(kept.Find(EntityKey.FromInt64(0)).Found);
+        WriteScores(table, clock.NowMs, from: 9_000, count: 100);
+        Assert.True(table.Pin().Find(EntityKey.FromInt64(9_099)).Found);
+        Assert.InRange(table.Pin().RecordCount, kept.RecordCount - 100, kept.RecordCount + 100);
+        Assert.InRange(table.Pin().Bytes, 1, 512 << 10);
+    }
+
+    /// <summary>
+    /// A limit too low to write under still brings the table within it: the limit comes before the next write. The old
+    /// records stayed, all of them, over the limit for good: every write failed, and only a write that fit installed a
+    /// smaller table. Under a limit only the empty table fits, the table is left empty, as one created with it stays.
+    /// </summary>
+    [Theory]
+    [InlineData(4 << 10)]
+    [InlineData(0)]
+    public void ALimitTooLowToWriteUnder_StillBringsTheTableWithinIt(int limit)
+    {
+        var (table, cache, clock) = Scores(1 << 20, 9_000);
+        var empty = Scores(1 << 20, 0).Table.Pin().Bytes;
+        var max = limit == 0 ? empty : limit;
+
+        table.Retune(ScoreOptions(max, clock));
+        cache.WriteQueued(table.Writer);
+
+        Assert.InRange(table.Pin().Bytes, 1, max);
+        Assert.InRange(table.Pin().RecordCount, 0, limit == 0 ? 0 : 100);
+        WriteScores(table, clock.NowMs, from: 9_000, count: 3);
+        Assert.InRange(table.Pin().Bytes, 1, max);
+    }
+
+    /// <summary>
+    /// Options the table cannot take are refused whole: nothing of them is applied. The limit was written before the
+    /// times were checked, and a refused plan left its limit on the table another plan served from.
+    /// </summary>
+    [Fact]
+    public void OptionsTheTableCannotTake_AreRefusedWhole()
+    {
+        var (table, cache, clock) = Scores(1 << 20, 10);
+        var wrongTimes = new LocalFeatureTableOptions { MaxBytes = 256 << 10, Cache = new CacheTableOptions { TtlMs = 0, Clock = clock } };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => table.Retune(wrongTimes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => table.CheckRetune(wrongTimes));
+        Assert.Throws<ArgumentOutOfRangeException>(() => table.Retune(ScoreOptions(1, clock)));
+        table.CheckRetune(ScoreOptions(256 << 10, clock)); // could be taken: checked, not applied
+
+        Assert.Equal((1L << 20, 60_000L, 10), (table.MaxBytes, cache.Policy.TtlMs, table.Pin().RecordCount));
+    }
+
+    private static LocalFeatureTableOptions ScoreOptions(long maxBytes, ManualClock clock) =>
+        new() { MaxBytes = maxBytes, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock } };
+
+    /// <summary>A cache of scores (an int64 key, one float64) holding <paramref name="records"/> of them, written at the clock's time.</summary>
+    private static (LocalFeatureTable Table, LocalTableCache Cache, ManualClock Clock) Scores(long maxBytes, int records)
+    {
+        var clock = new ManualClock();
+        var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("score", ColumnType.Float64)]);
+        var table = new LocalFeatureTable(schema, ScoreOptions(maxBytes, clock));
+        WriteScores(table, clock.NowMs, 0, records);
+        return (table, table.Cache!, clock);
+    }
+
+    private static void WriteScores(LocalFeatureTable table, long writtenMs, int from, int count)
+    {
+        var cache = table.Cache!;
+        var writer = new CacheRecordWriter(cache.Layout, 64 * count);
+        var spans = new (int Offset, int Length)[count];
+        for (var i = 0; i < count; i++)
+        {
+            writer.Begin(writtenMs, cache.Fingerprint, absent: false);
+            writer.Float64(0, from + i);
+            spans[i] = writer.End();
+        }
+
+        var keys = Enumerable.Range(from, count).Select(k => EntityKey.FromInt64(k)).ToArray();
+        Assert.True(cache.TryWriteBack(new CacheWriteBatch(keys, spans.Select(s => (ReadOnlyMemory<byte>)writer.Bytes.AsMemory(s.Offset, s.Length)).ToArray(), count)));
+        cache.WriteQueued(table.Writer);
+    }
+
     private static (LocalFeatureTable Table, LocalTableCache Cache, ManualClock Clock) Table(
         long maxBytes, long writeQueueBytes = 0, long ttlMs = 60_000, long staleIfErrorMs = 0)
     {

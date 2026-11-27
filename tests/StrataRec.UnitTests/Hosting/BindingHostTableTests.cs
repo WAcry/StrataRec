@@ -71,11 +71,11 @@ public class BindingHostTableTests
     }
 
     [Fact]
-    public void CacheSpecsOfTheSameOrigin_ShareATableWithinAnEngine_AndTheTableTakesTheNewLimits()
+    public void CacheSpecsOfTheSameOrigin_ShareATableWithinAnEngine_AndTheTableTakesTheLimitsOfThePlanThatServes()
     {
         // A plan swap keeps a cache's table and its records as long as what the records come from is the same: the table
-        // takes the new plan's times and max_bytes. Another origin, another set of tiers or another engine's registry
-        // gets an empty table of its own.
+        // takes the new plan's times and max_bytes when that plan serves. Another origin, another set of tiers or
+        // another engine's registry gets an empty table of its own.
         using var host = new BindingHost(new BindingHostOptions { Load = false });
         var engine = new object();
         var otherEngine = new object();
@@ -90,38 +90,55 @@ public class BindingHostTableTests
         var own = other.Acquire(CacheSpec(otherEngine));
         var anotherOrigin = moved.Acquire(CacheSpec(engine, origin: "v.2"));
         var withoutMemory = distributedOnly.Acquire(CacheSpec(engine, memory: false));
+        using var service = host.OpenLease();
+        var ofAService = service.Acquire(CacheSpec(engine, kind: "service")); // a service of the source's name, with fields of the same names
 
         Assert.Equal(CacheSpec(engine).Identity, CacheSpec(otherEngine, maxBytes: 2 << 20, ttlMs: 5_000).Identity);
         Assert.Same(table, takenOver);
-        Assert.Equal(2 << 20, table.MaxBytes);
-        Assert.Equal(5_000, table.Cache!.Policy.TtlMs);
+        Assert.Equal((1L << 20, 60_000L), (table.MaxBytes, table.Cache!.Policy.TtlMs));
+        next.Serve();
+        Assert.Equal((2L << 20, 5_000L), (table.MaxBytes, table.Cache.Policy.TtlMs));
         Assert.NotSame(table, own);
         Assert.NotSame(table, anotherOrigin);
         Assert.NotSame(table, withoutMemory);
-        Assert.Equal(4, host.TableCount);
+        Assert.NotSame(table, ofAService);
+        Assert.Equal(5, host.TableCount);
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void ATableHasTheLimitsOfThePlanThatTookItLast_AmongThoseThatStillHoldIt(bool applied)
+    /// <summary>
+    /// A plan that is compiled and never served leaves no trace on a table another plan serves from: not its limits,
+    /// and not the records a lower limit would evict while it holds the table. The table took a plan's limits when the
+    /// plan acquired it: a candidate with a quarter of the memory, discarded after one write of the serving plan, left
+    /// one record of 9,000.
+    /// </summary>
+    [Fact]
+    public void APlanThatIsCompiledAndNotServed_ChangesNothingOfATableAnotherServesFrom()
     {
-        // A plan that was compiled and not applied lets go and leaves nothing behind: the table is back at the limits of
-        // the plan that serves. Applied, the earlier plan lets go and the table keeps the new ones.
         using var host = new BindingHost(new BindingHostOptions { Load = false });
         var engine = new object();
         var serving = host.OpenLease();
-        var compiled = host.OpenLease();
         var table = serving.Acquire(CacheSpec(engine));
-        compiled.Acquire(CacheSpec(engine, maxBytes: 2 << 20, ttlMs: 5_000));
-        Assert.Equal((2L << 20, 5_000L), (table.MaxBytes, table.Cache!.Policy.TtlMs));
+        WriteScores(table, from: 0, count: 9_000);
 
-        (applied ? serving : compiled).Dispose();
+        var candidate = host.OpenLease();
+        Assert.Same(table, candidate.Acquire(CacheSpec(engine, maxBytes: 256 << 10, ttlMs: 5_000)));
+        WriteScores(table, from: 9_000, count: 1);
+        candidate.Dispose();
 
-        Assert.Equal(applied ? (2L << 20, 5_000L) : (1L << 20, 60_000L), (table.MaxBytes, table.Cache.Policy.TtlMs));
-        Assert.Equal(1, host.TableCount);
-        (applied ? compiled : serving).Dispose();
-        Assert.Equal(0, host.TableCount);
+        Assert.Equal((1L << 20, 60_000L), (table.MaxBytes, table.Cache!.Policy.TtlMs));
+        Assert.Equal(9_001, table.Pin().RecordCount);
+
+        // The same plan, served: the table takes its limits and gives the memory back at once, keeping what fits.
+        using var next = host.OpenLease();
+        next.Acquire(CacheSpec(engine, maxBytes: 256 << 10, ttlMs: 5_000));
+        next.Serve();
+        table.Cache.WriteQueued(table.Writer);
+        Assert.Equal((256L << 10, 5_000L), (table.MaxBytes, table.Cache.Policy.TtlMs));
+        Assert.InRange(table.Pin().Bytes, 1, 256 << 10);
+        Assert.InRange(table.Pin().RecordCount, 1_000, 9_000);
+
+        serving.Dispose(); // the plan before lets go: the limits are still those of the plan that serves
+        Assert.Equal((256L << 10, 1), (table.MaxBytes, host.TableCount));
     }
 
     [Fact]
@@ -506,12 +523,38 @@ public class BindingHostTableTests
             schema, new LocalFeatureTableOptions { MaxBytes = bytes }, binding, factory, "item_store", "bindings:test", "/sources/item_store", null);
     }
 
+    /// <summary>Writes <paramref name="count"/> scores to a cache's table as its writer does, on this thread.</summary>
+    private static void WriteScores(LocalFeatureTable table, int from, int count)
+    {
+        var cache = table.Cache!;
+        var writer = new CacheRecordWriter(cache.Layout, 64 * count);
+        var records = new ReadOnlyMemory<byte>[count];
+        var keys = new EntityKey[count];
+        var spans = new (int Offset, int Length)[count];
+        for (var i = 0; i < count; i++)
+        {
+            writer.Begin(cache.NowMs(), cache.Fingerprint, absent: false);
+            writer.Float64(0, from + i);
+            spans[i] = writer.End();
+            keys[i] = EntityKey.FromInt64(from + i);
+        }
+
+        for (var i = 0; i < count; i++)
+        {
+            records[i] = writer.Bytes.AsMemory(spans[i].Offset, spans[i].Length);
+        }
+
+        Assert.True(cache.TryWriteBack(new CacheWriteBatch(keys, records, count)));
+        cache.WriteQueued(table.Writer);
+    }
+
     /// <summary>The spec of a cache's table whose records come from <paramref name="origin"/>, for the engine <paramref name="owner"/> stands for.</summary>
-    private static LocalTableSpec CacheSpec(object owner, string origin = "0123456789abcdef", long maxBytes = 1 << 20, long ttlMs = 60_000, bool memory = true)
+    private static LocalTableSpec CacheSpec(
+        object owner, string origin = "0123456789abcdef", long maxBytes = 1 << 20, long ttlMs = 60_000, bool memory = true, string kind = "source")
     {
         var schema = new LocalTableSchema("item_store", "item", EntityKeyType.Int64, LocalTableMode.Cache, new[] { new LocalTableField("score", ColumnType.Float64) });
         var options = new LocalFeatureTableOptions { MaxBytes = maxBytes, Cache = new CacheTableOptions { TtlMs = ttlMs, Origin = origin, Memory = memory } };
-        return LocalTableSpec.CreateCache(schema, options, origin, owner, "bindings:test", "/sources/item_store", null);
+        return LocalTableSpec.CreateCache(schema, options, origin, kind, owner, "bindings:test", "/sources/item_store", null);
     }
 
     /// <summary>A run that loads item 1 with <paramref name="score"/> in one reload and returns.</summary>

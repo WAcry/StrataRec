@@ -288,7 +288,11 @@ internal sealed class CachedServiceCall
             else if (freshness == CacheFreshness.Fresh)
             {
                 _rows[r] = new Row(RowState.Fresh, default, decoded);
-                (copies ??= new()).Add((_keys[r], decoded.Bytes));
+                if (_cache.TableCache.Memory)
+                {
+                    (copies ??= new()).Add((_keys[r], decoded.Bytes)); // for the in-process tier, when the cache has one
+                }
+
                 hits++;
             }
             else

@@ -92,10 +92,16 @@ public sealed class LocalTableSpec
     /// engine, whatever connector or client object the plan got, so a binding with a <c>cache.version</c> keeps its table
     /// when its settings change.
     /// </param>
+    /// <param name="kind">
+    /// What the cache is in front of: <c>source</c>, <c>service</c> or <c>pipeline</c>. A source and a service may have
+    /// one name, and the identity compares fields by name whatever their order: without it a source whose fields are
+    /// named as a service's record lists are shared the service's table, which lays them out in another order.
+    /// </param>
     public static LocalTableSpec CreateCache(
         LocalTableSchema schema,
         LocalFeatureTableOptions options,
         string origin,
+        string kind,
         object owner,
         string artifact,
         string pointer,
@@ -104,13 +110,14 @@ public sealed class LocalTableSpec
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrEmpty(origin);
+        ArgumentException.ThrowIfNullOrEmpty(kind);
         ArgumentNullException.ThrowIfNull(owner);
         if (schema.Mode != LocalTableMode.Cache || options.Cache is null)
         {
             throw new ArgumentException("A cache spec has a cache schema and cache options.", nameof(options));
         }
 
-        var what = new JsonObject { ["origin"] = origin, ["memory"] = options.Cache.Memory };
+        var what = new JsonObject { ["of"] = kind, ["origin"] = origin, ["memory"] = options.Cache.Memory };
         return new LocalTableSpec(
             schema, options, what, Cache.CacheWriterSource.Instance, owner, artifact, pointer, BindingContext.PinBaseDirectory(baseDirectory));
     }

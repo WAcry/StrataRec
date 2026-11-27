@@ -45,7 +45,7 @@ public class CacheBindingTests
         var error = Assert.Single(Errors(Build("""{ "mode": "cache", "connector": "memory@1" }""")));
 
         Assert.Equal(("SOURCE_MODE_UNSUPPORTED", "/sources/item_store/mode"), (error.Code, error.Pointer));
-        Assert.Contains("remove \"mode\" and give the binding a \"cache\"", error.Hint);
+        Assert.Contains("remove \"mode\" and move the cache's settings into a \"cache\" member, \"max_bytes\" into its \"memory\"", error.Hint);
     }
 
     [Theory]

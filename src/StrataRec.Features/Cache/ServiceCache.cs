@@ -359,17 +359,26 @@ internal sealed class ServiceRecordBuilder
         }
 
         var bytes = _writer.Bytes;
-        var keys = new EntityKey[2 * count];
+        var memory = _cache.TableCache.Memory;
+        var keys = memory ? new EntityKey[2 * count] : []; // the in-process tier's, when the cache has one
         var records = new ReadOnlyMemory<byte>[count];
         for (var i = 0; i < count; i++)
         {
             var (key, offset, length) = _records[i];
-            keys[2 * i] = EntityKey.FromInt64((long)(ulong)(key >> 64));
-            keys[(2 * i) + 1] = EntityKey.FromInt64((long)(ulong)key);
+            if (memory)
+            {
+                keys[2 * i] = EntityKey.FromInt64((long)(ulong)(key >> 64));
+                keys[(2 * i) + 1] = EntityKey.FromInt64((long)(ulong)key);
+            }
+
             records[i] = bytes.AsMemory(offset, length);
         }
 
-        _cache.TableCache.TryWriteBack(new CacheWriteBatch(keys, records, count, partCount: 2));
+        if (memory)
+        {
+            _cache.TableCache.TryWriteBack(new CacheWriteBatch(keys, records, count, partCount: 2));
+        }
+
         if (_cache.Distributed is { } distributed)
         {
             var entries = new CacheStoreEntry[count];

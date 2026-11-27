@@ -215,6 +215,14 @@ public sealed class LocalTableCache
     /// <summary>A plan takes the table with other times than the plan before it: its records stay, judged by the new ones.</summary>
     internal void Adopt(CachePolicy policy) => Volatile.Write(ref _policy, policy);
 
+    /// <summary>
+    /// Has the writer look at the table without a write to make: its limit was lowered under what it holds, and a cache
+    /// whose reads all hit would keep the memory it was told to give back until its next miss.
+    /// </summary>
+    internal void Wake() => _queue.Writer.TryWrite(Nothing);
+
+    private static readonly CacheWriteBatch Nothing = new([], [], 0);
+
     /// <summary>Bytes handed to the writer and not written yet, as charged (<see cref="CacheWriteBatch.Bytes"/>).</summary>
     public long QueuedBytes => Volatile.Read(ref _queuedBytes);
 
@@ -365,6 +373,7 @@ public sealed class LocalTableCache
         while (_queue.Reader.TryRead(out var batch))
         {
             Interlocked.Add(ref _queuedBytes, -batch.Bytes);
+            writer.ShrinkToLimit(this); // before the writes: a limit lowered under the table is met whether they fit or not
             Write(writer, batch);
             batches++;
         }

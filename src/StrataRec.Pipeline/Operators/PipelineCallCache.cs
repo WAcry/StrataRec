@@ -273,9 +273,13 @@ internal sealed class PipelineCallCache
             return new CachedCallRead(null, result);
         }
 
-        // The in-process tier keeps it with the write time it was written with.
+        // The in-process tier, when the cache has one, keeps it with the write time it was written with.
         Count(CacheTier.Distributed, CacheKeyOutcome.Hit);
-        _tiers.TableCache.TryWriteBack(new CacheWriteBatch(KeyParts(key), [decoded.Bytes], 1, partCount: 2));
+        if (_tiers.TableCache.Memory)
+        {
+            _tiers.TableCache.TryWriteBack(new CacheWriteBatch(KeyParts(key), [decoded.Bytes], 1, partCount: 2));
+        }
+
         return new CachedCallRead(result, null);
     }
 

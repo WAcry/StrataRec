@@ -673,6 +673,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                         replaced = current;
                         _pipelines[pipelineId] = loaded;
                         load.Published = true; // the lease is the served plan's now
+                        lease.Serve(); // the tables it shares with the plan before take its limits only now
                         PlanLoadTelemetry.Applied(plan, order); // gauges stay ordered with the swaps
                     }
                 }

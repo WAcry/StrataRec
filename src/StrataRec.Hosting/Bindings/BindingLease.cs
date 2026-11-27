@@ -44,6 +44,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     private readonly BindingHost _host;
     private readonly object _gate = new();
     private readonly List<BindingHost.TableEntry> _tables = new();
+    private readonly List<LocalFeatureTableOptions> _tableOptions = new(); // by the index of _tables: what the plan asks of each
     private readonly Dictionary<TableKey, BindingHost.TableEntry> _tablesByKey = new();
     private readonly List<BindingHost.ClientEntry> _clients = new();
     private readonly Dictionary<BindingKey, BindingHost.ClientEntry> _clientsByKey = new();
@@ -107,10 +108,27 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
                 return held.Table;
             }
 
-            var entry = _host.Acquire(spec, holder: this);
+            var entry = _host.Acquire(spec);
             _tables.Add(entry);
+            _tableOptions.Add(spec.Options);
             _tablesByKey[spec.Key] = entry;
             return entry.Table;
+        }
+    }
+
+    /// <summary>
+    /// The plan compiled with this lease now serves: the tables it shares with the plans before it (a cache's, kept when
+    /// only its times or <c>max_bytes</c> change) take its limits. Until then they have those of the plan that serves
+    /// from them, so a plan that is compiled and not served leaves them as they are.
+    /// </summary>
+    public void Serve()
+    {
+        lock (_gate)
+        {
+            for (var i = 0; i < _tables.Count; i++)
+            {
+                _host.Serve(_tables[i], _tableOptions[i]);
+            }
         }
     }
 
@@ -425,13 +443,14 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             _disposed = true;
             tables = new List<BindingHost.TableEntry>(_tables);
             _tables.Clear();
+            _tableOptions.Clear();
             _tablesByKey.Clear();
         }
 
         CancelLookups(); // before the lease is marked retired, so the callbacks of the cancellation can count as a user
         foreach (var entry in tables)
         {
-            _host.Release(entry, holder: this);
+            _host.Release(entry);
         }
 
         var previous = Interlocked.Or(ref _state, Retired);

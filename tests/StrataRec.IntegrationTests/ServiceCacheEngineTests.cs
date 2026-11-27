@@ -125,6 +125,39 @@ public sealed class ServiceCacheEngineTests
     }
 
     /// <summary>
+    /// A service's cache with a version keeps its answers when the client's settings change, and starts anew when the
+    /// version does: the version is what the answers are keyed by, in place of a digest of the client and its settings.
+    /// </summary>
+    [Fact]
+    public async Task AServicesCacheWithAVersion_KeepsItsAnswersWhenTheClientsSettingsChange_UntilTheVersionChanges()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var stores = new SharedStores();
+        var root = HomeFeedTestHost.LoadModified(path => Rebind(path, -1.5, "1")).Root;
+        await using var engine = await CacheEngineTests.Load(root, stores);
+        var first = await engine.ExecuteAsync(Recorded("req-first"), token);
+        await CacheEngineTests.Eventually(stores.HoldsEveryKeyRead, () => "the write-back of the first answers");
+
+        Rebind(root, 5.0, "1");
+        Assert.True((await engine.LoadAsync(CacheEngineTests.Compile(root), cancellationToken: token)).Applied);
+        var kept = await engine.ExecuteAsync(Recorded("req-kept"), token);
+        Rebind(root, 5.0, "2");
+        Assert.True((await engine.LoadAsync(CacheEngineTests.Compile(root), cancellationToken: token)).Applied);
+        var anew = await engine.ExecuteAsync(Recorded("req-anew"), token);
+
+        Assert.True(first.Succeeded && kept.Succeeded && anew.Succeeded, first.Error ?? kept.Error ?? anew.Error);
+        Assert.Equal(Scores(first), Scores(kept)); // the version says the other bias answers the same
+        Assert.NotEqual(Scores(first), Scores(anew));
+
+        static void Rebind(string root, double bias, string version) => SampleBindings.RebindService(root, Service, FormattableString.Invariant($$"""
+            { "client": "linear@1", "outputs": { "p_click": { "bias": {{bias}}, "weights": { "smoothed_ctr": 12.0, "log_followers": 0.05 }, "activation": "sigmoid" } }{{Distributed.Replace("\"ttl_ms\": 600000", "\"ttl_ms\": 600000, \"version\": \"" + version + "\"", StringComparison.Ordinal)}} }
+            """));
+
+        static string Scores(RecResult result) =>
+            string.Join(';', result.Recording!.Runs[0].ServiceCalls.Where(c => c.Service == Service).Select(c => c.Outputs["p_click"].Values.GetRawText()));
+    }
+
+    /// <summary>
     /// A node its service's cache answered with stale values after the service failed is Degraded, and replays Degraded:
     /// the recording has why. It replayed as succeeded, and the replay called a node changed that was not.
     /// </summary>

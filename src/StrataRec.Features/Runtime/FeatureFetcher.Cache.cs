@@ -659,15 +659,18 @@ public sealed partial class FeatureFetcher
             shared += read.Sources[m] == CacheSource.Origin ? 1 : 0;
         }
 
-        if (local == 0)
+        // A cache without an in-process tier keeps nothing in process: its hits of the distributed tier are not gathered
+        // for a writer that would drop them (a key and a record reference for each).
+        var cache = read.Cache;
+        local = cache.Memory ? local : 0;
+        if (local == 0 && shared == 0)
         {
             return;
         }
 
-        var cache = read.Cache;
         var parts = read.KeyBatch.PartCount;
-        var keys = new EntityKey[local * parts];
-        var records = new ReadOnlyMemory<byte>[local];
+        var keys = local == 0 ? [] : new EntityKey[local * parts];
+        var records = local == 0 ? [] : new ReadOnlyMemory<byte>[local];
         var tier = read.Supply.Distributed;
         var entries = tier is null || shared == 0 ? null : new CacheStoreEntry[shared];
         var nowMs = cache.NowMs();
@@ -679,19 +682,27 @@ public sealed partial class FeatureFetcher
                 continue;
             }
 
-            for (var p = 0; p < parts; p++)
+            if (local > 0)
             {
-                keys[(l * parts) + p] = read.KeyBatch.Key(read.Misses[m].KeyIndex, p);
+                for (var p = 0; p < parts; p++)
+                {
+                    keys[(l * parts) + p] = read.KeyBatch.Key(read.Misses[m].KeyIndex, p);
+                }
+
+                records[l++] = read.Bytes[m];
             }
 
-            records[l++] = read.Bytes[m];
             if (entries is not null && read.Sources[m] == CacheSource.Origin)
             {
                 entries[s++] = new CacheStoreEntry(read.MissTexts![m], read.Bytes[m], read.Supply.Policy.StoreTimeToLive(CacheRecord.WrittenMs(read.Bytes[m].Span), nowMs));
             }
         }
 
-        cache.TryWriteBack(new CacheWriteBatch(keys, records, local, parts));
+        if (local > 0)
+        {
+            cache.TryWriteBack(new CacheWriteBatch(keys, records, local, parts));
+        }
+
         if (entries is not null)
         {
             tier!.TryWrite(cache, entries, shared);

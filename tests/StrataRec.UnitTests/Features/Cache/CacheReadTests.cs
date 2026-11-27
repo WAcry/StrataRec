@@ -114,6 +114,33 @@ public class CacheReadTests
         Assert.False(table.Pin().Find(1L).Found);
     }
 
+    /// <summary>
+    /// A plan judges a record by its own times, whatever times the table has: the plans of an engine share a cache's
+    /// table when only their times differ, and the table has those of the plan served last. A reader whose ttl_ms is
+    /// 100 is not served a record 2 s old because another plan keeps its records for a minute.
+    /// </summary>
+    [Fact]
+    public async Task APlanJudgesARecordByItsOwnTimes_NotByThoseTheTableTookFromAnotherPlan()
+    {
+        var value = 1.0;
+        var connector = ScriptedConnector.Values((_, _) => value);
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, ttlMs: 100);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        await rig.NewRequest(Three).EnsureAsync(clicks);
+        rig.WriteBack("item_store");
+        var table = rig.Tables["item_store"];
+
+        table.Retune(new StrataRec.Features.Local.LocalFeatureTableOptions { MaxBytes = table.MaxBytes, Cache = new CacheTableOptions { TtlMs = 60_000 } });
+        rig.Clock.AdvanceMs(2_000);
+        value = 2.0;
+        var request = rig.NewRequest(Three);
+        await request.EnsureAsync(clicks);
+
+        Assert.Equal(60_000, table.Cache!.Policy.TtlMs);
+        Assert.Equal(new[] { 2.0, 2, 2 }, Values(request, clicks, 3));
+    }
+
     [Fact]
     public async Task ARecord_IsServedForItsLifetime_TheTtlWithinTenPercentByKey_ThenFetchedAgain()
     {

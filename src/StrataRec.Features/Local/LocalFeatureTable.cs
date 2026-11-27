@@ -137,20 +137,41 @@ public sealed class LocalFeatureTable
     public long MaxBytes => Volatile.Read(ref _maxBytes);
 
     /// <summary>
-    /// A plan takes the table, held for an earlier one, with other limits: the table keeps its records and takes the
-    /// plan's <c>max_bytes</c> and, for a cache, its times. A lower limit is met by the writer's next write, which evicts
-    /// down to it. Plans that share a table share one limit, the last one given.
+    /// A plan that holds the table, created for an earlier one, now serves with other limits: the table keeps its
+    /// records and takes the plan's <c>max_bytes</c> and, for a cache, its times. A cache's writer meets a lower limit
+    /// at once, evicting down to it (<see cref="LocalTableWriter.ShrinkToLimit"/>). Plans that share a table share one
+    /// limit, that of the one served last.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">The new <c>max_bytes</c> cannot hold even an empty table.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The options are not ones the table can take
+    /// (<see cref="CheckRetune"/>); nothing of the table has changed.</exception>
     public void Retune(LocalFeatureTableOptions options)
     {
-        ArgumentNullException.ThrowIfNull(options);
-        Volatile.Write(ref _maxBytes, CheckedMaxBytes(options.MaxBytes));
-        if (Cache is { } cache && options.Cache is { } policy
-            && (policy.TtlMs != cache.Policy.TtlMs || policy.StaleIfErrorMs != cache.Policy.StaleIfErrorMs))
+        var (maxBytes, policy) = Checked(options);
+        var lowered = maxBytes < Interlocked.Exchange(ref _maxBytes, maxBytes);
+        if (policy is not null)
         {
-            cache.Adopt(new Cache.CachePolicy(policy.TtlMs, policy.StaleIfErrorMs));
+            Cache!.Adopt(policy);
         }
+
+        if (lowered)
+        {
+            Cache?.Wake();
+        }
+    }
+
+    /// <summary>Checks that the table could take <paramref name="options"/> (<see cref="Retune"/>), and changes nothing.</summary>
+    /// <exception cref="ArgumentOutOfRangeException"><c>max_bytes</c> cannot hold even the empty table, or a cache's times are not ones a policy takes.</exception>
+    public void CheckRetune(LocalFeatureTableOptions options) => Checked(options);
+
+    /// <summary>The limit and, when a cache's times differ from the table's, the policy <paramref name="options"/> ask for: all of it checked before any of it is applied.</summary>
+    private (long MaxBytes, Cache.CachePolicy? Policy) Checked(LocalFeatureTableOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var maxBytes = CheckedMaxBytes(options.MaxBytes);
+        var policy = Cache is { } cache && options.Cache is { } times && (times.TtlMs != cache.Policy.TtlMs || times.StaleIfErrorMs != cache.Policy.StaleIfErrorMs)
+            ? new Cache.CachePolicy(times.TtlMs, times.StaleIfErrorMs)
+            : null;
+        return (maxBytes, policy);
     }
 
     /// <summary>Every write checks the limit, so the empty table must be within it too.</summary>

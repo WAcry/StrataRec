@@ -402,7 +402,7 @@ internal sealed class FeatureSourceResolver
         try
         {
             spec = tableMode == LocalTableMode.Cache
-                ? LocalTableSpec.CreateCache(schema, supply.Options!, supply.Options!.Cache!.Origin!, _resolver.Registry, _artifact, pointer, _baseDirectory)
+                ? LocalTableSpec.CreateCache(schema, supply.Options!, supply.Options!.Cache!.Origin!, "source", _resolver.Registry, _artifact, pointer, _baseDirectory)
                 : LocalTableSpec.Create(schema, supply.Options!, supply.Binding, supply.BootstrapFactory!, supply.Name, _artifact, pointer, _baseDirectory);
         }
         catch (BindingException ex)
@@ -450,7 +450,7 @@ internal sealed class FeatureSourceResolver
             _diagnostics.Error("SOURCE_MODE_UNSUPPORTED", _artifact, pointer + "/mode",
                 $"Supply mode '{binding.Mode}' is not available in this build.",
                 string.Equals(binding.Mode, "cache", StringComparison.Ordinal)
-                    ? "a cache is a member of a fetch binding: remove \"mode\" and give the binding a \"cache\", e.g. { \"ttl_ms\": 60000, \"memory\": { \"max_bytes\": \"256MiB\" } }"
+                    ? "a cache is a member of a fetch binding: remove \"mode\" and move the cache's settings into a \"cache\" member, \"max_bytes\" into its \"memory\", e.g. { \"ttl_ms\": 60000, \"memory\": { \"max_bytes\": \"256MiB\" } }"
                     : "use mode " + ModeNames());
             return null;
         }

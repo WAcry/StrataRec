@@ -49,6 +49,23 @@ public class CacheAllocationTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// A cache with only the distributed tier keeps nothing in process, so its hits are not gathered for the table's
+    /// writer: a key and a record reference a hit, which the writer of a cache without that tier dropped unread.
+    /// </summary>
+    [Fact]
+    public void HitsOfTheDistributedTier_AreNotGatheredForAnInProcessTierTheCacheDoesNotHave()
+    {
+        var (both, bothFeatures) = Rig(new PreparedStore());
+        var (distributedOnly, onlyFeatures) = Rig(new PreparedStore(), memory: false);
+
+        var kept = Measure(both, bothFeatures, 1_000);
+        var passedOn = Measure(distributedOnly, onlyFeatures, 1_000);
+
+        output.WriteLine($"1000 distributed hits: {kept} B with an in-process tier, {passedOn} B without");
+        Assert.True(kept - passedOn >= 1_000 * 24, $"{kept} B with an in-process tier, {passedOn} B without");
+    }
+
+    /// <summary>
     /// A record holds every field of its source; a read fills the ones its node reads. A list of strings nobody reads is
     /// walked, not decoded: decoding it cost an array and a string per tag for every record.
     /// </summary>
@@ -107,9 +124,9 @@ public class CacheAllocationTests(ITestOutputHelper output)
         public ValueTask SetAsync(CacheKeyspace keyspace, ReadOnlyMemory<CacheStoreEntry> entries, CancellationToken cancellationToken) => ValueTask.CompletedTask;
     }
 
-    private static (FeatureTestRig Rig, int[] Features) Rig(ICacheStore? distributed)
+    private static (FeatureTestRig Rig, int[] Features) Rig(ICacheStore? distributed, bool memory = true)
     {
-        var rig = new FeatureTestRig().CacheSource("item_store", new SynchronousConnector(), distributed: distributed);
+        var rig = new FeatureTestRig().CacheSource("item_store", new SynchronousConnector(), distributed: distributed, maxBytes: memory ? "64MiB" : null);
         var features = new[]
         {
             rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store"),
