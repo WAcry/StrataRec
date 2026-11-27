@@ -272,6 +272,15 @@ public sealed partial class RecEngine
     private sealed class CallCapture
     {
         private readonly List<CallExposure> _exposures = new();
+        private volatile bool _unanswered;
+
+        /// <summary>
+        /// Every call made under this one was answered. One that was not (refused for where it was made, or its run
+        /// failed) leaves a result that lacks what it asked for, whatever its node did without it: not one to keep.
+        /// </summary>
+        public bool Whole => !_unanswered;
+
+        public void Unanswered() => _unanswered = true;
 
         public void Add(CallExposure exposure)
         {
@@ -296,10 +305,8 @@ public sealed partial class RecEngine
     /// <param name="Stale">A result past its time to live that may still serve if the run fails.</param>
     /// <param name="StaleShared">The stale result is the distributed tier's.</param>
     /// <param name="CutOff">The read was cut off by the node's budget or the caller.</param>
-    /// <param name="Failed">The run of another call of the request for the same result failed, with this error: this call fails as it did.</param>
     private readonly record struct CacheLookup(
-        UInt128? Key, List<(LoadedPipeline Pipeline, RequestArms Arms)>? Keyed, CachedCall? Fresh, CachedCall? Stale, bool StaleShared, Exception? CutOff,
-        string? Failed = null);
+        UInt128? Key, List<(LoadedPipeline Pipeline, RequestArms Arms)>? Keyed, CachedCall? Fresh, CachedCall? Stale, bool StaleShared, Exception? CutOff);
 
     /// <summary>
     /// The calls of one run (<see cref="OperatorContext.CallPipelineAsync"/>): each runs the pipeline this engine serves
@@ -328,6 +335,14 @@ public sealed partial class RecEngine
                 + $"{pipelineId}/{call.Call.NodeId}#{call.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
             var answer = await RunAsync().ConfigureAwait(false);
             answer.CalledBy = path;
+            if (!answer.Succeeded)
+            {
+                for (var run = this; run is not null; run = run.Parent)
+                {
+                    run.Capture?.Unanswered();
+                }
+            }
+
             if (scope.Traces)
             {
                 scope.Add(new CalledRun(path, pipelineId, call.Call.NodeId, call.Sequence, id, answer.Succeeded, answer.Error ?? failure,
@@ -399,20 +414,45 @@ public sealed partial class RecEngine
                         callerCancellation.ThrowIfCancellationRequested(); // the caller gave up: so does the node, as in a run
                     }
 
-                    if (lookup.Fresh is { } hit)
+                    var hit = lookup.Fresh;
+                    if (hit is null && lookup is { Key: { } asked, CutOff: null })
+                    {
+                        // The tiers did not have the result: another call of the request for it may be running the
+                        // pipeline, or have run it, and this one takes what that one computes (RequestReads).
+                        var joined = scope.Reads.Join(cache!.Table, asked, limit: 0, out var reader);
+                        if (reader)
+                        {
+                            reading = joined;
+                        }
+                        else
+                        {
+                            var bound = new CallBound(CancellationSite.Call, callerCancellation, deadline, engine._executor.Events, request.RequestId);
+                            SharedAnswer shared;
+                            try
+                            {
+                                shared = await joined.WaitAsync(bound, CallDeadline.None).ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                bound.Release();
+                            }
+
+                            callerCancellation.ThrowIfCancellationRequested(); // the caller gave up: so does the node, as in a run
+                            if (shared.Record is CachedCall computed && cache.TakeShared(asked, computed))
+                            {
+                                hit = computed;
+                            }
+                        }
+                    }
+
+                    if (hit is not null)
                     {
                         answered = true;
                         return Serve(hit, stale: false);
                     }
 
                     var remaining = call.Budget - Stopwatch.GetElapsedTime(started);
-                    if (lookup.Failed is not null)
-                    {
-                        // The run that failed is counted for the call that ran it: this one ran nothing.
-                        answered = true;
-                        failure = lookup.Failed;
-                    }
-                    else if (remaining <= TimeSpan.Zero || lookup.CutOff is not null)
+                    if (remaining <= TimeSpan.Zero || lookup.CutOff is not null)
                     {
                         failure = $"pipeline '{id}' was not called: nothing was left of the call's time after its assignment" + (cache is null ? string.Empty : " and the read of its cache");
                     }
@@ -456,10 +496,10 @@ public sealed partial class RecEngine
                             // old key's, for this instance or for the others that share the record.
                             // The request's other calls for the same result take it whether or not its runs write the
                             // logs: what they are told it comes from is a run of their own request.
-                            if (lookup.Key is { } key && !result.Degraded && engine.Serves(callee, lookup.Keyed!))
+                            if (lookup.Key is { } key && !result.Degraded && runCapture!.Whole && engine.Serves(callee, lookup.Keyed!))
                             {
                                 var from = new CachedFrom(request.RequestId, call.TimeMs, path);
-                                var exposures = runCapture!.Snapshot();
+                                var exposures = runCapture.Snapshot();
                                 if (WritesLogs(request))
                                 {
                                     cache!.Write(key, result.Columns, result.Values, from, exposures, startedMs);
@@ -472,13 +512,6 @@ public sealed partial class RecEngine
                         }
 
                         failure = $"pipeline '{id}' failed: {result.Error}";
-
-                        // A run that failed with time to spare failed of itself, and the calls waiting for it fail as it
-                        // did; one whose time was up may have failed for that, which is this call's bound, not theirs.
-                        if (call.Budget > Stopwatch.GetElapsedTime(started) && !callerCancellation.IsCancellationRequested)
-                        {
-                            reading?.Fail(failure, lookup.Stale);
-                        }
                     }
 
                     // The window is judged now, when the stale result is chosen, not when it was read.
@@ -492,7 +525,7 @@ public sealed partial class RecEngine
                 }
                 finally
                 {
-                    reading?.Withdraw(); // unless it ended above: the calls waiting for it go on by themselves
+                    reading?.Withdraw(); // unless it ended with the result: the calls waiting for it run the pipeline themselves
                     try
                     {
                         if (!answered)
@@ -508,12 +541,12 @@ public sealed partial class RecEngine
                     }
                 }
 
-                // What the tiers have of the call: memory first, then what another call of the request for the same
-                // result is getting or has got (RequestReads), then the distributed tier. Null key when the arms of a
+                // What the tiers have of the call: memory first, then the distributed tier. Null key when the arms of a
                 // pipeline the run may call cannot be told now, and the call then runs as one without a cache.
                 async ValueTask<CacheLookup> LookupAsync(PipelineCallCache cache, LoadedPipeline callee, RequestArms arms, RequestInputs inputs, long deadline)
                 {
-                    if (await engine.CalledArmsAsync(scope, callee, deadline, callerCancellation).ConfigureAwait(false) is not { } called)
+                    if (await engine.CalledArmsAsync(scope, callee, deadline, callerCancellation).ConfigureAwait(false) is not { } called
+                        || LeadsBack(called))
                     {
                         return default;
                     }
@@ -521,7 +554,7 @@ public sealed partial class RecEngine
                     var shape = callee.CallIdentity.Shape;
                     var key = CallKey(cache, callee, arms, called, inputs);
                     var memory = cache.ReadMemory(key, shape);
-                    if (memory.Fresh is not null)
+                    if (memory.Fresh is not null || !cache.HasDistributed)
                     {
                         return new CacheLookup(key, called, memory.Fresh, memory.Stale, false, null);
                     }
@@ -529,43 +562,9 @@ public sealed partial class RecEngine
                     var bound = new CallBound(CancellationSite.Call, callerCancellation, deadline, engine._executor.Events, request.RequestId);
                     try
                     {
-                        var joined = scope.Reads.Join(cache.Table, RequestReads.Asked(key, cache.Policy.TtlMs, cache.Policy.StaleIfErrorMs), out var reader);
-                        if (reader)
-                        {
-                            reading = joined;
-                        }
-                        else
-                        {
-                            var answer = await joined.WaitAsync(bound, Timeout.InfiniteTimeSpan).ConfigureAwait(false);
-                            switch (answer.End)
-                            {
-                                case SharedEnd.Record:
-                                    cache.CountShared();
-                                    return new CacheLookup(key, called, (CachedCall)answer.Record!, memory.Stale, false, null);
-                                case SharedEnd.Failed:
-                                    // With the stale result the call that ran held, when newer than this tier's: whether
-                                    // it still serves is judged when it is chosen, as this call's own is.
-                                    return answer.Record is CachedCall held && (memory.Stale is null || held.WrittenMs > memory.Stale.WrittenMs)
-                                        ? new CacheLookup(key, called, null, held, true, null, answer.Error)
-                                        : new CacheLookup(key, called, null, memory.Stale, false, null, answer.Error);
-                                case SharedEnd.CutOff or SharedEnd.TimedOut:
-                                    return new CacheLookup(key, called, null, memory.Stale, false, new OperationCanceledException());
-                            }
-                        }
-
-                        if (!cache.HasDistributed)
-                        {
-                            return new CacheLookup(key, called, null, memory.Stale, false, null);
-                        }
-
                         var shared = await cache.ReadDistributedAsync(key, shape, bound, call.Memory).ConfigureAwait(false);
                         if (shared.CutOff is not null || shared.Fresh is not null)
                         {
-                            if (shared.Fresh is not null)
-                            {
-                                reading?.Complete(shared.Fresh);
-                            }
-
                             return new CacheLookup(key, called, shared.Fresh, memory.Stale, false, shared.CutOff);
                         }
 
@@ -644,6 +643,28 @@ public sealed partial class RecEngine
         }
 
         private string? CalledBy => calledBy;
+
+        /// <summary>
+        /// A pipeline a run of the callee may call is one whose run led to this call: the calls lead back, and the run
+        /// will have one refused (<see cref="Chain"/>). Such a call has no cache: what its run returns depends on where
+        /// the circle was entered, which no key says, and calls that waited for each other's result around the circle
+        /// (<see cref="RequestReads"/>) would wait until their time was up.
+        /// </summary>
+        private bool LeadsBack(List<(LoadedPipeline Pipeline, RequestArms Arms)> called)
+        {
+            for (var run = this; run is not null; run = run.Parent)
+            {
+                foreach (var (pipeline, _) in called)
+                {
+                    if (pipeline.Plan.PipelineId == run.PipelineId)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
 
         /// <summary>The pipelines from <paramref name="id"/> back to it, when a run of it is among the runs that led here; null otherwise.</summary>
         private string? Chain(string id)

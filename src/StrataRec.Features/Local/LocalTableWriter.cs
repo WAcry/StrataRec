@@ -647,9 +647,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     /// <summary>
     /// Brings a cache's table under a limit that was lowered under what it holds (<see cref="LocalFeatureTable.Retune"/>),
-    /// with no write pending, as a write under pressure does: the records written over since go first, and alone when
-    /// that is enough; then it evicts. A limit no record fits under leaves the table empty, as a table created with that
-    /// limit stays. One comparison for a table within its limit.
+    /// with no write pending, as a write under pressure does: a compaction first, and alone when that is enough; then it
+    /// evicts. A limit no record fits under leaves the table empty, as a table created with that limit stays. One
+    /// comparison for a table within its limit.
     /// </summary>
     internal void ShrinkToLimit(LocalTableCache cache)
     {
@@ -660,21 +660,19 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
 
         Discard();
-        var packedBytes = _version.Bytes;
-        if (_version.SupersededBytes > 0)
-        {
-            // What is over the limit may be what the keys no longer hold: without it, the share to evict was taken of a
-            // size live keys do not have, and keys left that a compaction alone had kept.
-            var packed = BuildCompacted();
-            if (packed.Bytes <= max)
-            {
-                Install(packed);
-                return;
-            }
 
-            packedBytes = packed.Bytes;
+        // What is over the limit may be what the keys do not hold: the records written over since, the unused ends of
+        // pages. A packed copy has neither, and keeps every key when it fits. When it does not, the share to evict is
+        // taken of the smaller of the two sizes: a packed copy may be the larger one (a record that did not fit a
+        // page's end starts the next), and a share taken of that emptied a table that was a byte over its limit.
+        var packed = BuildCompacted();
+        if (packed.Bytes <= max)
+        {
+            Install(packed);
+            return;
         }
 
+        var packedBytes = Math.Min(_version.Bytes, packed.Bytes);
         var livePayload = LivePayload;
         var deadBefore = cache.NowMs() - cache.Policy.RetentionMs;
         var toFree = BytesToFree(packedBytes, 0);

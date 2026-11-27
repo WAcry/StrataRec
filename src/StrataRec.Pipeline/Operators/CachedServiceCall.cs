@@ -123,7 +123,7 @@ internal sealed class CachedServiceCall
         }
         finally
         {
-            read?._reading?.Withdraw(); // unless it ended with a record or the service's failure: those waiting go on by themselves
+            read?._reading?.Withdraw(); // unless it ended with the record: the calls waiting for it call the service themselves
             response.Close();
             recorder?.EndCall(
                 sequence, result.Outcome, result.CutOff?.Message ?? result.Status.Error, result.CutOff is not null, Stopwatch.GetElapsedTime(started), response,
@@ -148,40 +148,6 @@ internal sealed class CachedServiceCall
         }
 
         var misses = ReadLocal();
-        if (misses > 0 && !_keyed && _scope.Reads is { } reads)
-        {
-            // A call about no items is one record: another call of the request for it, by the same times and to the same
-            // limit, may be getting it, or have got it. The limit is not in the record's key (a longer answer serves a
-            // shorter call), and it is in what is joined: a service refuses a limit it answers a smaller one of.
-            var joined = reads.Join(_cache.Table, RequestReads.Asked(_keys[0], _cache.Policy.TtlMs, _cache.Policy.StaleIfErrorMs, _call.Limit), out var reader);
-            if (reader)
-            {
-                _reading = joined;
-            }
-            else
-            {
-                var answer = await joined.WaitAsync(_scope.Budget, _deadline.IsSet ? _deadline.Remaining : Timeout.InfiniteTimeSpan).ConfigureAwait(false);
-                switch (answer.End)
-                {
-                    case SharedEnd.Record when Take((ReadOnlyMemory<byte>)answer.Record!, RowState.Fresh):
-                        _cache.TableCache.CountKeys(CacheTier.Request, CacheKeyOutcome.Hit, 1);
-                        misses = 0;
-                        break;
-                    case SharedEnd.Failed:
-                        if (answer.Record is ReadOnlyMemory<byte> stale)
-                        {
-                            Take(stale, RowState.Stale);
-                        }
-
-                        return Failure(ServiceStatus.Failed(answer.Error ?? "failed"), IoOutcome.Error, answered: false);
-                    case SharedEnd.TimedOut:
-                        return Failure(ServiceStatus.Failed($"timed out after {_service.TimeoutMs} ms"), IoOutcome.Timeout, answered: false);
-                    case SharedEnd.CutOff when BoundedCall.CutOff(_scope.Budget) is { } cut:
-                        return new Result(default, cut.Outcome, cut.Exception, false);
-                }
-            }
-        }
-
         if (misses > 0 && _cache.Distributed is { } tier)
         {
             if (await ReadDistributedAsync(tier, misses).ConfigureAwait(false) is { } cutOff)
@@ -190,6 +156,34 @@ internal sealed class CachedServiceCall
             }
 
             misses = Count(RowState.Fresh, negate: true);
+        }
+
+        if (misses > 0 && !_keyed && !_timeUsed && _scope.Reads is { } reads)
+        {
+            // A call about no items is one record. The tiers did not have it fresh: another call of the request for as
+            // many items may be asking the service for it, or have asked, and this one takes what that one gets
+            // (RequestReads).
+            var joined = reads.Join(_cache.Table, _keys[0], _call.Limit, out var reader);
+            if (reader)
+            {
+                _reading = joined;
+            }
+            else
+            {
+                var answer = await joined.WaitAsync(_scope.Budget, _deadline).ConfigureAwait(false);
+                switch (answer.End)
+                {
+                    case SharedEnd.Record:
+                        var took = Take((ReadOnlyMemory<byte>)answer.Record!);
+                        _cache.TableCache.CountKeys(CacheTier.Request, took, 1);
+                        misses = took == CacheKeyOutcome.Hit ? 0 : misses;
+                        break;
+                    case SharedEnd.TimedOut:
+                        return Failure(ServiceStatus.Failed($"timed out after {_service.TimeoutMs} ms"), IoOutcome.Timeout, answered: false);
+                    case SharedEnd.CutOff when BoundedCall.CutOff(_scope.Budget) is { } cut:
+                        return new Result(default, cut.Outcome, cut.Exception, false);
+                }
+            }
         }
 
         if (misses == 0)
@@ -208,21 +202,24 @@ internal sealed class CachedServiceCall
     }
 
     /// <summary>
-    /// A record the call of the request this one joined got (<see cref="RequestReads"/>), as it took it: fresh, or stale
-    /// from the distributed tier when the service failed it. Taken as that tier's is: when it answers this call, a stale
-    /// one only when newer than the one held, and judged again if it comes to serve (<see cref="StaleAnswer"/>).
+    /// The record another call of the request got from the service (<see cref="RequestReads"/>), taken as a tier's is:
+    /// when it is fresh by this call's times and answers this call. Returns how the request tier counts it.
     /// </summary>
-    private bool Take(ReadOnlyMemory<byte> bytes, RowState state)
+    private CacheKeyOutcome Take(ReadOnlyMemory<byte> bytes)
     {
         var decoded = _cache.Decode(bytes, out _);
-        if (decoded is null || !WellFormed(decoded) || !Answers(decoded)
-            || (state == RowState.Stale && _rows[0].State == RowState.Stale && decoded.WrittenMs <= WrittenMs(0)))
+        if (decoded is null || !WellFormed(decoded) || !Answers(decoded))
         {
-            return false;
+            return CacheKeyOutcome.Mismatch; // another layout, or too few items
         }
 
-        _rows[0] = new Row(state, default, decoded);
-        return true;
+        if (_cache.Classify(decoded.WrittenMs, _keys[0], _cache.TableCache.NowMs()) != CacheFreshness.Fresh)
+        {
+            return CacheKeyOutcome.Expired;
+        }
+
+        _rows[0] = new Row(RowState.Fresh, default, decoded);
+        return CacheKeyOutcome.Hit;
     }
 
     /// <summary>The in-process tier: each key's record, fresh or stale, when it answers the call. Returns the rows not fresh.</summary>
@@ -344,7 +341,6 @@ internal sealed class CachedServiceCall
             else if (freshness == CacheFreshness.Fresh)
             {
                 _rows[r] = new Row(RowState.Fresh, default, decoded);
-                _reading?.Complete(decoded.Bytes); // a call about no items: its one record
                 if (_cache.TableCache.Memory)
                 {
                     (copies ??= new()).Add((_keys[r], decoded.Bytes)); // for the in-process tier, when the cache has one
@@ -447,13 +443,6 @@ internal sealed class CachedServiceCall
 
         // A failed answer is recorded as the service gave it (its generation details), as a call without a cache is.
         var failure = sent.End == CallEnd.Answered ? sent.Value : ServiceStatus.Failed(sent.Error ?? "failed");
-        if (sent.End is CallEnd.Answered or CallEnd.Threw)
-        {
-            // The service's own failure: the calls of the request waiting for this one fail as it did, each with the
-            // stale record this one read from the distributed tier, which they did not read. A call cut short by its
-            // time is not the service's word: they call on their own.
-            _reading?.Fail(failure.Error ?? "failed", _rows[0] is { State: RowState.Stale, Wire: { } held } ? held.Bytes : (object?)null);
-        }
         return Failure(failure, sent.Outcome == IoOutcome.Ok ? IoOutcome.Error : sent.Outcome, sent.End == CallEnd.Answered);
     }
 

@@ -648,22 +648,20 @@ internal sealed class PipelineExecutor
         state.PositionStarted = started;
         state.PositionRowsIn = rowsIn;
         state.PositionFallback = null;
-        // A `when` reads features as the node does: one whose source failed fails the node, and on_failure says what
-        // then; one answered in part or stale is decided on, and the node says so, skipped here or run (its own fill
-        // covers what its `when` reads).
-        string? whenFailed = null;
+        // A `when` is decided on the features it got, and a node it skips says so when they were not whole. One that
+        // cannot be decided (EvaluateWhenAsync) does not end the node here: the node goes on as one whose `when` holds,
+        // and its own fill, which covers what its `when` reads, fails it as any read of that feature does.
         if (!await EvaluateWhenAsync(state, position, node, cancellationToken).ConfigureAwait(false))
         {
-            var fill = state.WhenFills?[position] ?? default;
-            if (!fill.Failed)
+            var why = (state.WhenFills?[position] ?? default) switch
             {
-                var why = fill.State == FeatureState.Degraded ? "when is false, on degraded features: " + fill.Error : "when is false";
-                Record(state, node, NodeOutcomeKind.SkippedWhen, why, null, started, rowsIn);
-                state.Explainer?.Skipped(node.NodeId, why);
-                return null;
-            }
-
-            whenFailed = "when reads a feature that failed: " + fill.Error;
+                { State: FeatureState.Degraded } fill => "when is false, on degraded features: " + fill.Error,
+                { State: FeatureState.Failed } fill => "when is false, on features that failed: " + fill.Error,
+                _ => "when is false",
+            };
+            Record(state, node, NodeOutcomeKind.SkippedWhen, why, null, started, rowsIn);
+            state.Explainer?.Skipped(node.NodeId, why);
+            return null;
         }
 
         if (node.MinRemainingMs is not null || state.Recorder is not null)
@@ -690,17 +688,7 @@ internal sealed class PipelineExecutor
         var reserve = node.OnFailure == FailurePolicy.Fallback
             ? node.FallbackReserveMs ?? state.Plan.SelectFallback(node, state.Arms)?.TimeoutMs ?? 0
             : 0;
-        Attempt attempt;
-        if (whenFailed is null)
-        {
-            attempt = await RunNodeAsync(state, node, reserve, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            attempt = new Attempt(AttemptKind.Failed, whenFailed);
-            state.Explainer?.Skipped(node.NodeId, whenFailed);
-        }
-
+        var attempt = await RunNodeAsync(state, node, reserve, cancellationToken).ConfigureAwait(false);
         if (attempt.Kind is AttemptKind.Succeeded or AttemptKind.Degraded)
         {
             var category = attempt.Kind == AttemptKind.Succeeded ? NodeOutcomeKind.Succeeded : NodeOutcomeKind.Degraded;
@@ -1162,12 +1150,39 @@ internal sealed class PipelineExecutor
         var fill = await EnsureContextAsync(state, node.When, cancellationToken).ConfigureAwait(false);
         if (fill.State is FeatureState.Degraded or FeatureState.Failed)
         {
+            // The run is degraded, as it is when a node or the output reads such a feature: a recall skipped because of
+            // what the user's features could not say is not a result computed whole.
             (state.WhenFills ??= new FeatureFillResult[state.WhenResults.Length])[position] = fill;
+            state.Degraded = true;
         }
 
-        var result = !fill.Failed && Holds(state, node.When); // a feature that failed has no value to decide on
+        var result = Reaches(state, node.When, fill);
         state.WhenResults[position] = result;
         return result;
+    }
+
+    /// <summary>
+    /// Whether a condition lets its node be reached, on the features it got: it holds, or it cannot be decided. A
+    /// feature whose source failed is missing where it can be, and the condition is decided on that, as it is on any
+    /// missing value. One that cannot be missing has no value to decide on: the node is reached, as one whose condition
+    /// holds, and fails by its own fill of that feature.
+    /// </summary>
+    private static bool Reaches(RequestState state, CompiledExpression when, in FeatureFillResult fill)
+    {
+        if (fill.Failed)
+        {
+            var reads = when.Reads;
+            for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
+            {
+                if (reads[i].Kind == SymbolKind.Context && state.Plan.Schema.ContextFields[reads[i].Id] is { FeatureIndex: >= 0 and var f, Type.Nullable: false }
+                    && state.Features.GetState(f) == FeatureState.Failed)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return Holds(state, when);
     }
 
     /// <summary>
@@ -1187,10 +1202,7 @@ internal sealed class PipelineExecutor
 
     /// <summary>
     /// `when` and site conditions read request-level values only; make sure the context features they read are present.
-    /// The caller reads the fill as a node reads its own: a feature whose source failed has no value, and the condition is
-    /// not evaluated; one answered in part or stale is decided on. Either way the run is degraded, as it is when a node
-    /// or the output reads such a feature: a recall skipped because of what the user's features could not say is not a
-    /// result computed whole.
+    /// What the fill says of them is the caller's to act on (<see cref="Reaches"/>).
     /// </summary>
     private static ValueTask<FeatureFillResult> EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)
     {
@@ -1207,12 +1219,8 @@ internal sealed class PipelineExecutor
 
         return contextFeatures is null ? new ValueTask<FeatureFillResult>(new FeatureFillResult(FeatureState.Ok)) : AwaitEnsure(state, contextFeatures, cancellationToken);
 
-        static async ValueTask<FeatureFillResult> AwaitEnsure(RequestState state, List<int> features, CancellationToken cancellationToken)
-        {
-            var fill = await state.Features.EnsureAsync(CollectionsMarshal.AsSpan(features), cancellationToken).ConfigureAwait(false);
-            state.Degraded |= fill.State is FeatureState.Degraded or FeatureState.Failed;
-            return fill;
-        }
+        static ValueTask<FeatureFillResult> AwaitEnsure(RequestState state, List<int> features, CancellationToken cancellationToken) =>
+            state.Features.EnsureAsync(CollectionsMarshal.AsSpan(features), cancellationToken);
     }
 
     /// <summary>
@@ -1252,10 +1260,11 @@ internal sealed class PipelineExecutor
                     continue;
                 }
 
-                // A condition that cannot be decided, its feature's source having failed, counts as one that holds: the
-                // arm's node is reached and fails for it, as a node that fails otherwise is reached.
+                // A condition that cannot be decided counts as one that holds: the arm's node is reached and fails for
+                // it, as a node that fails otherwise is reached. Looking at an arm the request does not have says
+                // nothing of the run: only a node the run reaches marks it degraded (EvaluateWhenAsync).
                 var fill = await EnsureContextAsync(state, when, cancellationToken).ConfigureAwait(false);
-                if (fill.Failed || Holds(state, when))
+                if (Reaches(state, when, fill))
                 {
                     state.Triggered[experiment] = true;
                     break;

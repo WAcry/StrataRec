@@ -91,7 +91,7 @@ public sealed class PipelineCallCacheEndToEndTests
         /// <param name="operators">The test's own operators, beside the probe.</param>
         public Rig(
             HomeFeedTestHost host, Probe? probe = null, SharedStores? stores = null, IAssignmentProvider? provider = null, Action<BindingRegistry>? bind = null,
-            IOperatorFactory[]? operators = null, params string[] pipelines)
+            IOperatorFactory[]? operators = null, bool alone = false, params string[] pipelines)
         {
             Host = host;
             Probe = probe ?? new Probe();
@@ -113,7 +113,14 @@ public sealed class PipelineCallCacheEndToEndTests
             Engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Operators = registry, Bindings = bindings, Clock = Clock }, provider, Logs);
             foreach (var id in pipelines.Length == 0 ? ["promoted", "feed"] : pipelines)
             {
-                Load(id);
+                if (alone)
+                {
+                    LoadAlone(id);
+                }
+                else
+                {
+                    Load(id);
+                }
             }
         }
 
@@ -133,6 +140,17 @@ public sealed class PipelineCallCacheEndToEndTests
         public void Load(string pipelineId)
         {
             var load = Engine.Load(Compile(Host.Root, pipelineId));
+            Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
+        }
+
+        /// <summary>Loads the pipeline compiled without the others, as a release is: what it calls is checked when it calls.</summary>
+        private void LoadAlone(string pipelineId)
+        {
+            var load = Engine.Load(new PlanCompileRequest
+            {
+                Pipeline = Host.Workspace.Pipelines[pipelineId].Value, Catalog = Host.Request.Catalog, Bindings = Host.Request.Bindings, Tables = Host.Request.Tables,
+                Policy = Host.Request.Policy,
+            });
             Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
         }
 
@@ -194,7 +212,10 @@ public sealed class PipelineCallCacheEndToEndTests
     /// what other returns shows in what promoted returns; other has a probe of its own, <c>other</c>.
     /// </summary>
     /// <param name="otherCache">The cache of promoted's call of other, with the in-process tier bound for it; none when null.</param>
-    private static HomeFeedTestHost Nested(string cache = Hour, string? otherCache = null, string when = "") => Host(cache, more: root =>
+    private static HomeFeedTestHost Nested(string cache = Hour, string? otherCache = null, string when = "") =>
+        Host(cache, more: root => WriteNested(root, otherCache, when));
+
+    private static void WriteNested(string root, string? otherCache, string when = "")
     {
         File.WriteAllText(Path.Combine(root, "pipelines", "promoted.jsonc"), Called
             .Replace("\"columns\": { \"bid\": { \"type\": \"float32\", \"default\": 0.0 } }",
@@ -215,7 +236,7 @@ public sealed class PipelineCallCacheEndToEndTests
         {
             SampleBindings.BindPipeline(root, "other", Memory);
         }
-    });
+    }
 
     /// <summary>What <c>other</c> adds to an item's clicks for its bid, and what a release of it that bids more does.</summary>
     private const string OtherBids = "+ (ctx.request.slots ?? 0)", OtherBidsMore = "+ (ctx.request.slots ?? 0) + 100";
@@ -763,21 +784,26 @@ public sealed class PipelineCallCacheEndToEndTests
     }
 
     /// <summary>
-    /// A node whose <c>when</c> reads a feature its source failed to answer fails, as a node that reads one does, and
-    /// what its policy then leaves is no result computed whole: it is not kept. The condition was read as false and
-    /// nothing said so, and a recall skipped because the user's features could not be read was the pipeline's result
-    /// for the cache's ttl after the source was back; with a default for the feature, reading it threw out of the run.
+    /// A <c>when</c> is decided on the features it got. One that reads a feature whose source failed and that cannot be
+    /// missing cannot be decided: its node goes on as one whose <c>when</c> holds and fails by its own fill of that
+    /// feature, so <c>on_failure</c> says what then (evaluated, it threw out of the run). A failed feature that can be
+    /// missing is missing, and a <c>when</c> that says what then is decided: its node is skipped as it was before the
+    /// source failed, and says on what. Either way the run is not one computed whole, and no cache keeps its result.
     /// </summary>
     [Theory]
-    [InlineData("", false)]
-    [InlineData(" \"on_failure\": \"skip\",", true)]
-    public async Task ANodeWhoseWhenReadsAFeatureThatFailed_Fails_AndWhatItsPolicyLeavesIsNotKept(string policy, bool skipped)
+    [InlineData("ctx.user.ctr_30d > 0.03", "", "failed", "feature fetch failed: user store outage", false)]
+    [InlineData("ctx.user.ctr_30d > 0.03", " \"on_failure\": \"skip\",", "failed", "feature fetch failed: user store outage (skipped)", true)]
+    [InlineData("(ctx.request.user_id ?? 0) < 0 && (ctx.user.w ?? 0.0) > 0.0", "", "skipped_when", "when is false, on features that failed: user store outage", true)]
+    public async Task ANodeWhoseWhenReadsAFeatureThatFailed_FailsByItsOwnFill_OrIsDecidedWhereTheFeatureCanBeMissing(
+        string when, string policy, string outcome, string detail, bool succeeds)
     {
         var connectors = new RequestReadsEndToEndTests.CountedConnectors { Fail = true };
         var host = PageHost(more: root =>
         {
+            ReplayTests.Edit(root, "catalog/home_feed.jsonc", "\"user.tenure_days\":",
+                "\"user.w\": { \"type\": \"float32\", \"source\": \"user_store\", \"field\": \"u_w\" },\n    \"user.tenure_days\":"); // no default: it can be missing
             ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"recall\": { \"order\": 100, \"op\": \"MultiSourceRecall@1\",",
-                "\"recall\": { \"order\": 100, \"op\": \"MultiSourceRecall@1\", \"when\": \"ctx.user.ctr_30d > 0.03\"," + policy);
+                $"\"recall\": {{ \"order\": 100, \"op\": \"MultiSourceRecall@1\", \"when\": \"{when}\",{policy}");
             SampleBindings.Rebind(root, "user_store", $$"""
                 { "connector": "{{RequestReadsEndToEndTests.CountedConnectors.TypeName}}", "data_file": "fixtures/users.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }
                 """);
@@ -796,19 +822,49 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.All(outage.Calls, c =>
         {
             var recall = Assert.Single(c.Trace, n => n.NodeId == "recall");
-            Assert.Equal(("failed", "when reads a feature that failed: user store outage" + (skipped ? " (skipped)" : "")), (NodeOutcomeNames.Name(recall.Kind), recall.Detail));
-            Assert.Equal(skipped, c.Succeeded);
+            Assert.Equal((outcome, detail), (NodeOutcomeNames.Name(recall.Kind), recall.Detail));
+            Assert.Equal(succeeds, c.Succeeded);
         });
-        Assert.Equal(skipped, outage.Succeeded);
-        if (skipped)
+        Assert.Equal(succeeds, outage.Succeeded);
+        if (succeeds)
         {
             Assert.Equal("degraded", NodeOutcomeNames.Name(Assert.Single(outage.Trace!, n => n.NodeId == "content").Kind)); // the runs were, and say so upward
         }
 
-        // The source is back: the pipeline runs, and its recall with it.
+        // The source is back: the pipeline runs again, for the same calls.
         Assert.Equal(runs + 3, rig.Probe.Runs);
         Assert.All(after.Calls!, c => Assert.Null(c.Cached));
-        Assert.All(after.Items, i => Assert.NotEmpty(i.Columns["games"].AsInt64List().ToArray()));
+    }
+
+    /// <summary>
+    /// Whether an experiment triggers at a node is asked of every arm's <c>when</c>, so that it is the same for all of
+    /// them. What an arm the request is not in reads says nothing of the run: a feature that failed for it does not
+    /// degrade a run none of whose own nodes read it. Marked there, a run in control was degraded or not by the other
+    /// arm's name: the arms are looked at in name order, up to the first that triggers.
+    /// </summary>
+    [Theory]
+    [InlineData("aaa")]
+    [InlineData("zzz")]
+    public async Task AFeatureThatFailedForAnArmTheRequestIsNotIn_DoesNotDegradeTheRun(string arm)
+    {
+        var connectors = new RequestReadsEndToEndTests.CountedConnectors { Fail = true };
+        var host = PageHost(more: root =>
+        {
+            File.WriteAllText(Path.Combine(root, "experiments", "exp_promoted.jsonc"), $$"""
+                { "experiment_id": "exp_promoted", "pipeline_id": "promoted", "owner": "team", "description": "Recalls for some.", "expires_at": "2099-12-31",
+                  "arms": { "control": {}, "{{arm}}": { "nodes": { "recall": { "when": "ctx.user.ctr_30d > 0.03" } } } } }
+                """);
+            SampleBindings.Rebind(root, "user_store", $$"""
+                { "connector": "{{RequestReadsEndToEndTests.CountedConnectors.TypeName}}", "data_file": "fixtures/users.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }
+                """);
+        });
+        await using var rig = new Rig(host, bind: bindings => bindings.Add(connectors), pipelines: ["promoted", "page"]);
+
+        var result = await rig.Run("req-1", assignment: ["exp_promoted/control"], pipeline: "page");
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("succeeded", NodeOutcomeNames.Name(Assert.Single(result.Trace!, n => n.NodeId == "content").Kind));
+        Assert.All(result.Calls!, c => Assert.All(c.Trace, n => Assert.Equal("succeeded", NodeOutcomeNames.Name(n.Kind))));
     }
 
     /// <summary>
@@ -1178,37 +1234,141 @@ public sealed class PipelineCallCacheEndToEndTests
     }
 
     /// <summary>
-    /// A run that fails of itself fails the calls of the request waiting for its result as it failed its own, and is
-    /// not run again for them; a run that returned a degraded result is not shared, and the calls waiting run the
-    /// pipeline themselves, all at once: they waited for one run and wait for no other.
+    /// Only a whole result is shared. A run that failed, or returned a degraded result, is its call's own: the calls of
+    /// the request waiting for it run the pipeline themselves (they waited for one run and wait for no other), and
+    /// get what their own runs come to. A failure given to them as theirs failed calls whose own run, in their own
+    /// time and of their own plan, succeeds.
     /// </summary>
     [Theory]
-    [InlineData(true, 1)]
-    [InlineData(false, 3)]
-    public async Task ARunThatFailed_FailsTheCallsWaitingForIt_AndADegradedOneLeavesThemToRun(bool fail, int runs)
+    [InlineData("fails")]
+    [InlineData("fails once")]
+    [InlineData("degrades")]
+    public async Task ARunThatFailedOrDegraded_IsItsCallsOwn_AndTheCallsWaitingRunThePipelineThemselves(string run)
     {
         await using var rig = new Rig(PageHost(slots: "3"), pipelines: ["promoted", "page"]);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         rig.Probe.Hold = release.Task;
-        rig.Probe.Fail = fail;
-        rig.Probe.Degrade = !fail;
+        rig.Probe.Fail = run == "fails";
+        rig.Probe.FailFirst = run == "fails once" ? 1 : 0;
+        rig.Probe.Degrade = run == "degrades";
 
         var running = Start(rig, "req-1"); // the others wait: none runs while the first does
         release.SetResult();
         var result = await running;
 
-        Assert.Equal(runs, rig.Probe.Runs);
+        Assert.Equal(3, rig.Probe.Runs);
         Assert.Equal(3, result.Calls!.Count);
-        Assert.All(result.Calls, c => Assert.Null(c.Cached));
-        if (fail)
+        Assert.All(result.Calls, c => Assert.True(c.Cached is null && c.Trace.Count > 0)); // each ran
+        const string Outage = "pipeline 'promoted' failed: node 'probe' failed: probe outage";
+        Assert.Equal(
+            run switch { "fails" => [Outage, Outage, Outage], "fails once" => [Outage, null, null], _ => new string?[] { null, null, null } },
+            result.Calls.OrderBy(c => c.CalledBy, StringComparer.Ordinal).Select(c => c.Error));
+    }
+
+    /// <summary>
+    /// A result computed for the request is taken by its other calls as a tier's is: while it is fresh by the node's
+    /// times. A run that returns after its result's ttl leaves the calls that waited to run the pipeline, as each would
+    /// have found the record expired; taken as it came, a result was served as fresh however long its run took.
+    /// </summary>
+    [Fact]
+    public async Task AResultComputedForTheRequest_IsTakenOnlyWhileItIsFresh()
+    {
+        await using var rig = new Rig(PageHost(slots: "3"), pipelines: ["promoted", "page"]);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Probe.Hold = release.Task;
+
+        var running = Start(rig, "req-1");
+        rig.Clock.Advance(7_200_000); // the run returns two hours after it started: its result is past the node's hour
+        release.SetResult();
+        var result = await running;
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(3, rig.Probe.Runs);
+        Assert.All(result.Calls!, c => Assert.True(c.Succeeded && c.Cached is null));
+    }
+
+    /// <summary>
+    /// A result is kept only when every call made under its run was answered. An operator may go on without a call that
+    /// was not (its pipeline is not served, the calls nest too deep or lead back, its run failed), and its node is then
+    /// as the operator says; but what the run returns lacks what the call was for, and why depends on where and when the
+    /// run was made, which the key does not say. Kept, a list without its sponsored rows was served for the cache's hour
+    /// to requests whose own run would have got them.
+    /// </summary>
+    [Fact]
+    public async Task AResultOfARunWithACallThatWasNotAnswered_IsNotKept_WhateverItsNodeDidWithoutIt()
+    {
+        // promoted asks a pipeline this engine does not serve for more, and goes on without it.
+        var optional = new OptionalCall();
+        var host = PageHost(slots: "3", more: root => ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"nodes\": {",
+            "\"nodes\": {\n \"more\": { \"order\": 150, \"op\": \"OptionalCall@1\", \"config\": { \"pipeline\": \"other\" } },"));
+        await using var rig = new Rig(host, operators: [optional], alone: true, pipelines: ["promoted", "page"]);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Probe.Hold = release.Task;
+
+        var running = Start(rig, "req-1"); // the page's other rows wait for the first one's result
+        release.SetResult();
+        var result = await running;
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(3, optional.Unanswered);
+        Assert.Equal(3, rig.Probe.Runs); // what the first run returned was not given to the calls that waited for it
+        var runs = result.Calls!.Where(c => !c.CalledBy.Contains(" > ", StringComparison.Ordinal)).ToList();
+        Assert.Equal(3, runs.Count);
+        Assert.All(runs, c =>
         {
-            Assert.All(result.Calls, c => Assert.Equal((false, "pipeline 'promoted' failed: node 'probe' failed: probe outage"), (c.Succeeded, c.Error)));
-            Assert.Single(result.Calls, c => c.Trace.Count > 0); // one run
-        }
-        else
+            Assert.True(c.Succeeded && c.Cached is null, c.Error);
+            Assert.Equal("succeeded", NodeOutcomeNames.Name(Assert.Single(c.Trace, n => n.NodeId == "more").Kind));
+        });
+    }
+
+    /// <summary>
+    /// Pipelines published on their own may call each other, which nothing sees until a request runs into it: the call
+    /// that leads back is refused, at once. With caches, the calls under two branches of a page each waited for the
+    /// result the other branch was computing, around the circle, until their time was up. A call whose pipeline may call
+    /// one that led to it has no cache and waits for no other call, so the circle ends where it closes.
+    /// </summary>
+    [Fact]
+    public async Task PipelinesThatCallEachOther_AreRefusedAtTheCallThatLeadsBack_WhenTheirCallsAreCached()
+    {
+        // The page calls promoted for one row and other for another; promoted calls other, and other calls promoted,
+        // each with the inputs the page passes: the calls under one branch are for the result the other branch computes.
+        var host = PageHost(content: """
+            "config": { "by": "col.entity_id", "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
+                        "pipelines": { "5": { "pipeline": "promoted", "inputs": { "slots": "3" }, "cache": { "ttl_ms": 3600000 } },
+                                       "8": { "pipeline": "other", "inputs": { "slots": "3" }, "cache": { "ttl_ms": 3600000 } } },
+                        "computed_by": { "request_id": "games.from", "time_ms": "games.at", "called_by": "games.by" } }
+            """, more: root =>
+            {
+                // A called run takes its caller's inputs that it declares: with the same slots, every call of one
+                // pipeline here has the same inputs, whoever makes it.
+                WriteNested(root, otherCache: Hour);
+                ReplayTests.Edit(root, "pipelines/other.jsonc", "\"config\": { \"name\": \"other\" } },", "},\n \"back\": { \"order\": 150, \"op\": \"PipelineSource@1\","
+                    + " \"config\": { \"pipeline\": \"promoted\", \"limit_param\": \"top_k\", \"inputs\": { \"slots\": \"3\" }, \"cache\": " + Hour + " } },");
+            });
+        await using var rig = new Rig(host, alone: true, pipelines: ["other", "promoted", "page"]);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Probe.Hold = release.Task;
+
+        // With a deadline, so that calls which wait for each other end, and say what they waited for.
+        var running = rig.Engine.ExecuteAsync(new RecRequest
         {
-            Assert.All(result.Calls, c => Assert.True(c.Succeeded && c.Trace.Count > 0));
-        }
+            PipelineId = "page", RequestId = "req-1", Inputs = new RequestInputs().Set("user_id", 1001), Assignment = [], Deadline = TimeSpan.FromSeconds(20), TimeMs = T0,
+            Debug = new DebugOptions { Trace = true },
+        }, TestContext.Current.CancellationToken).AsTask();
+        Assert.Equal(2, rig.Probe.Runs); // both branches' runs are under way before either calls on
+        release.SetResult();
+        var result = await running;
+
+        // Each branch ran the other's pipeline itself, and that run's call back was refused: every other call failed of that.
+        Assert.Equal(
+            [
+                "page/content#0 > promoted/more#0 > other/back#0: pipeline 'promoted' was not called: the calls lead back to it (promoted → other → promoted)",
+                "page/content#1 > other/back#0 > promoted/more#0: pipeline 'other' was not called: the calls lead back to it (other → promoted → other)",
+            ],
+            result.Calls!.Where(c => c.Error?.Contains(" failed: ", StringComparison.Ordinal) == false).Select(c => c.CalledBy + ": " + c.Error).Order(StringComparer.Ordinal));
+        Assert.Equal(6, result.Calls!.Count);
+        Assert.All(result.Calls, c => Assert.Contains("the calls lead back to it", c.Error));
+        Assert.Equal(4, rig.Probe.Runs);
     }
 
     /// <summary>
@@ -1289,6 +1449,7 @@ public sealed class PipelineCallCacheEndToEndTests
     internal sealed class Probe : IOperatorFactory
     {
         private int _runs;
+        private int _failFirst;
         private volatile bool _fail;
         private volatile bool _degrade;
         private volatile string? _degradeAt;
@@ -1301,6 +1462,13 @@ public sealed class PipelineCallCacheEndToEndTests
         {
             get => _fail;
             set => _fail = value;
+        }
+
+        /// <summary>The first this many runs of the probe without a name fail.</summary>
+        public int FailFirst
+        {
+            get => Volatile.Read(ref _failFirst);
+            set => Volatile.Write(ref _failFirst, value);
         }
 
         public bool Degrade
@@ -1348,14 +1516,14 @@ public sealed class PipelineCallCacheEndToEndTests
                     return;
                 }
 
-                Interlocked.Increment(ref probe._runs);
+                var run = Interlocked.Increment(ref probe._runs);
                 probe.OnRun?.Invoke();
                 if (probe.Hold is { } hold)
                 {
                     await hold;
                 }
 
-                if (probe.Fail)
+                if (probe.Fail || run <= probe.FailFirst)
                 {
                     context.Fail("probe outage");
                 }
@@ -1370,6 +1538,38 @@ public sealed class PipelineCallCacheEndToEndTests
     internal sealed class ProbeConfig
     {
         public string? Name { get; init; }
+    }
+
+    /// <summary>
+    /// <c>OptionalCall@1</c>: calls a pipeline and goes on without its result when the call is not answered, as an
+    /// operator may.
+    /// </summary>
+    private sealed class OptionalCall : IOperatorFactory
+    {
+        private int _unanswered;
+
+        public int Unanswered => Volatile.Read(ref _unanswered);
+
+        public OperatorDescriptor Descriptor { get; } = new("OptionalCall", 1, Effects.None, typeof(OptionalCallConfig), "Calls a pipeline, and goes on without it when the call fails.");
+
+        public Operator? Compile(OperatorCompileContext context) =>
+            context.BindConfig<OptionalCallConfig>() is { } config && context.TryCallPipeline(config.Pipeline, "/pipeline", out var call) ? new Node(this, call) : null;
+
+        private sealed class Node(OptionalCall owner, PipelineCall call) : Operator
+        {
+            public override async ValueTask ExecuteAsync(OperatorContext context)
+            {
+                if (!(await context.CallPipelineAsync(call)).Succeeded)
+                {
+                    Interlocked.Increment(ref owner._unanswered);
+                }
+            }
+        }
+    }
+
+    private sealed class OptionalCallConfig
+    {
+        public string Pipeline { get; init; } = "";
     }
 
     /// <summary>

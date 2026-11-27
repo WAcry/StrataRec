@@ -716,19 +716,85 @@ public class CacheTableTests
     private static void WriteVector(LocalFeatureTable table, long writtenMs, long key, int length)
     {
         var cache = table.Cache!;
-        var values = new ListColumn<float>(ColumnType.List(StorageKind.Float32), 1, new RequestMemory());
-        var floats = values.SetUninitialized(0, length);
-        for (var i = 0; i < length; i++)
+        var memory = new RequestMemory();
+        var writer = new CacheRecordWriter(cache.Layout, 64 + (4 * length));
+        try
         {
-            floats[i] = key + i;
+            var values = new ListColumn<float>(ColumnType.List(StorageKind.Float32), 1, memory);
+            var floats = values.SetUninitialized(0, length);
+            for (var i = 0; i < length; i++)
+            {
+                floats[i] = key + i;
+            }
+
+            writer.Begin(writtenMs, cache.Fingerprint, absent: false);
+            writer.List(0, values, 0);
+        }
+        finally
+        {
+            memory.Release(); // the record is the writer's own bytes
         }
 
-        var writer = new CacheRecordWriter(cache.Layout, 64 + (4 * length));
-        writer.Begin(writtenMs, cache.Fingerprint, absent: false);
-        writer.List(0, values, 0);
         var (offset, count) = writer.End();
         cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(key)], [writer.Bytes.AsMemory(offset, count)], 1));
         cache.WriteQueued(table.Writer);
+    }
+
+    /// <summary>
+    /// A table a byte over a lowered limit loses a share of its keys, not all of them. Packed, a table can be larger
+    /// than it was (a record that does not fit the end of a page starts the next), and the share to evict was taken of
+    /// that size: the estimate fell short of a limit the packed copy was far over, and the retries ended with nothing.
+    /// </summary>
+    [Fact]
+    public void ALimitLoweredJustUnderWhatTheTableHolds_EvictsAShare_WhenAPackedCopyWouldBeLarger()
+    {
+        var clock = new ManualClock();
+        var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("v", ColumnType.List(StorageKind.Float32))]);
+        LocalFeatureTableOptions Options(long max) => new() { MaxBytes = max, PageSize = 64 << 10, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock } };
+        var table = new LocalFeatureTable(schema, Options(4 << 20));
+        WriteVector(table, clock.NowMs, 0, length: 1);
+        WriteVector(table, clock.NowMs, 10_000, length: 20_000); // larger than a page
+        for (var key = 1; key <= 1_200; key++)
+        {
+            WriteVector(table, clock.NowMs, key, length: 1);
+        }
+
+        WriteVector(table, clock.NowMs + 1, 1_200, length: 1);
+        table.Pin().Find(EntityKey.FromInt64(10_000)).MarkCacheHit();
+        var held = table.Pin().Bytes;
+
+        table.Retune(Options(held - 1));
+        table.Cache!.WriteQueued(table.Writer);
+
+        var kept = table.Pin();
+        Assert.InRange(kept.Bytes, 1, held - 1);
+        Assert.InRange(kept.RecordCount, 200, 1_202);
+        Assert.True(kept.Find(EntityKey.FromInt64(10_000)).Found, "the record that was read since is kept");
+    }
+
+    /// <summary>
+    /// A table over a lowered limit only by the unused ends of its pages keeps every key: a packed copy fits. With no
+    /// record written over, the copy was not tried, and keys were evicted from a table that fit the limit with all of them.
+    /// </summary>
+    [Fact]
+    public void ALimitLoweredToWhatAPackedTableTakes_KeepsEveryKey_WhenNoRecordWasWrittenOver()
+    {
+        var (table, cache, clock) = Scores(1 << 20, 10, pageSize: 4 << 10);
+        var held = table.Pin().Bytes;
+
+        // What the table takes packed: a twin brought a byte under what it holds is packed, and no more when that is enough.
+        var (packed, packedCache, packedClock) = Scores(1 << 20, 10, pageSize: 4 << 10);
+        packed.Retune(ScoreOptions(held - 1, packedClock, pageSize: 4 << 10));
+        packedCache.WriteQueued(packed.Writer);
+        var max = packed.Pin().Bytes;
+        Assert.Equal(10, packed.Pin().RecordCount);
+        Assert.True(max < held, $"a packed table is smaller ({max} B, {held} B as written)");
+
+        table.Retune(ScoreOptions(max, clock, pageSize: 4 << 10));
+        cache.WriteQueued(table.Writer);
+
+        Assert.Equal(10, table.Pin().RecordCount);
+        Assert.InRange(table.Pin().Bytes, 1, max);
     }
 
     /// <summary>

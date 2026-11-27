@@ -33,6 +33,27 @@ public sealed class NodeFallbackConfigTests
         }
     }
 
+    /// <summary>
+    /// A fallback runs whenever the node that names it fails: what decides whether a node on the timeline runs was
+    /// accepted on a fallback and never looked at, so a fallback whose <c>when</c> was false served all the same.
+    /// </summary>
+    [Theory]
+    [InlineData("\"when\": \"ctx.request.n == 1\"", "/nodes/backup/when")]
+    [InlineData("\"min_remaining_ms\": 50", "/nodes/backup/min_remaining_ms")]
+    public void WhatDecidesWhetherANodeRuns_IsAnErrorOnAFallback(string setting, string pointer)
+    {
+        var pipeline = Pipeline("\"on_failure\": \"fallback\", \"fallback\": \"backup\"")
+            .Replace("\"pipeline_id\": \"p\",", "\"pipeline_id\": \"p\", \"request_schema\": { \"n\": { \"type\": \"int64\" } },", StringComparison.Ordinal)
+            .Replace("\"role\": \"fallback\",", "\"role\": \"fallback\", " + setting + ",", StringComparison.Ordinal);
+
+        var compilation = MiniWorkspace.TryCompile(Sources, pipeline, operators: Operators(new Budgets()));
+
+        Assert.False(compilation.Succeeded);
+        var error = Assert.Single(compilation.Diagnostics, d => d.Severity == StrataRec.Artifacts.Model.DiagnosticSeverity.Error);
+        Assert.Equal(("NODE_FALLBACK_CONDITION", pointer), (error.Code, error.Pointer));
+        Assert.Contains("put it on the node that falls back to this one", error.Hint);
+    }
+
     [Theory]
     [InlineData("", 3000)] // the fallback's timeout_ms
     [InlineData(", \"fallback_reserve_ms\": 0", 0)]

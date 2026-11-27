@@ -2,6 +2,8 @@ using StrataRec.Core.Bindings;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Services;
+using StrataRec.Core.Types;
+using StrataRec.Core.Values;
 using StrataRec.Features.Connectors;
 using StrataRec.Hosting;
 using StrataRec.Pipeline.Execution;
@@ -12,12 +14,13 @@ using static StrataRec.IntegrationTests.PipelineCallCacheEndToEndTests;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The runs of one request share their cached reads of one record (<c>RequestReads</c>): a user's features and a call of
-/// a service about no items are read once, by the first run the in-process tier does not answer, and the runs that read
-/// them meanwhile wait for what it gets instead of asking the store, the connector or the service again. They get what
-/// they would have got alone: the record, the origin's failure with the stale record that goes with it, or nothing
-/// when the reads do not ask the same.
+/// The runs of one request ask the origin of a cached record once (<c>RequestReads</c>): a user's features, a call of a
+/// service about no items and a call of a pipeline are got by the first run the tiers do not answer, and the runs that
+/// want them meanwhile wait for what it gets instead of asking the connector, the service or the pipeline again. Each
+/// reads the tiers itself, and gets what it would have got alone: the record, when fresh by its own times, or its own
+/// answer of the origin, with the stale record it read itself when that fails.
 /// </summary>
+[Collection(ProcessWideListenersCollection.Name)] // one test reads the process's metrics
 public class RequestReadsEndToEndTests
 {
     /// <summary>A cache with the distributed tier alone: no run finds in process what another has just read.</summary>
@@ -76,7 +79,7 @@ public class RequestReadsEndToEndTests
     }
 
     [Fact]
-    public async Task TheRunsOfOneRequest_ReadAUsersFeaturesOnce()
+    public async Task TheRunsOfOneRequest_AskTheConnectorForAUsersFeaturesOnce()
     {
         var connectors = new CountedConnectors();
         var stores = new SharedStores();
@@ -94,7 +97,7 @@ public class RequestReadsEndToEndTests
         Assert.True(expected.Succeeded && result.Succeeded, expected.Error ?? result.Error);
         Assert.Equal(3, rig.Probe.Runs);
         Assert.Equal(1, connectors.Calls);
-        Assert.Equal(1, stores.Gets);
+        Assert.Equal(3, stores.Gets); // each run reads the tiers itself
         Assert.Equal(Lists(expected), Lists(result));
         Assert.All(result.Calls!, c => Assert.All(c.Trace, n => Assert.Equal("succeeded", NodeOutcomeNames.Name(n.Kind))));
 
@@ -102,17 +105,43 @@ public class RequestReadsEndToEndTests
         var keys = metrics.Of(StrataRecMetrics.Names.CacheKeys).Where(m => Equals(m.Tags[StrataRecTags.Source], "user_store"))
             .GroupBy(m => $"{m.Tags[StrataRecTags.CacheTier]}/{m.Tags[StrataRecTags.Outcome]}").ToDictionary(g => g.Key, g => g.Sum(m => (long)m.Value));
         Assert.Equal(2, keys.GetValueOrDefault("request/hit"));
-        Assert.Equal(1, keys.GetValueOrDefault("distributed/miss"));
+        Assert.Equal(3, keys.GetValueOrDefault("distributed/miss"));
     }
 
     /// <summary>
-    /// The connector's own failure fails the reads waiting for it as it failed its reader, and is not asked again. With
-    /// no record to fall back on they are told so: an empty one in its place, read as a record, threw out of the reads.
+    /// A record got for the request is taken by its other reads as a tier's is: while fresh by their own times. One the
+    /// connector gave after its ttl had passed leaves the reads that waited to ask themselves, as each would have found
+    /// the record expired.
     /// </summary>
     [Fact]
-    public async Task AConnectorsFailure_FailsTheReadsWaitingForIt_WithoutAskingAgain()
+    public async Task ARecordGotForTheRequest_IsTakenOnlyWhileItIsFresh()
     {
-        var connectors = new CountedConnectors { Fail = true };
+        var connectors = new CountedConnectors();
+        var release = Gate();
+        connectors.Hold = release.Task;
+        await using var rig = Engine(Host(Shared), connectors);
+
+        using var metrics = new MetricCapture();
+        var running = Start(rig, "req-1", () => connectors.Calls == 1);
+        rig.Clock.Advance(120_000); // the connector answers two minutes after it was asked: past the record's minute
+        release.SetResult();
+        var result = await running;
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(3, connectors.Calls);
+        Assert.Equal(2, metrics.Of(StrataRecMetrics.Names.CacheKeys)
+            .Where(m => Equals(m.Tags[StrataRecTags.Source], "user_store") && Equals(m.Tags[StrataRecTags.CacheTier], "request") && Equals(m.Tags[StrataRecTags.Outcome], "expired"))
+            .Sum(m => (long)m.Value));
+    }
+
+    /// <summary>
+    /// The connector's failure is the word of one call: the reads waiting for it ask the connector themselves, and get
+    /// what it tells them. Given to them as theirs, one failed call failed every run of the request.
+    /// </summary>
+    [Fact]
+    public async Task AConnectorsFailure_IsItsReadsAlone_AndTheReadsWaitingAskTheConnectorThemselves()
+    {
+        var connectors = new CountedConnectors { FailFirst = 1 };
         var release = Gate();
         connectors.Hold = release.Task;
         await using var rig = Engine(Host(Shared), connectors);
@@ -121,17 +150,17 @@ public class RequestReadsEndToEndTests
         release.SetResult();
         var result = await running;
 
-        Assert.Equal(1, connectors.Calls);
+        Assert.Equal(3, connectors.Calls); // the one that failed, and one for each read that waited for it
         Assert.Equal(3, result.Calls!.Count);
-        Assert.All(result.Calls, c => Assert.Equal("pipeline 'promoted' failed: node 'bid' failed: feature fetch failed: user store outage", c.Error));
+        Assert.Equal("pipeline 'promoted' failed: node 'bid' failed: feature fetch failed: user store outage", Assert.Single(result.Calls, c => !c.Succeeded).Error);
     }
 
     /// <summary>
-    /// When the connector fails and the distributed tier has the record past its time to live, every run serves it, as
-    /// each would alone: the runs that waited did not read the tier, and get the record with the failure.
+    /// When the connector fails and the distributed tier has the record past its time to live, every run serves the
+    /// record it read from the tier itself, as it would alone.
     /// </summary>
     [Fact]
-    public async Task AConnectorsFailure_WithAStaleRecordInTheStore_ServesItToEveryRun()
+    public async Task AConnectorsFailure_WithAStaleRecordInTheStore_LeavesEveryRunTheRecordItRead()
     {
         var connectors = new CountedConnectors();
         var stores = new SharedStores();
@@ -148,7 +177,7 @@ public class RequestReadsEndToEndTests
         var stale = await running;
 
         Assert.True(fresh.Succeeded && stale.Succeeded, fresh.Error ?? stale.Error);
-        Assert.Equal(2, connectors.Calls); // one a request
+        Assert.Equal(4, connectors.Calls); // the first request's, and each run's of the second: a failure is not shared
         Assert.Equal(Lists(fresh), Lists(stale));
         Assert.All(stale.Calls!, c =>
         {
@@ -158,8 +187,14 @@ public class RequestReadsEndToEndTests
         });
     }
 
-    [Fact]
-    public async Task TheRunsOfOneRequest_CallAServiceAboutNoItemsOnce()
+    /// <summary>
+    /// The runs' calls of a service about no items are one call of it; an answer that comes after its record's ttl
+    /// leaves the calls that waited to call themselves.
+    /// </summary>
+    [Theory]
+    [InlineData(false, 2)] // the page's own recall, and one for its three runs of promoted
+    [InlineData(true, 4)]
+    public async Task TheRunsOfOneRequest_CallAServiceAboutNoItemsOnce_AndTakeItsAnswerWhileItIsFresh(bool late, int calls)
     {
         var lists = new CountedLists { HoldFrom = 20 }; // the runs' calls: the page's own recall asks for 3
         var stores = new SharedStores();
@@ -170,25 +205,29 @@ public class RequestReadsEndToEndTests
 
         var expected = await reference.Run("req-1", pipeline: "page");
         var running = Start(rig, "req-1", () => lists.Calls == 2);
+        if (late)
+        {
+            rig.Clock.Advance(120_000); // the service answers two minutes after it was called: past the record's minute
+        }
+
         release.SetResult();
         var result = await running;
 
         Assert.True(expected.Succeeded && result.Succeeded, expected.Error ?? result.Error);
         Assert.Equal(3, rig.Probe.Runs);
-        Assert.Equal(2, lists.Calls); // the page's own recall, and one for its three runs of promoted
-        Assert.Equal(2, stores.Gets); // and the store was read as often: the runs that waited took the first one's answer
+        Assert.Equal(calls, lists.Calls);
+        Assert.Equal(4, stores.Gets); // every call reads the tiers itself
         Assert.Equal(Lists(expected), Lists(result));
     }
 
     /// <summary>
-    /// The service's own failure fails the calls waiting for it as it failed the one that called, and it is not called
-    /// again for them; with a record past its time to live in the distributed tier, which those waiting did not read,
-    /// every one of them serves it, as each would alone.
+    /// The service's failure is the word of one call: the calls waiting for it call the service themselves. With a
+    /// record past its time to live in the distributed tier, each serves the one it read there itself, as it would alone.
     /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task AServicesFailure_FailsTheCallsWaitingForIt_OrServesThemTheStaleRecordWithIt(bool stale)
+    public async Task AServicesFailure_IsItsCallsAlone_AndEveryCallServesTheStaleRecordItRead(bool stale)
     {
         var lists = new CountedLists { HoldFrom = 20 };
         var stores = new SharedStores();
@@ -208,11 +247,11 @@ public class RequestReadsEndToEndTests
         // The runs ask for 20. With a record to fall back on, the page's own recall, of 3, is refused too: answered, it
         // would write its shorter list over the record, which then answers no call of 20.
         lists.Most = stale ? 2 : 10;
-        var running = Start(rig, "req-1", () => lists.Calls == calls + 2); // the page's own recall, which is answered, and the first run's
+        var running = Start(rig, "req-1", () => lists.Calls == calls + 2); // the page's own recall and the first run's
         release.SetResult();
         var result = await running;
 
-        Assert.Equal(calls + 2, lists.Calls);
+        Assert.Equal(calls + 4, lists.Calls); // and one for each run that waited for the first
         Assert.Equal(3, result.Calls!.Count);
         if (stale)
         {
@@ -229,7 +268,7 @@ public class RequestReadsEndToEndTests
     /// <summary>
     /// Calls that ask a service for different numbers of items are not one call, though they are one record (a longer
     /// answer serves a shorter call, so the number is not in the record's key): a service that refuses the longer answers
-    /// the shorter, which took the other's refusal as its own.
+    /// the shorter, and a short answer kept for the request would leave the longer calls nothing to share.
     /// </summary>
     [Fact]
     public async Task ACallRefusedForItsLimit_DoesNotFailACallOfASmallerOne()
@@ -253,12 +292,12 @@ public class RequestReadsEndToEndTests
     }
 
     /// <summary>
-    /// Calls of a pipeline that judge its results by different times are not one call: a result in the distributed tier
-    /// that is past one node's ttl is within another's, which serves it whatever the first one's run comes to. Joined,
-    /// the node with the hour's ttl failed with the run of the node with the second's.
+    /// A call reads the tiers by its own node's times, whatever another call of the request for the same result comes
+    /// to: a result in the distributed tier that is past one node's ttl is within another's, which serves it while the
+    /// first one's run fails.
     /// </summary>
     [Fact]
-    public async Task CallsThatJudgeAResultByOtherTimes_AreNotJoined()
+    public async Task ACallReadsTheTiersByItsOwnTimes_WhateverAnotherCallForTheSameResultComesTo()
     {
         const string Distributed = """{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""";
         var host = PageHost(content: """
@@ -290,6 +329,55 @@ public class RequestReadsEndToEndTests
         Assert.Equal("req-1", within.Cached?.RequestId);
     }
 
+    /// <summary>
+    /// A call that waits for another's run reads the tiers first, so it holds the result past its ttl that it falls
+    /// back to: when its own time ends before that run does, it serves it, as it would alone. Joined before it read the
+    /// tiers, it had nothing to fall back to when its wait was cut off, and failed.
+    /// </summary>
+    [Fact]
+    public async Task ACallWhoseTimeEndsWhileItWaitsForAnothersRun_ServesTheStaleResultItReadItself()
+    {
+        const string Distributed = """{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""";
+        var pair = new TwoBudgets(shorter: TimeSpan.FromMilliseconds(50));
+        var host = PageHost(content: Uncached, more: root =>
+        {
+            SampleBindings.BindPipeline(root, "promoted", Distributed);
+            ReplayTests.Edit(root, "pipelines/page.jsonc", "\"nodes\": {",
+                "\"nodes\": {\n \"pair\": { \"order\": 50, \"op\": \"TwoBudgets@1\", \"config\": { \"pipeline\": \"promoted\", \"cache\": { \"ttl_ms\": 1000, \"stale_if_error_ms\": 600000 } } },");
+        });
+        var stores = new SharedStores();
+        await using var rig = new Rig(host, stores: stores, operators: [pair], pipelines: Pipelines);
+        var first = await rig.Run("req-0", pipeline: "page");
+        await CacheEngineTests.Eventually(() => stores.Records >= 1, () => "the result in the store");
+        pair.Clear();
+
+        rig.Clock.Advance(2_500); // past the ttl, within stale_if_error_ms
+        var release = Gate();
+        rig.Probe.Hold = release.Task;
+        var runs = rig.Probe.Runs;
+
+        // A wait may end a moment before its time, and the call then runs the pipeline in what is left, as it would
+        // alone: that run fails here, so the call falls back either way and the probe holds the long call's run only.
+        rig.Probe.OnRun = () =>
+        {
+            if (rig.Probe.Runs > runs + 1)
+            {
+                throw new InvalidOperationException("a run in what was left of the short call's time");
+            }
+        };
+        var running = Start(rig, "req-1", () => rig.Probe.Runs == runs + 1, T0 + 2_500); // the long call's run, which the probe holds
+        var cutOff = await pair.ShortEnded.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // while that run is still held
+        rig.Probe.OnRun = null;
+        release.SetResult();
+        var second = await running;
+
+        Assert.True(first.Succeeded && second.Succeeded, first.Error ?? second.Error);
+        Assert.True(cutOff.Succeeded, cutOff.Error);
+        Assert.Equal(("req-0", true), (cutOff.Cached?.RequestId, cutOff.Cached?.Stale));
+        var ran = Assert.Single(pair.Long);
+        Assert.True(ran.Succeeded && ran.Cached is null, ran.Error);
+    }
+
     /// <summary><c>counted_memory@1</c>: <c>memory@1</c>, counting its calls; each waits while held, and fails when told.</summary>
     internal sealed class CountedConnectors : IBindingFactory<IFeatureSourceConnector>
     {
@@ -297,10 +385,18 @@ public class RequestReadsEndToEndTests
 
         private readonly MemoryFeatureConnectorFactory _memory = new();
         private int _calls;
+        private int _failFirst;
         private volatile Task? _hold;
         private volatile bool _fail;
 
         public int Calls => Volatile.Read(ref _calls);
+
+        /// <summary>The first this many calls fail.</summary>
+        public int FailFirst
+        {
+            get => Volatile.Read(ref _failFirst);
+            set => Volatile.Write(ref _failFirst, value);
+        }
 
         /// <summary>Awaited by every call before it answers.</summary>
         public Task? Hold
@@ -330,13 +426,13 @@ public class RequestReadsEndToEndTests
             public async ValueTask<FetchStatus> FetchAsync(
                 EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
             {
-                Interlocked.Increment(ref owner._calls);
+                var call = Interlocked.Increment(ref owner._calls);
                 if (owner.Hold is { } hold)
                 {
                     await hold;
                 }
 
-                return owner.Fail ? FetchStatus.Failed("user store outage") : await inner.FetchAsync(keys, fields, writer, cancellationToken);
+                return owner.Fail || call <= owner.FailFirst ? FetchStatus.Failed("user store outage") : await inner.FetchAsync(keys, fields, writer, cancellationToken);
             }
         }
     }
@@ -378,6 +474,56 @@ public class RequestReadsEndToEndTests
     internal sealed class TwoLimitsConfig
     {
         public string Service { get; init; } = "";
+    }
+
+    /// <summary>
+    /// <c>TwoBudgets@1</c>: a node that calls a pipeline twice at once with the same inputs, the second call with a time
+    /// of its own, and keeps what each call returned.
+    /// </summary>
+    internal sealed class TwoBudgets(TimeSpan shorter) : IOperatorFactory
+    {
+        private TaskCompletionSource<PipelineCallResult> _shortEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public System.Collections.Concurrent.ConcurrentQueue<PipelineCallResult> Long { get; } = new();
+
+        /// <summary>What the call with a time of its own returned, once it has.</summary>
+        public Task<PipelineCallResult> ShortEnded => _shortEnded.Task;
+
+        public OperatorDescriptor Descriptor { get; } = new("TwoBudgets", 1, Effects.None, typeof(TwoBudgetsConfig), "Calls a pipeline twice at once, once with a time of its own.");
+
+        /// <summary>Forgets what the calls so far returned.</summary>
+        public void Clear()
+        {
+            Long.Clear();
+            _shortEnded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public Operator? Compile(OperatorCompileContext context) =>
+            context.BindConfig<TwoBudgetsConfig>() is { } config && context.TryCallPipeline(config.Pipeline, "/pipeline", out var call, config.Cache, "/cache")
+                && context.TryCallInput(call, "slots", "/pipeline", ColumnType.Int64)
+                ? new Node(this, call)
+                : null;
+
+        private sealed class Node(TwoBudgets owner, PipelineCall call) : Operator
+        {
+            public override async ValueTask ExecuteAsync(OperatorContext context)
+            {
+                var inputs = new RequestInputs().Set("slots", 3);
+                var longer = context.CallPipelineAsync(call, inputs).AsTask();
+                var shorter = context.CallPipelineAsync(call, inputs, owner.Shorter).AsTask();
+                owner._shortEnded.TrySetResult(await shorter);
+                owner.Long.Enqueue(await longer);
+            }
+        }
+
+        private TimeSpan Shorter => shorter;
+    }
+
+    internal sealed class TwoBudgetsConfig
+    {
+        public string Pipeline { get; init; } = "";
+
+        public PipelineCallCacheConfig? Cache { get; init; }
     }
 
     /// <summary>

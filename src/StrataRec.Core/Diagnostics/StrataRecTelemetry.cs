@@ -66,8 +66,9 @@ public static class StrataRecTags
     public const string Entity = "stratarec.entity";
 
     /// <summary>
-    /// Tier of a cache: <c>memory</c> (the in-process table), <c>distributed</c>, or <c>request</c>: a read answered by
-    /// what another run of the same request read (hits only; it holds nothing of its own).
+    /// Tier of a cache: <c>memory</c> (the in-process table), <c>distributed</c>, or <c>request</c>: what another run of
+    /// the same request got from the origin, a hit for a read it answers, expired or a mismatch for one it does not (it
+    /// holds nothing of its own).
     /// </summary>
     public const string CacheTier = "stratarec.cache.tier";
 

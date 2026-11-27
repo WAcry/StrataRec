@@ -365,8 +365,16 @@ internal sealed class PipelineCallCache
         return new CachedCallRead(result, null);
     }
 
-    /// <summary>A call answered by what another call of its request got (<see cref="RequestReads"/>).</summary>
-    public void CountShared() => Count(CacheTier.Request, CacheKeyOutcome.Hit);
+    /// <summary>
+    /// Whether the result another call of the request computed (<see cref="RequestReads"/>) answers this one: when it
+    /// is fresh by this node's times, as a tier's record is. Counted in the request tier.
+    /// </summary>
+    public bool TakeShared(UInt128 key, CachedCall computed)
+    {
+        var fresh = Policy.Classify(computed.WrittenMs, (ulong)key, NowMs()) == CacheFreshness.Fresh;
+        Count(CacheTier.Request, fresh ? CacheKeyOutcome.Hit : CacheKeyOutcome.Expired);
+        return fresh;
+    }
 
     /// <summary>Whether a stale result may serve now: still within the node's <c>stale_if_error_ms</c>.</summary>
     public bool Usable(UInt128 key, CachedCall stale) => Policy.Classify(stale.WrittenMs, (ulong)key, NowMs()) != CacheFreshness.Expired;

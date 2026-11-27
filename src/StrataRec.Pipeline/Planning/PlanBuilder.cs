@@ -394,6 +394,22 @@ public sealed class PlanBuilder
             }
         }
 
+        // A fallback runs when the node that names it fails, and then at once: what decides whether a node on the
+        // timeline runs does not apply to it, and is an error there, not silently ignored.
+        if (isFallback)
+        {
+            foreach (var (name, set) in new[] { ("when", spec.When is not null), ("min_remaining_ms", spec.MinRemainingMs is not null) })
+            {
+                if (set)
+                {
+                    _diagnostics.Error("NODE_FALLBACK_CONDITION", artifact, pointer + "/" + name,
+                        $"'{name}' does not apply to a fallback: it runs whenever the node that falls back to it fails.",
+                        $"remove '{name}', or put it on the node that falls back to this one");
+                    ok = false;
+                }
+            }
+        }
+
         var compact = spec.Compact switch
         {
             null or "auto" => CompactMode.Auto,
