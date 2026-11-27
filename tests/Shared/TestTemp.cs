@@ -22,9 +22,21 @@ internal static class TestTemp
     /// </summary>
     private static readonly string Prefix = "stratarec-tests-" + (ProcessNamespace() ?? "unknown") + "-";
 
+    /// <summary>
+    /// Set to <c>inherit</c> by a tool that passes files to the test process through the temporary directory it was
+    /// started with, and removes that directory itself (<c>scripts/mutate.sh</c>: the mutation tool reads each test's
+    /// coverage from files there, found none under a directory per process, and ran every test for every mutant).
+    /// </summary>
+    private const string Switch = "STRATAREC_TEST_TMPDIR";
+
     [ModuleInitializer]
     internal static void Use()
     {
+        if (Environment.GetEnvironmentVariable(Switch) == "inherit")
+        {
+            return;
+        }
+
         var system = Path.GetTempPath();
         var own = Directory.CreateTempSubdirectory(Prefix + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "-").FullName; // named for Sweep
         foreach (var variable in (ReadOnlySpan<string>)["TMPDIR", "TMP", "TEMP"]) // what Path.GetTempPath reads, here and on Windows
