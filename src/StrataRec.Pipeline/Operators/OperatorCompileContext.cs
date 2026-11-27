@@ -484,9 +484,22 @@ public sealed class OperatorCompileContext
     /// config key; one compiled without them (an engine loading one release) is checked when the call is made, and a call
     /// that does not fit fails as a result.
     /// </summary>
+    /// <param name="cache">
+    /// The node's cache of the call's results, from its config (a member named <c>cache</c>, by convention); null runs the
+    /// pipeline for every call. With it, a call whose result is cached does not run the pipeline, and its result says
+    /// where it comes from (<see cref="PipelineCallResult.Cached"/>). The environment binds where the results are kept
+    /// (<c>pipelines.&lt;id&gt;.cache</c>): without that binding the node does not compile.
+    /// </param>
+    /// <param name="cacheKey">
+    /// Where the node's config has <paramref name="cache"/>: a cache that is wrong or not bound is reported there, and
+    /// the call is declared without it, so the node's other declarations are still checked and nothing they declare is
+    /// reported missing.
+    /// </param>
     /// <returns>False after reporting an error at <paramref name="configKey"/>: no pipeline named, the node's own, one
     /// the workspace does not have, or one whose calls lead back to this pipeline.</returns>
-    public bool TryCallPipeline(string pipelineId, string configKey, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PipelineCall? call)
+    public bool TryCallPipeline(
+        string pipelineId, string configKey, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PipelineCall? call,
+        PipelineCallCacheConfig? cache = null, string cacheKey = "/cache")
     {
         call = null;
         if (string.IsNullOrEmpty(pipelineId))
@@ -525,8 +538,64 @@ public sealed class OperatorCompileContext
         }
 
         call = new PipelineCall(pipelineId, _caller.PipelineId, NodeId, configKey, _caller.Inputs, _schema.KeyType, known);
+        if (cache is not null)
+        {
+            DeclareCallCache(call, cache, cacheKey);
+        }
+
         _calls.Add(call);
         return true;
+    }
+
+    /// <summary>The node's cache of a call: its times and version checked at their keys, over the tiers the environment binds for the pipeline.</summary>
+    private void DeclareCallCache(PipelineCall call, PipelineCallCacheConfig cache, string cacheKey)
+    {
+        var at = Pointer + "/config" + cacheKey;
+        var ok = true;
+        long ttlMs = 0;
+        if (cache.TtlMs is not { } ttl)
+        {
+            ok = false;
+            _diagnostics.Error("CACHE_TTL", Artifact, at, $"The cache of node '{NodeId}' has no 'ttl_ms'.",
+                "add how long a result of the call is served, in milliseconds, e.g. \"ttl_ms\": 3600000");
+        }
+        else if (!Features.Cache.CacheSettings.TryTtl(ttl, _diagnostics, Artifact, at))
+        {
+            ok = false;
+        }
+        else
+        {
+            ttlMs = ttl;
+        }
+
+        ok &= Features.Cache.CacheSettings.TryStale(cache.StaleIfErrorMs, "pipeline", _diagnostics, Artifact, at, out var staleMs);
+        ok &= Features.Cache.CacheSettings.TryVersion(cache.Version, _diagnostics, Artifact, at);
+        if (!_clients.TryGetPipelineCache(call.PipelineId, out var tiers, out var unbound, out var hint))
+        {
+            ok = false;
+            if (unbound is not null)
+            {
+                _diagnostics.Error("PIPELINE_CALL_CACHE_UNBOUND", Artifact, at, unbound, hint);
+            }
+        }
+        else if (ok && tiers.Distributed is not null && Features.Cache.CachePolicy.RetentionOf(ttlMs, staleMs) > Features.Cache.CachePolicy.MaxRetentionMs)
+        {
+            // The store is given a record's longest use as a time to live (a TimeSpan), as for a source's and a service's cache.
+            ok = false;
+            var setting = Features.Cache.CachePolicy.MaxLifetime(ttlMs) > Features.Cache.CachePolicy.MaxRetentionMs ? "ttl_ms" : "stale_if_error_ms";
+            _diagnostics.Error("CACHE_RETENTION", Artifact, at + "/" + setting,
+                $"The distributed cache of pipeline '{call.PipelineId}' would keep a result for up to {Features.Cache.CachePolicy.RetentionOf(ttlMs, staleMs)} ms, "
+                + $"more than the {Features.Cache.CachePolicy.MaxRetentionMs} ms a time to live can be.",
+                $"lower ttl_ms or stale_if_error_ms so that ttl_ms × 1.1 + stale_if_error_ms is at most {Features.Cache.CachePolicy.MaxRetentionMs}");
+        }
+
+        if (!ok)
+        {
+            HasErrors = true;
+            return;
+        }
+
+        call.Cache = new PipelineCallCache(tiers!, new Features.Cache.CachePolicy(ttlMs, staleMs), cache.Version);
     }
 
     /// <summary>

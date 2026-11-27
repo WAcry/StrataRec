@@ -39,6 +39,14 @@ public static class LogBatchJson
         }
 
         json.WriteString("manifest", batch.ManifestId);
+        if (batch.CachedFromRequestId is { } cachedFrom)
+        {
+            json.WriteStartObject("cached_from");
+            json.WriteString("request_id", cachedFrom);
+            json.WriteNumber("time_ms", batch.CachedFromTimeMs);
+            json.WriteEndObject();
+        }
+
         json.WriteString("tap_id", batch.TapId);
         json.WriteString("schema", batch.Schema.Id);
         json.WriteString("delivery", batch.Delivery == LogDelivery.Durable ? "durable" : "best_effort");

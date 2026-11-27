@@ -14,7 +14,7 @@ public enum CancellationSite : byte
     /// <summary>A node attempt's token, held by its operator and its clients: cancelled at the node's budget.</summary>
     Node,
 
-    /// <summary>A service call's token: cancelled at the call's own timeout.</summary>
+    /// <summary>A service call's token, or that of a read of a pipeline call's distributed cache: cancelled at the call's own timeout.</summary>
     Call,
 
     /// <summary>

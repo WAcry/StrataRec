@@ -67,7 +67,7 @@
 | 供给方式 / supply mode（`mode`） | 数据源怎么给出特征。`fetch`：每个请求向连接器取，绑定带 `cache` 时把连接器的回答留一段时间。`local`：读后台加载的本地表，请求路径上没有 I/O。`service`：每个请求调用一次服务，给带 `args` 的实体 | 不叫 strategy、backend type |
 | 连接器 / connector（`IFeatureSourceConnector`） | 数据源读外部存储的实现，`fetch` 供给方式用它（带不带缓存都是）；`local` 读本地表，`service` 调用服务，都没有连接器 | 数据源是绑定里的一个名字；连接器是它背后的实现 |
 | 本地表 / local table | `local` 方式下进程内的一张表，由更新来源（`bootstrap`，`IFeatureUpdateSource`）在后台加载和更新。计划要等它读的每张表第一次加载完才服务 | 不叫 cache（缓存有期限、会回源，本地表没有）、snapshot（快照是更新来源读的一种输入） |
-| 缓存 / cache | 一份有期限（`ttl_ms`）的副本：`fetch` 数据源的，或者服务调用的。两层各自可选、至少一层：进程内（`memory`）和各实例共享的（`distributed`，`ICacheStore`）。`version` 钉住记录从哪来：写了它，配置变了记录也留着，改它才重新开始 | 不指本地表，也不指计划、编译结果这类算一次留着用的东西 |
+| 缓存 / cache | 一份有期限（`ttl_ms`）的副本：`fetch` 数据源的，服务调用的，或者节点对一条流水线的调用结果的（多久写在节点上，放在哪写在绑定的 `pipelines` 里）。两层各自可选、至少一层：进程内（`memory`）和各实例共享的（`distributed`，`ICacheStore`）。`version` 钉住记录从哪来：写了它，配置变了记录也留着，改它才重新开始 | 不指本地表，也不指计划、编译结果这类算一次留着用的东西 |
 | 拉取、预取 / fetch、prefetch | 拉取是按键向数据源取一批特征。预取是在读它的节点开始之前就发出的拉取；节点开始时等它，只补拉还缺的键。回填是把取到的值写进列 | 不叫 lookup、pull；加载（load）指的是发布和本地表 |
 
 ## 实验
@@ -109,3 +109,4 @@
 | diff、compare | `stratarec diff` 比两份配置编译出的计划；`stratarec compare` 在录制的请求上比两份配置的结果 | 两个词不混用 |
 | 调试选项 / debug options（`DebugOptions`） | 随请求带的排查开关，谁能用由宿主决定：强制臂、配置覆盖、trace、解释、录制。改变服务内容的两项（强制臂、配置覆盖）不写持久的日志 | 不叫 dry run、shadow |
 | 种子、请求时间 / seed、request time（`time_ms`） | 种子是请求的确定性种子，默认是请求 id 的哈希；请求里的随机都由它经 `StableHash` 得出。请求时间是请求看到的“现在”，默认是到达的时刻，回放时设成录制的值 | 不用进程级的随机数 |
+| 结果的来源 / `cached_from`、`computed_by` | 缓存回答一次流水线调用时，结果是哪个请求的运行算出来的（请求 id 和时间）。`cached_from` 只在缓存回答时有：`$experiments` 记录、追踪的 `calls`、回放包里；`computed_by` 是调用的算子写在行上的列，流水线这一次运行了就是本请求 | 不叫 origin：代码和 Schema 里 origin 指缓存背后的连接器、服务或流水线 |

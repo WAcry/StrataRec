@@ -108,6 +108,19 @@ public static class RecResultJson
                 }
 
                 json.WriteNumber("elapsed_ms", Math.Round(call.ElapsedMs, 3));
+                if (call.Cached is { } origin)
+                {
+                    json.WriteStartObject("cached_from");
+                    json.WriteString("request_id", origin.RequestId);
+                    json.WriteNumber("time_ms", origin.TimeMs);
+                    if (origin.Stale)
+                    {
+                        json.WriteBoolean("stale", true);
+                    }
+
+                    json.WriteEndObject();
+                }
+
                 json.WriteStartArray("arms");
                 foreach (var arm in call.Arms)
                 {

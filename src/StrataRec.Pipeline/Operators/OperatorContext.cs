@@ -89,6 +89,9 @@ public sealed class OperatorContext : IServiceCallScope
 
     public string RequestId => _state.RequestId;
 
+    /// <summary>The request's time, in Unix milliseconds: the one every node and every pipeline the request calls sees.</summary>
+    public long RequestTimeMs => _state.Context[Planning.PlanSchema.RequestTimeContext].AsInt64();
+
     /// <summary>Request seed for deterministic randomness.</summary>
     public long Seed => _state.Seed;
 
@@ -512,10 +515,32 @@ public sealed class OperatorContext : IServiceCallScope
         var sequence = _state.NextPipelineCall(NodeId);
         if (_state.Replay is { } replay)
         {
-            return new(replay.PipelineCall(NodeId, sequence, call.PipelineId, inputs)); // answered from the recording: a replay runs no other pipeline
+            return new(Heard(replay.PipelineCall(NodeId, sequence, call.PipelineId, inputs))); // answered from the recording: a replay runs no other pipeline, and reads no cache
         }
 
-        return _state.Recorder is { } recorder ? RecordedCallAsync(recorder, call, inputs, sequence, timeout) : SendAsync(call, inputs, sequence, timeout);
+        if (_state.Recorder is { } recorder)
+        {
+            return RecordedCallAsync(recorder, call, inputs, sequence, timeout);
+        }
+
+        return call.Cache is null ? SendAsync(call, inputs, sequence, timeout) : CachedCallAsync(call, inputs, sequence, timeout);
+    }
+
+    private async ValueTask<PipelineCallResult> CachedCallAsync(PipelineCall call, RequestInputs? inputs, int sequence, TimeSpan? timeout) =>
+        Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
+
+    /// <summary>
+    /// A result as the node gets it: one its cache served past its <c>ttl_ms</c> because the pipeline failed degrades the
+    /// node, as a service's stale answer does, whatever the operator does with it.
+    /// </summary>
+    private PipelineCallResult Heard(PipelineCallResult result)
+    {
+        if (result.Cached is { Stale: true } from)
+        {
+            ReportDegraded($"pipeline '{result.PipelineId}' failed, and its cached result of request '{from.RequestId}', past its ttl_ms, was served");
+        }
+
+        return result;
     }
 
     private async ValueTask<PipelineCallResult> RecordedCallAsync(
@@ -524,7 +549,7 @@ public sealed class OperatorContext : IServiceCallScope
         // What was passed, as it is now: the operator may change its inputs for its next call while this one runs.
         var passed = Replay.ReplayJson.Inputs(inputs);
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var result = await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false);
+        var result = Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
         recorder.PipelineCall(NodeId, sequence, call.PipelineId, passed, result, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         return result;
     }
@@ -547,8 +572,7 @@ public sealed class OperatorContext : IServiceCallScope
             return new(PipelineCallResult.Failed(call.PipelineId, $"pipeline '{call.PipelineId}' was not called: this run is not an engine's, which serves the pipelines a node calls"));
         }
 
-        var timeMs = _state.Context[Planning.PlanSchema.RequestTimeContext].AsInt64();
-        return calls.CallAsync(new PipelineCallRequest(call, inputs, _state.Inputs, sequence, _state.Seed, timeMs, budget), _state.CallerCancellation);
+        return calls.CallAsync(new PipelineCallRequest(call, inputs, _state.Inputs, sequence, _state.Seed, RequestTimeMs, budget), _state.CallerCancellation);
     }
 
     /// <summary>

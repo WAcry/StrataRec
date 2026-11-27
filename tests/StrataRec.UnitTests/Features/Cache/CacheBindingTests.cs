@@ -245,4 +245,15 @@ public class CacheBindingTests
     }
 
     private static List<ConfigDiagnostic> Errors(DiagnosticBag diagnostics) => diagnostics.Items.Where(d => d.IsError).ToList();
+
+    /// <summary>The longest time a cache setting may give is one a policy takes: 2^61 ms was accepted by the check and thrown by the policy.</summary>
+    [Fact]
+    public void TheLongestTimeTheSettingsAccept_IsOneAPolicyTakes()
+    {
+        var longest = new CachePolicy(CacheSettings.MaxMs, CacheSettings.MaxMs);
+
+        Assert.Equal((CacheSettings.MaxMs, CacheSettings.MaxMs), (longest.TtlMs, longest.StaleIfErrorMs));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CachePolicy(CacheSettings.MaxMs + 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CachePolicy(1, CacheSettings.MaxMs + 1));
+    }
 }

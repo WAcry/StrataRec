@@ -21,6 +21,11 @@ public sealed class SourceBindingArtifact
     /// </summary>
     public Dictionary<string, ClientBinding> Services { get; init; } = new();
 
+    [Description("What this environment gives the calls of a pipeline, by the called pipeline's id: where their cached results are kept, " +
+        "e.g. { \"rank\": { \"cache\": { \"distributed\": { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\", \"timeout_ms\": 15 } } } }. " +
+        "A node that calls the pipeline says whether its calls are cached and for how long (the 'cache' of its config).")]
+    public Dictionary<string, PipelineBinding> Pipelines { get; init; } = new();
+
     /// <summary>
     /// Adds to <paramref name="types"/> the client, connector, update-source and cache-store types the named bindings use:
     /// a binary that lacks one cannot serve them. The one place that knows which binding settings name a
@@ -28,7 +33,8 @@ public sealed class SourceBindingArtifact
     /// </summary>
     /// <param name="featureSources">Feature sources a plan reads: their connector, bootstrap source and distributed store.</param>
     /// <param name="services">Services a plan binds: their client and distributed store.</param>
-    public void AddTypes(ISet<string> types, IEnumerable<string> featureSources, IEnumerable<string> services)
+    /// <param name="pipelines">Pipelines whose calls a plan caches: their distributed store.</param>
+    public void AddTypes(ISet<string> types, IEnumerable<string> featureSources, IEnumerable<string> services, IEnumerable<string> pipelines)
     {
         ArgumentNullException.ThrowIfNull(types);
         foreach (var name in featureSources)
@@ -63,6 +69,14 @@ public sealed class SourceBindingArtifact
                 {
                     types.Add(store);
                 }
+            }
+        }
+
+        foreach (var name in pipelines)
+        {
+            if (Pipelines.TryGetValue(name, out var pipeline) && pipeline.Cache?.Distributed?.Store is { Length: > 0 } store)
+            {
+                types.Add(store);
             }
         }
     }
@@ -149,8 +163,8 @@ public sealed class UpdateSourceBinding
 }
 
 /// <summary>
-/// A cache: of a feature source's connector, of a service's answers, or (its tiers only) of the calls of a pipeline.
-/// Each value is served for <see cref="TtlMs"/> (RFC 9111 <c>max-age</c>) and may be served
+/// A cache of a feature source's connector or of a service's answers (the results of a pipeline's calls have the tiers
+/// only, <see cref="PipelineCacheBinding"/>: the calling nodes give the times). Each value is served for <see cref="TtlMs"/> (RFC 9111 <c>max-age</c>) and may be served
 /// <see cref="StaleIfErrorMs"/> longer when the origin (the connector, the service) fails (RFC 5861
 /// <c>stale-if-error</c>). It is kept in process (<see cref="Memory"/>), in a store the deployment's instances share
 /// (<see cref="Distributed"/>), or both: at least one.
@@ -185,6 +199,28 @@ public sealed class CacheBinding
 
     /// <summary>The form of <see cref="Version"/>.</summary>
     public const string VersionPattern = "^[A-Za-z0-9._-]{1,64}$";
+}
+
+/// <summary>What an environment gives the calls of one pipeline.</summary>
+public sealed class PipelineBinding
+{
+    [Description("Where the results of the pipeline's cached calls are kept: 'memory', 'distributed' or both, as for a source's or a " +
+        "service's cache. How long a result is served is not said here: each node that calls the pipeline says it for its " +
+        "own calls ('cache' in the node's config: ttl_ms, stale_if_error_ms, version).")]
+    public PipelineCacheBinding? Cache { get; init; }
+}
+
+/// <summary>The tiers of the cache of a pipeline's calls: at least one.</summary>
+public sealed class PipelineCacheBinding
+{
+    [Description("The in-process tier: { \"max_bytes\": \"64MiB\" }. Each instance has its own: results keyed by a user " +
+        "are rarely found again on a deployment of many instances, for which 'distributed' is the tier to have.")]
+    public MemoryCacheBinding? Memory { get; init; }
+
+    [Description("The tier the deployment's instances share, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\", " +
+        "\"timeout_ms\": 15 }. Its timeout_ms is required: a pipeline has no timeout of its own to take half of. When it " +
+        "fails or is slow, the pipeline runs.")]
+    public DistributedCacheBinding? Distributed { get; init; }
 }
 
 /// <summary>The in-process tier of a cache.</summary>

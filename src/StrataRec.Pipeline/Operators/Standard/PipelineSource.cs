@@ -40,6 +40,19 @@ public sealed class PipelineSourceConfig
     /// default does not fill the rows of other row sources).
     /// </summary>
     public string? Mark { get; init; }
+
+    /// <summary>
+    /// Caches the call's result: while a result is cached the pipeline does not run, such as
+    /// <c>{ "ttl_ms": 3600000 }</c>. The environment says where the results are kept (<c>pipelines.&lt;id&gt;.cache</c> in
+    /// the bindings).
+    /// </summary>
+    public PipelineCallCacheConfig? Cache { get; init; }
+
+    /// <summary>
+    /// Columns written on the appended rows that say which request's run computed them, such as
+    /// <c>{ "request_id": "rank.request_id" }</c>.
+    /// </summary>
+    public ComputedByColumns? ComputedBy { get; init; }
 }
 
 /// <summary>
@@ -61,7 +74,7 @@ public sealed class PipelineSourceFactory : IOperatorFactory
     public Operator? Compile(OperatorCompileContext context)
     {
         var config = context.BindConfig<PipelineSourceConfig>();
-        if (config is null || !context.TryCallPipeline(config.Pipeline, "/pipeline", out var call))
+        if (config is null || !context.TryCallPipeline(config.Pipeline, "/pipeline", out var call, config.Cache))
         {
             return null;
         }
@@ -119,7 +132,9 @@ public sealed class PipelineSourceFactory : IOperatorFactory
             }
         }
 
-        return ok ? new PipelineSource(call, [.. inputs], limit, [.. columns], mark) : null;
+        OutputColumn? computedById = null, computedByTime = null;
+        ok &= config.ComputedBy?.TryWrite(context, "/computed_by", out computedById, out computedByTime) ?? true;
+        return ok ? new PipelineSource(call, [.. inputs], limit, [.. columns], mark, computedById, computedByTime) : null;
     }
 
     private static List<string> Sorted(Dictionary<string, string>? map)
@@ -135,7 +150,8 @@ public sealed class PipelineSourceFactory : IOperatorFactory
     }
 
     private sealed class PipelineSource(
-        PipelineCall call, (string Name, CompiledExpression Expression)[] inputs, ParamRef limit, (OutputColumn Into, string From)[] columns, OutputColumn? mark)
+        PipelineCall call, (string Name, CompiledExpression Expression)[] inputs, ParamRef limit, (OutputColumn Into, string From)[] columns, OutputColumn? mark,
+        OutputColumn? computedById, OutputColumn? computedByTime)
         : Operator
     {
         public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => Limit(parameters[limit.Id]);
@@ -162,7 +178,7 @@ public sealed class PipelineSourceFactory : IOperatorFactory
                 return;
             }
 
-            Append(context, result.Columns);
+            Append(context, result.Columns, result.Cached);
         }
 
         /// <summary>
@@ -170,7 +186,8 @@ public sealed class PipelineSourceFactory : IOperatorFactory
         /// their columns. A column the result lacks, or a value its column cannot hold, fails the node: the call was
         /// checked against the pipeline's interface, so either is a defect, not data.
         /// </summary>
-        private void Append(OperatorContext context, ResultColumns rows)
+        /// <param name="cached">Where the rows come from when the node's cache answered; null for a run of this request.</param>
+        private void Append(OperatorContext context, ResultColumns rows, CachedFrom? cached)
         {
             var most = Limit(context.Param(limit));
 
@@ -249,6 +266,26 @@ public sealed class PipelineSourceFactory : IOperatorFactory
                 }
 
                 marked.SetValid(first, taken.Count);
+            }
+
+            if (computedById is { } idColumn)
+            {
+                var into = context.Output(idColumn);
+                var id = ScalarValue.FromString(cached?.RequestId ?? context.RequestId);
+                for (var i = 0; i < taken.Count; i++)
+                {
+                    ColumnValues.TrySet(into, first + i, id);
+                }
+            }
+
+            if (computedByTime is { } timeColumn)
+            {
+                var into = context.Output(timeColumn);
+                var time = ScalarValue.FromInt64(cached?.TimeMs ?? context.RequestTimeMs);
+                for (var i = 0; i < taken.Count; i++)
+                {
+                    ColumnValues.TrySet(into, first + i, time);
+                }
             }
         }
     }

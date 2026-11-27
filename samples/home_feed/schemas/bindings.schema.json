@@ -759,6 +759,125 @@
           }
         ]
       }
+    },
+    "pipelines": {
+      "description": "What this environment gives the calls of a pipeline, by the called pipeline's id: where their cached results are kept, e.g. { \"rank\": { \"cache\": { \"distributed\": { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\", \"timeout_ms\": 15 } } } }. A node that calls the pipeline says whether its calls are cached and for how long (the 'cache' of its config).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "cache": {
+            "description": "Where the results of the pipeline's cached calls are kept: 'memory', 'distributed' or both, as for a source's or a service's cache. How long a result is served is not said here: each node that calls the pipeline says it for its own calls ('cache' in the node's config: ttl_ms, stale_if_error_ms, version).",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "memory": {
+                "description": "The in-process tier: { \"max_bytes\": \"64MiB\" }. Each instance has its own: results keyed by a user are rarely found again on a deployment of many instances, for which 'distributed' is the tier to have.",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "max_bytes": {
+                    "description": "Required: the most memory the tier's table may take (for a source, each of its entities' tables), as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"64MiB\". A table that reaches it drops expired records first, then favors retaining recently read records.",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB)$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "distributed": {
+                "description": "The tier the deployment's instances share, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\", \"timeout_ms\": 15 }. Its timeout_ms is required: a pipeline has no timeout of its own to take half of. When it fails or is slow, the pipeline runs.",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "store": {
+                    "description": "Required: store type and version, e.g. 'redis@1'. The other members are the store's own settings, which the schema describes for each type of the binary that wrote it.",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "examples": [
+                      "redis@1"
+                    ]
+                  },
+                  "timeout_ms": {
+                    "description": "The longest a request waits for one read of the distributed cache, in milliseconds (default: half the source's or the service's timeout_ms; required for a service without one); always within that timeout_ms, so the origin keeps the rest of it.",
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "store": {
+                          "const": "redis@1"
+                        }
+                      },
+                      "required": [
+                        "store"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "store": {},
+                        "timeout_ms": {},
+                        "endpoint": {
+                          "description": "The server as host:port, e.g. redis.internal:6379; for a cluster, any of its nodes.",
+                          "type": "string"
+                        },
+                        "key_prefix": {
+                          "description": "What every key starts with (default stratarec:), so that services sharing a server keep apart.",
+                          "type": "string"
+                        },
+                        "user": {
+                          "description": "The ACL user to authenticate as.",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "password": {
+                          "description": "The password, as a reference to the host's secret store (secret://name), resolved at load.",
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "pattern": "^secret://."
+                        },
+                        "tls": {
+                          "description": "Connect over TLS (default false).",
+                          "type": "boolean"
+                        },
+                        "database": {
+                          "description": "The database number (default 0; a cluster has only 0).",
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "endpoint"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "required": [

@@ -618,7 +618,7 @@ internal sealed class FeatureSourceResolver
     /// <c>cache</c>, which decide when a value arrives and how long it is kept, not what it is: a release that only tunes
     /// those keeps both tiers' values (a service's cache follows the same rule, <c>ClientResolver.AnswerIdentity</c>).
     /// </summary>
-    private static string OriginIdentity(FeatureSourceBinding binding)
+    internal static string OriginIdentity(FeatureSourceBinding binding)
     {
         var node = ArtifactSerializer.ToNode(binding).AsObject();
         node.Remove("mode");
@@ -628,6 +628,13 @@ internal sealed class FeatureSourceResolver
         node.Remove("cache");
         return ContentHash.Compute(node).Substring(ContentHash.Prefix.Length, 16);
     }
+
+    /// <summary>
+    /// What a source's values come from, cached or not: its cache's <c>version</c> when it names one, otherwise
+    /// <see cref="OriginIdentity"/>. What a cache of something computed from the source (a pipeline's results) follows.
+    /// </summary>
+    internal static string ValuesIdentity(FeatureSourceBinding binding) =>
+        binding.Cache?.Version is { } version ? "v." + version : OriginIdentity(binding);
 
     /// <summary>The binding's <c>max_bytes</c> (required in mode local); false (diagnosed) when missing or not a positive size.</summary>
     private bool TryMaxBytes(string sourceName, FeatureSourceBinding binding, string pointer, SupplyMode mode, out long maxBytes)

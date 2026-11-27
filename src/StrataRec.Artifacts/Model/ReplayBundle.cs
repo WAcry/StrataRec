@@ -63,11 +63,13 @@ public sealed class ReplayBundle
     /// (<c>pipeline_calls</c>), each with what it returned: a build before cannot read them. 2026-11-26.1 numbers a node's
     /// calls over the run, not over an attempt (a fallback node that ran for two nodes recorded two calls 0), and records
     /// how many each attempt made, so a replay that skips an attempt recorded as timed out skips its calls too: a bundle
-    /// before has neither, and its second call would be answered with the first one's result.
+    /// before has neither, and its second call would be answered with the first one's result. 2026-11-27.1 records where
+    /// a pipeline call's cached result comes from (<c>cached_from</c>): a build before cannot read it, and its replay would
+    /// lack what the node wrote of it.
     /// </remarks>
-    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-26.1";
+    public const string CurrentFormat = "stratarec.replay_bundle/2026-11-27.1";
 
-    [Description("Format and version: \"stratarec.replay_bundle/2026-11-26.1\" (the date the layout changed, and that day's sequence).")]
+    [Description("Format and version: \"stratarec.replay_bundle/2026-11-27.1\" (the date the layout changed, and that day's sequence).")]
     public required string Format { get; init; }
 
     public required ReplayRequestRecord Request { get; init; }
@@ -215,6 +217,20 @@ public sealed class ReplayPipelineCall
 
     [Description("The pipeline's request-level output values (output.values), each as a column of one value.")]
     public List<ReplayCallColumn> Values { get; init; } = new();
+
+    [Description("For a result the node's cache answered: the request whose run computed it. The pipeline did not run for this call.")]
+    public ReplayCachedFrom? CachedFrom { get; init; }
+}
+
+public sealed class ReplayCachedFrom
+{
+    public required string RequestId { get; init; }
+
+    [Description("That request's time, in Unix milliseconds.")]
+    public long TimeMs { get; init; }
+
+    [Description("True when the result was past its ttl_ms and served because the pipeline failed: the node was degraded.")]
+    public bool? Stale { get; init; }
 }
 
 public sealed class ReplayCallColumn

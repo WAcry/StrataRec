@@ -247,6 +247,14 @@ public sealed class ExecutionPlan
     /// </summary>
     public ImmutableArray<string> Calls { get; init; } = [];
 
+    /// <summary>
+    /// A digest of what the plan's values come from in its environment: the feature sources it reads and the services its
+    /// nodes bind, each as its own cache's identity is (its connector or client and settings, or its
+    /// <c>cache.version</c>; not timeouts, batch sizes or cache settings). Part of what a cached result of a call of the
+    /// pipeline is found again by.
+    /// </summary>
+    public string ValuesIdentity { get; init; } = string.Empty;
+
     /// <summary>The inputs the pipeline accepts (<c>request_schema</c>) and the rules a request's inputs follow.</summary>
     public required RequestSchema RequestSchema { get; init; }
 

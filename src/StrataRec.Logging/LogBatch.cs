@@ -38,6 +38,16 @@ public sealed class LogBatch
     public required string ManifestId { get; init; }
 
     /// <summary>
+    /// For the record of a run that did not happen because a cache answered its call (<c>$experiments</c> of a called
+    /// pipeline, written so that exposure counts do not depend on the hit rate): the request whose run computed the
+    /// result, and that request's time. The called pipeline's other taps wrote under that request. Null for a run.
+    /// </summary>
+    public string? CachedFromRequestId { get; init; }
+
+    /// <inheritdoc cref="CachedFromRequestId"/>
+    public long CachedFromTimeMs { get; init; }
+
+    /// <summary>
     /// The tap variant's schema (columns, types, expressions), shared by its batches; its <see cref="LogSchema.Id"/> is what
     /// a batch records, and a sink that needs the record publishes it once per id.
     /// </summary>

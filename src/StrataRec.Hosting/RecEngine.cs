@@ -209,7 +209,15 @@ public sealed class DebugOptions
 /// <param name="Trace">The called run's node outcomes; empty when it did not run.</param>
 public sealed record CalledRun(
     string CalledBy, string Caller, string Node, int Sequence, string PipelineId, bool Succeeded, string? Error, double ElapsedMs, IReadOnlyList<string> Arms,
-    IReadOnlyList<NodeOutcome> Trace);
+    IReadOnlyList<NodeOutcome> Trace)
+{
+    /// <summary>
+    /// For a call the node's cache answered: the request whose run computed the result. The pipeline did not run for this
+    /// call, so <see cref="Trace"/> is empty and that request has its nodes; a stale one was served after the run here
+    /// failed, and <see cref="Trace"/> is that run's.
+    /// </summary>
+    public Pipeline.Operators.CachedFrom? Cached { get; init; }
+}
 
 /// <summary>Assignment and trigger record of a request.</summary>
 /// <remarks>
@@ -338,6 +346,12 @@ public sealed class LoadedPipeline
 
     /// <summary>What the plan was compiled from, copied at the load: a request's configuration override compiles it again (<see cref="DebugOptions.ConfigOverride"/>).</summary>
     internal PlanSource Source { get; init; } = null!;
+
+    /// <summary>
+    /// What the plan contributes to the key of a cached call of the pipeline: found when the plan is loaded, so no
+    /// request pays for it.
+    /// </summary>
+    internal CallIdentity CallIdentity { get; init; } = null!;
 
     /// <summary>
     /// The configuration override the plan of a request was compiled with, as the compile read it
@@ -631,6 +645,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             Bindings = lease,
             Layout = new PlanLayout(plan),
             Source = PlanSource.Capture(request),
+            CallIdentity = CallIdentity.Of(request, plan),
         };
         _ = loaded.Telemetry; // request metric tags are built with the plan, not on its first request
         Publishing?.Invoke();

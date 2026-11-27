@@ -1306,6 +1306,40 @@
                                       "null"
                                     ]
                                   }
+                                },
+                                "cache": {
+                                  "description": "Caches the results of this pipeline's calls, as the node's cache does those of pipeline.",
+                                  "type": [
+                                    "object",
+                                    "null"
+                                  ],
+                                  "properties": {
+                                    "ttl_ms": {
+                                      "description": "Required: how long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together.",
+                                      "type": [
+                                        "integer",
+                                        "null"
+                                      ]
+                                    },
+                                    "stale_if_error_ms": {
+                                      "description": "How much longer (milliseconds, default 0) an expired result may be served when the pipeline fails now; the node is then degraded.",
+                                      "type": [
+                                        "integer",
+                                        "null"
+                                      ]
+                                    },
+                                    "version": {
+                                      "description": "Names what the cached results are computed by, e.g. \"3\". Without it the cache follows the called pipeline's configuration: a release that changes its pipeline or catalog, the data or services it is bound to, or an experiment the request is in, computes anew. With it the results are kept across such releases, until the name changes. Letters, digits, '.', '_' and '-', at most 64.",
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ],
+                                      "pattern": "^[A-Za-z0-9._-]{1,64}$"
+                                    }
+                                  },
+                                  "additionalProperties": {
+                                    "type": "null"
+                                  }
                                 }
                               },
                               "additionalProperties": {
@@ -1372,6 +1406,66 @@
                               "integer",
                               "null"
                             ]
+                          },
+                          "cache": {
+                            "description": "Caches the results of pipeline's calls, each by the inputs its row passes: while a result is cached the pipeline does not run for that row, such as { \"ttl_ms\": 3600000 }. The environment says where the results are kept (pipelines.<id>.cache in the bindings). An entry of pipelines has a cache of its own.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "ttl_ms": {
+                                "description": "Required: how long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together.",
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ]
+                              },
+                              "stale_if_error_ms": {
+                                "description": "How much longer (milliseconds, default 0) an expired result may be served when the pipeline fails now; the node is then degraded.",
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ]
+                              },
+                              "version": {
+                                "description": "Names what the cached results are computed by, e.g. \"3\". Without it the cache follows the called pipeline's configuration: a release that changes its pipeline or catalog, the data or services it is bound to, or an experiment the request is in, computes anew. With it the results are kept across such releases, until the name changes. Letters, digits, '.', '_' and '-', at most 64.",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^[A-Za-z0-9._-]{1,64}$"
+                              }
+                            },
+                            "additionalProperties": {
+                              "type": "null"
+                            }
+                          },
+                          "computed_by": {
+                            "description": "Columns written on each row whose call returned, that say which request's run computed what the row got, such as { \"request_id\": \"games.request_id\" }. Every entry's.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "request_id": {
+                                "description": "The column (string?) that gets the id of the request whose run computed the result.",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "time_ms": {
+                                "description": "The column (int64?) that gets that request's time, in Unix milliseconds.",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "additionalProperties": {
+                              "type": "null"
+                            }
                           }
                         },
                         "additionalProperties": {
@@ -1447,6 +1541,66 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "cache": {
+                            "description": "Caches the call's result: while a result is cached the pipeline does not run, such as { \"ttl_ms\": 3600000 }. The environment says where the results are kept (pipelines.<id>.cache in the bindings).",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "ttl_ms": {
+                                "description": "Required: how long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together.",
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ]
+                              },
+                              "stale_if_error_ms": {
+                                "description": "How much longer (milliseconds, default 0) an expired result may be served when the pipeline fails now; the node is then degraded.",
+                                "type": [
+                                  "integer",
+                                  "null"
+                                ]
+                              },
+                              "version": {
+                                "description": "Names what the cached results are computed by, e.g. \"3\". Without it the cache follows the called pipeline's configuration: a release that changes its pipeline or catalog, the data or services it is bound to, or an experiment the request is in, computes anew. With it the results are kept across such releases, until the name changes. Letters, digits, '.', '_' and '-', at most 64.",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "pattern": "^[A-Za-z0-9._-]{1,64}$"
+                              }
+                            },
+                            "additionalProperties": {
+                              "type": "null"
+                            }
+                          },
+                          "computed_by": {
+                            "description": "Columns written on the appended rows that say which request's run computed them, such as { \"request_id\": \"rank.request_id\" }.",
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "properties": {
+                              "request_id": {
+                                "description": "The column (string?) that gets the id of the request whose run computed the result.",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "time_ms": {
+                                "description": "The column (int64?) that gets that request's time, in Unix milliseconds.",
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "additionalProperties": {
+                              "type": "null"
+                            }
                           }
                         },
                         "additionalProperties": {

@@ -85,8 +85,9 @@ internal sealed class ServiceCache
     /// <summary>The telemetry target of the distributed tier's reads: role <c>cache</c>, the service's name.</summary>
     public IoTarget Io { get; }
 
-    /// <summary>The one layout of every service's cache table, for service <paramref name="service"/>.</summary>
-    public static LocalTableSchema Schema(string service) => new(service, Entity, KeyLayout, LocalTableMode.Cache, Fields);
+    /// <summary>The one layout of every table of whole answers, for the service (or the pipeline) <paramref name="owner"/>.</summary>
+    /// <param name="entity">What the table holds, as its metric tag and its keyspace say it: a service's <see cref="Entity"/>, a pipeline's results.</param>
+    public static LocalTableSchema Schema(string owner, string entity = Entity) => new(owner, entity, KeyLayout, LocalTableMode.Cache, Fields);
 
     /// <summary>The record of <paramref name="key"/> in a pinned version, or none.</summary>
     public static LocalRecordRef Find(TableVersion version, UInt128 key)
@@ -348,7 +349,8 @@ internal sealed class ServiceRecordBuilder
     /// Hands the records to the tiers without waiting (<see cref="LocalTableCache.TryWriteBack"/>, and the distributed
     /// tier's queue with each record's time to live); a full queue drops them, counted.
     /// </summary>
-    public void WriteBack(long nowMs)
+    /// <param name="policy">The times the records are kept for; null for the cache's own (a service's binding's).</param>
+    public void WriteBack(long nowMs, CachePolicy? policy = null)
     {
         var count = _records.Count;
         if (count == 0)
@@ -371,7 +373,7 @@ internal sealed class ServiceRecordBuilder
         if (_cache.Distributed is { } distributed)
         {
             var entries = new CacheStoreEntry[count];
-            var ttl = _cache.Policy.StoreTimeToLive(_writtenMs, nowMs);
+            var ttl = (policy ?? _cache.Policy).StoreTimeToLive(_writtenMs, nowMs);
             for (var i = 0; i < count; i++)
             {
                 entries[i] = new CacheStoreEntry(ServiceCache.KeyText(_records[i].Key), records[i], ttl);

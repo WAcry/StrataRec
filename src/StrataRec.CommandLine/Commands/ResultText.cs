@@ -75,7 +75,13 @@ internal static class ResultText
             // Each run of a pipeline a node called, under who called it, with its own nodes.
             foreach (var call in calls)
             {
-                var how = call.Succeeded ? "succeeded" : $"failed ({call.Error})";
+                var how = call switch
+                {
+                    { Cached: { Stale: true } stale } => $"failed ({call.Error}), served the cached result of request {stale.RequestId}, past its ttl_ms",
+                    { Cached: { } origin } => $"not run, served the cached result of request {origin.RequestId}",
+                    { Succeeded: true } => "succeeded",
+                    _ => $"failed ({call.Error})",
+                };
                 var arms = call.Arms.Count == 0 ? string.Empty : $", arms {string.Join(", ", call.Arms)}";
                 output.WriteLine($"  call      {call.CalledBy} -> {call.PipelineId}: {how}, " +
                                  $"{call.ElapsedMs.ToString("0.###", CultureInfo.InvariantCulture)} ms{arms}");

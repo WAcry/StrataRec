@@ -341,7 +341,9 @@ internal static class ReplayJson
             values[v] = new Execution.ResultValue(call.Values[v].Name, type, Values(call.Values[v].Values, type, 1, at + "/values")[0]);
         }
 
-        return new Operators.PipelineCallResult(call.Pipeline, true, null, new Execution.ResultColumns(ids, names, types, columns), Execution.ResultValues.OfOutput(values));
+        var cached = call.CachedFrom is { } from ? new Operators.CachedFrom(from.RequestId, from.TimeMs, from.Stale == true) : null;
+        return new Operators.PipelineCallResult(
+            call.Pipeline, true, null, new Execution.ResultColumns(ids, names, types, columns), Execution.ResultValues.OfOutput(values), cached);
     }
 
     public static ColumnType Type(string? text, string pointer)

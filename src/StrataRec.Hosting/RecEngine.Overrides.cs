@@ -73,6 +73,7 @@ public sealed partial class RecEngine
                 Bindings = lease,
                 Layout = new PlanLayout(plan),
                 Source = served.Source,
+                CallIdentity = served.CallIdentity, // never read: a request with an override uses no cache of calls
                 ConfigOverride = compilation.ConfigOverride,
             };
             handedOut = lease.TryEnter(); // a lease nothing has retired: always entered

@@ -26,8 +26,9 @@ public sealed class CachePolicy
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ttlMs);
         ArgumentOutOfRangeException.ThrowIfNegative(staleIfErrorMs);
-        if (ttlMs > long.MaxValue / 4 || staleIfErrorMs > long.MaxValue / 4)
+        if (ttlMs > CacheSettings.MaxMs || staleIfErrorMs > CacheSettings.MaxMs)
         {
+            // What a binding may write (CacheSettings): the lifetime with its jitter and the stale window still add up in an int64.
             throw new ArgumentOutOfRangeException(nameof(ttlMs), "ttl_ms and stale_if_error_ms are at most 2^61 ms.");
         }
 

@@ -122,6 +122,7 @@ public sealed record PlanEnvironment
         (BindingKind.UpdateSource, typeof(IBindingFactory<IFeatureUpdateSource>), static f => ((IBindingFactory<IFeatureUpdateSource>)f).SettingsType),
         (BindingKind.CacheStore, typeof(IBindingFactory<ICacheStore>), static f => ((IBindingFactory<ICacheStore>)f).SettingsType),
         (BindingKind.ServiceCacheStore, typeof(IBindingFactory<ICacheStore>), static f => ((IBindingFactory<ICacheStore>)f).SettingsType),
+        (BindingKind.PipelineCacheStore, typeof(IBindingFactory<ICacheStore>), static f => ((IBindingFactory<ICacheStore>)f).SettingsType),
     ];
 }
 
@@ -2615,6 +2616,7 @@ public sealed class PlanBuilder
             CompileTime = _clock.Elapsed,
             RequestSchema = RequestInputSchema,
             Calls = CalledPipelines(),
+            ValuesIdentity = _clients?.ValuesIdentity(ReadSources()) ?? string.Empty,
         };
         _ = plan.Telemetry; // metric tags are built with the plan, not on its first request
         return plan;
@@ -2689,6 +2691,13 @@ public sealed class PlanBuilder
             return required;
         }
 
+        _clients.Bindings.AddTypes(required, ReadSources(), _clients.BoundServices, _clients.CachedPipelines);
+        return required;
+    }
+
+    /// <summary>The feature sources of the catalog features registered so far.</summary>
+    private HashSet<string> ReadSources()
+    {
         var sources = new HashSet<string>(StringComparer.Ordinal);
         foreach (var feature in _features)
         {
@@ -2698,8 +2707,7 @@ public sealed class PlanBuilder
             }
         }
 
-        _clients.Bindings.AddTypes(required, sources, _clients.BoundServices);
-        return required;
+        return sources;
     }
 
     /// <summary>

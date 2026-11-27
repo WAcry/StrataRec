@@ -42,7 +42,7 @@ internal readonly record struct CacheSpec(CachePolicy Policy, string? Version, l
 }
 
 /// <summary>
-/// The one reading of a <c>cache</c> binding: its times, its version and its tiers, each problem reported at its setting.
+/// The one reading of a cache's settings: its times, its version and its tiers, each problem reported at its setting.
 /// Feature sources, services and pipeline calls read their caches here, so they say the same about the same mistake.
 /// </summary>
 internal static class CacheSettings
@@ -53,25 +53,14 @@ internal static class CacheSettings
     /// <param name="pointer">The <c>cache</c> member's pointer.</param>
     /// <param name="ownerTimeoutMs">The owner's <c>timeout_ms</c>: the distributed tier's default is half of it; with none,
     /// the tier must give its own.</param>
-    /// <param name="times">Whether the binding gives the times (<c>ttl_ms</c>, <c>stale_if_error_ms</c>, <c>version</c>):
-    /// a pipeline's binding holds only the tiers, the calling nodes give the times, and <paramref name="spec"/> has a
-    /// placeholder policy.</param>
-    public static bool TryRead(
-        CacheBinding cache, CacheOwner owner, BindingResolver resolver, string pointer, int? ownerTimeoutMs, out CacheSpec spec, bool times = true)
+    public static bool TryRead(CacheBinding cache, CacheOwner owner, BindingResolver resolver, string pointer, int? ownerTimeoutMs, out CacheSpec spec)
     {
         var diagnostics = resolver.Diagnostics;
         var artifact = resolver.Artifact;
         var ok = true;
-        long ttlMs = 0, staleMs = 0;
-        long? memoryBytes = null;
-        DistributedCacheTier? distributed = null;
-        int? distributedTimeoutMs = null;
+        long ttlMs = 0;
         spec = default;
-        if (!times)
-        {
-            ok &= NoTimes(cache, owner, resolver, pointer);
-        }
-        else if (cache.TtlMs is not { } ttl)
+        if (cache.TtlMs is not { } ttl)
         {
             ok = false;
             diagnostics.Error("CACHE_TTL", artifact, pointer, $"The cache of {owner.Noun} '{owner.Name}' has no 'ttl_ms'.",
@@ -86,17 +75,34 @@ internal static class CacheSettings
             ttlMs = ttl;
         }
 
-        if (times && !TryStale(cache.StaleIfErrorMs, owner.Origin, diagnostics, artifact, pointer, out staleMs))
+        ok &= TryStale(cache.StaleIfErrorMs, owner.Origin, diagnostics, artifact, pointer, out var staleMs);
+        ok &= TryVersion(cache.Version, diagnostics, artifact, pointer);
+        ok &= TryTiers(cache.Memory, cache.Distributed, owner, resolver, pointer, ownerTimeoutMs, out var memoryBytes, out var distributed, out var distributedTimeoutMs);
+        ok &= distributed is null || TryRetention(owner, ttlMs, staleMs, pointer, resolver);
+        if (ok)
         {
-            ok = false;
+            spec = new CacheSpec(new CachePolicy(ttlMs, staleMs), cache.Version, memoryBytes, distributed, distributedTimeoutMs);
         }
 
-        if (times && !TryVersion(cache.Version, diagnostics, artifact, pointer))
-        {
-            ok = false;
-        }
+        return ok;
+    }
 
-        if (cache.Memory is { } memory)
+    /// <summary>
+    /// The tiers of a cache: <c>memory</c>, <c>distributed</c> or both, at least one; each problem reported at its setting.
+    /// </summary>
+    /// <param name="pointer">The <c>cache</c> member's pointer.</param>
+    /// <param name="ownerTimeoutMs">As for <see cref="TryRead"/>.</param>
+    public static bool TryTiers(
+        MemoryCacheBinding? memory, DistributedCacheBinding? shared, CacheOwner owner, BindingResolver resolver, string pointer, int? ownerTimeoutMs,
+        out long? memoryBytes, out DistributedCacheTier? distributed, out int? distributedTimeoutMs)
+    {
+        var diagnostics = resolver.Diagnostics;
+        var artifact = resolver.Artifact;
+        var ok = true;
+        memoryBytes = null;
+        distributed = null;
+        distributedTimeoutMs = null;
+        if (memory is not null)
         {
             if (memory.MaxBytes is null)
             {
@@ -115,14 +121,14 @@ internal static class CacheSettings
                 memoryBytes = bytes;
             }
         }
-        else if (cache.Distributed is null)
+        else if (shared is null)
         {
             ok = false;
             diagnostics.Error("CACHE_TIERS", artifact, pointer, $"The cache of {owner.Noun} '{owner.Name}' has neither a 'memory' nor a 'distributed' tier: nothing would keep its values.",
                 "add \"memory\": { \"max_bytes\": \"64MiB\" } to keep them in process, or \"distributed\": { \"store\": \"redis@1\", ... } to keep them in a store the instances share");
         }
 
-        if (cache.Distributed is { } shared)
+        if (shared is not null)
         {
             var at = pointer + "/distributed";
             if (shared.TimeoutMs is <= 0)
@@ -143,12 +149,6 @@ internal static class CacheSettings
             distributed = resolver.Acquire<ICacheStore, DistributedCacheTier>(
                 owner.StoreKind, owner.Name, shared.Store, shared.Settings, static store => new DistributedCacheTier(store), StoreHint(shared.Store));
             ok &= distributed is not null;
-            ok &= !times || TryRetention(owner, ttlMs, staleMs, pointer, resolver);
-        }
-
-        if (ok)
-        {
-            spec = new CacheSpec(new CachePolicy(times ? ttlMs : 1, staleMs), cache.Version, memoryBytes, distributed, distributedTimeoutMs);
         }
 
         return ok;
@@ -216,29 +216,11 @@ internal static class CacheSettings
         return true;
     }
 
-    /// <summary>A binding that holds only tiers has none of the times: they are the calling nodes'. False (diagnosed) when it has one.</summary>
-    private static bool NoTimes(CacheBinding cache, CacheOwner owner, BindingResolver resolver, string pointer)
-    {
-        var ok = true;
-        foreach (var (name, set) in new[] { ("ttl_ms", cache.TtlMs is not null), ("stale_if_error_ms", cache.StaleIfErrorMs is not null), ("version", cache.Version is not null) })
-        {
-            if (set)
-            {
-                ok = false;
-                resolver.Diagnostics.Error("CACHE_SETTING_OF_CALL", resolver.Artifact, pointer + "/" + name,
-                    $"'{name}' of the cache of {owner.Noun} '{owner.Name}' is not a binding's setting: each node that calls the pipeline says it for its own calls.",
-                    $"move '{name}' to the 'cache' of the calling node's config; the binding keeps where the results are held ('memory', 'distributed')");
-            }
-        }
-
-        return ok;
-    }
-
     /// <summary>
     /// Whether the distributed tier can be given the longest time to live a record of this binding needs (the TTL with all
     /// its jitter, plus the stale window): a <see cref="TimeSpan"/>. Diagnosed at the setting that takes it past.
     /// </summary>
-    private static bool TryRetention(CacheOwner owner, long ttlMs, long staleMs, string pointer, BindingResolver resolver)
+    public static bool TryRetention(CacheOwner owner, long ttlMs, long staleMs, string pointer, BindingResolver resolver)
     {
         if (ttlMs == 0 || CachePolicy.RetentionOf(ttlMs, staleMs) <= CachePolicy.MaxRetentionMs)
         {

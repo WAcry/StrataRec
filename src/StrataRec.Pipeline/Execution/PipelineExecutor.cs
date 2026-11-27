@@ -1659,6 +1659,53 @@ internal sealed class PipelineExecutor
         }
     }
 
+    /// <summary>
+    /// The <c>$experiments</c> record of a run that did not happen because a cache answered the call of its pipeline
+    /// (<see cref="Operators.PipelineCallCache"/>): the request was exposed to the arms that computed the result, and a
+    /// record only for the runs that happened would make exposure counts depend on the hit rate. It carries where the
+    /// result comes from and no node outcomes: nothing ran. The run's other taps wrote under the request that computed it.
+    /// </summary>
+    /// <param name="capture">The request captures its log batches: the batch is returned instead of written.</param>
+    /// <param name="write">The request's runs may write the persistent logs.</param>
+    /// <returns>The batch when captured; null when it was written, or goes nowhere.</returns>
+    internal Logging.LogBatch? PublishCachedExposure(
+        string requestId, long timeMs, string calledBy, Operators.CallExposure exposure, Operators.CachedFrom from, bool capture, bool write)
+    {
+        if (!capture && !(write && _logs is not null))
+        {
+            return null;
+        }
+
+        var batch = new Logging.LogBatch
+        {
+            TapId = "$experiments",
+            RequestId = requestId,
+            PipelineId = exposure.PipelineId,
+            CalledBy = calledBy,
+            ManifestId = exposure.ManifestId,
+            CachedFromRequestId = from.RequestId,
+            CachedFromTimeMs = from.TimeMs,
+            Schema = Logging.LogSchema.Experiments,
+            TimeMs = timeMs,
+            Delivery = Logging.LogDelivery.Durable,
+            RequestProbability = 1.0,
+            Int64EntityIds = Array.Empty<long>(),
+            Ranks = Array.Empty<int>(),
+            RowProbability = 1.0,
+            Columns = Array.Empty<Logging.LogColumn>(),
+            Context = Array.Empty<(string, ScalarValue)>(),
+            AssignedArms = exposure.Arms,
+            TriggeredExperiments = exposure.Triggered,
+        };
+        if (capture)
+        {
+            return batch;
+        }
+
+        _logs!.Submit(batch);
+        return null;
+    }
+
     /// <summary>Whether the run's log batches are returned to the caller: captured, or a replay's (compared, never written).</summary>
     private static bool Returns(PipelineRequest request) => request.CaptureLogs || request.Replay is not null;
 

@@ -181,6 +181,9 @@ public sealed class PipelineCall
     /// <summary>The key type the operator reads the result's ids as (<see cref="OperatorCompileContext.CallReadsKeys"/>); null when it said none.</summary>
     internal EntityKeyType? ReadsKeys { get; set; }
 
+    /// <summary>The node's cache of the call's results (<see cref="OperatorCompileContext.TryCallPipeline"/>); null for a call that always runs the pipeline.</summary>
+    internal PipelineCallCache? Cache { get; set; }
+
     internal bool PassesInput(string name) => IndexOf(_inputs, name) >= 0;
 
     internal void AddInput(string name, ColumnType type) => _inputs.Add(new PipelineOutput(name, type));
@@ -356,13 +359,14 @@ public sealed class PipelineCall
 /// <summary>What a call of a pipeline returned (<see cref="OperatorContext.CallPipelineAsync"/>).</summary>
 public sealed class PipelineCallResult
 {
-    internal PipelineCallResult(string pipelineId, bool succeeded, string? error, ResultColumns columns, ResultValues values)
+    internal PipelineCallResult(string pipelineId, bool succeeded, string? error, ResultColumns columns, ResultValues values, CachedFrom? cached = null)
     {
         PipelineId = pipelineId;
         Succeeded = succeeded;
         Error = error;
         Columns = columns;
         Values = values;
+        Cached = cached;
     }
 
     public string PipelineId { get; }
@@ -380,6 +384,13 @@ public sealed class PipelineCallResult
 
     /// <summary>The pipeline's request-level output values (<c>output.values</c>).</summary>
     public ResultValues Values { get; }
+
+    /// <summary>
+    /// For a result the node's cache answered (<see cref="OperatorCompileContext.TryCallPipeline"/>): the request whose
+    /// run computed it. The pipeline did not run for this call: its log taps wrote under that request, not this one. Null
+    /// for a result the pipeline computed for this call.
+    /// </summary>
+    public CachedFrom? Cached { get; }
 
     internal static PipelineCallResult Failed(string pipelineId, string error) => new(pipelineId, false, error, ResultColumns.Empty, ResultValues.Empty);
 }

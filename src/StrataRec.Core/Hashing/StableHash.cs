@@ -143,6 +143,62 @@ public static class StableHash
             }
         }
 
+        /// <summary>
+        /// Adds any value, a missing one and a list too, each after what it is: a missing value, an empty list and an empty
+        /// string are three things. A float32 is added as the double it is: what declares the value says its width.
+        /// </summary>
+        public void AddAny(in ScalarValue value)
+        {
+            switch (value.Kind)
+            {
+                case 0:
+                    Add(false);
+                    break;
+                case Types.StorageKind.List:
+                    Add(true);
+                    AddIndex(value.ListLength);
+                    switch (value.ListElement)
+                    {
+                        case Types.StorageKind.Int64:
+                            foreach (var element in value.AsInt64List())
+                            {
+                                Add(element);
+                            }
+
+                            break;
+                        case Types.StorageKind.Float64:
+                            foreach (var element in value.AsFloat64List())
+                            {
+                                Add(element);
+                            }
+
+                            break;
+                        case Types.StorageKind.Bool:
+                            foreach (var element in value.AsBoolList())
+                            {
+                                Add(element);
+                            }
+
+                            break;
+                        case Types.StorageKind.String:
+                            foreach (var element in value.AsStringList())
+                            {
+                                Add(element);
+                            }
+
+                            break;
+                        default:
+                            throw new ArgumentException($"A list of {value.ListElement} cannot be hashed.", nameof(value));
+                    }
+
+                    break;
+                default:
+                    Add(true);
+                    Add(value);
+                    break;
+            }
+        }
+
         /// <summary>Hashes the bytes added so far. The builder can keep accumulating afterwards.</summary>
         public readonly ulong Finish() =>
             XxHash3.HashToUInt64(_buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length));
