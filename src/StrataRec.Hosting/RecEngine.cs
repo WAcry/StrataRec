@@ -1129,6 +1129,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             ExplainIds = request.Debug?.ExplainIds,
             OnRecording = runs is null ? null : runs.Add,
             Calls = pipeline.Plan.Calls.IsEmpty ? null : new RunCalls(calls ??= new RequestCalls(this, request), pipeline.Plan.PipelineId, 0),
+            Reads = calls?.Reads, // after Calls: a run that calls none shares with none
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
 

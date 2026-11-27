@@ -780,6 +780,8 @@ public sealed class OperatorContext : IServiceCallScope
 
     RunReplay? IServiceCallScope.Replay => _state.Replay;
 
+    RequestReads? IServiceCallScope.Reads => _state.Reads;
+
     RunRecorder? IServiceCallScope.Recorder => _state.Recorder;
 
     /// <summary>A node's pending call holds the request memory until it completes; nothing else waits for it.</summary>

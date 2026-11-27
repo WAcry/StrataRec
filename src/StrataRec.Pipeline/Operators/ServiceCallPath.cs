@@ -68,6 +68,9 @@ internal interface IServiceCallScope
 
     RunReplay? Replay { get; }
 
+    /// <summary>What the cached reads of the request's runs share (<see cref="RequestReads"/>); null for a request of one run.</summary>
+    RequestReads? Reads { get; }
+
     /// <summary>The call was answered with stale values (its cache's), or was when it was recorded.</summary>
     void ReportDegraded(string reason);
 

@@ -419,6 +419,7 @@ internal sealed class SharedStores : IBindingFactory<ICacheStore>
 
     private readonly ConcurrentDictionary<string, byte[]> _records = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, bool> _read = new(StringComparer.Ordinal);
+    private int _sets;
 
     public string Type => TypeName;
 
@@ -428,6 +429,17 @@ internal sealed class SharedStores : IBindingFactory<ICacheStore>
 
     /// <summary>Awaited by every read before it answers, when set: a store that is slow for as long as the test says.</summary>
     public Func<Task>? BeforeGet { get; set; }
+
+    private int _gets;
+
+    /// <summary>The reads the stores were asked for, each a round trip.</summary>
+    public int Gets => Volatile.Read(ref _gets);
+
+    /// <summary>The records the stores hold.</summary>
+    public int Records => _records.Count;
+
+    /// <summary>The records the stores were given, one written over another too.</summary>
+    public int Sets => Volatile.Read(ref _sets);
 
     /// <summary>Whether every key any store was asked for has a record: what was missed has been written back.</summary>
     public bool HoldsEveryKeyRead() => !_read.IsEmpty && _read.Keys.All(_records.ContainsKey);
@@ -460,6 +472,7 @@ internal sealed class SharedStores : IBindingFactory<ICacheStore>
 
         public async ValueTask GetAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref shared._gets);
             if (shared.BeforeGet is { } hold)
             {
                 await hold(); // not the read's token: a store that goes on after its caller gave up
@@ -481,6 +494,7 @@ internal sealed class SharedStores : IBindingFactory<ICacheStore>
             foreach (var entry in entries.Span)
             {
                 shared._records[Name(keyspace, entry.Key)] = entry.Record.ToArray();
+                Interlocked.Increment(ref shared._sets);
             }
 
             return ValueTask.CompletedTask;

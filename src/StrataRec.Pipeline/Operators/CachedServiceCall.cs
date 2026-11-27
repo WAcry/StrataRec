@@ -67,6 +67,7 @@ internal sealed class CachedServiceCall
     private readonly long _nowMs;
     private readonly CallDeadline _deadline;
     private bool _timeUsed; // the distributed tier's read was cut off at the service's own deadline
+    private RequestReads.SharedRead? _reading; // the request's read of the call's record, when this call is its reader
     private int[]? _layout; // a call about items: the layout every record it uses has
 
     private CachedServiceCall(IServiceCallScope scope, BoundService service, ServiceCache cache, ServiceCall call, ServiceResponse response)
@@ -114,12 +115,15 @@ internal sealed class CachedServiceCall
         var sequence = recorder?.BeginCall(scope.Caller, service.Target, call) ?? 0;
         var started = Stopwatch.GetTimestamp();
         var result = new Result(ServiceStatus.Failed("the call did not complete"), IoOutcome.Error, null, false);
+        CachedServiceCall? read = null;
         try
         {
-            result = await new CachedServiceCall(scope, service, cache, call, response).ReadAsync().ConfigureAwait(false);
+            read = new CachedServiceCall(scope, service, cache, call, response);
+            result = await read.ReadAsync().ConfigureAwait(false);
         }
         finally
         {
+            read?._reading?.Withdraw(); // unless it ended with a record or the service's failure: those waiting go on by themselves
             response.Close();
             recorder?.EndCall(
                 sequence, result.Outcome, result.CutOff?.Message ?? result.Status.Error, result.CutOff is not null, Stopwatch.GetElapsedTime(started), response,
@@ -144,6 +148,40 @@ internal sealed class CachedServiceCall
         }
 
         var misses = ReadLocal();
+        if (misses > 0 && !_keyed && _scope.Reads is { } reads)
+        {
+            // A call about no items is one record: another call of the request for it, by the same times and to the same
+            // limit, may be getting it, or have got it. The limit is not in the record's key (a longer answer serves a
+            // shorter call), and it is in what is joined: a service refuses a limit it answers a smaller one of.
+            var joined = reads.Join(_cache.Table, RequestReads.Asked(_keys[0], _cache.Policy.TtlMs, _cache.Policy.StaleIfErrorMs, _call.Limit), out var reader);
+            if (reader)
+            {
+                _reading = joined;
+            }
+            else
+            {
+                var answer = await joined.WaitAsync(_scope.Budget, _deadline.IsSet ? _deadline.Remaining : Timeout.InfiniteTimeSpan).ConfigureAwait(false);
+                switch (answer.End)
+                {
+                    case SharedEnd.Record when Take((ReadOnlyMemory<byte>)answer.Record!, RowState.Fresh):
+                        _cache.TableCache.CountKeys(CacheTier.Request, CacheKeyOutcome.Hit, 1);
+                        misses = 0;
+                        break;
+                    case SharedEnd.Failed:
+                        if (answer.Record is ReadOnlyMemory<byte> stale)
+                        {
+                            Take(stale, RowState.Stale);
+                        }
+
+                        return Failure(ServiceStatus.Failed(answer.Error ?? "failed"), IoOutcome.Error, answered: false);
+                    case SharedEnd.TimedOut:
+                        return Failure(ServiceStatus.Failed($"timed out after {_service.TimeoutMs} ms"), IoOutcome.Timeout, answered: false);
+                    case SharedEnd.CutOff when BoundedCall.CutOff(_scope.Budget) is { } cut:
+                        return new Result(default, cut.Outcome, cut.Exception, false);
+                }
+            }
+        }
+
         if (misses > 0 && _cache.Distributed is { } tier)
         {
             if (await ReadDistributedAsync(tier, misses).ConfigureAwait(false) is { } cutOff)
@@ -167,6 +205,24 @@ internal sealed class CachedServiceCall
         }
 
         return await CallServiceAsync(misses).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A record the call of the request this one joined got (<see cref="RequestReads"/>), as it took it: fresh, or stale
+    /// from the distributed tier when the service failed it. Taken as that tier's is: when it answers this call, a stale
+    /// one only when newer than the one held, and judged again if it comes to serve (<see cref="StaleAnswer"/>).
+    /// </summary>
+    private bool Take(ReadOnlyMemory<byte> bytes, RowState state)
+    {
+        var decoded = _cache.Decode(bytes, out _);
+        if (decoded is null || !WellFormed(decoded) || !Answers(decoded)
+            || (state == RowState.Stale && _rows[0].State == RowState.Stale && decoded.WrittenMs <= WrittenMs(0)))
+        {
+            return false;
+        }
+
+        _rows[0] = new Row(state, default, decoded);
+        return true;
     }
 
     /// <summary>The in-process tier: each key's record, fresh or stale, when it answers the call. Returns the rows not fresh.</summary>
@@ -288,6 +344,7 @@ internal sealed class CachedServiceCall
             else if (freshness == CacheFreshness.Fresh)
             {
                 _rows[r] = new Row(RowState.Fresh, default, decoded);
+                _reading?.Complete(decoded.Bytes); // a call about no items: its one record
                 if (_cache.TableCache.Memory)
                 {
                     (copies ??= new()).Add((_keys[r], decoded.Bytes)); // for the in-process tier, when the cache has one
@@ -390,6 +447,13 @@ internal sealed class CachedServiceCall
 
         // A failed answer is recorded as the service gave it (its generation details), as a call without a cache is.
         var failure = sent.End == CallEnd.Answered ? sent.Value : ServiceStatus.Failed(sent.Error ?? "failed");
+        if (sent.End is CallEnd.Answered or CallEnd.Threw)
+        {
+            // The service's own failure: the calls of the request waiting for this one fail as it did, each with the
+            // stale record this one read from the distributed tier, which they did not read. A call cut short by its
+            // time is not the service's word: they call on their own.
+            _reading?.Fail(failure.Error ?? "failed", _rows[0] is { State: RowState.Stale, Wire: { } held } ? held.Bytes : (object?)null);
+        }
         return Failure(failure, sent.Outcome == IoOutcome.Ok ? IoOutcome.Error : sent.Outcome, sent.End == CallEnd.Answered);
     }
 
@@ -839,6 +903,7 @@ internal sealed class CachedServiceCall
             if (EncodeCall(answer, builder, truncated))
             {
                 builder.End(_keys[0]);
+                _reading?.Complete(builder.Record(0));
                 builder.WriteBack(_cache.TableCache.NowMs());
             }
 

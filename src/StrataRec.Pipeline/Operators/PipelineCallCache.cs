@@ -253,6 +253,9 @@ internal sealed class PipelineCallCache
 
     public bool HasDistributed => _tiers.Distributed is not null;
 
+    /// <summary>The table of the pipeline's results: what the calls of a request that share a result are found by (<see cref="RequestReads"/>).</summary>
+    public object Table => _tiers.Table;
+
     /// <summary>The cache's clock, in Unix milliseconds: what a record's write time and its age are told by.</summary>
     public long NowMs() => _tiers.TableCache.NowMs();
 
@@ -361,6 +364,9 @@ internal sealed class PipelineCallCache
 
         return new CachedCallRead(result, null);
     }
+
+    /// <summary>A call answered by what another call of its request got (<see cref="RequestReads"/>).</summary>
+    public void CountShared() => Count(CacheTier.Request, CacheKeyOutcome.Hit);
 
     /// <summary>Whether a stale result may serve now: still within the node's <c>stale_if_error_ms</c>.</summary>
     public bool Usable(UInt128 key, CachedCall stale) => Policy.Classify(stale.WrittenMs, (ulong)key, NowMs()) != CacheFreshness.Expired;

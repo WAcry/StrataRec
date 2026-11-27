@@ -1,7 +1,9 @@
 using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
+using StrataRec.Core.Columns;
 using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
+using StrataRec.Core.Memory;
 using StrataRec.Core.Types;
 using StrataRec.Features.Cache;
 using StrataRec.Features.Local;
@@ -657,6 +659,79 @@ public class CacheTableTests
     }
 
     /// <summary>
+    /// What a table is over a lowered limit may be the records its keys were written over since: those go first, and
+    /// no key with them when that is enough. The share to evict was taken of the size with them, and keys went from a
+    /// table that, compacted, was within the limit with every one of them.
+    /// </summary>
+    [Fact]
+    public void ALimitLoweredToWhatTheKeysHold_FreesTheRecordsWrittenOver_AndKeepsEveryKey()
+    {
+        var (table, cache, clock) = Scores(1 << 20, 1_000, pageSize: 4 << 10);
+        for (var round = 0; round < 4; round++)
+        {
+            WriteScores(table, clock.NowMs + round + 1, from: 0, count: 800); // written over: the old records stay until a compaction
+        }
+
+        var packed = Scores(1 << 20, 1_000, pageSize: 4 << 10).Table.Pin().Bytes;
+        var held = table.Pin().Bytes;
+        Assert.True(held > packed + (8 << 10), $"the records written over are still held ({held} B, {packed} B without them)");
+        var max = packed + (4 << 10);
+
+        table.Retune(ScoreOptions(max, clock, pageSize: 4 << 10));
+        cache.WriteQueued(table.Writer);
+
+        Assert.Equal(1_000, table.Pin().RecordCount);
+        Assert.InRange(table.Pin().Bytes, 1, max);
+    }
+
+    /// <summary>
+    /// A record that fits the table is written while records can still go for it: an eviction whose estimate falls short
+    /// (a table of a few pages, where the room a record needs is a page and not its own size) frees more, as a lowered
+    /// limit does. It was tried once: of three records much larger than those the table held, two were refused, and a
+    /// key refused is one its source is asked for again at every read.
+    /// </summary>
+    [Fact]
+    public void ARecordLargerThanThoseHeld_IsWritten_WhenOneEvictionDoesNotMakeRoomForIt()
+    {
+        const int Max = 16 << 10;
+        var clock = new ManualClock();
+        var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("v", ColumnType.List(StorageKind.Float32))]);
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions { MaxBytes = Max, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock } });
+        for (var key = 0; key < 300; key++)
+        {
+            WriteVector(table, clock.NowMs, key, length: 1 + (key % 24)); // more than it holds: it is at its limit
+        }
+
+        Assert.InRange(table.Pin().RecordCount, 50, 299);
+        for (var key = 1_000; key < 1_003; key++)
+        {
+            WriteVector(table, clock.NowMs, key, length: 512);
+            Assert.True(table.Pin().Find(EntityKey.FromInt64(key)).Found, $"record {key} was refused by a table of {table.Pin().RecordCount} records and {table.Pin().Bytes} B");
+            Assert.InRange(table.Pin().Bytes, 1, Max);
+        }
+
+        Assert.InRange(table.Pin().RecordCount, 4, 299); // and not by emptying the table
+    }
+
+    private static void WriteVector(LocalFeatureTable table, long writtenMs, long key, int length)
+    {
+        var cache = table.Cache!;
+        var values = new ListColumn<float>(ColumnType.List(StorageKind.Float32), 1, new RequestMemory());
+        var floats = values.SetUninitialized(0, length);
+        for (var i = 0; i < length; i++)
+        {
+            floats[i] = key + i;
+        }
+
+        var writer = new CacheRecordWriter(cache.Layout, 64 + (4 * length));
+        writer.Begin(writtenMs, cache.Fingerprint, absent: false);
+        writer.List(0, values, 0);
+        var (offset, count) = writer.End();
+        cache.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(key)], [writer.Bytes.AsMemory(offset, count)], 1));
+        cache.WriteQueued(table.Writer);
+    }
+
+    /// <summary>
     /// A limit too low to write under still brings the table within it: the limit comes before the next write. The old
     /// records stayed, all of them, over the limit for good: every write failed, and only a write that fit installed a
     /// smaller table. Under a limit only the empty table fits, the table is left empty, as one created with it stays.
@@ -697,15 +772,15 @@ public class CacheTableTests
         Assert.Equal((1L << 20, 60_000L, 10), (table.MaxBytes, cache.Policy.TtlMs, table.Pin().RecordCount));
     }
 
-    private static LocalFeatureTableOptions ScoreOptions(long maxBytes, ManualClock clock) =>
-        new() { MaxBytes = maxBytes, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock } };
+    private static LocalFeatureTableOptions ScoreOptions(long maxBytes, ManualClock clock, int pageSize = 1 << 20) =>
+        new() { MaxBytes = maxBytes, PageSize = pageSize, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock } };
 
     /// <summary>A cache of scores (an int64 key, one float64) holding <paramref name="records"/> of them, written at the clock's time.</summary>
-    private static (LocalFeatureTable Table, LocalTableCache Cache, ManualClock Clock) Scores(long maxBytes, int records)
+    private static (LocalFeatureTable Table, LocalTableCache Cache, ManualClock Clock) Scores(long maxBytes, int records, int pageSize = 1 << 20)
     {
         var clock = new ManualClock();
         var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("score", ColumnType.Float64)]);
-        var table = new LocalFeatureTable(schema, ScoreOptions(maxBytes, clock));
+        var table = new LocalFeatureTable(schema, ScoreOptions(maxBytes, clock, pageSize));
         WriteScores(table, clock.NowMs, 0, records);
         return (table, table.Cache!, clock);
     }

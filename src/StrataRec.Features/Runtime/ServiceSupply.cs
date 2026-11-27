@@ -63,6 +63,9 @@ internal sealed class ServiceSupplyCall
     /// <inheritdoc cref="RequestId"/>
     public long? Seed { get; init; }
 
+    /// <summary>What the cached reads of the request's runs share; null for a request of one run.</summary>
+    public RequestReads? Reads { get; init; }
+
     /// <summary>The fetch, which tracks the call's external operations still running (<see cref="FeatureFetcher.WhenIoCompleteAsync"/>).</summary>
     public IIoTracker? Io { get; init; }
 }

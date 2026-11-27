@@ -551,7 +551,7 @@ public sealed partial class FeatureFetcher
         var call = new ServiceSupplyCall
         {
             Group = group, Args = args, Fields = fields, Values = new ScalarValue[fields.Length], Memory = _memory, Bound = bound, Hook = _hook,
-            RequestId = _requestId, Seed = _seed, Io = this,
+            RequestId = _requestId, Seed = _seed, Io = this, Reads = Reads,
         };
         ValueTask<FetchStatus> served;
         try

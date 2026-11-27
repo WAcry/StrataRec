@@ -23,7 +23,7 @@ namespace StrataRec.IntegrationTests;
 /// </summary>
 public sealed class PipelineCallCacheEndToEndTests
 {
-    private const long T0 = 1_767_225_600_000;
+    internal const long T0 = 1_767_225_600_000;
 
     private const string Memory = """{ "cache": { "memory": { "max_bytes": "1MiB" } } }""";
 
@@ -85,9 +85,13 @@ public sealed class PipelineCallCacheEndToEndTests
         });
 
     /// <summary>An engine serving <c>promoted</c> and <c>feed</c>, with what the tests move and read.</summary>
-    private sealed class Rig : IAsyncDisposable
+    internal sealed class Rig : IAsyncDisposable
     {
-        public Rig(HomeFeedTestHost host, Probe? probe = null, SharedStores? stores = null, IAssignmentProvider? provider = null, params string[] pipelines)
+        /// <param name="bind">Adds the test's own connectors and clients.</param>
+        /// <param name="operators">The test's own operators, beside the probe.</param>
+        public Rig(
+            HomeFeedTestHost host, Probe? probe = null, SharedStores? stores = null, IAssignmentProvider? provider = null, Action<BindingRegistry>? bind = null,
+            IOperatorFactory[]? operators = null, params string[] pipelines)
         {
             Host = host;
             Probe = probe ?? new Probe();
@@ -97,9 +101,16 @@ public sealed class PipelineCallCacheEndToEndTests
                 bindings.Add(stores);
             }
 
+            bind?.Invoke(bindings);
+
             Logs = new LogPipeline(Sink);
-            Engine = new RecEngine(
-                new PlanEnvironment { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(Probe), Bindings = bindings, Clock = Clock }, provider, Logs);
+            var registry = OperatorRegistry.CreateDefault().Add(Probe);
+            foreach (var factory in operators ?? [])
+            {
+                registry.Add(factory);
+            }
+
+            Engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Operators = registry, Bindings = bindings, Clock = Clock }, provider, Logs);
             foreach (var id in pipelines.Length == 0 ? ["promoted", "feed"] : pipelines)
             {
                 Load(id);
@@ -215,14 +226,15 @@ public sealed class PipelineCallCacheEndToEndTests
     private static RequestInputs Elsewhere => new RequestInputs().Set("user_id", 1001).Set("country", "nz");
 
     /// <summary>A page whose rows each call <c>promoted</c> with <paramref name="slots"/>, and say which run computed their lists.</summary>
-    private static HomeFeedTestHost PageHost(string slots = "col.entity_id", string? content = null) => Host(more: root =>
+    internal static HomeFeedTestHost PageHost(string slots = "col.entity_id", string? content = null, Action<string>? more = null) => Host(more: root =>
     {
         var page = content is null ? Page : Page.Replace(PageContent, content, StringComparison.Ordinal);
         File.WriteAllText(Path.Combine(root, "pipelines", "page.jsonc"), page.Replace("QUOTIENT", slots, StringComparison.Ordinal));
         File.WriteAllText(Path.Combine(root, "releases", "page.local.jsonc"), """{ "pipeline_id": "page", "environment": "local", "catalog": "home_feed", "bindings": "local" }""");
+        more?.Invoke(root);
     });
 
-    private const string PageContent = """
+    internal const string PageContent = """
         "config": { "pipeline": "promoted", "inputs": { "slots": "QUOTIENT" }, "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
                               "cache": { "ttl_ms": 3600000 }, "computed_by": { "request_id": "games.from", "time_ms": "games.at", "called_by": "games.by" } }
         """;
@@ -719,6 +731,128 @@ public sealed class PipelineCallCacheEndToEndTests
     }
 
     /// <summary>
+    /// Nor when a pipeline under the called one came to be served while the run was under way: the key was built without
+    /// it, as on an instance that does not serve it, and the run called it. The result was kept under that key, and an
+    /// instance the release had not reached returned rows of a pipeline it does not serve.
+    /// </summary>
+    [Fact]
+    public async Task AResultComputedWhileAPipelineUnderItCameToBeServed_IsNotKept()
+    {
+        var host = Nested();
+        SampleBindings.BindPipeline(host.Root, "promoted", """{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""");
+        var stores = new SharedStores();
+        string[] before = ["promoted", "feed"];
+        await using var rolling = new Rig(host, stores: stores, pipelines: before);
+        await using var behind = new Rig(host, stores: stores, pipelines: before); // the release of other has not reached it
+        rolling.Probe.OnRun = () =>
+        {
+            rolling.Probe.OnRun = null; // once: promoted runs, and has not called other yet
+            rolling.Load("other");
+        };
+
+        var during = await rolling.Run("req-during");
+        var elsewhere = await rolling.Run("req-elsewhere", inputs: Elsewhere); // written after the first: once it is in the store, that would be
+        await CacheEngineTests.Eventually(() => stores.Records >= 1, () => "the result of req-elsewhere in the store");
+        var after = await behind.Run("req-after");
+
+        Assert.True(during.Succeeded && elsewhere.Succeeded, during.Error ?? elsewhere.Error);
+        Assert.NotEmpty(Rows(during)); // the run under way did call other
+        Assert.Equal(1, behind.Probe.Runs);
+        Assert.DoesNotContain(after.Calls ?? [], c => c.Cached is not null);
+        Assert.Empty(Rows(after));
+    }
+
+    /// <summary>
+    /// A node whose <c>when</c> reads a feature its source failed to answer fails, as a node that reads one does, and
+    /// what its policy then leaves is no result computed whole: it is not kept. The condition was read as false and
+    /// nothing said so, and a recall skipped because the user's features could not be read was the pipeline's result
+    /// for the cache's ttl after the source was back; with a default for the feature, reading it threw out of the run.
+    /// </summary>
+    [Theory]
+    [InlineData("", false)]
+    [InlineData(" \"on_failure\": \"skip\",", true)]
+    public async Task ANodeWhoseWhenReadsAFeatureThatFailed_Fails_AndWhatItsPolicyLeavesIsNotKept(string policy, bool skipped)
+    {
+        var connectors = new RequestReadsEndToEndTests.CountedConnectors { Fail = true };
+        var host = PageHost(more: root =>
+        {
+            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"recall\": { \"order\": 100, \"op\": \"MultiSourceRecall@1\",",
+                "\"recall\": { \"order\": 100, \"op\": \"MultiSourceRecall@1\", \"when\": \"ctx.user.ctr_30d > 0.03\"," + policy);
+            SampleBindings.Rebind(root, "user_store", $$"""
+                { "connector": "{{RequestReadsEndToEndTests.CountedConnectors.TypeName}}", "data_file": "fixtures/users.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }
+                """);
+        });
+        await using var rig = new Rig(host, bind: bindings => bindings.Add(connectors), pipelines: ["promoted", "page"]);
+
+        var outage = await rig.Run("req-1", pipeline: "page");
+        connectors.Fail = false;
+        var elsewhere = await rig.Run("req-elsewhere", inputs: Elsewhere, pipeline: "page"); // written after the first: once kept, that would be
+        await CacheEngineTests.Eventually(() => rig.Results(holder: "page").Pin().RecordCount >= 3, () => "the results of req-elsewhere");
+        var runs = rig.Probe.Runs;
+        var after = await rig.Run("req-2", T0 + 5_000, pipeline: "page");
+
+        Assert.True(elsewhere.Succeeded && after.Succeeded, elsewhere.Error ?? after.Error);
+        Assert.Equal(3, outage.Calls!.Count);
+        Assert.All(outage.Calls, c =>
+        {
+            var recall = Assert.Single(c.Trace, n => n.NodeId == "recall");
+            Assert.Equal(("failed", "when reads a feature that failed: user store outage" + (skipped ? " (skipped)" : "")), (NodeOutcomeNames.Name(recall.Kind), recall.Detail));
+            Assert.Equal(skipped, c.Succeeded);
+        });
+        Assert.Equal(skipped, outage.Succeeded);
+        if (skipped)
+        {
+            Assert.Equal("degraded", NodeOutcomeNames.Name(Assert.Single(outage.Trace!, n => n.NodeId == "content").Kind)); // the runs were, and say so upward
+        }
+
+        // The source is back: the pipeline runs, and its recall with it.
+        Assert.Equal(runs + 3, rig.Probe.Runs);
+        Assert.All(after.Calls!, c => Assert.Null(c.Cached));
+        Assert.All(after.Items, i => Assert.NotEmpty(i.Columns["games"].AsInt64List().ToArray()));
+    }
+
+    /// <summary>
+    /// A <c>when</c> that reads a feature served stale, its source having failed, is decided on it, and its node says so,
+    /// skipped or run: the run is degraded, as it is when a node reads such a feature.
+    /// </summary>
+    [Theory]
+    [InlineData("ctx.user.ctr_30d > 0.03", "degraded", "degraded features: user store outage")] // its own fill covers what its when reads
+    [InlineData("ctx.user.ctr_30d > 0.05", "skipped_when", "when is false, on degraded features: user store outage")]
+    public async Task ANodeWhoseWhenReadsAFeatureServedStale_DecidesOnIt_AndSaysSo(string when, string outcome, string detail)
+    {
+        var connectors = new RequestReadsEndToEndTests.CountedConnectors();
+        var host = PageHost(more: root =>
+        {
+            ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"recall\": { \"order\": 100, \"op\": \"MultiSourceRecall@1\",",
+                $"\"recall\": {{ \"order\": 100, \"op\": \"MultiSourceRecall@1\", \"when\": \"{when}\",");
+            SampleBindings.Rebind(root, "user_store", $$"""
+                { "connector": "{{RequestReadsEndToEndTests.CountedConnectors.TypeName}}", "data_file": "fixtures/users.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}},
+                  "cache": { "ttl_ms": 60000, "stale_if_error_ms": 600000, "memory": { "max_bytes": "1MiB" } } }
+                """);
+        });
+        await using var rig = new Rig(host, bind: bindings => bindings.Add(connectors), pipelines: ["promoted", "page"]);
+        Assert.True(rig.Engine.TryGetPipeline("promoted", out var promoted));
+        var users = Assert.Single(promoted.Bindings.Tables, t => t.Schema.Source == "user_store");
+
+        var fresh = await rig.Run("req-1", pipeline: "page");
+        await CacheEngineTests.Eventually(() => users.Pin().RecordCount >= 1, () => "the user's record");
+        rig.Clock.Advance(120_000); // past the ttl, within stale_if_error_ms
+        connectors.Fail = true;
+        var stale = await rig.Run("req-2", T0 + 120_000, inputs: Elsewhere, pipeline: "page"); // calls no request made: the pipeline runs
+
+        Assert.True(fresh.Succeeded && stale.Succeeded, fresh.Error ?? stale.Error);
+        Assert.Equal("succeeded", NodeOutcomeNames.Name(Assert.Single(fresh.Trace!, n => n.NodeId == "content").Kind));
+        Assert.Equal(3, stale.Calls!.Count);
+        Assert.All(stale.Calls, c =>
+        {
+            var recall = Assert.Single(c.Trace, n => n.NodeId == "recall");
+            Assert.Equal(outcome, NodeOutcomeNames.Name(recall.Kind));
+            Assert.StartsWith(detail, recall.Detail);
+        });
+        Assert.Equal("degraded", NodeOutcomeNames.Name(Assert.Single(stale.Trace!, n => n.NodeId == "content").Kind)); // the runs were, and say so upward
+    }
+
+    /// <summary>
     /// A request has one answer for its arms in a called pipeline, whichever of its calls asked: calls that start together
     /// each ask, and all run the answer that came first. A provider that answered them differently had the rows of one
     /// request in different arms, and a cached call's key built with arms the runs under it did not run.
@@ -1000,6 +1134,84 @@ public sealed class PipelineCallCacheEndToEndTests
     }
 
     /// <summary>
+    /// The calls of one request for the same result run the pipeline once: the first runs it, the others wait for what
+    /// it returns and say which call computed it, as a call the cache answers does. The in-process tier does not have a
+    /// result while it is computed, nor at once after (it is written off the request path), so every row of a page that
+    /// asked for the same list ran the pipeline.
+    /// </summary>
+    [Fact]
+    public async Task CallsOfOneRequestForTheSameResult_RunThePipelineOnce_AndSayWhichCallComputedIt()
+    {
+        await using var rig = new Rig(PageHost(slots: "3"), pipelines: ["promoted", "page"]);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Probe.Hold = release.Task;
+
+        var running = Start(rig, "req-1");
+        release.SetResult();
+        var result = await running;
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(1, rig.Probe.Runs);
+        Assert.Equal(3, result.Items.Count);
+        Assert.All(result.Items, i => Assert.Equal(result.Items[0].Columns["games"].AsInt64List().ToArray(), i.Columns["games"].AsInt64List().ToArray()));
+        Assert.NotEmpty(result.Items[0].Columns["games"].AsInt64List().ToArray());
+        Assert.All(result.Items, i => Assert.Equal(("req-1", T0, "page/content#0"), (i.Columns["from"].AsString(), i.Columns["at"].AsInt64(), i.Columns["by"].AsString())));
+        Assert.Equal(
+            new CachedFrom?[] { null, new("req-1", T0, "page/content#0"), new("req-1", T0, "page/content#0") },
+            result.Calls!.Select(c => c.Cached));
+        Assert.All(result.Calls!, c => Assert.True(c.Succeeded));
+    }
+
+    /// <summary>
+    /// Starts a request for the page whose first call's run the probe holds, and returns with its calls under way. The
+    /// engine runs on its caller's thread until something it waits for does not answer at once: when the request's task
+    /// comes back here the first run is held, and the other calls have gone as far as they go without it, so what the
+    /// test lets go next it lets go to calls that wait. That the one run got there on this thread is checked: were the
+    /// engine to leave the thread earlier, the test fails here and not by its timing.
+    /// </summary>
+    private static Task<RecResult> Start(Rig rig, string requestId)
+    {
+        var before = rig.Probe.Runs;
+        var running = rig.Run(requestId, pipeline: "page").AsTask();
+        Assert.Equal(before + 1, rig.Probe.Runs);
+        return running;
+    }
+
+    /// <summary>
+    /// A run that fails of itself fails the calls of the request waiting for its result as it failed its own, and is
+    /// not run again for them; a run that returned a degraded result is not shared, and the calls waiting run the
+    /// pipeline themselves, all at once: they waited for one run and wait for no other.
+    /// </summary>
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 3)]
+    public async Task ARunThatFailed_FailsTheCallsWaitingForIt_AndADegradedOneLeavesThemToRun(bool fail, int runs)
+    {
+        await using var rig = new Rig(PageHost(slots: "3"), pipelines: ["promoted", "page"]);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Probe.Hold = release.Task;
+        rig.Probe.Fail = fail;
+        rig.Probe.Degrade = !fail;
+
+        var running = Start(rig, "req-1"); // the others wait: none runs while the first does
+        release.SetResult();
+        var result = await running;
+
+        Assert.Equal(runs, rig.Probe.Runs);
+        Assert.Equal(3, result.Calls!.Count);
+        Assert.All(result.Calls, c => Assert.Null(c.Cached));
+        if (fail)
+        {
+            Assert.All(result.Calls, c => Assert.Equal((false, "pipeline 'promoted' failed: node 'probe' failed: probe outage"), (c.Succeeded, c.Error)));
+            Assert.Single(result.Calls, c => c.Trace.Count > 0); // one run
+        }
+        else
+        {
+            Assert.All(result.Calls, c => Assert.True(c.Succeeded && c.Trace.Count > 0));
+        }
+    }
+
+    /// <summary>
     /// A cache that is wrong is an error where it is written: the node's times and version at the node, the tiers at the
     /// binding; and a node that asks for a cache the environment binds no tier for does not compile.
     /// </summary>
@@ -1045,7 +1257,7 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Contains(load.Diagnostics, d => d.Code == code && d.Pointer == pointer);
     }
 
-    private static void Edit(HomeFeedTestHost host, string file, string from, string to)
+    internal static void Edit(HomeFeedTestHost host, string file, string from, string to)
     {
         var path = Path.Combine(host.Root, file);
         var text = File.ReadAllText(path);
@@ -1061,7 +1273,7 @@ public sealed class PipelineCallCacheEndToEndTests
     }
 
     /// <summary>A wall clock the test moves.</summary>
-    private sealed class MovableClock : TimeProvider
+    internal sealed class MovableClock : TimeProvider
     {
         private long _timeMs = 1_720_000_000_000L;
 
@@ -1074,13 +1286,14 @@ public sealed class PipelineCallCacheEndToEndTests
     /// <c>Probe@1</c>: counts its runs, and fails or degrades its node when told. One with a <c>name</c> is another
     /// pipeline's: it is told by its name, and not counted.
     /// </summary>
-    private sealed class Probe : IOperatorFactory
+    internal sealed class Probe : IOperatorFactory
     {
         private int _runs;
         private volatile bool _fail;
         private volatile bool _degrade;
         private volatile string? _degradeAt;
         private volatile Action? _onRun;
+        private volatile Task? _hold;
 
         public int Runs => Volatile.Read(ref _runs);
 
@@ -1110,13 +1323,20 @@ public sealed class PipelineCallCacheEndToEndTests
             set => _onRun = value;
         }
 
+        /// <summary>Awaited by each run of the probe without a name, once counted: its pipeline's run stays under way until the test lets it go.</summary>
+        public Task? Hold
+        {
+            get => _hold;
+            set => _hold = value;
+        }
+
         public OperatorDescriptor Descriptor { get; } = new("Probe", 1, Effects.None, typeof(ProbeConfig), "Counts its runs, and fails or degrades when told.");
 
         public Operator? Compile(OperatorCompileContext context) => context.BindConfig<ProbeConfig>() is { } config ? new Node(this, config.Name) : null;
 
         private sealed class Node(Probe probe, string? name) : Operator
         {
-            public override ValueTask ExecuteAsync(OperatorContext context)
+            public override async ValueTask ExecuteAsync(OperatorContext context)
             {
                 if (name is not null)
                 {
@@ -1125,11 +1345,16 @@ public sealed class PipelineCallCacheEndToEndTests
                         context.ReportDegraded("probe degraded");
                     }
 
-                    return ValueTask.CompletedTask;
+                    return;
                 }
 
                 Interlocked.Increment(ref probe._runs);
                 probe.OnRun?.Invoke();
+                if (probe.Hold is { } hold)
+                {
+                    await hold;
+                }
+
                 if (probe.Fail)
                 {
                     context.Fail("probe outage");
@@ -1138,13 +1363,11 @@ public sealed class PipelineCallCacheEndToEndTests
                 {
                     context.ReportDegraded("probe degraded");
                 }
-
-                return ValueTask.CompletedTask;
             }
         }
     }
 
-    private sealed class ProbeConfig
+    internal sealed class ProbeConfig
     {
         public string? Name { get; init; }
     }

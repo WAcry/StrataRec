@@ -313,6 +313,9 @@ internal sealed class ServiceRecordBuilder
 
     public int Count => _records.Count;
 
+    /// <summary>The bytes of the record ended <paramref name="index"/>th: the writer's array is not written again once its records are ended.</summary>
+    public ReadOnlyMemory<byte> Record(int index) => _writer.Bytes.AsMemory(_records[index].Offset, _records[index].Length);
+
     /// <summary>Encodes the record gathered so far under <paramref name="key"/> and clears the lists for the next.</summary>
     public void End(UInt128 key)
     {

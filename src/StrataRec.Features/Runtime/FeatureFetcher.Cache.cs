@@ -41,6 +41,10 @@ namespace StrataRec.Features.Runtime;
 /// without any field as an absent record (negative caching). A record's version is when the connector call started, so
 /// a slow call never replaces what a later one wrote. A miss fetches every field of the table, not only the ones the
 /// node needs, so that the records it writes back are complete.</para>
+/// <para><b>Reads of one request</b>. A context group's read is of one record, which the runs of a request often all read
+/// (a user's features): a read the table did not answer joins the request's read of that record
+/// (<see cref="RequestReads"/>). The first reads on as above; the others wait for what it gets within their own budget
+/// and call neither the store nor the connector. Candidate reads, of many keys, are not joined.</para>
 /// <para><b>Replay</b>. A recording request records each cache read as one feature call: its keys (the
 /// keys a fetch of the same rows takes, in the same order), the values it served whichever tier they came from, and how
 /// it ended. A replay answers cache groups like local ones, through the fetch path from the recording, so it never
@@ -240,7 +244,10 @@ public sealed partial class FeatureFetcher
 
         var misses = _memory.Rent<CacheMiss>(1);
         misses[0] = new CacheMiss(0, freshness == CacheFreshness.Stale);
-        var read = new CacheRead(group, features.ToArray(), version, key, new ReadOnlySpan<LocalRecordRef>(in record), misses, 1, rowCapacity: 0, _memory);
+        var read = new CacheRead(group, features.ToArray(), version, key, new ReadOnlySpan<LocalRecordRef>(in record), misses, 1, rowCapacity: 0, _memory)
+        {
+            OneRecord = true,
+        };
         Resolve(read, started, cancellationToken);
         return read;
     }
@@ -285,6 +292,7 @@ public sealed partial class FeatureFetcher
     /// </summary>
     private async Task ResolveAsync(CacheRead read, CancellationToken cancellationToken)
     {
+        RequestReads.SharedRead? reading = null; // the request's read of the record, when this read is its reader
         try
         {
             if (read.Cancellation is null)
@@ -293,12 +301,38 @@ public sealed partial class FeatureFetcher
             }
             else
             {
-                if (read.Supply.Distributed is { } tier)
+                var joined = false; // another read of the request gave this one its record, or its failure
+                if (read.OneRecord && Reads is { } reads)
                 {
-                    await ReadDistributedAsync(read, tier, cancellationToken).ConfigureAwait(false);
+                    var times = read.Supply.Policy;
+                    var shared = reads.Join(
+                        read.Group.Supply.Table!.Table, RequestReads.Asked(LocalTableCache.RecordKey(read.KeyBatch, 0), times.TtlMs, times.StaleIfErrorMs), out var reader);
+                    if (reader)
+                    {
+                        reading = shared;
+                    }
+                    else
+                    {
+                        joined = Take(read, await shared.WaitAsync(read.Cancellation, Timeout.InfiniteTimeSpan).ConfigureAwait(false));
+                    }
                 }
 
-                await FetchOriginAsync(read, read.Cancellation, cancellationToken).ConfigureAwait(false);
+                if (!joined)
+                {
+                    if (read.Supply.Distributed is { } tier)
+                    {
+                        await ReadDistributedAsync(read, tier, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    await FetchOriginAsync(read, read.Cancellation, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            // Before the record settles: a stale one the distributed tier had goes with the connector's failure, for
+            // those waiting to judge by their own times.
+            if (reading is not null)
+            {
+                Share(read, reading);
             }
 
             Settle(read);
@@ -306,8 +340,59 @@ public sealed partial class FeatureFetcher
         }
         finally
         {
+            reading?.Withdraw(); // unless it ended above: the reads waiting for it go on by themselves
             read.Cancellation?.Release(); // the read's own reference; every sent call holds one until it really completes
             _memory.Release();
+        }
+    }
+
+    /// <summary>
+    /// What the request's read of a context read's record gave it (<see cref="RequestReads"/>); false when the read goes
+    /// on by itself. A record is taken as its reader took it, by the same times; a failure with the stale record the
+    /// reader held from the distributed tier, which this read did not ask, if it held one; a wait this read's budget
+    /// cut off as a call of its own cut off.
+    /// </summary>
+    private static bool Take(CacheRead read, in SharedAnswer answer)
+    {
+        switch (answer.End)
+        {
+            case SharedEnd.Record:
+                read.Sources[0] = CacheSource.Shared;
+                read.Bytes[0] = (ReadOnlyMemory<byte>)answer.Record!;
+                read.Cache.CountKeys(CacheTier.Request, CacheKeyOutcome.Hit, 1);
+                return true;
+            case SharedEnd.Failed:
+                read.Error = answer.Error;
+                if (answer.Record is ReadOnlyMemory<byte> stale)
+                {
+                    read.Sources[0] = CacheSource.StaleCandidate;
+                    read.Bytes[0] = stale;
+                }
+
+                return true;
+            case SharedEnd.CutOff or SharedEnd.TimedOut:
+                read.Error = (read.Cancellation!.Caller.IsCancellationRequested ? Cancelled(read.Group) : TimedOut(read.Group, read.BudgetMs)).Error;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Ends the request's read of a context read's record with what this read, its reader, got: the record the
+    /// distributed tier or the connector gave whole, or the connector's own failure. Anything else (an answer in part, a
+    /// call cut off by this read's time) is not ended here and is withdrawn: the reads waiting go on by themselves.
+    /// </summary>
+    private static void Share(CacheRead read, RequestReads.SharedRead reading)
+    {
+        switch (read.Sources[0])
+        {
+            case CacheSource.Distributed or CacheSource.Origin:
+                reading.Complete(read.Bytes[0]);
+                break;
+            case CacheSource.Pending or CacheSource.StaleCandidate when read.OriginFailed:
+                reading.Fail(read.Error ?? "failed", read.Sources[0] == CacheSource.StaleCandidate ? read.Bytes[0] : (object?)null); // no record is null, not an empty one
+                break;
         }
     }
 
@@ -492,10 +577,12 @@ public sealed partial class FeatureFetcher
         var spans = _memory.Rent<(int Offset, int Length)>(count);
         for (var c = 0; c < chunks; c++)
         {
-            var status = StatusOf(group, read.BudgetMs, await calls[c].ConfigureAwait(false));
+            var answered = await calls[c].ConfigureAwait(false);
+            var status = StatusOf(group, read.BudgetMs, answered);
             if (status.Outcome == FetchOutcome.Failed)
             {
                 read.Error ??= status.Error; // its keys stay unanswered; its staging is never read
+                read.OriginFailed |= answered.End is CallEnd.Answered or CallEnd.Threw; // the connector's word, not this read's time
                 continue;
             }
 
@@ -633,7 +720,7 @@ public sealed partial class FeatureFetcher
                     }
 
                     break;
-                case CacheSource.Distributed or CacheSource.Origin or CacheSource.OriginPartial:
+                case CacheSource.Distributed or CacheSource.Shared or CacheSource.Origin or CacheSource.OriginPartial:
                     break;
                 case CacheSource.StaleDistributed or CacheSource.StaleLocal or CacheSource.Failed:
                     throw new InvalidOperationException("A cache read is settled once.");
@@ -791,7 +878,7 @@ public sealed partial class FeatureFetcher
                     resolved++;
                     present += read.Version.HasValue(field, read.Records[k]) ? 1 : 0;
                 }
-                else if (read.Sources[m] is CacheSource.Distributed or CacheSource.Origin or CacheSource.OriginPartial)
+                else if (read.Sources[m] is CacheSource.Distributed or CacheSource.Shared or CacheSource.Origin or CacheSource.OriginPartial)
                 {
                     resolved++;
                     present += CacheRecord.HasValue(read.Bytes[m].Span, field) ? 1 : 0;
@@ -873,7 +960,7 @@ public sealed partial class FeatureFetcher
                 fill.Row = read.Rows[i];
                 switch (read.Sources[m])
                 {
-                    case CacheSource.Distributed or CacheSource.Origin or CacheSource.OriginPartial or CacheSource.StaleDistributed:
+                    case CacheSource.Distributed or CacheSource.Shared or CacheSource.Origin or CacheSource.OriginPartial or CacheSource.StaleDistributed:
                         CacheRecord.Read(read.Bytes[m].Span, layout, ref fill); // checked well formed (or encoded here) already
                         break;
                     case CacheSource.StaleLocal:
@@ -914,6 +1001,12 @@ public sealed partial class FeatureFetcher
 
         /// <summary>A fresh record from the distributed tier.</summary>
         Distributed,
+
+        /// <summary>
+        /// The record another read of the request got (<see cref="RequestReads"/>), from the distributed tier or the
+        /// connector: served as it is, and written back by the read that got it, not by this one.
+        /// </summary>
+        Shared,
 
         /// <summary>The connector's answer, of a chunk that answered in full: written back.</summary>
         Origin,
@@ -1052,6 +1145,12 @@ public sealed partial class FeatureFetcher
 
         public string? Error { get; set; }
 
+        /// <summary>The connector itself failed a call of the read (answered a failure, or threw), as opposed to a call the read's time cut off.</summary>
+        public bool OriginFailed { get; set; }
+
+        /// <summary>A context group's read: one record, which the reads of a request share (<see cref="RequestReads"/>).</summary>
+        public bool OneRecord { get; init; }
+
         public bool Partial { get; set; }
 
         public int FailedKeys { get; set; }
@@ -1132,7 +1231,7 @@ public sealed partial class FeatureFetcher
 
             switch (Sources[m])
             {
-                case CacheSource.Distributed or CacheSource.Origin or CacheSource.OriginPartial or CacheSource.StaleDistributed:
+                case CacheSource.Distributed or CacheSource.Shared or CacheSource.Origin or CacheSource.OriginPartial or CacheSource.StaleDistributed:
                     var value = new FieldValue(tableField, Strings);
                     CacheRecord.Read(Bytes[m].Span, Cache.Layout, ref value);
                     return value.Value;

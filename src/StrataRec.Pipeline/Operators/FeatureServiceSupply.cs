@@ -201,6 +201,8 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
 
         public RunReplay? Replay => call.Hook as RunReplay;
 
+        public RequestReads? Reads => call.Reads;
+
         public string? Degraded { get; private set; }
 
         public void ReportDegraded(string reason) => Degraded ??= reason;

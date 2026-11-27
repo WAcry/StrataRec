@@ -582,18 +582,28 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             // against those bytes can evict every small record, even though rebuilding avoids that growth.
             var avoidableGrowth = _version.IndexGrowthBytes(newKey) + Math.Max(0, _version.PageGrowthBytes(recordBytes) - recordBytes);
             var toFree = BytesToFree(packedBytes, required - avoidableGrowth - _table.MaxBytes);
+            var livePayload = LivePayload;
             var deadBefore = cache.NowMs() - cache.Policy.RetentionMs;
-            var compacted = BuildCompacted(deadBefore, toFree, _oldPosition, out var expired, out var evicted);
-            newKey = newKey || compacted.ProbeForWrite(_indexKey, _key.AsSpan(0, _keyLength), out _) == 0;
-            var afterEviction = Required(compacted, recordBytes, newKey, strings, out _);
-            if (afterEviction <= _table.MaxBytes)
+            for (var attempt = 0; ; attempt++)
             {
-                Install(compacted);
-                cache.CountEvictions(expired, evicted);
-                return newKey;
-            }
+                var compacted = BuildCompacted(deadBefore, toFree, _oldPosition, out var expired, out var evicted);
+                var needsSlot = newKey || compacted.ProbeForWrite(_indexKey, _key.AsSpan(0, _keyLength), out _) == 0;
+                var afterEviction = Required(compacted, recordBytes, needsSlot, strings, out _);
+                if (afterEviction <= _table.MaxBytes)
+                {
+                    Install(compacted);
+                    cache.CountEvictions(expired, evicted);
+                    return needsSlot;
+                }
 
-            required = Math.Min(required, afterEviction);
+                required = Math.Min(required, afterEviction);
+                if (toFree == long.MaxValue)
+                {
+                    break; // not even alone in the table
+                }
+
+                toFree = More(toFree, livePayload, attempt);
+            }
         }
 
         throw new LocalTableFullException(Schema, _table.MaxBytes, required);
@@ -609,7 +619,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     {
         var max = _table.MaxBytes;
         var target = max / 4 * 3;
-        var livePayload = _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
+        var livePayload = LivePayload;
         if (packedBytes <= max)
         {
             return Math.Max(1, Math.Max(Math.Min(packedBytes - target, livePayload / 4), lacking));
@@ -623,11 +633,23 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         return Math.Max(1, Math.Max((long)(livePayload * share), lacking - (packedBytes - max)));
     }
 
+    /// <summary>The records and strings the keys of the table hold now: what an eviction can free.</summary>
+    private long LivePayload => _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
+
+    /// <summary>
+    /// What an eviction frees next when its estimate fell short (an index that does not get smaller with its keys, a
+    /// table of a few pages where one record is much of it): half of what is left, and after four such everything. The
+    /// one rule of a write under pressure and of a lowered limit: a record its empty table holds is not refused while
+    /// records could still go, and a limit is met.
+    /// </summary>
+    private static long More(long toFree, long livePayload, int attempt) =>
+        attempt < 4 && toFree < livePayload ? toFree + ((livePayload - toFree + 1) / 2) : long.MaxValue;
+
     /// <summary>
     /// Brings a cache's table under a limit that was lowered under what it holds (<see cref="LocalFeatureTable.Retune"/>),
-    /// with no write pending: it evicts as a write under pressure does. An estimate that falls short (an index that does
-    /// not get smaller with its keys) frees half of what is left, and a limit no record fits under leaves the table
-    /// empty, as a table created with that limit stays. One comparison for a table within its limit.
+    /// with no write pending, as a write under pressure does: the records written over since go first, and alone when
+    /// that is enough; then it evicts. A limit no record fits under leaves the table empty, as a table created with that
+    /// limit stays. One comparison for a table within its limit.
     /// </summary>
     internal void ShrinkToLimit(LocalTableCache cache)
     {
@@ -638,9 +660,24 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
 
         Discard();
-        var livePayload = _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
+        var packedBytes = _version.Bytes;
+        if (_version.SupersededBytes > 0)
+        {
+            // What is over the limit may be what the keys no longer hold: without it, the share to evict was taken of a
+            // size live keys do not have, and keys left that a compaction alone had kept.
+            var packed = BuildCompacted();
+            if (packed.Bytes <= max)
+            {
+                Install(packed);
+                return;
+            }
+
+            packedBytes = packed.Bytes;
+        }
+
+        var livePayload = LivePayload;
         var deadBefore = cache.NowMs() - cache.Policy.RetentionMs;
-        var toFree = BytesToFree(_version.Bytes, 0);
+        var toFree = BytesToFree(packedBytes, 0);
         for (var attempt = 0; ; attempt++)
         {
             var compacted = BuildCompacted(deadBefore, toFree, 0, out var expired, out var evicted);
@@ -651,7 +688,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 return;
             }
 
-            toFree = attempt < 4 && toFree < livePayload ? toFree + ((livePayload - toFree + 1) / 2) : long.MaxValue;
+            toFree = More(toFree, livePayload, attempt);
         }
     }
 

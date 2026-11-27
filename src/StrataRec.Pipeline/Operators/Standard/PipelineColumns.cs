@@ -529,7 +529,8 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                 by.Evaluate(eval, rows, kinds);
             }
 
-            // A row-level input is evaluated once for the rows called, whichever pipelines take it.
+            // A row-level input is evaluated once for the rows called, whichever pipelines take it: for all of them, a
+            // row of another kind too, since telling them apart first costs more than it saves beside a call a row.
             Dictionary<CompiledExpression, ColumnBuffer>? perRow = null;
             var inputs = new RequestInputs?[rows.Length];
             for (var i = 0; i < rows.Length; i++)

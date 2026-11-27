@@ -69,11 +69,15 @@ internal enum CacheFreshness : byte
     Expired,
 }
 
-/// <summary>Which tier of a cache a key count is about (metric tag <c>stratarec.cache.tier</c>: <c>memory</c>, <c>distributed</c>).</summary>
+/// <summary>
+/// Which tier of a cache a key count is about (metric tag <c>stratarec.cache.tier</c>: <c>memory</c>, <c>distributed</c>,
+/// and <c>request</c> for a read answered by what another read of its request got, <see cref="Core.Threading.RequestReads"/>).
+/// </summary>
 internal enum CacheTier : byte
 {
     Memory = 0,
     Distributed = 1,
+    Request = 2,
 }
 
 /// <summary>What a tier had for a key (metric tag <c>stratarec.outcome</c> of <see cref="StrataRecMetrics.CacheKeys"/>).</summary>
@@ -278,6 +282,29 @@ public sealed class LocalTableCache
     }
 
     /// <summary>
+    /// What the reads of one request find key <paramref name="index"/>'s record of a table by (<see cref="Core.Threading.RequestReads"/>):
+    /// 128 bits of every part, since two keys taken for one would give one's record to the other.
+    /// </summary>
+    internal static UInt128 RecordKey(in EntityKeyBatch keys, int index)
+    {
+        using var builder = new StableHash.Builder();
+        for (var p = 0; p < keys.PartCount; p++)
+        {
+            var part = keys.Key(index, p);
+            if (part.StringValue is { } s)
+            {
+                builder.Add(s);
+            }
+            else
+            {
+                builder.Add(part.Int64Value);
+            }
+        }
+
+        return builder.Finish128();
+    }
+
+    /// <summary>
     /// Hands records to the writer without waiting; false (and counted) when they do not fit a queue that holds some
     /// (<see cref="WriteQueueBudget"/>). A cache without an in-process tier takes none.
     /// </summary>
@@ -335,7 +362,7 @@ public sealed class LocalTableCache
         {
             try
             {
-                StrataRecMetrics.CacheKeys.Add(keys, _keyTags[((int)tier * _keyTags.Length / 2) + (int)outcome]);
+                StrataRecMetrics.CacheKeys.Add(keys, _keyTags[((int)tier * _keyTags.Length / Tiers) + (int)outcome]);
             }
             catch (Exception)
             {
@@ -348,7 +375,7 @@ public sealed class LocalTableCache
     {
         if (records > 0)
         {
-            StrataRecMetrics.CacheWrites.Add(records, _writeTags[((int)tier * _writeTags.Length / 2) + (int)outcome]);
+            StrataRecMetrics.CacheWrites.Add(records, _writeTags[((int)tier * _writeTags.Length / Tiers) + (int)outcome]);
         }
     }
 
@@ -464,16 +491,23 @@ public sealed class LocalTableCache
         return _chars.AsSpan(0, length);
     }
 
+    private const int Tiers = 3; // CacheTier's values
+
     private static KeyValuePair<string, object?>[][] TagMatrix(KeyValuePair<string, object?>[] table, int outcomes, Func<int, string> outcomeName)
     {
-        var matrix = new KeyValuePair<string, object?>[2 * outcomes][];
-        for (var tier = 0; tier < 2; tier++)
+        var matrix = new KeyValuePair<string, object?>[Tiers * outcomes][];
+        for (var tier = 0; tier < Tiers; tier++)
         {
             for (var outcome = 0; outcome < outcomes; outcome++)
             {
                 matrix[(tier * outcomes) + outcome] =
                 [
-                    table[0], table[1], new(StrataRecTags.CacheTier, tier == (int)CacheTier.Memory ? "memory" : "distributed"),
+                    table[0], table[1], new(StrataRecTags.CacheTier, (CacheTier)tier switch
+                    {
+                        CacheTier.Memory => "memory",
+                        CacheTier.Distributed => "distributed",
+                        CacheTier.Request => "request",
+                    }),
                     new(StrataRecTags.Outcome, outcomeName(outcome)),
                 ];
             }

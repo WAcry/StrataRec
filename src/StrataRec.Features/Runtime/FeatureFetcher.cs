@@ -78,6 +78,9 @@ public sealed partial class FeatureFetcher : IIoTracker
     private readonly IFeatureCallHook? _hook;
     private int _nonFiniteReplaced;
 
+    /// <summary>What the cached reads of the request's runs share (<see cref="RequestReads"/>); null for a request of one run.</summary>
+    internal RequestReads? Reads { get; init; }
+
     /// <param name="counters">The request's expression counters, shared with the operators' evaluations so a request
     /// reports one total per event; null gives the fetcher counters of its own.</param>
     /// <param name="requestId">Sample request id for failure summaries.</param>
