@@ -40,8 +40,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The one shared helper the unit tests need; the other files of tests/Shared are for the sample-based tests. -->
+    <!-- The shared helpers the unit tests need; the other files of tests/Shared are for the sample-based tests. -->
     <Compile Include="..\Shared\DisposedTokens.cs" LinkBase="Shared" />
+    <Compile Include="..\Shared\TestTemp.cs" LinkBase="Shared" />
   </ItemGroup>
 
 </Project>
