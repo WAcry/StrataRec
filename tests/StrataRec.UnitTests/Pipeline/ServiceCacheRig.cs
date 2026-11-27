@@ -35,7 +35,7 @@ internal sealed class ServiceCacheRig
             Cache = new CacheTableOptions { TtlMs = ttlMs, StaleIfErrorMs = staleIfErrorMs, Clock = Clock },
         };
         Table = new LocalFeatureTable(ServiceCache.Schema("m"), options);
-        Cache = new ServiceCache("m", Table, store is null ? null : new DistributedCacheTier(store), distributedTimeoutMs, identity);
+        Cache = new ServiceCache("m", Table, Table.Cache!.Policy, store is null ? null : new DistributedCacheTier(store), distributedTimeoutMs, identity);
         Bound = new BoundService("m", Service, IoRoles.Model, timeoutMs, cached ? Cache : null);
         Unbound = new BoundService("m", Service, IoRoles.Model, timeoutMs, null);
         _timeoutMs = timeoutMs;

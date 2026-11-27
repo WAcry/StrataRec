@@ -18,7 +18,7 @@
         "type": "object",
         "properties": {
           "mode": {
-            "description": "Supply mode: 'fetch' (default) fetches from the connector on every request; 'local' serves the features from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'cache' keeps what the connector returned in an in-process table (and optionally a distributed cache) for 'cache.ttl_ms'; 'service' asks the service named by 'service' once per request, for the features of an entity with args. Settings of another mode are errors.",
+            "description": "Where the features come from: 'fetch' (default) from the connector, on every request or, with a 'cache', when the cache has no fresh value; 'local' from an in-process table that 'bootstrap' loads in the background, with no I/O on the request path; 'service' from the service named by 'service', asked once per request for the features of an entity with args. Settings of another mode are errors.",
             "type": [
               "string",
               "null"
@@ -26,7 +26,6 @@
             "enum": [
               "fetch",
               "local",
-              "cache",
               "service",
               null
             ]
@@ -39,7 +38,7 @@
             ]
           },
           "connector": {
-            "description": "Modes fetch and cache, required: connector type and version, e.g. 'memory@1' (for cache, the origin the cache is in front of). Other members of the binding not listed here are the connector's own settings (e.g. 'data_file').",
+            "description": "Mode fetch, required: connector type and version, e.g. 'memory@1'. Other members of the binding not listed here are the connector's own settings (e.g. 'data_file').",
             "type": [
               "string",
               "null"
@@ -50,21 +49,21 @@
             ]
           },
           "timeout_ms": {
-            "description": "Modes fetch, cache and service: time limit of one connector call, in milliseconds (default 50). For cache, the whole read of the keys a request misses (the distributed cache, then the connector) stays within it; for service, the whole call of the service (its cache, then its client), whose own timeout_ms applies within it.",
+            "description": "Modes fetch and service: time limit of one connector call, in milliseconds (default 50). With a cache, the whole read of the keys a request misses (the distributed tier, then the connector) stays within it; for service, the whole call of the service (its cache, then its client), whose own timeout_ms applies within it.",
             "type": [
               "integer",
               "null"
             ]
           },
           "max_batch": {
-            "description": "Modes fetch and cache: maximum keys per connector call (default 1000); larger batches are split into the fewest calls, of even size (9 keys at most 4 a call go as 3, 3 and 3), sent concurrently. For cache, also the keys per read of the distributed cache.",
+            "description": "Mode fetch: maximum keys per connector call (default 1000); larger batches are split into the fewest calls, of even size (9 keys at most 4 a call go as 3, 3 and 3), sent concurrently. With a cache, also the keys per read of its distributed tier.",
             "type": [
               "integer",
               "null"
             ]
           },
           "max_bytes": {
-            "description": "Modes local and cache, required: the most memory each table of the source (one per entity) may take, as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"512MiB\". A local load that would exceed it fails and the plan is not served; a cache that reaches it drops expired records first, then favors retaining recently read records.",
+            "description": "Mode local, required: the most memory each table of the source (one per entity) may take, as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"512MiB\". A load that would exceed it fails and the plan is not served. (A cache's memory is 'cache.memory.max_bytes'.)",
             "type": [
               "string",
               "null"
@@ -126,7 +125,7 @@
             ]
           },
           "cache": {
-            "description": "Mode cache, required: { \"ttl_ms\": 60000 }, optionally \"stale_if_error_ms\" and a \"distributed\" cache shared by the service's instances.",
+            "description": "Mode fetch, optional: keeps what the connector returned for 'ttl_ms', in process ('memory'), in a store the deployment's instances share ('distributed'), or both, e.g. { \"ttl_ms\": 60000, \"memory\": { \"max_bytes\": \"256MiB\" } }.",
             "type": [
               "object",
               "null"
@@ -146,8 +145,34 @@
                   "null"
                 ]
               },
+              "version": {
+                "description": "Names what the cached values come from, e.g. \"3\". Without it the cache follows the configuration: a change of the connector or client, or of its own settings, starts the cache anew, since other settings may give other values. With it the cache follows this name instead: the values are kept across such changes, until you change the name. Changing ttl_ms, stale_if_error_ms, timeouts, max_bytes or the distributed store never starts it anew. Letters, digits, '.', '_' and '-', at most 64.",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[A-Za-z0-9._-]{1,64}$"
+              },
+              "memory": {
+                "description": "The in-process tier: { \"max_bytes\": \"256MiB\" }. Hits take no I/O; each instance has its own. Worth it for keys many requests share (items); for keys of one user on a deployment of many instances, 'distributed' alone saves the memory.",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "max_bytes": {
+                    "description": "Required: the most memory the tier's table may take (for a source, each of its entities' tables), as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"64MiB\". A table that reaches it drops expired records first, then favors retaining recently read records.",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB)$"
+                  }
+                },
+                "additionalProperties": false
+              },
               "distributed": {
-                "description": "A cache shared by the deployment's instances, read on an in-process miss before the origin, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, the keys go to the origin.",
+                "description": "The tier the deployment's instances share, read when the in-process tier (if any) has no fresh value, before the origin, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, the keys go to the origin.",
                 "type": [
                   "object",
                   "null"
@@ -290,20 +315,12 @@
             ]
           },
           "cache": {
-            "description": "Caches the service's answers, e.g. { \"ttl_ms\": 60000, \"max_bytes\": \"64MiB\" }: a call about no items whole, one about items item by item (the items a call misses go to the service in one call). Keyed by the service version, the outputs read and the inputs, not by the request's seed: a service that samples by the seed reuses one answer for ttl_ms.",
+            "description": "Caches the service's answers, e.g. { \"ttl_ms\": 60000, \"memory\": { \"max_bytes\": \"64MiB\" } }: a call about no items whole, one about items item by item (the items a call misses go to the service in one call). Keyed by the service version, the outputs read and the inputs, not by the request's seed: a service that samples by the seed reuses one answer for ttl_ms.",
             "type": [
               "object",
               "null"
             ],
             "properties": {
-              "max_bytes": {
-                "description": "Required: the most memory the service's in-process cache table may take, as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"64MiB\". A cache that reaches it drops expired records first, then favors retaining recently read records.",
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB)$"
-              },
               "ttl_ms": {
                 "description": "Required: how long a value fetched from the origin (the connector, or the service) is served, in milliseconds. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together.",
                 "type": [
@@ -318,8 +335,34 @@
                   "null"
                 ]
               },
+              "version": {
+                "description": "Names what the cached values come from, e.g. \"3\". Without it the cache follows the configuration: a change of the connector or client, or of its own settings, starts the cache anew, since other settings may give other values. With it the cache follows this name instead: the values are kept across such changes, until you change the name. Changing ttl_ms, stale_if_error_ms, timeouts, max_bytes or the distributed store never starts it anew. Letters, digits, '.', '_' and '-', at most 64.",
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[A-Za-z0-9._-]{1,64}$"
+              },
+              "memory": {
+                "description": "The in-process tier: { \"max_bytes\": \"256MiB\" }. Hits take no I/O; each instance has its own. Worth it for keys many requests share (items); for keys of one user on a deployment of many instances, 'distributed' alone saves the memory.",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "max_bytes": {
+                    "description": "Required: the most memory the tier's table may take (for a source, each of its entities' tables), as an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"64MiB\". A table that reaches it drops expired records first, then favors retaining recently read records.",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[0-9]+(B|KiB|MiB|GiB|TiB)$"
+                  }
+                },
+                "additionalProperties": false
+              },
               "distributed": {
-                "description": "A cache shared by the deployment's instances, read on an in-process miss before the origin, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, the keys go to the origin.",
+                "description": "The tier the deployment's instances share, read when the in-process tier (if any) has no fresh value, before the origin, e.g. { \"store\": \"redis@1\", \"endpoint\": \"cache.internal:6379\" }. Only an optimisation: when it fails or is slow, the keys go to the origin.",
                 "type": [
                   "object",
                   "null"

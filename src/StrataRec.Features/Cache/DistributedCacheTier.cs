@@ -7,7 +7,7 @@ using StrataRec.Features.Local;
 namespace StrataRec.Features.Cache;
 
 /// <summary>
-/// The distributed tier of a <c>cache</c> source as the engine holds it: the binding's
+/// The distributed tier of a cache as the engine holds it: the binding's
 /// <see cref="ICacheStore"/> and the engine's write-back queue in front of it. This, not the store, is the binding
 /// instance: shared by identity, loaded before a plan serves (the store's own load), disposed once nothing can call it.
 /// </summary>

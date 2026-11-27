@@ -10,7 +10,7 @@ namespace StrataRec.Pipeline.Planning;
 /// <summary>
 /// Registers catalog features into a plan schema the first time a name resolves to one, with what each
 /// needs: a derived feature compiles then, and its own reads register the features it is computed from; a feature of an
-/// entity keyed by features (candidate or context) registers them first; a feature of a <c>cache</c> source registers every feature of its table
+/// entity keyed by features (candidate or context) registers them first; a feature of a cached source registers every feature of its table
 /// (<see cref="FeaturePlan.NeedsWholeTable"/>). The one place that decides what of a catalog a plan holds, and that
 /// compiles derived features and finds their cycles.
 /// </summary>

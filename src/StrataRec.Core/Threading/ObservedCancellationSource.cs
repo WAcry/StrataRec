@@ -18,7 +18,7 @@ public enum CancellationSite : byte
     Call,
 
     /// <summary>
-    /// A feature fetch's token, shared by its chunks and by the read of a cache source's distributed tier: cancelled at
+    /// A feature fetch's token, shared by its chunks and by the read of a cached source's distributed tier: cancelled at
     /// the fetch's budget.
     /// </summary>
     Fetch,

@@ -3,8 +3,8 @@ using StrataRec.Core.Diagnostics;
 namespace StrataRec.Features.Local;
 
 /// <summary>Limits and tuning of one <see cref="LocalFeatureTable"/>. A served table takes its options from its binding
-/// (<c>max_bytes</c>) and the engine's defaults, so the binding decides them, and <see cref="LocalTableSpec.Identity"/>
-/// covers them by covering the binding.</summary>
+/// (<c>max_bytes</c>) and the engine's defaults. A <c>local</c> table's identity covers the binding, so its options never
+/// change; a cache table is kept when only its limits change, and takes the new ones (<see cref="LocalFeatureTable.Retune"/>).</summary>
 public sealed class LocalFeatureTableOptions
 {
     public static LocalFeatureTableOptions Default { get; } = new();
@@ -90,7 +90,9 @@ public sealed class LocalFeatureTable
 {
     private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly KeyValuePair<string, object?>[] _tags;
+    private readonly long _emptyBytes;
     private TableVersion _current;
+    private long _maxBytes;
     private UpdatePosition _position = UpdatePosition.Empty;
     private long _compactions;
     private long _completions;
@@ -109,14 +111,8 @@ public sealed class LocalFeatureTable
 
         _current = new TableVersion(
             layout, Options.KeyHasher ?? KeyHashes.Default, Options.PageSize, generation: 0, Options.InitialCapacity);
-        if (_current.Bytes > Options.MaxBytes)
-        {
-            // Every write checks the limit, so the empty table must be within it too.
-            throw new ArgumentOutOfRangeException(
-                nameof(options), Options.MaxBytes,
-                $"max_bytes of {schema.Source}/{schema.Entity} is {Options.MaxBytes} B, but the empty table already takes {_current.Bytes} B " +
-                $"(an index for {Options.InitialCapacity} keys, the page directory and the string dictionary): raise max_bytes, or lower the initial capacity.");
-        }
+        _emptyBytes = _current.Bytes;
+        _maxBytes = CheckedMaxBytes(Options.MaxBytes);
 
         Writer = new LocalTableWriter(this, layout, Options, _current);
         _tags = [new(StrataRecTags.Source, schema.Source), new(StrataRecTags.Entity, schema.Entity)];
@@ -134,7 +130,42 @@ public sealed class LocalFeatureTable
 
     public LocalTableSchema Schema { get; }
 
+    /// <summary>What the table was created with. Its limit now is <see cref="MaxBytes"/>.</summary>
     public LocalFeatureTableOptions Options { get; }
+
+    /// <summary>The table's <c>max_bytes</c> now: what it was created with, or what the plan that took it last asked for.</summary>
+    public long MaxBytes => Volatile.Read(ref _maxBytes);
+
+    /// <summary>
+    /// A plan takes the table, held for an earlier one, with other limits: the table keeps its records and takes the
+    /// plan's <c>max_bytes</c> and, for a cache, its times. A lower limit is met by the writer's next write, which evicts
+    /// down to it. Plans that share a table share one limit, the last one given.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The new <c>max_bytes</c> cannot hold even an empty table.</exception>
+    public void Retune(LocalFeatureTableOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Volatile.Write(ref _maxBytes, CheckedMaxBytes(options.MaxBytes));
+        if (Cache is { } cache && options.Cache is { } policy
+            && (policy.TtlMs != cache.Policy.TtlMs || policy.StaleIfErrorMs != cache.Policy.StaleIfErrorMs))
+        {
+            cache.Adopt(new Cache.CachePolicy(policy.TtlMs, policy.StaleIfErrorMs));
+        }
+    }
+
+    /// <summary>Every write checks the limit, so the empty table must be within it too.</summary>
+    private long CheckedMaxBytes(long maxBytes)
+    {
+        if (maxBytes <= 0 || _emptyBytes > maxBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                "options", maxBytes,
+                $"max_bytes of {Schema.Source}/{Schema.Entity} is {maxBytes} B, but the empty table already takes {_emptyBytes} B " +
+                $"(an index for {Options.InitialCapacity} keys, the page directory and the string dictionary): raise max_bytes, or lower the initial capacity.");
+        }
+
+        return maxBytes;
+    }
 
     /// <summary>The cache policy and the write-back queue of a table in mode <see cref="LocalTableMode.Cache"/>; null otherwise.</summary>
     public Cache.LocalTableCache? Cache { get; }

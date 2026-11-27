@@ -50,16 +50,20 @@ public class LocalBindingTests
     {
         // The code handles a mode through switches over every SupplyMode value (a new value fails to compile there);
         // what the compiler cannot see is the binding's spelling of a mode, and the schema's list of them.
-        var names = Enum.GetValues<SupplyMode>().Select(FeatureSourceResolver.ModeName).ToArray();
+        var names = Enum.GetValues<SupplyMode>().Select(FeatureSourceResolver.ModeName).Distinct().ToArray();
         foreach (var mode in Enum.GetValues<SupplyMode>())
         {
-            Assert.True(FeatureSourceResolver.TryParseMode(FeatureSourceResolver.ModeName(mode), out var parsed));
+            // A cache is not a mode of its own: a fetch binding with a cache.
+            var cached = mode == SupplyMode.Cache;
+            var binding = new FeatureSourceBinding { Mode = FeatureSourceResolver.ModeName(mode), Cache = cached ? new CacheBinding() : null };
+            Assert.True(FeatureSourceResolver.TryMode(binding, out var parsed));
             Assert.Equal(mode, parsed);
         }
 
-        Assert.True(FeatureSourceResolver.TryParseMode(null, out var unset));
+        Assert.True(FeatureSourceResolver.TryMode(new FeatureSourceBinding(), out var unset));
         Assert.Equal(SupplyMode.Fetch, unset);
-        Assert.False(FeatureSourceResolver.TryParseMode("Local", out _));
+        Assert.False(FeatureSourceResolver.TryMode(new FeatureSourceBinding { Mode = "Local" }, out _));
+        Assert.False(FeatureSourceResolver.TryMode(new FeatureSourceBinding { Mode = "cache" }, out _));
         var allowed = typeof(FeatureSourceBinding).GetProperty(nameof(FeatureSourceBinding.Mode))!
             .GetCustomAttributes(typeof(System.ComponentModel.DataAnnotations.AllowedValuesAttribute), false)
             .Cast<System.ComponentModel.DataAnnotations.AllowedValuesAttribute>().Single().Values;

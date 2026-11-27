@@ -559,7 +559,7 @@ public sealed class FeaturePlan
     /// </summary>
     public static bool NeedsWholeTable(SourceBindingArtifact bindings, string source)
     {
-        if (!bindings.Sources.TryGetValue(source, out var binding) || !FeatureSourceResolver.TryParseMode(binding.Mode, out var mode))
+        if (!bindings.Sources.TryGetValue(source, out var binding) || !FeatureSourceResolver.TryMode(binding, out var mode))
         {
             return false;
         }

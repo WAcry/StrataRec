@@ -89,44 +89,27 @@ public sealed class ClientResolver
     }
 
     /// <summary>
-    /// The cache a service's binding declares: its table, shared across plans by the binding's identity and
-    /// the client object, and its distributed tier; every problem reported at its setting. False when any is wrong.
+    /// The cache a service's binding declares: its table, shared across plans by the identity of its answers, and its
+    /// distributed tier; every problem reported at its setting. False when any is wrong.
     /// </summary>
-    private bool TryCache(string name, ClientBinding binding, ServiceCacheBinding settings, IServiceClient? client, out ServiceCache? cache)
+    private bool TryCache(string name, ClientBinding binding, CacheBinding settings, IServiceClient? client, out ServiceCache? cache)
     {
         cache = null;
         var entry = BindingKind.Service.Pointer(name);
         var pointer = entry + "/cache";
         var diagnostics = _resolver.Diagnostics;
-        var ok = true;
-        long maxBytes = 0;
-        if (settings.MaxBytes is null)
-        {
-            ok = false;
-            diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer, $"The cache of service '{name}' has no 'max_bytes'.",
-                "add the most memory its table may take, e.g. \"max_bytes\": \"64MiB\"");
-        }
-        else if (!ByteSize.TryParse(settings.MaxBytes, out maxBytes) || maxBytes == 0)
-        {
-            ok = false;
-            diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer + "/max_bytes", $"'{settings.MaxBytes}' is not a positive size.",
-                "write an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"64MiB\"");
-        }
-
-        ok &= CacheSettings.TryRead(
-            settings, new CacheOwner(BindingKind.ServiceCacheStore, name, "service", "service"), _resolver, pointer, binding.TimeoutMs,
-            out var ttlMs, out var staleMs, out var distributed, out var distributedTimeoutMs);
+        var ok = CacheSettings.TryRead(
+            settings, new CacheOwner(BindingKind.ServiceCacheStore, name, "service", "service"), _resolver, pointer, binding.TimeoutMs, out var read);
         if (!ok || client is null)
         {
             return false;
         }
 
-        var options = new LocalFeatureTableOptions
-        {
-            MaxBytes = maxBytes,
-            Cache = new CacheTableOptions { TtlMs = ttlMs, StaleIfErrorMs = staleMs, Clock = _clock },
-        };
-        var spec = LocalTableSpec.CreateServiceCache(ServiceCache.Schema(name), options, binding, client, _resolver.Artifact, entry, _resolver.BaseDirectory);
+        // The answers' identity is in every key, and in the table's: a release that only changes the cache's times or
+        // limits keeps the table.
+        var identity = read.Origin(AnswerIdentity(binding));
+        var spec = LocalTableSpec.CreateCache(
+            ServiceCache.Schema(name), read.TableOptions(_clock, origin: null), identity, _resolver.Registry, _resolver.Artifact, entry, _resolver.BaseDirectory);
         LocalFeatureTable table;
         try
         {
@@ -135,19 +118,19 @@ public sealed class ClientResolver
         catch (ArgumentOutOfRangeException ex)
         {
             // max_bytes below what an empty table takes.
-            diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer + "/max_bytes", ex.Message.Split('\n')[0], "raise max_bytes");
+            diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer + "/memory/max_bytes", ex.Message.Split('\n')[0], "raise max_bytes");
             return false;
         }
 
         // A distributed tier's timeout defaults to half the service's (which then exists: CacheSettings requires one or the other).
-        cache = new ServiceCache(name, table, distributed, distributedTimeoutMs ?? Math.Max(1, (binding.TimeoutMs ?? 2) / 2), AnswerIdentity(binding));
+        cache = new ServiceCache(name, table, read.Policy, read.Distributed, read.DistributedTimeoutMs ?? Math.Max(1, (binding.TimeoutMs ?? 2) / 2), identity);
         return true;
     }
 
     /// <summary>
-    /// The content id of what a binding answers with: its client and settings, canonical (RFC 8785), so every instance
-    /// with the same configuration has the same one. Not its <c>timeout_ms</c> or <c>cache</c>, which change when an
-    /// answer arrives and how long it is kept, not what it is.
+    /// The content id of what a binding answers with, for a cache that names no <c>version</c>: its client and settings,
+    /// canonical (RFC 8785), so every instance with the same configuration has the same one. Not its <c>timeout_ms</c> or
+    /// <c>cache</c>, which change when an answer arrives and how long it is kept, not what it is.
     /// </summary>
     private static string AnswerIdentity(ClientBinding binding)
     {

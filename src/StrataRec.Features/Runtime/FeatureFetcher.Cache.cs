@@ -17,7 +17,7 @@ using StrataRec.Features.Local;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The request read path of cache groups: everything a request does with a cache source is here.
+/// The request read path of cache groups: everything a request does with a cached source is here.
 /// </summary>
 /// <remarks>
 /// <para><b>Tiers.</b> A cache read starts as a local read (<c>FeatureFetcher.Local.cs</c>): the same rows, one lookup of
@@ -116,7 +116,7 @@ public sealed partial class FeatureFetcher
                 RecordRead(recorder, group, features, version, batch, started);
             }
 
-            cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, keyCount);
+            cache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Hit, keyCount);
             if (keyCount > 0 && CountsValues)
             {
                 CountTableValues(group, features, version, batch.KeyRecords);
@@ -179,7 +179,7 @@ public sealed partial class FeatureFetcher
         var k = 0;
         if (batch.Found == records.Length)
         {
-            var freshSince = nowMs - cache.MinLifetimeMs;
+            var freshSince = nowMs - group.Supply.Cache!.Policy.MinLifetimeMs;
             while (k < records.Length && version.VersionOf(records[k]) >= freshSince)
             {
                 records[k].MarkCacheHit();
@@ -193,12 +193,13 @@ public sealed partial class FeatureFetcher
         }
 
         var keys = batch.Keys.Batch(_memory);
+        var policy = group.Supply.Cache!.Policy;
         CacheMiss[]? misses = null;
         var count = 0;
         for (; k < records.Length; k++)
         {
             var record = records[k];
-            var freshness = record.Found ? cache.Classify(version.VersionOf(record), keys, k, nowMs) : CacheFreshness.Expired;
+            var freshness = record.Found ? policy.Classify(version.VersionOf(record), keys, k, nowMs) : CacheFreshness.Expired;
             if (freshness == CacheFreshness.Fresh)
             {
                 record.MarkCacheHit();
@@ -223,12 +224,12 @@ public sealed partial class FeatureFetcher
     {
         var cache = group.Supply.Table!.Table.Cache!;
         var nowMs = cache.NowMs();
-        var freshness = record.Found ? cache.Classify(version.VersionOf(record), key, 0, nowMs) : CacheFreshness.Expired;
+        var freshness = record.Found ? group.Supply.Cache!.Policy.Classify(version.VersionOf(record), key, 0, nowMs) : CacheFreshness.Expired;
         if (freshness == CacheFreshness.Fresh)
         {
             record.MarkCacheHit();
             StoreLocalContext(group, features, version, key, record, started); // recorded before its metrics (ReadLocal)
-            cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, 1);
+            cache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Hit, 1);
             if (CountsValues)
             {
                 CountTableValues(group, features, version, new ReadOnlySpan<LocalRecordRef>(in record));
@@ -364,7 +365,7 @@ public sealed partial class FeatureFetcher
                     continue;
                 }
 
-                switch (cache.Classify(writtenMs, read.KeyBatch, read.Misses[m].KeyIndex, nowMs))
+                switch (read.Supply.Policy.Classify(writtenMs, read.KeyBatch, read.Misses[m].KeyIndex, nowMs))
                 {
                     case CacheFreshness.Fresh:
                         read.Sources[m] = CacheSource.Distributed;
@@ -609,9 +610,9 @@ public sealed partial class FeatureFetcher
                 case CacheSource.Pending or CacheSource.StaleCandidate:
                     var miss = read.Misses[m];
                     var localMs = miss.LocalStale ? read.Version.VersionOf(read.Records[miss.KeyIndex]) : 0;
-                    var local = miss.LocalStale && read.Cache.Classify(localMs, read.KeyBatch, miss.KeyIndex, nowMs) != CacheFreshness.Expired;
+                    var local = miss.LocalStale && read.Supply.Policy.Classify(localMs, read.KeyBatch, miss.KeyIndex, nowMs) != CacheFreshness.Expired;
                     var sharedMs = read.Sources[m] == CacheSource.StaleCandidate ? CacheRecord.WrittenMs(read.Bytes[m].Span) : 0;
-                    var shared = read.Sources[m] == CacheSource.StaleCandidate && read.Cache.Classify(sharedMs, read.KeyBatch, miss.KeyIndex, nowMs) != CacheFreshness.Expired;
+                    var shared = read.Sources[m] == CacheSource.StaleCandidate && read.Supply.Policy.Classify(sharedMs, read.KeyBatch, miss.KeyIndex, nowMs) != CacheFreshness.Expired;
                     if (shared && !(local && localMs > sharedMs))
                     {
                         read.Sources[m] = CacheSource.StaleDistributed;
@@ -640,7 +641,7 @@ public sealed partial class FeatureFetcher
         }
 
         read.StaleKeys = staleLocal + staleDistributed;
-        read.Cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Stale, staleLocal);
+        read.Cache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Stale, staleLocal);
         read.Cache.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Stale, staleDistributed);
     }
 
@@ -686,7 +687,7 @@ public sealed partial class FeatureFetcher
             records[l++] = read.Bytes[m];
             if (entries is not null && read.Sources[m] == CacheSource.Origin)
             {
-                entries[s++] = new CacheStoreEntry(read.MissTexts![m], read.Bytes[m], cache.StoreTimeToLive(CacheRecord.WrittenMs(read.Bytes[m].Span), nowMs));
+                entries[s++] = new CacheStoreEntry(read.MissTexts![m], read.Bytes[m], read.Supply.Policy.StoreTimeToLive(CacheRecord.WrittenMs(read.Bytes[m].Span), nowMs));
             }
         }
 
@@ -965,9 +966,9 @@ public sealed partial class FeatureFetcher
             RowMiss = rowCapacity == 0 ? [] : memory.Rent<int>(rowCapacity);
 
             MissTexts = Supply.Distributed is null ? null : FormatMissTexts(memory);
-            Cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, KeyCount - missCount);
-            Cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Miss, notFound);
-            Cache.CountKeys(CacheTier.Local, CacheKeyOutcome.Expired, missCount - notFound);
+            Cache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Hit, KeyCount - missCount);
+            Cache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Miss, notFound);
+            Cache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Expired, missCount - notFound);
         }
 
         public FetchGroup Group { get; }

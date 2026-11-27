@@ -218,8 +218,8 @@ public static class StrataRecMetrics
     /// <c>missing / (present + missing)</c>, per source and per feature. A source, or one of its fields,
     /// that stops returning data shows here before it shows in ranking quality. Each distinct key of a read counts once per
     /// requested feature, and only when the source answered for it: the keys of a chunk that failed or timed out are
-    /// counted by <see cref="IoErrors"/> instead; a <c>local</c> source answers every key, a <c>cache</c> source every
-    /// key its local tier had fresh or its distributed tier or connector answered. Rows without a key (a missing foreign or
+    /// counted by <see cref="IoErrors"/> instead; a <c>local</c> source answers every key, a cached source every
+    /// key its memory tier had fresh or its distributed tier or connector answered. Rows without a key (a missing foreign or
     /// context key) are not asked for. A default does not make a value present, and a non-finite value the source returned
     /// is present (its replacement is <see cref="ColumnNonFinite"/>). Tags: <c>stratarec.source</c>,
     /// <c>stratarec.feature</c>, <c>stratarec.outcome</c> = <c>present</c> |
@@ -268,33 +268,33 @@ public static class StrataRecMetrics
     /// </summary>
     public static readonly Gauge<double> LocalLoadLastSuccess = Meter.CreateGauge<double>(Names.LocalLoadLastSuccess, "s", "Unix time of the last complete load or checkpoint of local feature tables.");
 
-    // Caches: an in-process table (tier local) and optionally a distributed cache (tier distributed)
-    // in front of a cache source's connector, or of a service's client. Tagged stratarec.source, stratarec.entity and
+    // Caches: an in-process table (tier memory), a distributed cache (tier distributed) or both
+    // in front of a cached source's connector, or of a service's client. Tagged stratarec.source, stratarec.entity and
     // stratarec.cache.tier; a service's cache with the service's name and stratarec.entity = answers.
 
     /// <summary>
-    /// Keys a request read from a tier of a <c>cache</c> source or a service's cache (its items, or its whole call), by what the tier had. Tags: <c>stratarec.source</c>,
-    /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c> = <c>local</c> | <c>distributed</c>, <c>stratarec.outcome</c> =
+    /// Keys a request read from a tier of a cached source or a service's cache (its items, or its whole call), by what the tier had. Tags: <c>stratarec.source</c>,
+    /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c> = <c>memory</c> | <c>distributed</c>, <c>stratarec.outcome</c> =
     /// <c>hit</c> (served, within its TTL) | <c>miss</c> (no record) | <c>expired</c> (a record past its TTL, so the key went
     /// on) | <c>stale</c> (an expired record served because the connector or the service failed) | <c>mismatch</c> (distributed only: a
     /// record of another field set or format, e.g. written by an instance on another catalog version) | <c>error</c>
     /// (distributed only: the read failed or timed out, so the key went on). A key goes on to the next tier, then to the
     /// connector or the service, on <c>miss</c>, <c>expired</c>, <c>mismatch</c> and <c>error</c>; those calls are counted
     /// as the connector's or the service's.
-    /// The local hit ratio is <c>hit / (hit + miss + expired)</c> of tier <c>local</c>.
+    /// The in-process hit ratio is <c>hit / (hit + miss + expired)</c> of tier <c>memory</c>.
     /// </summary>
     public static readonly Counter<long> CacheKeys = Meter.CreateCounter<long>(Names.CacheKeys, "{key}", "Keys read from the tiers of caches, by outcome.");
 
     /// <summary>
-    /// Records written back to a tier of a <c>cache</c> source or a service's cache, off the request path. Tags: <c>stratarec.source</c>,
+    /// Records written back to a tier of a cached source or a service's cache, off the request path. Tags: <c>stratarec.source</c>,
     /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c>, <c>stratarec.outcome</c> = <c>written</c> | <c>dropped</c> (the
     /// tier's bounded write queue was full; the key is fetched again on its next miss) | <c>failed</c> (the write failed: a
-    /// distributed write that errored or timed out, a local write that did not fit <c>max_bytes</c> even after eviction).
+    /// distributed write that errored or timed out, an in-process write that did not fit <c>max_bytes</c> even after eviction).
     /// </summary>
     public static readonly Counter<long> CacheWrites = Meter.CreateCounter<long>(Names.CacheWrites, "{record}", "Records written back to the tiers of caches, by outcome.");
 
     /// <summary>
-    /// Records the in-process table of a <c>cache</c> source or a service's cache dropped to stay within <c>max_bytes</c>. Tags: <c>stratarec.source</c>,
+    /// Records the in-process table of a cached source or a service's cache dropped to stay within <c>max_bytes</c>. Tags: <c>stratarec.source</c>,
     /// <c>stratarec.entity</c>, <c>stratarec.outcome</c> = <c>expired</c> (past their TTL and stale-if-error window, dropped
     /// first) | <c>capacity</c> (still usable, dropped to make room; records read recently are kept longer).
     /// </summary>

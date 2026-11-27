@@ -98,19 +98,24 @@ public sealed class GroupSupply
 }
 
 /// <summary>
-/// What a <see cref="SupplyMode.Cache"/> group has besides its connector and table: its policy
-/// (the table's <see cref="LocalTableCache"/>), the distributed tier if any, and how its misses are chunked and bounded.
+/// What a <see cref="SupplyMode.Cache"/> group has besides its connector and table: its times, the distributed tier if
+/// any, and how its misses are chunked and bounded.
 /// </summary>
 public sealed class CacheSupply
 {
-    internal CacheSupply(string sourceName, int maxBatch, DistributedCacheTier? distributed, int? distributedTimeoutMs, int[] memberOfTableField)
+    internal CacheSupply(string sourceName, CachePolicy policy, int maxBatch, DistributedCacheTier? distributed, int? distributedTimeoutMs, int[] memberOfTableField)
     {
+        Policy = policy;
         MaxBatch = maxBatch;
         Distributed = distributed;
         DistributedTimeoutMs = distributedTimeoutMs;
         MemberOfTableField = memberOfTableField;
         Io = new IoTarget(IoRoles.Cache, sourceName);
     }
+
+    /// <summary>The binding's <c>ttl_ms</c> and <c>stale_if_error_ms</c> as this plan compiled them: how fresh its reads
+    /// find a record, in either tier.</summary>
+    public CachePolicy Policy { get; }
 
     /// <summary>Keys per connector call, and per read of the distributed tier (the binding's <c>max_batch</c>).</summary>
     public int MaxBatch { get; }
@@ -163,8 +168,9 @@ public sealed class LocalGroupTable
 internal sealed class FeatureSourceResolver
 {
     /// <summary>
-    /// Every setting of <see cref="FeatureSourceBinding"/> (by its JSON name) with the modes it belongs to; the members the
-    /// binding does not declare are connector settings, which belong to the modes with a connector
+    /// Every setting of <see cref="FeatureSourceBinding"/> (by its JSON name) with the modes it belongs to
+    /// (<see cref="SupplyMode.Cache"/> is a <c>fetch</c> binding with a <c>cache</c>, <see cref="TryMode"/>); the members
+    /// the binding does not declare are connector settings, which belong to the modes with a connector
     /// (<see cref="TakesConnectorSettings"/>). A setting of a mode the binding is not in is an error. A setting means the
     /// same in every mode it belongs to, so a binding switched between them keeps it. A test checks that this lists every
     /// declared member, so a setting added to the binding cannot be silently accepted in a mode that ignores it.
@@ -174,9 +180,9 @@ internal sealed class FeatureSourceResolver
         ("connector", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.Connector is not null),
         ("timeout_ms", [SupplyMode.Fetch, SupplyMode.Cache, SupplyMode.Service], static b => b.TimeoutMs is not null),
         ("max_batch", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.MaxBatch is not null),
-        ("max_bytes", [SupplyMode.Local, SupplyMode.Cache], static b => b.MaxBytes is not null),
+        ("max_bytes", [SupplyMode.Local], static b => b.MaxBytes is not null),
         ("bootstrap", [SupplyMode.Local], static b => b.Bootstrap is not null),
-        ("cache", [SupplyMode.Cache], static b => b.Cache is not null),
+        ("cache", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.Cache is not null),
         ("service", [SupplyMode.Service], static b => b.Service is not null),
     };
 
@@ -366,11 +372,11 @@ internal sealed class FeatureSourceResolver
         }
 
         return GroupSupply.ForCache(supply.Connector!, supply.TimeoutMs, table,
-            new CacheSupply(supply.Name, supply.MaxBatch, supply.Distributed, supply.DistributedTimeoutMs, memberOfField));
+            new CacheSupply(supply.Name, supply.Policy!, supply.MaxBatch, supply.Distributed, supply.DistributedTimeoutMs, memberOfField));
     }
 
     /// <summary>
-    /// The table of one (source, entity) group of a local or cache source and the table field of each member; null
+    /// The table of one (source, entity) group of a local or cached source and the table field of each member; null
     /// (diagnosed) when the features disagree on a field's type.
     /// </summary>
     private LocalGroupTable? LocalTable(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members)
@@ -396,7 +402,7 @@ internal sealed class FeatureSourceResolver
         try
         {
             spec = tableMode == LocalTableMode.Cache
-                ? LocalTableSpec.CreateCache(schema, supply.Options!, supply.Binding, supply.Connector!, _artifact, pointer, _baseDirectory)
+                ? LocalTableSpec.CreateCache(schema, supply.Options!, supply.Options!.Cache!.Origin!, _resolver.Registry, _artifact, pointer, _baseDirectory)
                 : LocalTableSpec.Create(schema, supply.Options!, supply.Binding, supply.BootstrapFactory!, supply.Name, _artifact, pointer, _baseDirectory);
         }
         catch (BindingException ex)
@@ -413,7 +419,9 @@ internal sealed class FeatureSourceResolver
         catch (ArgumentOutOfRangeException ex)
         {
             // max_bytes below what an empty table takes.
-            _diagnostics.Error("LOCAL_MAX_BYTES", _artifact, pointer + "/max_bytes", FirstLine(ex.Message), "raise max_bytes");
+            var cache = tableMode == LocalTableMode.Cache;
+            _diagnostics.Error(cache ? "CACHE_MAX_BYTES" : "LOCAL_MAX_BYTES", _artifact, pointer + (cache ? "/cache/memory/max_bytes" : "/max_bytes"),
+                FirstLine(ex.Message), "raise max_bytes");
             return null;
         }
 
@@ -437,10 +445,13 @@ internal sealed class FeatureSourceResolver
         }
 
         var pointer = "/sources/" + JsonPointer.Escape(sourceName);
-        if (!TryParseMode(binding.Mode, out var mode))
+        if (!TryMode(binding, out var mode))
         {
             _diagnostics.Error("SOURCE_MODE_UNSUPPORTED", _artifact, pointer + "/mode",
-                $"Supply mode '{binding.Mode}' is not available in this build.", "use mode " + ModeNames());
+                $"Supply mode '{binding.Mode}' is not available in this build.",
+                string.Equals(binding.Mode, "cache", StringComparison.Ordinal)
+                    ? "a cache is a member of a fetch binding: remove \"mode\" and give the binding a \"cache\", e.g. { \"ttl_ms\": 60000, \"memory\": { \"max_bytes\": \"256MiB\" } }"
+                    : "use mode " + ModeNames());
             return null;
         }
 
@@ -456,20 +467,18 @@ internal sealed class FeatureSourceResolver
         return settingsOk ? supply : null;
     }
 
-    /// <summary>The mode a binding's <c>mode</c> names; no mode is <see cref="SupplyMode.Fetch"/>. The inverse of <see cref="ModeName"/>.</summary>
-    internal static bool TryParseMode(string? name, out SupplyMode mode)
+    /// <summary>
+    /// How a binding supplies its features: the mode its <c>mode</c> names (none is <c>fetch</c>), and for a <c>fetch</c>
+    /// binding with a <c>cache</c>, <see cref="SupplyMode.Cache"/>. False when <c>mode</c> names none.
+    /// </summary>
+    internal static bool TryMode(FeatureSourceBinding binding, out SupplyMode mode)
     {
         mode = SupplyMode.Fetch;
-        if (name is null)
-        {
-            return true;
-        }
-
         foreach (var candidate in Enum.GetValues<SupplyMode>())
         {
-            if (string.Equals(ModeName(candidate), name, StringComparison.Ordinal))
+            if (candidate != SupplyMode.Cache && string.Equals(ModeName(candidate), binding.Mode ?? ModeName(SupplyMode.Fetch), StringComparison.Ordinal))
             {
-                mode = candidate;
+                mode = candidate == SupplyMode.Fetch && binding.Cache is not null ? SupplyMode.Cache : candidate;
                 return true;
             }
         }
@@ -477,15 +486,22 @@ internal sealed class FeatureSourceResolver
         return false;
     }
 
-    private static string ModeNames()
+    private static string ModeNames() => string.Join(" or ", QuotedNames(Enum.GetValues<SupplyMode>()));
+
+    /// <summary>The names of <paramref name="modes"/> as a binding writes them, quoted, each once.</summary>
+    private static List<string> QuotedNames(SupplyMode[] modes)
     {
-        var names = new List<string>();
-        foreach (var mode in Enum.GetValues<SupplyMode>())
+        var names = new List<string>(modes.Length);
+        foreach (var mode in modes)
         {
-            names.Add("'" + ModeName(mode) + "'");
+            var name = "'" + ModeName(mode) + "'";
+            if (!names.Contains(name))
+            {
+                names.Add(name);
+            }
         }
 
-        return string.Join(" or ", names);
+        return names;
     }
 
     /// <summary>Whether the binding's undeclared members (connector settings) belong to the mode: the modes with a connector.</summary>
@@ -504,12 +520,11 @@ internal sealed class FeatureSourceResolver
             if (Array.IndexOf(modes, mode) < 0 && isSet(binding))
             {
                 ok = false;
-                var names = new List<string>(modes.Length);
-                var bindAs = new List<string>(modes.Length);
-                foreach (var settingMode in modes)
+                var names = QuotedNames(modes);
+                var bindAs = new List<string>(names.Count);
+                foreach (var quoted in names)
                 {
-                    names.Add("'" + ModeName(settingMode) + "'");
-                    bindAs.Add($"\"mode\": \"{ModeName(settingMode)}\"");
+                    bindAs.Add($"\"mode\": \"{quoted.Trim('\'')}\"");
                 }
 
                 _diagnostics.Error("SOURCE_SETTING_WRONG_MODE", _artifact, pointer + "/" + name,
@@ -524,7 +539,7 @@ internal sealed class FeatureSourceResolver
             {
                 ok = false;
                 _diagnostics.Error("SOURCE_SETTING_WRONG_MODE", _artifact, pointer + "/" + JsonPointer.Escape(name),
-                    $"'{name}' is not a setting of mode '{ModeName(mode)}' (connector settings belong to modes 'fetch' and 'cache'); source '{sourceName}' is bound with mode '{ModeName(mode)}'.",
+                    $"'{name}' is not a setting of mode '{ModeName(mode)}' (connector settings belong to mode 'fetch'); source '{sourceName}' is bound with mode '{ModeName(mode)}'.",
                     $"a {ModeName(mode)} binding takes {SettingsOf(mode)}; "
                     + (mode == SupplyMode.Local ? "settings of the update source go inside 'bootstrap'" : "the service's settings go under 'services'"));
             }
@@ -570,30 +585,16 @@ internal sealed class FeatureSourceResolver
         _resolver.Acquire<IFeatureSourceConnector>(BindingKind.Connector, sourceName, binding.Connector, binding.Settings);
 
     /// <summary>
-    /// A cache binding: the connector it is in front of, <c>max_bytes</c> of its tables, and its
-    /// <c>cache</c> settings, the distributed tier included. Every problem of the binding is reported at once.
+    /// A fetch binding with a cache: the connector it is in front of and its <c>cache</c> settings, the tiers included.
+    /// Every problem of the binding is reported at once.
     /// </summary>
     private SourceSupply? ResolveCache(string sourceName, FeatureSourceBinding binding, string pointer)
     {
         var connector = ResolveConnector(sourceName, binding);
         var ok = connector is not null;
-        ok &= TryMaxBytes(sourceName, binding, pointer, SupplyMode.Cache, out var maxBytes);
-        long ttlMs = 0, staleMs = 0;
-        DistributedCacheTier? distributed = null;
-        int? distributedTimeoutMs = null;
-        if (binding.Cache is not { } cache)
-        {
-            ok = false;
-            _diagnostics.Error("CACHE_SETTINGS_MISSING", _artifact, pointer, $"Source '{sourceName}' is bound with mode 'cache' but has no 'cache'.",
-                "add how long values are served, e.g. \"cache\": { \"ttl_ms\": 60000 }");
-        }
-        else
-        {
-            ok &= CacheSettings.TryRead(
-                cache, new CacheOwner(BindingKind.CacheStore, sourceName, "source", "connector"), _resolver, pointer + "/cache",
-                binding.TimeoutMs ?? DefaultTimeoutMs, out ttlMs, out staleMs, out distributed, out distributedTimeoutMs);
-        }
-
+        ok &= CacheSettings.TryRead(
+            binding.Cache!, new CacheOwner(BindingKind.CacheStore, sourceName, "source", "connector"), _resolver, pointer + "/cache",
+            binding.TimeoutMs ?? DefaultTimeoutMs, out var cache);
         if (!ok)
         {
             return null;
@@ -604,21 +605,18 @@ internal sealed class FeatureSourceResolver
             Connector = connector,
             TimeoutMs = binding.TimeoutMs ?? DefaultTimeoutMs,
             MaxBatch = binding.MaxBatch is > 0 ? binding.MaxBatch.Value : DefaultMaxBatch,
-            Options = new LocalFeatureTableOptions
-            {
-                MaxBytes = maxBytes,
-                Cache = new CacheTableOptions { TtlMs = ttlMs, StaleIfErrorMs = staleMs, Clock = _clock, Origin = OriginIdentity(binding) },
-            },
-            Distributed = distributed,
-            DistributedTimeoutMs = distributedTimeoutMs,
+            Options = cache.TableOptions(_clock, cache.Origin(OriginIdentity(binding))),
+            Policy = cache.Policy,
+            Distributed = cache.Distributed,
+            DistributedTimeoutMs = cache.DistributedTimeoutMs,
         };
     }
 
     /// <summary>
-    /// What a cached source's values come from: its connector and the connector's settings, canonical, as the first 16 hex
-    /// digits of their content id. Not <c>timeout_ms</c>, <c>max_batch</c>, <c>max_bytes</c> or <c>cache</c>, which decide
-    /// when a value arrives and how long it is kept, not what it is: a release that only tunes those keeps the shared
-    /// tier's values (a service's cache follows the same rule, <c>ClientResolver.AnswerIdentity</c>).
+    /// What a cached source's values come from when its cache names no <c>version</c>: its connector and the connector's
+    /// settings, canonical, as the first 16 hex digits of their content id. Not <c>timeout_ms</c>, <c>max_batch</c> or
+    /// <c>cache</c>, which decide when a value arrives and how long it is kept, not what it is: a release that only tunes
+    /// those keeps both tiers' values (a service's cache follows the same rule, <c>ClientResolver.AnswerIdentity</c>).
     /// </summary>
     private static string OriginIdentity(FeatureSourceBinding binding)
     {
@@ -631,7 +629,7 @@ internal sealed class FeatureSourceResolver
         return ContentHash.Compute(node).Substring(ContentHash.Prefix.Length, 16);
     }
 
-    /// <summary>The binding's <c>max_bytes</c> (required in modes local and cache); false (diagnosed) when missing or not a positive size.</summary>
+    /// <summary>The binding's <c>max_bytes</c> (required in mode local); false (diagnosed) when missing or not a positive size.</summary>
     private bool TryMaxBytes(string sourceName, FeatureSourceBinding binding, string pointer, SupplyMode mode, out long maxBytes)
     {
         maxBytes = 0;
@@ -746,12 +744,12 @@ internal sealed class FeatureSourceResolver
         return parameter < 0 ? line : line[..parameter];
     }
 
-    /// <summary>The mode's name in a binding (<c>"mode"</c>); <see cref="TryParseMode"/> reads it back.</summary>
+    /// <summary>The mode's name in a binding (<c>"mode"</c>); <see cref="TryMode"/> reads it back.</summary>
     internal static string ModeName(SupplyMode mode) => mode switch
     {
         SupplyMode.Fetch => "fetch",
         SupplyMode.Local => "local",
-        SupplyMode.Cache => "cache",
+        SupplyMode.Cache => "fetch", // a fetch binding with a cache
         SupplyMode.Service => "service",
     };
 
@@ -783,7 +781,7 @@ internal sealed class SourceSupply(string name, string pointer, FeatureSourceBin
 
     public SupplyMode Mode { get; } = mode;
 
-    /// <summary>Modes fetch and cache.</summary>
+    /// <summary>Mode fetch, with or without a cache.</summary>
     public IFeatureSourceConnector? Connector { get; init; }
 
     public int TimeoutMs { get; init; }
@@ -793,13 +791,16 @@ internal sealed class SourceSupply(string name, string pointer, FeatureSourceBin
     /// <summary>Mode local: the factory of the bootstrap source.</summary>
     public IBindingFactory<IFeatureUpdateSource>? BootstrapFactory { get; init; }
 
-    /// <summary>Modes local and cache: the options of every table of the source.</summary>
+    /// <summary>Mode local, and a fetch binding with a cache: the options of every table of the source.</summary>
     public LocalFeatureTableOptions? Options { get; init; }
 
-    /// <summary>Mode cache: the distributed tier, if the binding has one.</summary>
+    /// <summary>A fetch binding with a cache: its times.</summary>
+    public CachePolicy? Policy { get; init; }
+
+    /// <summary>A fetch binding with a cache: the distributed tier, if the binding has one.</summary>
     public DistributedCacheTier? Distributed { get; init; }
 
-    /// <summary>Mode cache: <c>cache.distributed.timeout_ms</c>.</summary>
+    /// <summary>A fetch binding with a cache: <c>cache.distributed.timeout_ms</c>.</summary>
     public int? DistributedTimeoutMs { get; init; }
 
     /// <summary>Mode service: the service.</summary>

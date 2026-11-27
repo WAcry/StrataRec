@@ -113,12 +113,14 @@ internal sealed class FeatureTestRig
     }
 
     /// <summary>
-    /// Binds a source with mode <c>cache</c> in front of a test connector, with <paramref name="distributed"/> as its
+    /// Binds a source with a cache in front of a test connector, with <paramref name="distributed"/> as its
     /// distributed tier when given. Its table's writer does not run: <see cref="WriteBack"/> applies what reads handed it.
     /// </summary>
+    /// <param name="maxBytes">Of the in-process tier; null binds the cache without one (then <paramref name="distributed"/> is its only tier).</param>
+    /// <param name="version">The cache's <c>version</c>; null lets it follow the connector's configuration.</param>
     public FeatureTestRig CacheSource(
         string name, IFeatureSourceConnector connector, long ttlMs = 60_000, long staleIfErrorMs = 0, ICacheStore? distributed = null,
-        int? distributedTimeoutMs = null, int timeoutMs = UntimedMs, int? maxBatch = null, string maxBytes = "64MiB")
+        int? distributedTimeoutMs = null, int timeoutMs = UntimedMs, int? maxBatch = null, string? maxBytes = "64MiB", string? version = null)
     {
         _connectors[name] = connector;
         if (distributed is not null)
@@ -128,22 +130,22 @@ internal sealed class FeatureTestRig
 
         _sources[name] = new FeatureSourceBinding
         {
-            Mode = "cache",
             Connector = TestConnectorFactory.TypeName,
             TimeoutMs = timeoutMs,
             MaxBatch = maxBatch,
-            MaxBytes = maxBytes,
             Cache = new CacheBinding
             {
                 TtlMs = ttlMs,
                 StaleIfErrorMs = staleIfErrorMs,
+                Version = version,
+                Memory = maxBytes is null ? null : new MemoryCacheBinding { MaxBytes = maxBytes },
                 Distributed = distributed is null ? null : new DistributedCacheBinding { Store = TestCacheStoreFactory.TypeName, TimeoutMs = distributedTimeoutMs },
             },
         };
         return this;
     }
 
-    /// <summary>Binds a source with mode <c>cache</c> in front of <c>memory@1</c> with inline data.</summary>
+    /// <summary>Binds a source with a cache in front of <c>memory@1</c> with inline data.</summary>
     public FeatureTestRig MemoryCacheSource(string name, string json, long ttlMs = 60_000, ICacheStore? distributed = null)
     {
         MemorySource(name, json);
@@ -155,14 +157,13 @@ internal sealed class FeatureTestRig
 
         _sources[name] = new FeatureSourceBinding
         {
-            Mode = "cache",
             Connector = fetched.Connector,
             TimeoutMs = fetched.TimeoutMs,
             Settings = fetched.Settings,
-            MaxBytes = "64MiB",
             Cache = new CacheBinding
             {
                 TtlMs = ttlMs,
+                Memory = new MemoryCacheBinding { MaxBytes = "64MiB" },
                 Distributed = distributed is null ? null : new DistributedCacheBinding { Store = TestCacheStoreFactory.TypeName },
             },
         };

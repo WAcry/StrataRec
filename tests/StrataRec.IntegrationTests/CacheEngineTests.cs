@@ -47,8 +47,8 @@ public sealed class CacheEngineTests
         Assert.True(expected.Succeeded && first.Succeeded, first.Error);
         Assert.Equal(Items(expected), Items(first));
         Assert.Equal(Items(expected), Items(fromTable));
-        Assert.True(firstRead.Keys("local", "miss") >= 1 && firstRead.ConnectorKeys >= 1, firstRead.ToString()); // a cold table
-        Assert.Equal(firstRead.Keys("local", "miss") + firstRead.Keys("local", "hit"), tableRead.Keys("local", "hit")); // the same reads, all hits
+        Assert.True(firstRead.Keys("memory", "miss") >= 1 && firstRead.ConnectorKeys >= 1, firstRead.ToString()); // a cold table
+        Assert.Equal(firstRead.Keys("memory", "miss") + firstRead.Keys("memory", "hit"), tableRead.Keys("memory", "hit")); // the same reads, all hits
         Assert.Equal(0, tableRead.Keys("distributed", "miss") + tableRead.Keys("distributed", "hit")); // there is no distributed tier
     }
 
@@ -98,16 +98,83 @@ public sealed class CacheEngineTests
         Assert.True(result.Succeeded, result.Error);
         Assert.Same(table, ItemTable(engine));
         Assert.Equal(3, engine.Bindings.TableCount); // item_store's and the sample's local author_store and item_country_store, none left over
-        Assert.True(read.Keys("local", "miss") == 0 && read.Keys("local", "hit") > 0, read.ToString());
+        Assert.True(read.Keys("memory", "miss") == 0 && read.Keys("memory", "hit") > 0, read.ToString());
         Assert.Equal(0, read.ConnectorKeys);
+    }
+
+    [Fact]
+    public async Task APlanSwapThatOnlyTunesTheCache_KeepsItsRecords_AndTheTableTakesTheNewLimits()
+    {
+        // A cache of millions of items that started empty whenever a timeout changed would send every key to its origin
+        // at once: times and limits are not what the records come from.
+        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r)).Root;
+        await using var engine = await Load(root, bindings: null);
+        using var metrics = new MetricCapture();
+        await UntilServedFromTable(engine, metrics, MetricsTests.Request);
+        var table = ItemTable(engine);
+
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_batch\":25", "\"max_batch\":20"); // the file as Rebind wrote it
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"ttl_ms\":600000", "\"ttl_ms\":300000,\"stale_if_error_ms\":1000");
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_bytes\":\"4MiB\"", "\"max_bytes\":\"8MiB\"");
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
+        var before = Snapshot.Of(metrics);
+        var result = await engine.ExecuteAsync(MetricsTests.Request("req-tuned"), TestContext.Current.CancellationToken);
+        var read = Snapshot.Of(metrics).Minus(before);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Same(table, ItemTable(engine));
+        Assert.Equal((8L << 20, 300_000L, 1_000L), (table.MaxBytes, table.Cache!.Policy.TtlMs, table.Cache.Policy.StaleIfErrorMs));
+        Assert.True(read.Keys("memory", "miss") == 0 && read.Keys("memory", "hit") > 0 && read.ConnectorKeys == 0, read.ToString());
+    }
+
+    [Fact]
+    public async Task ACacheWithAVersion_KeepsItsRecordsWhenTheConnectorsSettingsChange_UntilTheVersionChanges()
+    {
+        // Without a version, other connector settings may be other data, so the cache starts anew (the next test). The
+        // version says they are not: the records stay, in the table and under the same keys of the distributed tier.
+        var ct = TestContext.Current.CancellationToken;
+        var shared = new SharedStores();
+        var root = HomeFeedTestHost.LoadModified(r => CacheItems(r, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 1 }""")).Root;
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"ttl_ms\":600000", "\"ttl_ms\":600000,\"version\":\"1\"");
+        File.Copy(Path.Combine(root, "fixtures", "items.json"), Path.Combine(root, "fixtures", "items-moved.json"));
+        await using var engine = await Load(root, shared);
+        using var metrics = new MetricCapture();
+        await UntilServedFromTable(engine, metrics, MetricsTests.Request);
+        var table = ItemTable(engine);
+        var prefix = table.Cache!.Keyspace.Prefix;
+
+        // The same data at another place: a setting of the connector.
+        ReplayTests.Edit(root, "bindings/local.jsonc", "fixtures/items.json", "fixtures/items-moved.json");
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: ct)).Applied);
+        var before = Snapshot.Of(metrics);
+        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-moved"), ct)).Succeeded);
+        var kept = Snapshot.Of(metrics).Minus(before);
+
+        Assert.Same(table, ItemTable(engine));
+        Assert.EndsWith(":v.1:", prefix, StringComparison.Ordinal);
+        Assert.True(kept.Keys("memory", "miss") == 0 && kept.Keys("memory", "hit") > 0 && kept.ConnectorKeys == 0, kept.ToString());
+
+        // Another version: a cache of its own. Both tiers hold every key under the old one, and neither answers: the
+        // request's first read of each key goes to the connector.
+        await Eventually(shared.HoldsEveryKeyRead, () => "the distributed write-back: " + Snapshot.Of(metrics));
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"version\":\"1\"", "\"version\":\"2\"");
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: ct)).Applied);
+        before = Snapshot.Of(metrics);
+        Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-next"), ct)).Succeeded);
+        var anew = Snapshot.Of(metrics).Minus(before);
+
+        Assert.NotSame(table, ItemTable(engine));
+        Assert.EndsWith(":v.2:", ItemTable(engine).Cache!.Keyspace.Prefix, StringComparison.Ordinal);
+        Assert.True(anew.Keys("memory", "miss") >= 1 && anew.ConnectorKeys >= 1, anew.ToString());
+        Assert.Equal(anew.Keys("distributed", "miss"), anew.ConnectorKeys); // what the shared tier was asked and did not have
     }
 
     [Fact]
     public async Task TwoEnginesSharingAHost_WithConnectorsOfTheirOwn_NeverReadEachOthersTable()
     {
-        // The same configuration, so the same table identity, but each engine's registry creates its own connector: the
-        // second engine finds an empty table and asks its own connector, instead of serving the rows the first engine's
-        // connector fetched.
+        // The same configuration, so the same table identity, but each engine resolves its bindings with a registry of its
+        // own, which creates its own connector: the second engine finds an empty table and asks its own connector, instead
+        // of serving the rows the first engine's connector fetched.
         var root = HomeFeedTestHost.LoadModified(r => CacheItems(r)).Root;
         using var host = new BindingHost();
         await using var first = await Load(root, host);
@@ -120,7 +187,7 @@ public sealed class CacheEngineTests
         var read = Snapshot.Of(metrics).Minus(before);
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.True(read.Keys("local", "miss") >= 1 && read.ConnectorKeys >= 1, read.ToString());
+        Assert.True(read.Keys("memory", "miss") >= 1 && read.ConnectorKeys >= 1, read.ToString());
         Assert.NotSame(ItemTable(first), ItemTable(second));
         Assert.Equal(6, host.TableCount); // item_store's and the sample's local author_store and item_country_store, for each engine
     }
@@ -238,9 +305,8 @@ public sealed class CacheEngineTests
     /// </summary>
     internal static void CacheItems(string root, string? distributed = null) => SampleBindings.Rebind(root, Source, $$"""
         {
-          "mode": "cache", "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}}, "max_batch": 25,
-          "max_bytes": "4MiB",
-          "cache": { "ttl_ms": 600000{{(distributed is null ? string.Empty : ", \"distributed\": " + distributed)}} }
+          "connector": "memory@1", "data_file": "fixtures/items.json", "timeout_ms": {{HomeFeedTestHost.UntimedMs}}, "max_batch": 25,
+          "cache": { "ttl_ms": 600000, "memory": { "max_bytes": "4MiB" }{{(distributed is null ? string.Empty : ", \"distributed\": " + distributed)}} }
         }
         """);
 
@@ -288,7 +354,7 @@ public sealed class CacheEngineTests
             var result = await engine.ExecuteAsync(request("req-table-" + attempt));
             Assert.True(result.Succeeded, result.Error);
             var read = Snapshot.Of(metrics).Minus(before);
-            if (read.Keys("local", "miss") == 0 && read.Keys("local", "hit") > 0)
+            if (read.Keys("memory", "miss") == 0 && read.Keys("memory", "hit") > 0)
             {
                 Assert.Equal(0, read.ConnectorKeys);
                 return (result, read);

@@ -70,65 +70,49 @@ public sealed class LocalTableSpec
     }
 
     /// <summary>
-    /// The spec of a <c>cache</c> table: fed by the requests that miss it, through its writer, which the
-    /// table host runs as the table's source (<see cref="Cache.CacheWriterSource"/>). The identity is built by the same rule
-    /// as a local table's, so a change of the connector, of the cache settings or of the field set starts a new, empty table.
+    /// The spec of a cache's table: a feature source's (fed by the requests that miss it) or a service's (by the calls
+    /// that miss it), through its writer, which the table host runs as the table's source
+    /// (<see cref="Cache.CacheWriterSource"/>).
     /// </summary>
+    /// <remarks>
+    /// The identity is what decides which records the table may hold, and nothing else: the layout, whether it keeps
+    /// records at all, and <paramref name="origin"/>. The cache's times and limits (<c>ttl_ms</c>,
+    /// <c>stale_if_error_ms</c>, <c>max_bytes</c>, timeouts, the distributed tier) are not part of it: a release that
+    /// only tunes them keeps the table and its records, which take the new ones (<see cref="LocalFeatureTable.Retune"/>).
+    /// A cache of millions of records that started empty whenever a timeout changed would send every key to its origin
+    /// at once.
+    /// </remarks>
     /// <param name="options">With <see cref="LocalFeatureTableOptions.Cache"/> set.</param>
-    /// <param name="connector">The connector the table caches, as the plan's bindings handed it out; the spec's
-    /// <see cref="Owner"/>, so a table holds only rows this connector object fetched. The engine hands out one connector
-    /// per <see cref="Bindings.BindingKey"/>, so the same connector object already means the same factory and identity.</param>
+    /// <param name="origin">
+    /// What the records come from: the binding's <c>cache.version</c>, or without one a digest of the connector or client
+    /// and its settings, so a table never serves what another origin answered.
+    /// </param>
+    /// <param name="owner">
+    /// The registry the plan's bindings were resolved with, the spec's <see cref="Owner"/>: the same for every plan of an
+    /// engine, whatever connector or client object the plan got, so a binding with a <c>cache.version</c> keeps its table
+    /// when its settings change.
+    /// </param>
     public static LocalTableSpec CreateCache(
         LocalTableSchema schema,
         LocalFeatureTableOptions options,
-        FeatureSourceBinding binding,
-        IFeatureSourceConnector connector,
+        string origin,
+        object owner,
         string artifact,
         string pointer,
         string? baseDirectory)
     {
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(binding);
-        ArgumentNullException.ThrowIfNull(connector);
+        ArgumentException.ThrowIfNullOrEmpty(origin);
+        ArgumentNullException.ThrowIfNull(owner);
         if (schema.Mode != LocalTableMode.Cache || options.Cache is null)
         {
             throw new ArgumentException("A cache spec has a cache schema and cache options.", nameof(options));
         }
 
+        var what = new JsonObject { ["origin"] = origin, ["memory"] = options.Cache.Memory };
         return new LocalTableSpec(
-            schema, options, ArtifactSerializer.ToNode(binding), Cache.CacheWriterSource.Instance, connector, artifact, pointer,
-            BindingContext.PinBaseDirectory(baseDirectory));
-    }
-
-    /// <summary>
-    /// The spec of a service's cache table: fed by the calls that miss it, as a source's <c>cache</c> table
-    /// (<see cref="CreateCache"/>), with the identity of the service's binding as written, so a change of the client, its
-    /// settings or the cache settings starts a new, empty table.
-    /// </summary>
-    /// <param name="schema">The service cache's layout (<see cref="Cache.ServiceCache.Schema"/>).</param>
-    /// <param name="client">The client the table caches, as the plan's bindings handed it out: the spec's <see cref="Owner"/>.</param>
-    public static LocalTableSpec CreateServiceCache(
-        LocalTableSchema schema,
-        LocalFeatureTableOptions options,
-        ClientBinding binding,
-        object client,
-        string artifact,
-        string pointer,
-        string? baseDirectory)
-    {
-        ArgumentNullException.ThrowIfNull(schema);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(binding);
-        ArgumentNullException.ThrowIfNull(client);
-        if (schema.Mode != LocalTableMode.Cache || options.Cache is null)
-        {
-            throw new ArgumentException("A cache spec has a cache schema and cache options.", nameof(options));
-        }
-
-        return new LocalTableSpec(
-            schema, options, ArtifactSerializer.ToNode(binding), Cache.CacheWriterSource.Instance, client, artifact, pointer,
-            BindingContext.PinBaseDirectory(baseDirectory));
+            schema, options, what, Cache.CacheWriterSource.Instance, owner, artifact, pointer, BindingContext.PinBaseDirectory(baseDirectory));
     }
 
     public LocalTableSchema Schema { get; }
@@ -141,7 +125,7 @@ public sealed class LocalTableSpec
 
     /// <summary>
     /// The runtime object whose data the table holds, compared by reference: the bootstrap source's factory for a
-    /// <c>local</c> table, the connector for a <c>cache</c> table. The <see cref="Identity"/> describes the configuration
+    /// <c>local</c> table, the bindings registry for a cache's table. The <see cref="Identity"/> describes the configuration
     /// only, and two engines on one host can compile the same configuration with different registries; a table shared
     /// on the identity alone would serve one engine the data another engine's source loaded or another engine's connector
     /// fetched. Not part of the identity, which stays a canonical, stable description of the configuration.
@@ -165,13 +149,14 @@ public sealed class LocalTableSpec
     /// are served by one table, so a new plan takes over a loaded table instead of loading it again. The identity is the
     /// RFC 8785 canonical JSON of what decides the table's contents: the source and entity, the key type, the physical
     /// fields with their storage types (in field-name order, so renaming the features that read them, or changing their
-    /// defaults, changes nothing), the source's binding as written, and the absolute <see cref="BaseDirectory"/>. Nothing
+    /// defaults, changes nothing), the absolute <see cref="BaseDirectory"/>, and for a <c>local</c> table the source's
+    /// binding as written, for a cache's table what its records come from (<see cref="CreateCache"/>). Nothing
     /// else in the configuration is part of it: other sources, pipelines and experiments never cause a reload.
     /// </summary>
     /// <remarks>
-    /// The binding is taken whole rather than setting by setting, so a binding setting added later is part of the
-    /// identity without anyone remembering to add it: a table is never shared between bindings that differ in anything.
-    /// The table options all come from the binding (<c>max_bytes</c>) or are the engine's constants.
+    /// A <c>local</c> binding is taken whole rather than setting by setting, so a binding setting added later is part of
+    /// the identity without anyone remembering to add it: a loaded table is never shared between bindings that differ in
+    /// anything.
     /// </remarks>
     public string Identity { get; }
 
@@ -195,7 +180,7 @@ public sealed class LocalTableSpec
             ["key_type"] = schema.Key.TypeText, // "int64" or "string" for one part, "(int64,string)" for several
             ["mode"] = schema.Mode.ToString(),
             ["fields"] = fieldArray,
-            ["binding"] = binding,
+            [schema.Mode == LocalTableMode.Cache ? "cache" : "binding"] = binding,
             ["base_directory"] = baseDirectory,
         };
         return JsonCanonicalizer.CanonicalizeToString(identity);

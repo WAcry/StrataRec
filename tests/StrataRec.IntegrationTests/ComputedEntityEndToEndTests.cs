@@ -144,7 +144,7 @@ public sealed class ComputedEntityEndToEndTests
     public async Task TheServicesCache_AnswersRequestsWithTheSameArguments()
     {
         var service = new IntentService();
-        var root = Workspace(serviceCache: """, "cache": { "ttl_ms": 600000, "max_bytes": "1MiB" }""");
+        var root = Workspace(serviceCache: """, "cache": { "ttl_ms": 600000, "memory": { "max_bytes": "1MiB" } }""");
         var diagnostics = new DiagnosticBag();
         var request = ConfigWorkspace.Load(root, diagnostics).CreateCompileRequest("p", "local", diagnostics);
         await using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root, Bindings = PlanEnvironment.DefaultBindings().Add(service) });
@@ -182,7 +182,7 @@ public sealed class ComputedEntityEndToEndTests
         var token = TestContext.Current.CancellationToken;
         var service = new IntentService();
         var clock = new MovableClock();
-        var root = Workspace(readInOutput: false, serviceCache: """, "cache": { "ttl_ms": 1000, "max_bytes": "1MiB", "stale_if_error_ms": 60000 }""");
+        var root = Workspace(readInOutput: false, serviceCache: """, "cache": { "ttl_ms": 1000, "memory": { "max_bytes": "1MiB" }, "stale_if_error_ms": 60000 }""");
         var diagnostics = new DiagnosticBag();
         var request = ConfigWorkspace.Load(root, diagnostics).CreateCompileRequest("p", "local", diagnostics);
         await using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root, Bindings = PlanEnvironment.DefaultBindings().Add(service), Clock = clock });
@@ -266,7 +266,7 @@ public sealed class ComputedEntityEndToEndTests
     [Theory]
     [InlineData("""{ "mode": "service" }""", "SOURCE_SERVICE_MISSING", "/sources/intent", "names no 'service'")]
     [InlineData("""{ "mode": "service", "service": "intent_modle" }""", "SERVICE_UNBOUND", "/sources/intent/service", "has no binding")]
-    [InlineData("""{ "mode": "service", "service": "intent_model", "connector": "memory@1" }""", "SOURCE_SETTING_WRONG_MODE", "/sources/intent/connector", "mode 'fetch' and 'cache'")]
+    [InlineData("""{ "mode": "service", "service": "intent_model", "connector": "memory@1" }""", "SOURCE_SETTING_WRONG_MODE", "/sources/intent/connector", "a setting of mode 'fetch',")]
     [InlineData("""{ "mode": "service", "service": "intent_model", "max_bytes": "1MiB" }""", "SOURCE_SETTING_WRONG_MODE", "/sources/intent/max_bytes", "is bound with mode 'service'")]
     [InlineData("""{ "connector": "memory@1", "data": {} }""", "SOURCE_SERVICE_ENTITY", "/sources/intent", "a service computes its features")]
     public void ASourceInModeService_IsChecked_AndOnlyAServiceComputesAnEntityWithArgs(string binding, string code, string pointer, string message)

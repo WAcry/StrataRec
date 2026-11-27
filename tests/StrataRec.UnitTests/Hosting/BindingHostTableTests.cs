@@ -71,26 +71,73 @@ public class BindingHostTableTests
     }
 
     [Fact]
-    public void CacheSpecsWithTheSameIdentity_ShareATableOnlyWithTheSameConnector()
+    public void CacheSpecsOfTheSameOrigin_ShareATableWithinAnEngine_AndTheTableTakesTheNewLimits()
     {
-        // A plan swap gets the connector the host already holds (one per binding key), so it takes over the table with the
-        // rows that connector fetched. Another engine's connector with the same configuration gets an empty table of its
-        // own: the rows the first connector fetched are not its connector's answers.
+        // A plan swap keeps a cache's table and its records as long as what the records come from is the same: the table
+        // takes the new plan's times and max_bytes. Another origin, another set of tiers or another engine's registry
+        // gets an empty table of its own.
         using var host = new BindingHost(new BindingHostOptions { Load = false });
-        var connector = ScriptedConnector.Values((_, _) => 1.0);
-        var otherConnector = ScriptedConnector.Values((_, _) => 2.0);
+        var engine = new object();
+        var otherEngine = new object();
         using var current = host.OpenLease();
         using var next = host.OpenLease();
-        using var otherEngine = host.OpenLease();
+        using var other = host.OpenLease();
+        using var moved = host.OpenLease();
+        using var distributedOnly = host.OpenLease();
 
-        var table = current.Acquire(CacheSpec(connector));
-        var takenOver = next.Acquire(CacheSpec(connector));
-        var own = otherEngine.Acquire(CacheSpec(otherConnector));
+        var table = current.Acquire(CacheSpec(engine));
+        var takenOver = next.Acquire(CacheSpec(engine, maxBytes: 2 << 20, ttlMs: 5_000));
+        var own = other.Acquire(CacheSpec(otherEngine));
+        var anotherOrigin = moved.Acquire(CacheSpec(engine, origin: "v.2"));
+        var withoutMemory = distributedOnly.Acquire(CacheSpec(engine, memory: false));
 
-        Assert.Equal(CacheSpec(connector).Identity, CacheSpec(otherConnector).Identity);
+        Assert.Equal(CacheSpec(engine).Identity, CacheSpec(otherEngine, maxBytes: 2 << 20, ttlMs: 5_000).Identity);
         Assert.Same(table, takenOver);
+        Assert.Equal(2 << 20, table.MaxBytes);
+        Assert.Equal(5_000, table.Cache!.Policy.TtlMs);
         Assert.NotSame(table, own);
-        Assert.Equal(2, host.TableCount);
+        Assert.NotSame(table, anotherOrigin);
+        Assert.NotSame(table, withoutMemory);
+        Assert.Equal(4, host.TableCount);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ATableHasTheLimitsOfThePlanThatTookItLast_AmongThoseThatStillHoldIt(bool applied)
+    {
+        // A plan that was compiled and not applied lets go and leaves nothing behind: the table is back at the limits of
+        // the plan that serves. Applied, the earlier plan lets go and the table keeps the new ones.
+        using var host = new BindingHost(new BindingHostOptions { Load = false });
+        var engine = new object();
+        var serving = host.OpenLease();
+        var compiled = host.OpenLease();
+        var table = serving.Acquire(CacheSpec(engine));
+        compiled.Acquire(CacheSpec(engine, maxBytes: 2 << 20, ttlMs: 5_000));
+        Assert.Equal((2L << 20, 5_000L), (table.MaxBytes, table.Cache!.Policy.TtlMs));
+
+        (applied ? serving : compiled).Dispose();
+
+        Assert.Equal(applied ? (2L << 20, 5_000L) : (1L << 20, 60_000L), (table.MaxBytes, table.Cache.Policy.TtlMs));
+        Assert.Equal(1, host.TableCount);
+        (applied ? compiled : serving).Dispose();
+        Assert.Equal(0, host.TableCount);
+    }
+
+    [Fact]
+    public void ALimitTheHeldTableCannotTake_IsRefused_AndTheTableKeepsItsOwn()
+    {
+        using var host = new BindingHost(new BindingHostOptions { Load = false });
+        var engine = new object();
+        using var current = host.OpenLease();
+        using var next = host.OpenLease();
+        var table = current.Acquire(CacheSpec(engine));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => next.Acquire(CacheSpec(engine, maxBytes: 1)));
+
+        Assert.Equal(1 << 20, table.MaxBytes);
+        current.Dispose();
+        Assert.Equal(0, host.TableCount); // the refused plan holds no reference
     }
 
     [Fact]
@@ -459,14 +506,12 @@ public class BindingHostTableTests
             schema, new LocalFeatureTableOptions { MaxBytes = bytes }, binding, factory, "item_store", "bindings:test", "/sources/item_store", null);
     }
 
-    /// <summary>The spec of a <c>cache</c> table in front of <paramref name="connector"/>, with one configuration.</summary>
-    private static LocalTableSpec CacheSpec(ScriptedConnector connector)
+    /// <summary>The spec of a cache's table whose records come from <paramref name="origin"/>, for the engine <paramref name="owner"/> stands for.</summary>
+    private static LocalTableSpec CacheSpec(object owner, string origin = "0123456789abcdef", long maxBytes = 1 << 20, long ttlMs = 60_000, bool memory = true)
     {
         var schema = new LocalTableSchema("item_store", "item", EntityKeyType.Int64, LocalTableMode.Cache, new[] { new LocalTableField("score", ColumnType.Float64) });
-        var binding = ArtifactSerializer.Deserialize<FeatureSourceBinding>(
-            """{ "mode": "cache", "connector": "scripted@1", "max_bytes": "1MiB", "cache": { "ttl_ms": 60000 } }""");
-        var options = new LocalFeatureTableOptions { MaxBytes = 1 << 20, Cache = new CacheTableOptions { TtlMs = 60_000 } };
-        return LocalTableSpec.CreateCache(schema, options, binding, connector, "bindings:test", "/sources/item_store", null);
+        var options = new LocalFeatureTableOptions { MaxBytes = maxBytes, Cache = new CacheTableOptions { TtlMs = ttlMs, Origin = origin, Memory = memory } };
+        return LocalTableSpec.CreateCache(schema, options, origin, owner, "bindings:test", "/sources/item_store", null);
     }
 
     /// <summary>A run that loads item 1 with <paramref name="score"/> in one reload and returns.</summary>

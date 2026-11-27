@@ -48,7 +48,7 @@
 | 存活行 / live row | 还没被去掉的行。过滤和截断只是把行移出存活的集合；压实（compaction）之后它们占的位置才回收。探针的 `scope` 用同一组词：`entered`、`survived`、`dropped` | 不叫 active、valid |
 | 列 / column（`col.x`） | 候选表的一个逻辑列；每个写它的节点提交它的一个版本 | 字段（field）是文档里的成员：数据源的字段、请求输入、日志记录的字段，不指表的列；不叫 attribute |
 | 流动列 / flow column（`"flow": true`） | 后面的节点可以再写的列，每次写是一个新版本（`score.final`）。别的列在一条路径上只有一个写者 | 不叫 mutable、shared |
-| 版本 / version | 三个互不相干的用法，写的时候带上是谁的：列的版本（一个节点提交的那一份，`col.x@node` 读指定节点的）；算子和绑定类型的 `@N`（配置契约的版本）；持久化格式的版本（日期式，如 `2026-11-21.9`） | 不叫 revision、generation |
+| 版本 / version | 四个互不相干的用法，写的时候带上是谁的：列的版本（一个节点提交的那一份，`col.x@node` 读指定节点的）；算子和绑定类型的 `@N`（配置契约的版本）；持久化格式的版本（日期式，如 `2026-11-21.9`）；缓存的版本（`cache.version`，使用者起的名字） | 不叫 revision、generation |
 | 请求列 / request column（`req.x`） | 节点在一次运行里算出的请求级的值；被调用的流水线看不到调用方的 | 区别于请求输入和参数 |
 | 请求输入 / request input（`request_schema`、`ctx.request.x`） | 宿主随请求给的值，在任何东西运行之前按流水线声明的类型检查 | 不叫 argument、field；不是参数 |
 | 上下文 / context（`ctx.x`） | 一个请求只有一份的值：请求输入（`ctx.request.x`）和上下文实体的特征（`ctx.user.x`） | 类名里的 Context（`OperatorContext`）是算子拿到的句柄，不是这个意思 |
@@ -64,10 +64,10 @@
 | 特征 / feature（`col.item.x`、`ctx.user.x`） | 目录里声明的值：物理特征由数据源供给，衍生特征（`derived_features`）由表达式算出。候选的特征是列，上下文的特征是请求级的值 | 不叫 signal、attribute |
 | 实体 / entity（`entities`） | 特征挂在它上面的东西：由键标识（请求输入、候选的 id、另一个特征，1 到 8 段），或者由服务从参数算出（`args`）。键只由请求级的值组成的是上下文实体，每个请求一个；否则是候选实体，每行一个 | 不叫 object、dimension、scope |
 | 数据源 / source（`sources`） | 目录里的特征引用的一个逻辑名字；每个环境的绑定决定它怎么供给 | 不叫 store、table、backend。召回的源是服务 |
-| 供给方式 / supply mode（`mode`） | 数据源怎么给出特征。`fetch`：每个请求向连接器取。`cache`：把连接器的回答留一段时间。`local`：读后台加载的本地表，请求路径上没有 I/O。`service`：每个请求调用一次服务，给带 `args` 的实体 | 不叫 strategy、backend type |
-| 连接器 / connector（`IFeatureSourceConnector`） | 数据源读外部存储的实现，`fetch` 和 `cache` 两种供给方式用它；`local` 读本地表，`service` 调用服务，都没有连接器 | 数据源是绑定里的一个名字；连接器是它背后的实现 |
+| 供给方式 / supply mode（`mode`） | 数据源怎么给出特征。`fetch`：每个请求向连接器取，绑定带 `cache` 时把连接器的回答留一段时间。`local`：读后台加载的本地表，请求路径上没有 I/O。`service`：每个请求调用一次服务，给带 `args` 的实体 | 不叫 strategy、backend type |
+| 连接器 / connector（`IFeatureSourceConnector`） | 数据源读外部存储的实现，`fetch` 供给方式用它（带不带缓存都是）；`local` 读本地表，`service` 调用服务，都没有连接器 | 数据源是绑定里的一个名字；连接器是它背后的实现 |
 | 本地表 / local table | `local` 方式下进程内的一张表，由更新来源（`bootstrap`，`IFeatureUpdateSource`）在后台加载和更新。计划要等它读的每张表第一次加载完才服务 | 不叫 cache（缓存有期限、会回源，本地表没有）、snapshot（快照是更新来源读的一种输入） |
-| 缓存 / cache | 一份有期限（`ttl_ms`）的副本：数据源的 `cache` 方式，或者服务调用的缓存。进程内一层，可以再加一层各实例共享的（`ICacheStore`） | 不指本地表，也不指计划、编译结果这类算一次留着用的东西 |
+| 缓存 / cache | 一份有期限（`ttl_ms`）的副本：`fetch` 数据源的，或者服务调用的。两层各自可选、至少一层：进程内（`memory`）和各实例共享的（`distributed`，`ICacheStore`）。`version` 钉住记录从哪来：写了它，配置变了记录也留着，改它才重新开始 | 不指本地表，也不指计划、编译结果这类算一次留着用的东西 |
 | 拉取、预取 / fetch、prefetch | 拉取是按键向数据源取一批特征。预取是在读它的节点开始之前就发出的拉取；节点开始时等它，只补拉还缺的键。回填是把取到的值写进列 | 不叫 lookup、pull；加载（load）指的是发布和本地表 |
 
 ## 实验

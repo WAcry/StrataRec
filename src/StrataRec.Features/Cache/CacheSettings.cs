@@ -1,5 +1,7 @@
 using StrataRec.Artifacts.Model;
+using StrataRec.Core.Diagnostics;
 using StrataRec.Features.Bindings;
+using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Cache;
 
@@ -13,10 +15,35 @@ namespace StrataRec.Features.Cache;
 /// <param name="Origin">What the cache is in front of: <c>connector</c>, <c>service</c>.</param>
 internal readonly record struct CacheOwner(BindingKind StoreKind, string Name, string Noun, string Origin);
 
+/// <summary>What <see cref="CacheSettings.TryRead"/> read of a <c>cache</c> binding.</summary>
+/// <param name="Policy">Its times.</param>
+/// <param name="Version"><c>version</c>; null when the cache follows the configuration.</param>
+/// <param name="MemoryBytes"><c>memory.max_bytes</c>; null without an in-process tier.</param>
+/// <param name="Distributed">The distributed tier; null without one.</param>
+/// <param name="DistributedTimeoutMs">The tier's own <c>timeout_ms</c>; null takes half the owner's.</param>
+internal readonly record struct CacheSpec(CachePolicy Policy, string? Version, long? MemoryBytes, DistributedCacheTier? Distributed, int? DistributedTimeoutMs)
+{
+    /// <summary>
+    /// What a cache's records come from, in its keys and its table's identity: the binding's <c>version</c> when it names
+    /// one (<c>v.3</c>: no digest has a dot), otherwise <paramref name="derived"/>, a digest of the configuration that
+    /// decides the values.
+    /// </summary>
+    public string Origin(string derived) => Version is null ? derived : "v." + Version;
+
+    /// <summary>The table of the cache's in-process tier, or the empty one a cache without that tier has.</summary>
+    public LocalFeatureTableOptions TableOptions(TimeProvider clock, string? origin) => new()
+    {
+        MaxBytes = MemoryBytes ?? long.MaxValue,
+        Cache = new CacheTableOptions
+        {
+            TtlMs = Policy.TtlMs, StaleIfErrorMs = Policy.StaleIfErrorMs, Clock = clock, Origin = origin, Memory = MemoryBytes is not null,
+        },
+    };
+}
+
 /// <summary>
-/// The one reading of a <c>cache</c> binding: its TTL, its stale window and its distributed tier, each problem
-/// reported at its setting. Feature sources and services read their caches here, so the two say the same about the same
-/// mistake.
+/// The one reading of a <c>cache</c> binding: its times, its version and its tiers, each problem reported at its setting.
+/// Feature sources, services and pipeline calls read their caches here, so they say the same about the same mistake.
 /// </summary>
 internal static class CacheSettings
 {
@@ -26,44 +53,73 @@ internal static class CacheSettings
     /// <param name="pointer">The <c>cache</c> member's pointer.</param>
     /// <param name="ownerTimeoutMs">The owner's <c>timeout_ms</c>: the distributed tier's default is half of it; with none,
     /// the tier must give its own.</param>
+    /// <param name="times">Whether the binding gives the times (<c>ttl_ms</c>, <c>stale_if_error_ms</c>, <c>version</c>):
+    /// a pipeline's binding holds only the tiers, the calling nodes give the times, and <paramref name="spec"/> has a
+    /// placeholder policy.</param>
     public static bool TryRead(
-        CacheBinding cache, CacheOwner owner, BindingResolver resolver, string pointer, int? ownerTimeoutMs,
-        out long ttlMs, out long staleMs, out DistributedCacheTier? distributed, out int? distributedTimeoutMs)
+        CacheBinding cache, CacheOwner owner, BindingResolver resolver, string pointer, int? ownerTimeoutMs, out CacheSpec spec, bool times = true)
     {
         var diagnostics = resolver.Diagnostics;
         var artifact = resolver.Artifact;
         var ok = true;
-        ttlMs = 0;
-        staleMs = 0;
-        distributed = null;
-        distributedTimeoutMs = null;
-        if (cache.TtlMs is not { } ttl)
+        long ttlMs = 0, staleMs = 0;
+        long? memoryBytes = null;
+        DistributedCacheTier? distributed = null;
+        int? distributedTimeoutMs = null;
+        spec = default;
+        if (!times)
+        {
+            ok &= NoTimes(cache, owner, resolver, pointer);
+        }
+        else if (cache.TtlMs is not { } ttl)
         {
             ok = false;
             diagnostics.Error("CACHE_TTL", artifact, pointer, $"The cache of {owner.Noun} '{owner.Name}' has no 'ttl_ms'.",
                 "add how long a fetched value is served, in milliseconds, e.g. \"ttl_ms\": 60000");
         }
-        else if (ttl is <= 0 or > MaxMs)
+        else if (!TryTtl(ttl, diagnostics, artifact, pointer))
         {
             ok = false;
-            diagnostics.Error("CACHE_TTL", artifact, pointer + "/ttl_ms", $"ttl_ms {ttl} is not between 1 and 2^61 milliseconds.",
-                "give how long a fetched value is served, e.g. \"ttl_ms\": 60000");
         }
         else
         {
             ttlMs = ttl;
         }
 
-        if (cache.StaleIfErrorMs is { } stale && stale is < 0 or > MaxMs)
+        if (times && !TryStale(cache.StaleIfErrorMs, owner.Origin, diagnostics, artifact, pointer, out staleMs))
         {
             ok = false;
-            diagnostics.Error("CACHE_STALE_IF_ERROR", artifact, pointer + "/stale_if_error_ms",
-                $"stale_if_error_ms {stale} is not between 0 and 2^61 milliseconds.",
-                $"give how much longer an expired value may serve when the {owner.Origin} fails, e.g. 300000, or 0");
         }
-        else
+
+        if (times && !TryVersion(cache.Version, diagnostics, artifact, pointer))
         {
-            staleMs = cache.StaleIfErrorMs ?? 0;
+            ok = false;
+        }
+
+        if (cache.Memory is { } memory)
+        {
+            if (memory.MaxBytes is null)
+            {
+                ok = false;
+                diagnostics.Error("CACHE_MAX_BYTES", artifact, pointer + "/memory", $"The in-process cache of {owner.Noun} '{owner.Name}' has no 'max_bytes'.",
+                    "add the most memory its table may take, e.g. \"max_bytes\": \"64MiB\"");
+            }
+            else if (!ByteSize.TryParse(memory.MaxBytes, out var bytes) || bytes == 0)
+            {
+                ok = false;
+                diagnostics.Error("CACHE_MAX_BYTES", artifact, pointer + "/memory/max_bytes", $"'{memory.MaxBytes}' is not a positive size.",
+                    "write an integer and a unit B, KiB, MiB, GiB or TiB, e.g. \"64MiB\"");
+            }
+            else
+            {
+                memoryBytes = bytes;
+            }
+        }
+        else if (cache.Distributed is null)
+        {
+            ok = false;
+            diagnostics.Error("CACHE_TIERS", artifact, pointer, $"The cache of {owner.Noun} '{owner.Name}' has neither a 'memory' nor a 'distributed' tier: nothing would keep its values.",
+                "add \"memory\": { \"max_bytes\": \"64MiB\" } to keep them in process, or \"distributed\": { \"store\": \"redis@1\", ... } to keep them in a store the instances share");
         }
 
         if (cache.Distributed is { } shared)
@@ -87,7 +143,92 @@ internal static class CacheSettings
             distributed = resolver.Acquire<ICacheStore, DistributedCacheTier>(
                 owner.StoreKind, owner.Name, shared.Store, shared.Settings, static store => new DistributedCacheTier(store), StoreHint(shared.Store));
             ok &= distributed is not null;
-            ok &= TryRetention(owner, ttlMs, staleMs, pointer, resolver);
+            ok &= !times || TryRetention(owner, ttlMs, staleMs, pointer, resolver);
+        }
+
+        if (ok)
+        {
+            spec = new CacheSpec(new CachePolicy(times ? ttlMs : 1, staleMs), cache.Version, memoryBytes, distributed, distributedTimeoutMs);
+        }
+
+        return ok;
+    }
+
+    /// <summary><c>ttl_ms</c> within what a policy takes; false (diagnosed at <paramref name="pointer"/><c>/ttl_ms</c>) otherwise.</summary>
+    public static bool TryTtl(long ttl, DiagnosticBag diagnostics, string artifact, string pointer)
+    {
+        if (ttl is > 0 and <= MaxMs)
+        {
+            return true;
+        }
+
+        diagnostics.Error("CACHE_TTL", artifact, pointer + "/ttl_ms", $"ttl_ms {ttl} is not between 1 and 2^61 milliseconds.",
+            "give how long a fetched value is served, e.g. \"ttl_ms\": 60000");
+        return false;
+    }
+
+    /// <summary><c>stale_if_error_ms</c> (none is 0) within what a policy takes; false (diagnosed) otherwise.</summary>
+    /// <param name="origin">What the cache is in front of, for the hint: <c>connector</c>, <c>service</c>, <c>pipeline</c>.</param>
+    public static bool TryStale(long? stale, string origin, DiagnosticBag diagnostics, string artifact, string pointer, out long staleMs)
+    {
+        staleMs = stale ?? 0;
+        if (staleMs is >= 0 and <= MaxMs)
+        {
+            return true;
+        }
+
+        diagnostics.Error("CACHE_STALE_IF_ERROR", artifact, pointer + "/stale_if_error_ms",
+            $"stale_if_error_ms {stale} is not between 0 and 2^61 milliseconds.",
+            $"give how much longer an expired value may serve when the {origin} fails, e.g. 300000, or 0");
+        staleMs = 0;
+        return false;
+    }
+
+    /// <summary><c>version</c>, when given, in its form; false (diagnosed) otherwise.</summary>
+    public static bool TryVersion(string? version, DiagnosticBag diagnostics, string artifact, string pointer)
+    {
+        if (version is null || IsVersion(version))
+        {
+            return true;
+        }
+
+        diagnostics.Error("CACHE_VERSION", artifact, pointer + "/version", $"'{version}' is not a cache version.",
+            "name it with letters, digits, '.', '_' and '-', at most 64, e.g. \"version\": \"3\"; or remove it to let the cache follow the configuration");
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="version"/> has the form of <see cref="CacheBinding.VersionPattern"/>.</summary>
+    private static bool IsVersion(string version)
+    {
+        if (version.Length is 0 or > 64)
+        {
+            return false;
+        }
+
+        foreach (var c in version)
+        {
+            if (!(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>A binding that holds only tiers has none of the times: they are the calling nodes'. False (diagnosed) when it has one.</summary>
+    private static bool NoTimes(CacheBinding cache, CacheOwner owner, BindingResolver resolver, string pointer)
+    {
+        var ok = true;
+        foreach (var (name, set) in new[] { ("ttl_ms", cache.TtlMs is not null), ("stale_if_error_ms", cache.StaleIfErrorMs is not null), ("version", cache.Version is not null) })
+        {
+            if (set)
+            {
+                ok = false;
+                resolver.Diagnostics.Error("CACHE_SETTING_OF_CALL", resolver.Artifact, pointer + "/" + name,
+                    $"'{name}' of the cache of {owner.Noun} '{owner.Name}' is not a binding's setting: each node that calls the pipeline says it for its own calls.",
+                    $"move '{name}' to the 'cache' of the calling node's config; the binding keeps where the results are held ('memory', 'distributed')");
+            }
         }
 
         return ok;
@@ -99,16 +240,16 @@ internal static class CacheSettings
     /// </summary>
     private static bool TryRetention(CacheOwner owner, long ttlMs, long staleMs, string pointer, BindingResolver resolver)
     {
-        if (ttlMs == 0 || LocalTableCache.RetentionMs(ttlMs, staleMs) <= LocalTableCache.MaxRetentionMs)
+        if (ttlMs == 0 || CachePolicy.RetentionOf(ttlMs, staleMs) <= CachePolicy.MaxRetentionMs)
         {
             return true; // a ttl_ms that is missing or wrong is diagnosed already
         }
 
-        var setting = LocalTableCache.MaxLifetime(ttlMs) > LocalTableCache.MaxRetentionMs ? "ttl_ms" : "stale_if_error_ms";
+        var setting = CachePolicy.MaxLifetime(ttlMs) > CachePolicy.MaxRetentionMs ? "ttl_ms" : "stale_if_error_ms";
         resolver.Diagnostics.Error("CACHE_RETENTION", resolver.Artifact, pointer + "/" + setting,
-            $"The distributed cache of {owner.Noun} '{owner.Name}' would keep a record for up to {LocalTableCache.RetentionMs(ttlMs, staleMs)} ms "
-            + $"(ttl_ms with its 10% jitter, plus stale_if_error_ms), more than the {LocalTableCache.MaxRetentionMs} ms a time to live can be.",
-            $"lower ttl_ms or stale_if_error_ms so that ttl_ms × 1.1 + stale_if_error_ms is at most {LocalTableCache.MaxRetentionMs} (about 29,000 years)");
+            $"The distributed cache of {owner.Noun} '{owner.Name}' would keep a record for up to {CachePolicy.RetentionOf(ttlMs, staleMs)} ms "
+            + $"(ttl_ms with its 10% jitter, plus stale_if_error_ms), more than the {CachePolicy.MaxRetentionMs} ms a time to live can be.",
+            $"lower ttl_ms or stale_if_error_ms so that ttl_ms × 1.1 + stale_if_error_ms is at most {CachePolicy.MaxRetentionMs} (about 29,000 years)");
         return false;
     }
 
@@ -116,5 +257,5 @@ internal static class CacheSettings
     private static string StoreHint(string? type) =>
         type is not null && type.StartsWith("redis@", StringComparison.Ordinal)
             ? "redis@1 is in the package StrataRec.Redis: the host adds it with PlanEnvironment.Bindings.AddRedis()"
-            : "or remove 'distributed' to cache in process only";
+            : "or remove 'distributed' and keep the values in process with 'memory'";
 }

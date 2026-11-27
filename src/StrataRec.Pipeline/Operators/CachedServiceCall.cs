@@ -92,7 +92,7 @@ internal sealed class CachedServiceCall
         }
 
         _version = cache.Table.Pin();
-        _nowMs = cache.Policy.NowMs();
+        _nowMs = cache.TableCache.NowMs();
         _deadline = CallDeadline.After(service.TimeoutMs); // the whole read's: the distributed tier and the service share it
     }
 
@@ -209,15 +209,15 @@ internal sealed class CachedServiceCall
             }
         }
 
-        _cache.Policy.CountKeys(CacheTier.Local, CacheKeyOutcome.Hit, hits);
-        _cache.Policy.CountKeys(CacheTier.Local, CacheKeyOutcome.Miss, missing);
-        _cache.Policy.CountKeys(CacheTier.Local, CacheKeyOutcome.Expired, expired);
+        _cache.TableCache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Hit, hits);
+        _cache.TableCache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Miss, missing);
+        _cache.TableCache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Expired, expired);
         return _count - hits;
     }
 
     /// <summary>
-    /// The distributed tier, for the rows the local tier did not have fresh, in one read bounded by its <c>timeout_ms</c>
-    /// within the service's: fresh records answer their rows and go to the local tier; a stale one is kept for a failure.
+    /// The distributed tier, for the rows the memory tier did not have fresh, in one read bounded by its <c>timeout_ms</c>
+    /// within the service's: fresh records answer their rows and go to the memory tier; a stale one is kept for a failure.
     /// Records are judged when the read answered, by the cache's clock: one fresh when the call started may have expired
     /// while the read took its time, as for a source's cache. A read that fails or is late leaves its rows to
     /// the service. Returns the cut-off when the node's budget ran out or the caller cancelled.
@@ -240,7 +240,7 @@ internal sealed class CachedServiceCall
         var tierDeadline = CallDeadline.After(_cache.DistributedTimeoutMs);
         var serviceFirst = _deadline.IsSet && _deadline.Remaining <= tierDeadline.Remaining; // the read within the service's time
         var read = await BoundedCall.RunAsync<bool, StoreRead>(
-            new StoreRead(_scope, tier, _cache.Policy, texts, records, answeredAt), _scope.Budget, _memory, _cache.Io,
+            new StoreRead(_scope, tier, _cache.TableCache, texts, records, answeredAt), _scope.Budget, _memory, _cache.Io,
             serviceFirst ? _deadline : tierDeadline).ConfigureAwait(false);
         switch (read.End)
         {
@@ -252,7 +252,7 @@ internal sealed class CachedServiceCall
                 // Cut off at the service's own deadline, the read took all of its time: the service is not called. Said
                 // here, not left to the clock: a wait ends up to a millisecond before its deadline (BoundedCall).
                 _timeUsed = serviceFirst && read.End == CallEnd.TimedOut;
-                _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Error, misses);
+                _cache.TableCache.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Error, misses);
                 return null;
         }
 
@@ -304,14 +304,14 @@ internal sealed class CachedServiceCall
             }
         }
 
-        _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Hit, hits);
-        _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Miss, missing);
-        _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Expired, expired);
-        _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Mismatch, mismatched);
-        _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Error, broken);
+        _cache.TableCache.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Hit, hits);
+        _cache.TableCache.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Miss, missing);
+        _cache.TableCache.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Expired, expired);
+        _cache.TableCache.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Mismatch, mismatched);
+        _cache.TableCache.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Error, broken);
         if (copies is not null)
         {
-            // The local tier keeps them with the write time they were written with.
+            // The memory tier keeps them with the write time they were written with.
             var keys = new EntityKey[2 * copies.Count];
             var bytes = new ReadOnlyMemory<byte>[copies.Count];
             for (var i = 0; i < copies.Count; i++)
@@ -321,7 +321,7 @@ internal sealed class CachedServiceCall
                 bytes[i] = copies[i].Bytes;
             }
 
-            _cache.Policy.TryWriteBack(new CacheWriteBatch(keys, bytes, copies.Count, partCount: 2));
+            _cache.TableCache.TryWriteBack(new CacheWriteBatch(keys, bytes, copies.Count, partCount: 2));
         }
 
         return null;
@@ -354,7 +354,7 @@ internal sealed class CachedServiceCall
             call = Subset(subRows);
         }
 
-        var writtenMs = _cache.Policy.NowMs();
+        var writtenMs = _cache.TableCache.NowMs();
         var answer = new ServiceResponse(_memory, call.Limit);
 
         // Within what is left of the service's timeout_ms: not sent at all once the distributed tier took all of it.
@@ -396,7 +396,7 @@ internal sealed class CachedServiceCall
     /// <param name="answered">The service answered (a failed status): what it said is recorded.</param>
     private Result Failure(in ServiceStatus failure, IoOutcome outcome, bool answered)
     {
-        if (Count(RowState.Fresh, negate: true) == Count(RowState.Stale, negate: false) && StaleAnswer(_cache.Policy.NowMs()))
+        if (Count(RowState.Fresh, negate: true) == Count(RowState.Stale, negate: false) && StaleAnswer(_cache.TableCache.NowMs()))
         {
             // Taken only if the node could still send the call now, as an answer of the tiers alone is
             // (a caller that cancelled while the distributed tier used up the service's time got the stale values).
@@ -407,8 +407,8 @@ internal sealed class CachedServiceCall
 
             // Every row without a fresh record has a stale one still within stale_if_error_ms now: they answer, and the
             // node is Degraded, in a replay too (the reason is recorded with the call).
-            _cache.Policy.CountKeys(CacheTier.Local, CacheKeyOutcome.Stale, CountStale(wire: false));
-            _cache.Policy.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Stale, CountStale(wire: true));
+            _cache.TableCache.CountKeys(CacheTier.Memory, CacheKeyOutcome.Stale, CountStale(wire: false));
+            _cache.TableCache.CountKeys(CacheTier.Distributed, CacheKeyOutcome.Stale, CountStale(wire: true));
             var degraded = $"{_service.Target.Role} '{_service.Name}' failed ({failure.Error}); its cache answered with values past their TTL";
             _scope.ReportDegraded(degraded);
             return new Result(Assemble(null, null), IoOutcome.Ok, null, true, degraded);
@@ -439,7 +439,7 @@ internal sealed class CachedServiceCall
         return true;
     }
 
-    /// <summary>When the record row <paramref name="r"/> holds (a stale or fresh one, local or distributed) was written.</summary>
+    /// <summary>When the record row <paramref name="r"/> holds (a stale or fresh one, of either tier) was written.</summary>
     private long WrittenMs(int r) => _rows[r].Wire is { } wire ? wire.WrittenMs : new LocalServiceRecord(_version, _rows[r].Local).WrittenMs;
 
     // ------------------------------------------------------------------------------------------------------------------
@@ -493,7 +493,7 @@ internal sealed class CachedServiceCall
     /// Whether a record is one this code writes (see the remarks): its kind and header, each output's type and element
     /// count, and its lists holding exactly that many values of each type. A record that is not is never read: a type code
     /// out of range, or a list shorter than its layout, would throw while the answer is put together, and a write-back
-    /// would copy it into the local tier.
+    /// would copy it into the memory tier.
     /// </summary>
     private static bool WellFormed<TRecord>(TRecord record)
         where TRecord : IServiceRecord
@@ -835,7 +835,7 @@ internal sealed class CachedServiceCall
             if (EncodeCall(answer, builder, truncated))
             {
                 builder.End(_keys[0]);
-                builder.WriteBack(_cache.Policy.NowMs());
+                builder.WriteBack(_cache.TableCache.NowMs());
             }
 
             return;
@@ -878,7 +878,7 @@ internal sealed class CachedServiceCall
             items.End(_keys[subRows is null ? row : subRows[row]]);
         }
 
-        items.WriteBack(_cache.Policy.NowMs());
+        items.WriteBack(_cache.TableCache.NowMs());
     }
 
     /// <summary>
@@ -1080,7 +1080,7 @@ internal sealed class CachedServiceCall
         _ => "text",
     };
 
-    /// <summary>Where one row's answer comes from: a record of the local tier or of the distributed one, or the service.</summary>
+    /// <summary>Where one row's answer comes from: a record of the memory tier or of the distributed one, or the service.</summary>
     private readonly record struct Row(RowState State, LocalRecordRef Local, DecodedServiceRecord? Wire);
 
     /// <summary>

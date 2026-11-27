@@ -29,7 +29,7 @@ public sealed class ServiceCacheEngineTests
     {
         static RecRequest Recorded(string id) => ReplayTests.Request(id, 1001, "home", ReplayTests.ControlArms);
         await using var reference = MetricsTests.LoadEngine(HomeFeedTestHost.Load()).Engine;
-        await using var engine = MetricsTests.LoadEngine(Host($$"""{ {{Linear}}, "cache": { "ttl_ms": 600000, "max_bytes": "1MiB" } }""")).Engine;
+        await using var engine = MetricsTests.LoadEngine(Host($$"""{ {{Linear}}, "cache": { "ttl_ms": 600000, "memory": { "max_bytes": "1MiB" } } }""")).Engine;
         using var metrics = new MetricCapture();
 
         var expected = await reference.ExecuteAsync(Recorded("req-model"), TestContext.Current.CancellationToken);
@@ -59,7 +59,7 @@ public sealed class ServiceCacheEngineTests
 
         // The recording holds the answer the node got: a fresh engine, whose cache is empty, replays it identically and
         // reads no cache.
-        await using var fresh = MetricsTests.LoadEngine(Host($$"""{ {{Linear}}, "cache": { "ttl_ms": 600000, "max_bytes": "1MiB" } }""")).Engine;
+        await using var fresh = MetricsTests.LoadEngine(Host($$"""{ {{Linear}}, "cache": { "ttl_ms": 600000, "memory": { "max_bytes": "1MiB" } } }""")).Engine;
         var replayedFrom = metrics.Measurements.Count;
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(hit.Recording!));
         var outcome = await fresh.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
@@ -70,11 +70,14 @@ public sealed class ServiceCacheEngineTests
 
     /// <summary>Each wrong setting of a service's cache is an error at the setting, and the service is not served without it.</summary>
     [Theory]
-    [InlineData("""{ "ttl_ms": 1000 }""", "CACHE_MAX_BYTES", "/services/ctr_model/cache")]
-    [InlineData("""{ "ttl_ms": 1000, "max_bytes": "0B" }""", "CACHE_MAX_BYTES", "/services/ctr_model/cache/max_bytes")]
-    [InlineData("""{ "max_bytes": "1MiB" }""", "CACHE_TTL", "/services/ctr_model/cache")]
-    [InlineData("""{ "ttl_ms": 0, "max_bytes": "1MiB" }""", "CACHE_TTL", "/services/ctr_model/cache/ttl_ms")]
-    [InlineData("""{ "ttl_ms": 1000, "max_bytes": "1MiB", "distributed": { "store": "shared_memory@1" } }""", "DISTRIBUTED_CACHE_CONFIG", "/services/ctr_model/cache/distributed")]
+    [InlineData("""{ "ttl_ms": 1000 }""", "CACHE_TIERS", "/services/ctr_model/cache")]
+    [InlineData("""{ "ttl_ms": 1000, "memory": { } }""", "CACHE_MAX_BYTES", "/services/ctr_model/cache/memory")]
+    [InlineData("""{ "ttl_ms": 1000, "memory": { "max_bytes": "0B" } }""", "CACHE_MAX_BYTES", "/services/ctr_model/cache/memory/max_bytes")]
+    [InlineData("""{ "ttl_ms": 1000, "memory": { "max_bytes": "1B" } }""", "CACHE_MAX_BYTES", "/services/ctr_model/cache/memory/max_bytes")]
+    [InlineData("""{ "memory": { "max_bytes": "1MiB" } }""", "CACHE_TTL", "/services/ctr_model/cache")]
+    [InlineData("""{ "ttl_ms": 0, "memory": { "max_bytes": "1MiB" } }""", "CACHE_TTL", "/services/ctr_model/cache/ttl_ms")]
+    [InlineData("""{ "ttl_ms": 1000, "version": "a b", "memory": { "max_bytes": "1MiB" } }""", "CACHE_VERSION", "/services/ctr_model/cache/version")]
+    [InlineData("""{ "ttl_ms": 1000, "memory": { "max_bytes": "1MiB" }, "distributed": { "store": "shared_memory@1" } }""", "DISTRIBUTED_CACHE_CONFIG", "/services/ctr_model/cache/distributed")]
     public void AWrongCacheSetting_IsAnErrorAtTheSetting(string cache, string code, string pointer)
     {
         var host = Host($$"""{ {{Linear}}, "cache": {{cache}} }""");
@@ -172,13 +175,13 @@ public sealed class ServiceCacheEngineTests
         Assert.Equal(("error", 11, (bool?)true), (withCache.Status, withCache.OutputTokens, withCache.Truncated));
     }
 
-    private const string Distributed = """, "cache": { "ttl_ms": 600000, "max_bytes": "1MiB", "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } }""";
+    private const string Distributed = """, "cache": { "ttl_ms": 600000, "memory": { "max_bytes": "1MiB" }, "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } }""";
 
     private static RecRequest Recorded(string id) => ReplayTests.Request(id, 1001, "home", ReplayTests.ControlArms);
 
     private static RecEngine FlakyEngine(FlakyModel model, TimeProvider clock, bool cached)
     {
-        var cache = cached ? """, "cache": { "ttl_ms": 1000, "max_bytes": "1MiB", "stale_if_error_ms": 60000 }""" : string.Empty;
+        var cache = cached ? """, "cache": { "ttl_ms": 1000, "memory": { "max_bytes": "1MiB" }, "stale_if_error_ms": 60000 }""" : string.Empty;
         var host = HomeFeedTestHost.LoadModified(root => SampleBindings.RebindService(root, Service, $$"""{ "client": "{{FlakyModel.TypeName}}"{{cache}} }"""));
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(model), Clock = clock });
         var load = engine.Load(host.Request);
@@ -246,7 +249,7 @@ public sealed class ServiceCacheEngineTests
         long hit = 0, miss = 0;
         foreach (var m in metrics.Of(StrataRecMetrics.Names.CacheKeys))
         {
-            if (Equals(m.Tags[StrataRecTags.Source], Service) && Equals(m.Tags[StrataRecTags.CacheTier], "local"))
+            if (Equals(m.Tags[StrataRecTags.Source], Service) && Equals(m.Tags[StrataRecTags.CacheTier], "memory"))
             {
                 hit += Equals(m.Tags[StrataRecTags.Outcome], "hit") ? (long)m.Value : 0;
                 miss += Equals(m.Tags[StrataRecTags.Outcome], "miss") || Equals(m.Tags[StrataRecTags.Outcome], "expired") ? (long)m.Value : 0;

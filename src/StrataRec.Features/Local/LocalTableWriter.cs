@@ -186,9 +186,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     {
         Discard();
         var next = BuildCompacted();
-        if (next.Bytes > _options.MaxBytes)
+        if (next.Bytes > _table.MaxBytes)
         {
-            throw new LocalTableFullException(Schema, _options.MaxBytes, next.Bytes);
+            throw new LocalTableFullException(Schema, _table.MaxBytes, next.Bytes);
         }
 
         Install(next);
@@ -556,16 +556,16 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private bool EnsureBudget(int recordBytes, bool newKey, bool strings, LocalTableCache? cache = null)
     {
         var required = Required(_version, recordBytes, newKey, strings, out var newStringObjects);
-        if (required <= _options.MaxBytes)
+        if (required <= _table.MaxBytes)
         {
             return newKey;
         }
 
         // An empty table needs at least the record and its distinct strings. Page and dictionary growth would
         // overstate that lower bound: a cache eviction can recover a whole page or shrink a nearly full dictionary.
-        if (cache is not null && recordBytes + newStringObjects > _options.MaxBytes)
+        if (cache is not null && recordBytes + newStringObjects > _table.MaxBytes)
         {
-            throw new LocalTableFullException(Schema, _options.MaxBytes, required);
+            throw new LocalTableFullException(Schema, _table.MaxBytes, required);
         }
 
         var packedBytes = _version.Bytes;
@@ -578,18 +578,18 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         {
             // Plan the eviction while the fully decoded write is still staged. A copy that cannot admit it leaves
             // the old cache and its metrics intact, including the record being replaced.
-            var target = _options.MaxBytes / 4 * 3;
+            var target = _table.MaxBytes / 4 * 3;
             // Victims release records and unshared strings. Charging a whole index doubling or the next append page
             // against those bytes can evict every small record, even though rebuilding avoids that growth.
             var livePayload = _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
             var headroom = Math.Min(packedBytes - target, livePayload / 4);
             var avoidableGrowth = _version.IndexGrowthBytes(newKey) + Math.Max(0, _version.PageGrowthBytes(recordBytes) - recordBytes);
-            var toFree = Math.Max(1, Math.Max(headroom, required - avoidableGrowth - _options.MaxBytes));
-            var deadBefore = cache.NowMs() - cache.MaxLifetimeMs - cache.Options.StaleIfErrorMs;
+            var toFree = Math.Max(1, Math.Max(headroom, required - avoidableGrowth - _table.MaxBytes));
+            var deadBefore = cache.NowMs() - cache.Policy.RetentionMs;
             var compacted = BuildCompacted(deadBefore, toFree, _oldPosition, out var expired, out var evicted);
             newKey = newKey || compacted.ProbeForWrite(_indexKey, _key.AsSpan(0, _keyLength), out _) == 0;
             var afterEviction = Required(compacted, recordBytes, newKey, strings, out _);
-            if (afterEviction <= _options.MaxBytes)
+            if (afterEviction <= _table.MaxBytes)
             {
                 Install(compacted);
                 cache.CountEvictions(expired, evicted);
@@ -599,7 +599,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             required = Math.Min(required, afterEviction);
         }
 
-        throw new LocalTableFullException(Schema, _options.MaxBytes, required);
+        throw new LocalTableFullException(Schema, _table.MaxBytes, required);
     }
 
     // A rejected copy can be as large as the original. End its stack lifetime before building an eviction candidate.
@@ -609,7 +609,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         var compacted = BuildCompacted();
         // Its pages are packed and its dictionary now contains only strings still in use.
         var afterCompaction = Required(compacted, recordBytes, newKey, strings, out _);
-        if (afterCompaction <= _options.MaxBytes)
+        if (afterCompaction <= _table.MaxBytes)
         {
             Install(compacted);
             return true;
@@ -752,7 +752,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             && freeable >= 2 * _autoCompactionDeclined)
         {
             var next = BuildCompacted();
-            if (next.Bytes <= _options.MaxBytes)
+            if (next.Bytes <= _table.MaxBytes)
             {
                 Install(next);
             }

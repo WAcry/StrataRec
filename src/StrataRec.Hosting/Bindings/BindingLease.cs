@@ -107,7 +107,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
                 return held.Table;
             }
 
-            var entry = _host.Acquire(spec);
+            var entry = _host.Acquire(spec, holder: this);
             _tables.Add(entry);
             _tablesByKey[spec.Key] = entry;
             return entry.Table;
@@ -431,7 +431,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         CancelLookups(); // before the lease is marked retired, so the callbacks of the cancellation can count as a user
         foreach (var entry in tables)
         {
-            _host.Release(entry);
+            _host.Release(entry, holder: this);
         }
 
         var previous = Interlocked.Or(ref _state, Retired);

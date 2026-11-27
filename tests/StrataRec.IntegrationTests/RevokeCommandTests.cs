@@ -356,7 +356,7 @@ public sealed class RevokeCommandTests
             {
                 bindings["services"]!["random_model"] = JsonNode.Parse("""{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click"] }""");
                 bindings["sources"]!["extra_store"] = JsonNode.Parse("""
-                    { "connector": "memory@1", "data": { }, "mode": "cache", "max_bytes": "1MiB",
+                    { "connector": "memory@1", "data": { },
                       "cache": { "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379" } } }
                     """);
             });

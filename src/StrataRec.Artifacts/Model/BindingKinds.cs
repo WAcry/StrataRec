@@ -14,7 +14,7 @@ public enum BindingKind : byte
     /// <summary><c>sources.*.bootstrap.source</c>: the update source of a <c>local</c> source.</summary>
     UpdateSource,
 
-    /// <summary><c>sources.*.cache.distributed.store</c>: the distributed cache store of a <c>cache</c> source.</summary>
+    /// <summary><c>sources.*.cache.distributed.store</c>: the distributed cache store of a cached source.</summary>
     CacheStore,
 
     /// <summary><c>services.*.cache.distributed.store</c>: the distributed cache store of a service's cache.</summary>

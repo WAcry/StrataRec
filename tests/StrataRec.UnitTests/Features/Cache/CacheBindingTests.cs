@@ -30,19 +30,66 @@ public class CacheBindingTests
     [Fact]
     public void ACacheBinding_WithoutItsRequiredSettings_ReportsEachAtTheBinding()
     {
-        var items = Errors(Build("""{ "mode": "cache" }"""));
+        var items = Errors(Build("""{ "cache": { } }"""));
 
         Assert.Equal(
-            new[] { ("BINDING_TYPE_UNKNOWN", "/sources/item_store"), ("LOCAL_MAX_BYTES", "/sources/item_store"), ("CACHE_SETTINGS_MISSING", "/sources/item_store") },
+            new[] { ("BINDING_TYPE_UNKNOWN", "/sources/item_store"), ("CACHE_TTL", "/sources/item_store/cache"), ("CACHE_TIERS", "/sources/item_store/cache") },
             items.Select(d => (d.Code, d.Pointer)));
-        Assert.Contains("mode 'cache'", items[1].Message);
-        Assert.Contains("\"ttl_ms\": 60000", items[2].Hint);
+        Assert.Contains("\"ttl_ms\": 60000", items[1].Hint);
+        Assert.Contains("\"memory\": { \"max_bytes\": \"64MiB\" }", items[2].Hint);
+    }
+
+    [Fact]
+    public void ModeCache_IsNotAMode_AndTheHintSaysWhereACacheGoes()
+    {
+        var error = Assert.Single(Errors(Build("""{ "mode": "cache", "connector": "memory@1" }""")));
+
+        Assert.Equal(("SOURCE_MODE_UNSUPPORTED", "/sources/item_store/mode"), (error.Code, error.Pointer));
+        Assert.Contains("remove \"mode\" and give the binding a \"cache\"", error.Hint);
     }
 
     [Theory]
-    [InlineData("""{ }""", "/sources/item_store/cache", "CACHE_TTL")]
-    [InlineData("""{ "ttl_ms": 0 }""", "/sources/item_store/cache/ttl_ms", "CACHE_TTL")]
-    [InlineData("""{ "ttl_ms": 1000, "stale_if_error_ms": -1 }""", "/sources/item_store/cache/stale_if_error_ms", "CACHE_STALE_IF_ERROR")]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task EitherTierAlone_OrBoth_IsACache(bool memory, bool distributed)
+    {
+        // A cache with only a distributed tier keeps nothing in process: a second read goes to the store again, where
+        // one with a memory tier is answered by its table.
+        var store = new FakeCacheStore();
+        var connector = ScriptedConnector.Values((_, _) => 1.0);
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, distributed: distributed ? store : null, maxBytes: memory ? "64MiB" : null);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        Assert.Equal(memory, rig.Tables["item_store"].Cache!.Memory);
+
+        for (var read = 0; read < 2; read++)
+        {
+            var request = rig.NewRequest([1]);
+            Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(clicks)).State);
+            Assert.Equal(1.0, request.Value(clicks, 0).AsFloat64());
+            rig.WriteBack("item_store");
+            if (distributed)
+            {
+                await store.WhenWrittenAsync(1);
+            }
+        }
+
+        Assert.Single(connector.Calls); // a tier answered the second read
+        Assert.Equal(memory ? 1 : 0, rig.Tables["item_store"].Pin().RecordCount);
+        Assert.Equal(!distributed ? 0 : memory ? 1 : 2, store.Gets.Count);
+    }
+
+    [Theory]
+    [InlineData("""{ "memory": { "max_bytes": "1MiB" } }""", "/sources/item_store/cache", "CACHE_TTL")]
+    [InlineData("""{ "ttl_ms": 0, "memory": { "max_bytes": "1MiB" } }""", "/sources/item_store/cache/ttl_ms", "CACHE_TTL")]
+    [InlineData("""{ "ttl_ms": 1000, "stale_if_error_ms": -1, "memory": { "max_bytes": "1MiB" } }""", "/sources/item_store/cache/stale_if_error_ms", "CACHE_STALE_IF_ERROR")]
+    [InlineData("""{ "ttl_ms": 1000 }""", "/sources/item_store/cache", "CACHE_TIERS")]
+    [InlineData("""{ "ttl_ms": 1000, "memory": { } }""", "/sources/item_store/cache/memory", "CACHE_MAX_BYTES")]
+    [InlineData("""{ "ttl_ms": 1000, "memory": { "max_bytes": "0B" } }""", "/sources/item_store/cache/memory/max_bytes", "CACHE_MAX_BYTES")]
+    [InlineData("""{ "ttl_ms": 1000, "memory": { "max_bytes": "1B" } }""", "/sources/item_store/cache/memory/max_bytes", "CACHE_MAX_BYTES")]
+    [InlineData("""{ "ttl_ms": 1000, "version": "", "memory": { "max_bytes": "1MiB" } }""", "/sources/item_store/cache/version", "CACHE_VERSION")]
+    [InlineData("""{ "ttl_ms": 1000, "version": "a:b", "memory": { "max_bytes": "1MiB" } }""", "/sources/item_store/cache/version", "CACHE_VERSION")]
     [InlineData("""{ "ttl_ms": 1000, "distributed": { } }""", "/sources/item_store/cache/distributed", "BINDING_TYPE_UNKNOWN")]
     [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@2" } }""", "/sources/item_store/cache/distributed/store", "BINDING_TYPE_UNKNOWN")]
     [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "timeout_ms": 0 } }""", "/sources/item_store/cache/distributed/timeout_ms", "DISTRIBUTED_CACHE_CONFIG")]
@@ -54,7 +101,7 @@ public class CacheBindingTests
     [InlineData("""{ "ttl_ms": 1000, "distributed": { "store": "redis@1", "endpoint": "r:6379", "tls": "yes" } }""", "/sources/item_store/cache/distributed/tls", "BINDING_SETTINGS")]
     public void AWrongCacheSetting_IsAnErrorAtTheSetting_WithAHint(string cache, string pointer, string code)
     {
-        var error = Assert.Single(Errors(Build($$"""{ "mode": "cache", "connector": "memory@1", "max_bytes": "1MiB", "cache": {{cache}} }""")));
+        var error = Assert.Single(Errors(Build($$"""{ "connector": "memory@1", "cache": {{cache}} }""")));
 
         Assert.Equal((code, pointer), (error.Code, error.Pointer));
         Assert.False(string.IsNullOrEmpty(error.Hint), error.ToString());
@@ -72,7 +119,7 @@ public class CacheBindingTests
     public async Task TheLongestRetentionOfADistributedTier_IsWhatATimeToLiveHolds(long pastIt)
     {
         const long Ttl = 1_000;
-        var stale = LocalTableCache.MaxRetentionMs - LocalTableCache.MaxLifetime(Ttl) + pastIt;
+        var stale = CachePolicy.MaxRetentionMs - CachePolicy.MaxLifetime(Ttl) + pastIt;
         var store = new FakeCacheStore();
         var rig = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) => 1.0), ttlMs: Ttl, staleIfErrorMs: stale, distributed: store);
         var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
@@ -88,7 +135,7 @@ public class CacheBindingTests
         Assert.Equal(FeatureState.Ok, (await rig.NewRequest([1]).EnsureAsync(clicks)).State);
         await store.WhenWrittenAsync(1);
         Assert.True(store.TryGet(rig.Tables["item_store"].Cache!.Keyspace.Prefix + "1", out _, out var timeToLive));
-        Assert.Equal(TimeSpan.FromTicks(LocalTableCache.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
+        Assert.Equal(TimeSpan.FromTicks(CachePolicy.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
     }
 
     /// <summary>
@@ -103,7 +150,7 @@ public class CacheBindingTests
     public async Task AtTheLongestRetention_ARecordWrittenAheadOfTheClock_IsKeptForTheRetention(long stepBackMs)
     {
         const long Ttl = 1_000;
-        var stale = LocalTableCache.MaxRetentionMs - LocalTableCache.MaxLifetime(Ttl);
+        var stale = CachePolicy.MaxRetentionMs - CachePolicy.MaxLifetime(Ttl);
         var store = new FakeCacheStore();
         FeatureTestRig? rig = null;
         var stepped = 0;
@@ -123,7 +170,7 @@ public class CacheBindingTests
 
         await store.WhenWrittenAsync(1);
         Assert.True(store.TryGet(rig.Tables["item_store"].Cache!.Keyspace.Prefix + "1", out _, out var timeToLive));
-        Assert.Equal(TimeSpan.FromTicks(LocalTableCache.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
+        Assert.Equal(TimeSpan.FromTicks(CachePolicy.MaxRetentionMs * TimeSpan.TicksPerMillisecond), timeToLive);
     }
 
     [Fact]
@@ -144,7 +191,7 @@ public class CacheBindingTests
     [Fact]
     public void ADistributedStore_ThisBinaryDoesNotHave_NamesWhatWouldProvideIt()
     {
-        var error = Assert.Single(Errors(Build("""{ "mode": "cache", "connector": "memory@1", "max_bytes": "1MiB", "cache": { "ttl_ms": 1, "distributed": { "store": "redis@1" } } }""", redis: false)));
+        var error = Assert.Single(Errors(Build("""{ "connector": "memory@1", "cache": { "ttl_ms": 1, "distributed": { "store": "redis@1" } } }""", redis: false)));
 
         Assert.Equal(("BINDING_TYPE_UNKNOWN", "/sources/item_store/cache/distributed/store"), (error.Code, error.Pointer));
         Assert.Contains("StrataRec.Redis", error.Hint);
@@ -154,20 +201,21 @@ public class CacheBindingTests
     public void SettingsOfOtherModes_AreErrors_AndTheHintNamesEveryModeTheyBelongTo()
     {
         var cache = Errors(Build("""
-            { "mode": "cache", "connector": "memory@1", "max_bytes": "1MiB", "cache": { "ttl_ms": 1000 },
+            { "connector": "memory@1", "cache": { "ttl_ms": 1000, "memory": { "max_bytes": "1MiB" } }, "max_bytes": "1MiB",
               "bootstrap": { "source": "snapshot_files@1", "uri": "x" } }
             """));
-        Assert.Equal(new[] { "/sources/item_store/bootstrap" }, cache.Select(d => d.Pointer));
+        Assert.Equal(new[] { "/sources/item_store/max_bytes", "/sources/item_store/bootstrap" }, cache.Select(d => d.Pointer));
         Assert.All(cache, d => Assert.Equal("SOURCE_SETTING_WRONG_MODE", d.Code));
+        Assert.Contains("mode 'local'", cache[0].Message);
 
-        var fetch = Assert.Single(Errors(Build("""{ "connector": "memory@1", "cache": { "ttl_ms": 1000 } }""")));
-        Assert.Equal("/sources/item_store/cache", fetch.Pointer);
-        Assert.Contains("\"mode\": \"cache\"", fetch.Hint);
-
-        var local = Errors(Build("""{ "mode": "local", "max_bytes": "1MiB", "bootstrap": { "source": "test_updates@1" }, "timeout_ms": 5 }"""));
-        var timeout = Assert.Single(local);
-        Assert.Contains("mode 'fetch' and 'cache'", timeout.Message);
-        Assert.Contains("\"mode\": \"fetch\" or \"mode\": \"cache\"", timeout.Hint);
+        var local = Errors(Build("""
+            { "mode": "local", "max_bytes": "1MiB", "bootstrap": { "source": "test_updates@1" }, "timeout_ms": 5,
+              "cache": { "ttl_ms": 1000, "memory": { "max_bytes": "1MiB" } } }
+            """));
+        Assert.Equal(new[] { "/sources/item_store/timeout_ms", "/sources/item_store/cache" }, local.Select(d => d.Pointer));
+        Assert.Contains("mode 'fetch' and 'service'", local[0].Message);
+        Assert.Contains("\"mode\": \"fetch\" or \"mode\": \"service\"", local[0].Hint);
+        Assert.Contains("a setting of mode 'fetch',", local[1].Message); // once: a fetch binding with a cache is a fetch binding
     }
 
     [Fact]

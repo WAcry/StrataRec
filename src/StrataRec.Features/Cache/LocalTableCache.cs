@@ -9,14 +9,22 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Cache;
 
-/// <summary>The cache policy of a <c>cache</c> table, from the binding's <c>cache</c> settings.</summary>
+/// <summary>What a <c>cache</c> table is created with, from the binding's <c>cache</c> settings.</summary>
 public sealed class CacheTableOptions
 {
-    /// <summary><c>cache.ttl_ms</c>: how long a value is served. Each key's lifetime is this ±10%, by the key's hash.</summary>
+    /// <summary><c>cache.ttl_ms</c> of the plan that takes the table: with <see cref="StaleIfErrorMs"/>, its
+    /// <see cref="CachePolicy"/>, which the table keeps for its writer (<see cref="LocalTableCache.Policy"/>).</summary>
     public required long TtlMs { get; init; }
 
-    /// <summary><c>cache.stale_if_error_ms</c>: how much longer an expired value may be served when the connector fails.</summary>
+    /// <summary><c>cache.stale_if_error_ms</c> of the plan that takes the table.</summary>
     public long StaleIfErrorMs { get; init; }
+
+    /// <summary>
+    /// Whether the table keeps records (<c>cache.memory</c>). A cache without an in-process tier still has its table, for
+    /// what every tier shares (the records' layout, the keyspace, the clock, the counts): it stays empty, so every read
+    /// misses it and goes on to the distributed tier.
+    /// </summary>
+    public bool Memory { get; init; } = true;
 
     /// <summary>
     /// The most bytes waiting for the table's writer (<see cref="CacheWriteBatch.Bytes"/>: records and keys); a write-back
@@ -33,24 +41,18 @@ public sealed class CacheTableOptions
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
     /// <summary>
-    /// What the table's values come from, for a feature source's cache: a digest of its connector and the connector's
-    /// settings, the same on every instance with the same configuration. Part of every key of the distributed tier
-    /// (<see cref="CacheKeyspace.Prefix"/>), so a source bound to another connector, or to other data, does not read what
-    /// the earlier binding left there, which outlives the local table; two releases that differ in it each keep their own.
-    /// Null for a service's cache, whose keys carry the service's answer identity themselves.
+    /// What the table's values come from, for a feature source's cache: the binding's <c>cache.version</c>, or without one
+    /// a digest of its connector and the connector's settings; the same on every instance with the same configuration.
+    /// Part of every key of the distributed tier (<see cref="CacheKeyspace.Prefix"/>), so a source bound to another
+    /// connector, or to other data, does not read what the earlier binding left there; two releases that differ in it
+    /// each keep their own. Null for a service's cache, whose keys carry the service's answer identity themselves.
     /// </summary>
     public string? Origin { get; init; }
 
     internal void Validate()
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TtlMs);
-        ArgumentOutOfRangeException.ThrowIfNegative(StaleIfErrorMs);
         ArgumentOutOfRangeException.ThrowIfNegative(WriteQueueBytes);
         ArgumentNullException.ThrowIfNull(Clock);
-        if (TtlMs > long.MaxValue / 4 || StaleIfErrorMs > long.MaxValue / 4)
-        {
-            throw new ArgumentOutOfRangeException(nameof(TtlMs), "ttl_ms and stale_if_error_ms are at most 2^61 ms.");
-        }
     }
 }
 
@@ -67,10 +69,10 @@ internal enum CacheFreshness : byte
     Expired,
 }
 
-/// <summary>Which tier of a <c>cache</c> source a key count is about (metric tag <c>stratarec.cache.tier</c>).</summary>
+/// <summary>Which tier of a cache a key count is about (metric tag <c>stratarec.cache.tier</c>: <c>memory</c>, <c>distributed</c>).</summary>
 internal enum CacheTier : byte
 {
-    Local = 0,
+    Memory = 0,
     Distributed = 1,
 }
 
@@ -145,10 +147,10 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 }
 
 /// <summary>
-/// The in-process tier of a <c>cache</c> source: one per table, and the one owner of what the
-/// table's records mean as a cache. The request side asks it how fresh a record is (each key's lifetime is the TTL ±10%
-/// by the key's hash); the write side is its single writer, which applies what reads hand back and keeps the table within
-/// <c>max_bytes</c>.
+/// The in-process tier of a cache: one per table. Its write side is the table's single writer, which applies what reads
+/// hand back and keeps the table within <c>max_bytes</c>; it also holds what every tier of the cache shares (the records'
+/// layout, the keyspace, the clock, the counts). How fresh a record is, each reader asks its own plan's
+/// <see cref="CachePolicy"/>.
 /// </summary>
 /// <remarks>
 /// <para><b>Versions are write times.</b> A record's version is when the fetch that produced it started (Unix ms, from
@@ -168,21 +170,13 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 /// </remarks>
 public sealed class LocalTableCache
 {
-    /// <summary>
-    /// The longest time to live a distributed tier is given, in milliseconds: what a <see cref="TimeSpan"/> holds (about
-    /// 29,000 years). A binding with a distributed tier whose <see cref="RetentionMs"/> exceeds it is rejected.
-    /// </summary>
-    internal const long MaxRetentionMs = long.MaxValue / TimeSpan.TicksPerMillisecond;
-
-    private const double Jitter = 0.1;
-
     private readonly LocalFeatureTable _table;
     private readonly Channel<CacheWriteBatch> _queue = Channel.CreateUnbounded<CacheWriteBatch>(new UnboundedChannelOptions { SingleReader = true });
-    private readonly long _queueLimit;
     private readonly KeyValuePair<string, object?>[][] _keyTags; // [tier * outcomes + outcome]
     private readonly KeyValuePair<string, object?>[][] _writeTags; // [tier * outcomes + outcome]
     private readonly KeyValuePair<string, object?>[] _evictedExpiredTags;
     private readonly KeyValuePair<string, object?>[] _evictedCapacityTags;
+    private CachePolicy _policy;
     private long _queuedBytes;
     private char[] _chars = new char[256]; // the writer's UTF-8 decoding buffer
 
@@ -190,13 +184,11 @@ public sealed class LocalTableCache
     {
         options.Validate();
         _table = table;
+        _policy = new CachePolicy(options.TtlMs, options.StaleIfErrorMs);
         Options = options;
         Clock = options.Clock;
         Layout = new CacheRecordLayout(table.Schema);
         Keyspace = new CacheKeyspace(table.Schema.Source, table.Schema.Entity, table.Schema.Key, options.Origin);
-        _queueLimit = options.WriteQueueBytes > 0 ? options.WriteQueueBytes : Math.Clamp(table.Options.MaxBytes / 16, 1L << 20, 64L << 20);
-        MinLifetimeMs = LifetimeMs(0UL);
-        MaxLifetimeMs = MaxLifetime(options.TtlMs);
         var tags = table.MetricTags.ToArray();
         _keyTags = TagMatrix(tags, Enum.GetValues<CacheKeyOutcome>().Length, static o => OutcomeName((CacheKeyOutcome)o));
         _writeTags = TagMatrix(tags, Enum.GetValues<CacheWriteOutcome>().Length, static o => OutcomeName((CacheWriteOutcome)o));
@@ -208,11 +200,20 @@ public sealed class LocalTableCache
 
     public TimeProvider Clock { get; }
 
-    /// <summary>Even the key with the shortest jittered lifetime stays fresh this long.</summary>
-    internal long MinLifetimeMs { get; }
+    /// <summary>
+    /// The policy of the plan that took the table last: the writer's, which reclaims records past its retention first. A
+    /// reader uses its own plan's, which is this one unless two plans with different times share the table.
+    /// </summary>
+    public CachePolicy Policy => Volatile.Read(ref _policy);
 
-    /// <summary>The longest lifetime of any key: the TTL plus the most jitter.</summary>
-    public long MaxLifetimeMs { get; }
+    /// <summary>Whether the table keeps records (<see cref="CacheTableOptions.Memory"/>).</summary>
+    public bool Memory => Options.Memory;
+
+    /// <summary>The most bytes that wait for the writer: the option, or a sixteenth of the table's <c>max_bytes</c> now, within 1–64 MiB.</summary>
+    private long QueueLimit => Options.WriteQueueBytes > 0 ? Options.WriteQueueBytes : Math.Clamp(_table.MaxBytes / 16, 1L << 20, 64L << 20);
+
+    /// <summary>A plan takes the table with other times than the plan before it: its records stay, judged by the new ones.</summary>
+    internal void Adopt(CachePolicy policy) => Volatile.Write(ref _policy, policy);
 
     /// <summary>Bytes handed to the writer and not written yet, as charged (<see cref="CacheWriteBatch.Bytes"/>).</summary>
     public long QueuedBytes => Volatile.Read(ref _queuedBytes);
@@ -224,20 +225,8 @@ public sealed class LocalTableCache
     /// <summary>The fingerprint the table's records carry.</summary>
     internal ulong Fingerprint => Layout.Fingerprint;
 
-    /// <summary>The longest lifetime of any key of a table with TTL <paramref name="ttlMs"/>: the TTL plus the most jitter.</summary>
-    internal static long MaxLifetime(long ttlMs) => (long)Math.Ceiling(ttlMs * (1 + Jitter));
-
-    /// <summary>The longest a distributed tier keeps a record: until no reader could use it, even stale.</summary>
-    internal static long RetentionMs(long ttlMs, long staleIfErrorMs) => MaxLifetime(ttlMs) + staleIfErrorMs;
-
     /// <summary>Now, in Unix milliseconds: the version of a record a fetch starting now writes.</summary>
     internal long NowMs() => Clock.GetUtcNow().ToUnixTimeMilliseconds();
-
-    /// <summary>How long the record of a one-part <paramref name="key"/> is served: the TTL ±10% by the key's hash, the same on every instance.</summary>
-    internal long LifetimeMs(in EntityKey key) => LifetimeMs(KeyHash(key));
-
-    /// <summary>How long the record of the key with hash <paramref name="keyHash"/> (<see cref="KeyHash(in EntityKeyBatch, int)"/>) is served.</summary>
-    internal long LifetimeMs(ulong keyHash) => (long)(Options.TtlMs * (1 - Jitter + (2 * Jitter * StableHash.ToUnit(keyHash))));
 
     /// <summary>The canonical hash of a one-part key: what its jitter derives from, so every instance agrees.</summary>
     internal static ulong KeyHash(in EntityKey key)
@@ -280,90 +269,27 @@ public sealed class LocalTableCache
         return builder.Finish();
     }
 
-    /// <summary>How a record of a one-part <paramref name="key"/> written at <paramref name="writtenMs"/> stands at <paramref name="nowMs"/>.</summary>
-    internal CacheFreshness Classify(long writtenMs, in EntityKey key, long nowMs) => Classify(writtenMs, KeyHash(key), nowMs);
-
-    /// <summary>Classifies a record from its age alone when every key agrees, otherwise applies this key's jitter.</summary>
-    internal CacheFreshness Classify(long writtenMs, in EntityKeyBatch keys, int index, long nowMs)
-    {
-        var age = AgeMs(writtenMs, nowMs);
-        if (age <= MinLifetimeMs)
-        {
-            return CacheFreshness.Fresh;
-        }
-
-        if (age > MaxLifetimeMs)
-        {
-            if (age > MaxLifetimeMs + Options.StaleIfErrorMs)
-            {
-                return CacheFreshness.Expired;
-            }
-
-            if (age <= MinLifetimeMs + Options.StaleIfErrorMs)
-            {
-                return CacheFreshness.Stale;
-            }
-        }
-
-        return ClassifyAge(age, KeyHash(keys, index));
-    }
-
-    /// <summary>How a record of the key with hash <paramref name="keyHash"/> written at <paramref name="writtenMs"/> stands at <paramref name="nowMs"/>.</summary>
-    /// <remarks>A write time ahead of the clock (another instance's clock runs ahead) counts as written now.</remarks>
-    internal CacheFreshness Classify(long writtenMs, ulong keyHash, long nowMs) =>
-        ClassifyAge(AgeMs(writtenMs, nowMs), keyHash);
-
-    private static long AgeMs(long writtenMs, long nowMs)
-    {
-        if (writtenMs >= nowMs)
-        {
-            return 0;
-        }
-
-        // A stored timestamp can span the entire signed range. A past record that overflows the difference is expired.
-        var age = unchecked(nowMs - writtenMs);
-        return age < 0 ? long.MaxValue : age;
-    }
-
-    private CacheFreshness ClassifyAge(long age, ulong keyHash)
-    {
-        var lifetime = LifetimeMs(keyHash);
-        return age <= lifetime ? CacheFreshness.Fresh : age <= lifetime + Options.StaleIfErrorMs ? CacheFreshness.Stale : CacheFreshness.Expired;
-    }
-
-    /// <summary>How long the distributed tier should keep a record written at <paramref name="writtenMs"/>: until no reader
-    /// could use it, even stale.</summary>
-    /// <remarks>
-    /// The retention less the record's age, at least 1 ms. The age is judged as <see cref="Classify(long, ulong, long)"/> judges it: a write
-    /// time ahead of the clock (the clock stepped back during the fetch, say) counts as written now, so the result is at
-    /// most <see cref="RetentionMs"/>, which the binding checked against <see cref="MaxRetentionMs"/>; at that bound a
-    /// write time 1 ms ahead used to overflow the ticks to a negative time to live. In ticks, so no
-    /// floating-point rounding takes the boundary past what a <see cref="TimeSpan"/> holds.
-    /// </remarks>
-    internal TimeSpan StoreTimeToLive(long writtenMs, long nowMs)
-    {
-        var retention = MaxLifetimeMs + Options.StaleIfErrorMs;
-        var age = AgeMs(writtenMs, nowMs);
-        var remaining = age >= retention ? 1 : retention - age;
-        return TimeSpan.FromTicks(remaining * TimeSpan.TicksPerMillisecond);
-    }
-
     /// <summary>
     /// Hands records to the writer without waiting; false (and counted) when they do not fit a queue that holds some
-    /// (<see cref="WriteQueueBudget"/>).
+    /// (<see cref="WriteQueueBudget"/>). A cache without an in-process tier takes none.
     /// </summary>
     internal bool TryWriteBack(CacheWriteBatch batch)
     {
-        if (!WriteQueueBudget.TryTake(ref _queuedBytes, batch.Bytes, _queueLimit))
+        if (!Memory)
         {
-            CountDropped(CacheTier.Local, batch.Count);
+            return true; // no in-process tier: nothing is kept, and nothing was dropped
+        }
+
+        if (!WriteQueueBudget.TryTake(ref _queuedBytes, batch.Bytes, QueueLimit))
+        {
+            CountDropped(CacheTier.Memory, batch.Count);
             return false;
         }
 
         if (!_queue.Writer.TryWrite(batch))
         {
             Interlocked.Add(ref _queuedBytes, -batch.Bytes);
-            CountDropped(CacheTier.Local, batch.Count);
+            CountDropped(CacheTier.Memory, batch.Count);
             return false;
         }
 
@@ -397,7 +323,7 @@ public sealed class LocalTableCache
     /// </summary>
     internal void CountKeys(CacheTier tier, CacheKeyOutcome outcome, int keys)
     {
-        if (keys > 0)
+        if (keys > 0 && (Memory || tier != CacheTier.Memory))
         {
             try
             {
@@ -470,8 +396,8 @@ public sealed class LocalTableCache
             }
         }
 
-        CountWrites(CacheTier.Local, CacheWriteOutcome.Written, written);
-        CountWrites(CacheTier.Local, CacheWriteOutcome.Failed, failed);
+        CountWrites(CacheTier.Memory, CacheWriteOutcome.Written, written);
+        CountWrites(CacheTier.Memory, CacheWriteOutcome.Failed, failed);
     }
 
     private WriteResult WriteOne(LocalTableWriter writer, ReadOnlySpan<EntityKey> key, ReadOnlySpan<byte> record)
@@ -538,7 +464,7 @@ public sealed class LocalTableCache
             {
                 matrix[(tier * outcomes) + outcome] =
                 [
-                    table[0], table[1], new(StrataRecTags.CacheTier, tier == (int)CacheTier.Local ? "local" : "distributed"),
+                    table[0], table[1], new(StrataRecTags.CacheTier, tier == (int)CacheTier.Memory ? "memory" : "distributed"),
                     new(StrataRecTags.Outcome, outcomeName(outcome)),
                 ];
             }

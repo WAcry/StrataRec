@@ -197,7 +197,7 @@ public sealed class CatalogFeatureRegistrationTests
         const string Extra = """, "item.extra": { "type": "int64", "source": "item_store", "field": "i_extra" }""";
         var fetched = Plan(features: Extra);
         var cached = Plan(features: Extra,
-            itemStore: """{ "mode": "cache", "connector": "memory@1", "data": {}, "timeout_ms": 30000, "max_bytes": "1MiB", "cache": { "ttl_ms": 60000 } }""");
+            itemStore: """{ "connector": "memory@1", "data": {}, "timeout_ms": 30000, "cache": { "ttl_ms": 60000, "memory": { "max_bytes": "1MiB" } } }""");
 
         Assert.Equal(["item.boost", "item.score"], Names(fetched));
 
@@ -318,7 +318,7 @@ public sealed class CatalogFeatureRegistrationTests
     {
         var compilation = TryCompile(
             features: """, "item.old": { "type": "float32", "source": "item_store", "field": "i_score", "default": 0.0, "deprecated": true }""",
-            itemStore: """{ "connector": "memory@1", "data": { "1": { "i_score": 0.5, "i_author": 10 } }, "timeout_ms": 30000, "mode": "cache", "max_bytes": "1MiB", "cache": { "ttl_ms": 60000 } }""");
+            itemStore: """{ "connector": "memory@1", "data": { "1": { "i_score": 0.5, "i_author": 10 } }, "timeout_ms": 30000, "cache": { "ttl_ms": 60000, "memory": { "max_bytes": "1MiB" } } }""");
 
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         Assert.Empty(compilation.Diagnostics);
@@ -342,7 +342,7 @@ public sealed class CatalogFeatureRegistrationTests
 
         var started = Stopwatch.GetTimestamp();
         var compilation = TryCompile(features: features.ToString(),
-            itemStore: """{ "connector": "memory@1", "data": { "1": { "i_score": 0.5, "i_author": 10 } }, "timeout_ms": 30000, "mode": "cache", "max_bytes": "1MiB", "cache": { "ttl_ms": 60000 } }""");
+            itemStore: """{ "connector": "memory@1", "data": { "1": { "i_score": 0.5, "i_author": 10 } }, "timeout_ms": 30000, "cache": { "ttl_ms": 60000, "memory": { "max_bytes": "1MiB" } } }""");
         var elapsed = Stopwatch.GetElapsedTime(started);
 
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));

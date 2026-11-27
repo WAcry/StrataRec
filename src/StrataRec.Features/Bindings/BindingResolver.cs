@@ -48,6 +48,10 @@ public sealed class BindingResolver
 
     public string? BaseDirectory { get; }
 
+    /// <summary>The registry the bindings resolve with: one per engine, the owner of the cache tables its plans share
+    /// (<see cref="Local.LocalTableSpec.CreateCache"/>).</summary>
+    public BindingRegistry Registry => _registry;
+
     /// <summary>The factory of the type entry <paramref name="name"/> names; null (reported) when it names none or an unknown one.</summary>
     /// <param name="type">The type the entry's selector names; null when it has none.</param>
     /// <param name="hint">What else to do about an unknown type, after the list of registered types (when none is close to it).</param>

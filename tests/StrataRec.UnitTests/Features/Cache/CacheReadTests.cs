@@ -135,8 +135,8 @@ public class CacheReadTests
         var refetched = connector.Calls.Last().Keys.Select(k => k.Int64Value).ToArray();
         Assert.InRange(refetched.Length, Keys / 4, Keys * 3 / 4);
         var cache = rig.Tables["item_store"].Cache!;
-        Assert.All(refetched, key => Assert.True(cache.LifetimeMs(EntityKey.FromInt64(key)) < 10_000));
-        Assert.All(keys.Except(refetched), key => Assert.True(cache.LifetimeMs(EntityKey.FromInt64(key)) >= 10_000));
+        Assert.All(refetched, key => Assert.True(cache.Policy.LifetimeMs(EntityKey.FromInt64(key)) < 10_000));
+        Assert.All(keys.Except(refetched), key => Assert.True(cache.Policy.LifetimeMs(EntityKey.FromInt64(key)) >= 10_000));
         rig.WriteBack("item_store");
 
         rig.Clock.AdvanceMs(1_001); // past the longest lifetime: every key that was not refetched just now
@@ -152,13 +152,13 @@ public class CacheReadTests
         rig.Build();
         var cache = rig.Tables["item_store"].Cache!;
 
-        var lifetimes = Enumerable.Range(1, 10_000).Select(i => cache.LifetimeMs(EntityKey.FromInt64(i))).ToArray();
+        var lifetimes = Enumerable.Range(1, 10_000).Select(i => cache.Policy.LifetimeMs(EntityKey.FromInt64(i))).ToArray();
 
         Assert.All(lifetimes, l => Assert.InRange(l, 54_000, 66_000));
         Assert.True(lifetimes.Min() < 54_600 && lifetimes.Max() > 65_400, $"{lifetimes.Min()}..{lifetimes.Max()}");
         Assert.InRange(lifetimes.Count(l => l < 60_000), 4_500, 5_500);
-        Assert.Equal(cache.LifetimeMs(EntityKey.FromInt64(42)), cache.LifetimeMs(EntityKey.FromInt64(42)));
-        Assert.Equal(lifetimes[41], cache.LifetimeMs(EntityKey.FromInt64(42)));
+        Assert.Equal(cache.Policy.LifetimeMs(EntityKey.FromInt64(42)), cache.Policy.LifetimeMs(EntityKey.FromInt64(42)));
+        Assert.Equal(lifetimes[41], cache.Policy.LifetimeMs(EntityKey.FromInt64(42)));
     }
 
     [Theory]
@@ -181,8 +181,8 @@ public class CacheReadTests
 
         Assert.Equal(fresh ? 42.0 : 1.0, request.Value(clicks, 0).AsFloat64());
         Assert.Equal(fresh ? 0 : 1, connector.Calls.Count);
-        Assert.Equal(fresh ? CacheFreshness.Fresh : CacheFreshness.Expired, cache.Classify(writtenMs, EntityKey.FromInt64(1), nowMs));
-        Assert.Equal(TimeSpan.FromMilliseconds(fresh ? cache.MaxLifetimeMs + cache.Options.StaleIfErrorMs : 1), cache.StoreTimeToLive(writtenMs, nowMs));
+        Assert.Equal(fresh ? CacheFreshness.Fresh : CacheFreshness.Expired, cache.Policy.Classify(writtenMs, EntityKey.FromInt64(1), nowMs));
+        Assert.Equal(TimeSpan.FromMilliseconds(fresh ? cache.Policy.RetentionMs : 1), cache.Policy.StoreTimeToLive(writtenMs, nowMs));
     }
 
     [Fact]
@@ -353,7 +353,7 @@ public class CacheReadTests
         var keys = cache.Keyspace.Prefix;
         Assert.Matches("^item_store:item:[0-9a-f]{16}:$", keys);
         Assert.True(store.TryGet(keys + "2", out _, out var timeToLive));
-        Assert.Equal(TimeSpan.FromMilliseconds(cache.MaxLifetimeMs + cache.Options.StaleIfErrorMs), timeToLive);
+        Assert.Equal(TimeSpan.FromMilliseconds(cache.Policy.RetentionMs), timeToLive);
 
         var (reader, readerConnector, readerClicks) = DistributedRig(store); // another instance: an empty table
         var request = reader.NewRequest([3, 1, 4]);

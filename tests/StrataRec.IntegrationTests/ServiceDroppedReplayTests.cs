@@ -20,7 +20,7 @@ public sealed class ServiceDroppedReplayTests
     public async Task ANodeReadingTheItemsItsServiceDropped_ReplaysAsItRan()
     {
         var compilation = MiniWorkspace.TryCompile(
-            """ "s": { "client": "overflowing@1", "cache": { "ttl_ms": 60000, "max_bytes": "1MiB" } } """,
+            """ "s": { "client": "overflowing@1", "cache": { "ttl_ms": 60000, "memory": { "max_bytes": "1MiB" } } } """,
             """
             { "pipeline_id": "p", "entity_key_type": "int64",
               "param_schema": { "k": { "type": "int64" } },

@@ -24,7 +24,7 @@
     // answers are cached: one per region (the inputs are the key) for 30 seconds, in a table of at most 4 MiB.
     "trending": {
       "client": "trending@1",
-      "cache": { "ttl_ms": 30000, "max_bytes": "4MiB" },
+      "cache": { "ttl_ms": 30000, "memory": { "max_bytes": "4MiB" } },
       "region_input": "region",
       "items": [
         { "id": 1,  "score": 950, "region": "us" },
@@ -61,7 +61,7 @@
     // service only about the candidates it has not answered since.
     "stock": {
       "client": "stock@1",
-      "cache": { "ttl_ms": 5000, "max_bytes": "1MiB" },
+      "cache": { "ttl_ms": 5000, "memory": { "max_bytes": "1MiB" } },
       "out_of_stock": [1, 22]
     }
   }

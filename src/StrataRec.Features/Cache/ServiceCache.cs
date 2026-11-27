@@ -45,15 +45,19 @@ internal sealed class ServiceCache
     /// <param name="answerIdentity">
     /// What the binding answers with, the same on every instance that has the same configuration: part of every key, so a
     /// binding whose client or settings changed (a hot reload, another deployment sharing the store) does not read the
-    /// answers the earlier one left in the distributed tier, which outlive the local table.
+    /// answers the earlier one left. The binding's <c>cache.version</c> when it names one.
     /// </param>
-    public ServiceCache(string service, LocalFeatureTable table, DistributedCacheTier? distributed, int distributedTimeoutMs, string answerIdentity)
+    /// <param name="policy">The binding's times as the plan compiled them.</param>
+    public ServiceCache(
+        string service, LocalFeatureTable table, CachePolicy policy, DistributedCacheTier? distributed, int distributedTimeoutMs, string answerIdentity)
     {
+        ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(answerIdentity);
         Service = service;
         AnswerIdentity = answerIdentity;
         Table = table;
-        Policy = table.Cache ?? throw new ArgumentException("A service's cache table is a cache table.", nameof(table));
+        Policy = policy;
+        TableCache = table.Cache ?? throw new ArgumentException("A service's cache table is a cache table.", nameof(table));
         Distributed = distributed;
         DistributedTimeoutMs = distributedTimeoutMs;
         Io = new IoTarget(IoRoles.Cache, service);
@@ -62,13 +66,16 @@ internal sealed class ServiceCache
     /// <summary>The service's binding name.</summary>
     public string Service { get; }
 
-    /// <summary>What the binding answers with (see the constructor): a digest of its client and settings.</summary>
+    /// <summary>What the binding answers with (see the constructor): its <c>cache.version</c>, or a digest of its client and settings.</summary>
     public string AnswerIdentity { get; }
 
     public LocalFeatureTable Table { get; }
 
-    /// <summary>The table's policy: freshness, the write-back queue, the counts.</summary>
-    public LocalTableCache Policy { get; }
+    /// <summary>How fresh this plan's calls find a record, in either tier.</summary>
+    public CachePolicy Policy { get; }
+
+    /// <summary>The table's side of the cache: the write-back queue, the records' layout, the clock, the counts.</summary>
+    public LocalTableCache TableCache { get; }
 
     public DistributedCacheTier? Distributed { get; }
 
@@ -105,11 +112,11 @@ internal sealed class ServiceCache
     public DecodedServiceRecord? Decode(ReadOnlyMemory<byte> bytes, out CacheKeyOutcome outcome)
     {
         var record = bytes.Span;
-        switch (CacheRecord.ReadHeader(record, Fields.Length, Policy.Fingerprint, out var writtenMs, out _))
+        switch (CacheRecord.ReadHeader(record, Fields.Length, TableCache.Fingerprint, out var writtenMs, out _))
         {
-            case CacheRecordHeader.Ok when CacheRecord.IsWellFormed(record, Policy.Layout):
+            case CacheRecordHeader.Ok when CacheRecord.IsWellFormed(record, TableCache.Layout):
                 var visitor = new DecodeVisitor(new DecodedServiceRecord(writtenMs, bytes));
-                CacheRecord.Read(record, Policy.Layout, ref visitor);
+                CacheRecord.Read(record, TableCache.Layout, ref visitor);
                 outcome = CacheKeyOutcome.Hit;
                 return visitor.Record;
             case CacheRecordHeader.Mismatch:
@@ -235,7 +242,7 @@ internal sealed class DecodedServiceRecord(long writtenMs, ReadOnlyMemory<byte> 
 {
     public long WrittenMs { get; } = writtenMs;
 
-    /// <summary>The record as the store returned it: what the local tier is written from.</summary>
+    /// <summary>The record as the store returned it: what the memory tier is written from.</summary>
     public ReadOnlyMemory<byte> Bytes { get; } = bytes;
 
     internal int[] LayoutValues { get; set; } = [];
@@ -285,7 +292,7 @@ internal sealed class ServiceRecordBuilder
     {
         _cache = cache;
         _writtenMs = writtenMs;
-        _writer = new CacheRecordWriter(cache.Policy.Layout, Math.Max(1, records) * cache.Policy.Layout.TypicalSize);
+        _writer = new CacheRecordWriter(cache.TableCache.Layout, Math.Max(1, records) * cache.TableCache.Layout.TypicalSize);
         _records = new List<(UInt128, int, int)>(records);
     }
 
@@ -308,7 +315,7 @@ internal sealed class ServiceRecordBuilder
     /// <summary>Encodes the record gathered so far under <paramref name="key"/> and clears the lists for the next.</summary>
     public void End(UInt128 key)
     {
-        _writer.Begin(_writtenMs, _cache.Policy.Fingerprint, absent: false);
+        _writer.Begin(_writtenMs, _cache.TableCache.Fingerprint, absent: false);
         Write(ServiceCache.LayoutField, Layout);
         Write(ServiceCache.BoolField, Bools);
         Write(ServiceCache.Int32Field, Int32s);
@@ -360,7 +367,7 @@ internal sealed class ServiceRecordBuilder
             records[i] = bytes.AsMemory(offset, length);
         }
 
-        _cache.Policy.TryWriteBack(new CacheWriteBatch(keys, records, count, partCount: 2));
+        _cache.TableCache.TryWriteBack(new CacheWriteBatch(keys, records, count, partCount: 2));
         if (_cache.Distributed is { } distributed)
         {
             var entries = new CacheStoreEntry[count];
@@ -370,7 +377,7 @@ internal sealed class ServiceRecordBuilder
                 entries[i] = new CacheStoreEntry(ServiceCache.KeyText(_records[i].Key), records[i], ttl);
             }
 
-            distributed.TryWrite(_cache.Policy, entries, count);
+            distributed.TryWrite(_cache.TableCache, entries, count);
         }
     }
 

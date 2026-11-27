@@ -65,7 +65,7 @@ public static class StrataRecTags
     /// <summary>Entity of a local feature table (with <see cref="Source"/>: one table per source and entity).</summary>
     public const string Entity = "stratarec.entity";
 
-    /// <summary>Tier of a <c>cache</c> source: <c>local</c> (the in-process table) or <c>distributed</c>.</summary>
+    /// <summary>Tier of a cache: <c>memory</c> (the in-process table) or <c>distributed</c>.</summary>
     public const string CacheTier = "stratarec.cache.tier";
 
     /// <summary>Outcome category; only on counters, never on durations.</summary>
