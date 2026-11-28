@@ -727,7 +727,9 @@ public sealed partial class FeatureFetcher
         // A cache without an in-process tier keeps nothing in process: its hits of the distributed tier are not gathered
         // for a writer that would drop them (a key and a record reference for each).
         var cache = read.Cache;
+        var tier = read.Supply.Distributed;
         local = cache.Memory ? local : 0;
+        shared = tier is null ? 0 : shared; // nor are the connector's records, for a tier the cache does not have
         if (local == 0 && shared == 0)
         {
             return;
@@ -736,8 +738,7 @@ public sealed partial class FeatureFetcher
         var parts = read.KeyBatch.PartCount;
         var keys = local == 0 ? [] : new EntityKey[local * parts];
         var records = local == 0 ? [] : new ReadOnlyMemory<byte>[local];
-        var tier = read.Supply.Distributed;
-        var entries = tier is null || shared == 0 ? null : new CacheStoreEntry[shared];
+        var entries = shared == 0 ? null : new CacheStoreEntry[shared];
         var nowMs = cache.NowMs();
         int l = 0, s = 0;
         for (var m = 0; m < read.MissCount; m++)

@@ -14,7 +14,8 @@ namespace StrataRec.Pipeline.Operators;
 /// <summary>
 /// A node's cache of its calls of a pipeline (<c>cache</c> in the config of an operator that calls one): a call whose
 /// result is cached does not run the pipeline. Where the results are kept is the environment's
-/// (<c>pipelines.&lt;id&gt;.cache</c> in the bindings).
+/// (<c>pipelines.&lt;id&gt;.cache</c> in the bindings). With no settings (<c>"cache": {}</c>) nothing is kept and the
+/// environment binds nothing: the calls for one result within a request run the pipeline once.
 /// </summary>
 /// <remarks>
 /// A result is found again by what the called pipeline would run and what it is given: its configuration (or
@@ -25,8 +26,9 @@ namespace StrataRec.Pipeline.Operators;
 public sealed class PipelineCallCacheConfig
 {
     /// <summary>
-    /// Required: how long a result is served, in milliseconds, e.g. <c>3600000</c>. Each result's lifetime varies by ±10%
-    /// with its key, so results computed together do not all expire together.
+    /// How long a result is served, in milliseconds, e.g. <c>3600000</c>. Each result's lifetime varies by ±10% with its
+    /// key, so results computed together do not all expire together. Leave out every setting (<c>"cache": {}</c>) to keep
+    /// nothing: the calls for one result within a request then run the pipeline once, and the next request runs it again.
     /// </summary>
     public long? TtlMs { get; init; }
 
@@ -389,6 +391,11 @@ internal sealed class PipelineCallCache
     /// <param name="startedMs">When the run started, by <see cref="NowMs"/>.</param>
     public void Write(UInt128 key, ResultColumns columns, ResultValues values, CachedFrom from, IReadOnlyList<CallExposure> exposures, long startedMs)
     {
+        if (!_tiers.Kept)
+        {
+            return; // the request's own calls have the result as it is: no record is built for tiers the cache does not have
+        }
+
         var builder = new ServiceRecordBuilder(_tiers, 1, startedMs);
         Encode(builder, columns, values, from, exposures);
         builder.End(key);

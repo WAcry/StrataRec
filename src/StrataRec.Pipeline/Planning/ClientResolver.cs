@@ -22,6 +22,7 @@ public sealed class ClientResolver
     private readonly TimeProvider _clock;
     private readonly Dictionary<string, (IServiceClient? Client, int? TimeoutMs, ServiceCache? Cache)> _services = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ServiceCache?> _pipelineCaches = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ServiceCache> _requestCaches = new(StringComparer.Ordinal);
 
     /// <param name="resolver">Creates the instances, from <paramref name="instances"/>, and reports a binding's errors at the binding.</param>
     /// <param name="instances">Where service signatures and the tables of services' caches come from.</param>
@@ -185,7 +186,7 @@ public sealed class ClientResolver
         // The table never judges a record dead by its age: each calling node has its own times, and a reader judges by
         // its own. Records leave by capacity. Its identity names no origin: a record's key says what it is of
         // (PipelineCallCache.Format), so the table is kept across every change of the configuration.
-        var spec = new CacheSpec(new CachePolicy(CacheSettings.MaxMs), null, memoryBytes, distributed, distributedTimeoutMs);
+        var spec = new CacheSpec(CachePolicy.Unlimited, null, memoryBytes, distributed, distributedTimeoutMs);
         var table = LocalTableSpec.CreateCache(
             ServiceCache.Schema(pipelineId, PipelineCallCache.Entity), spec.TableOptions(_clock, origin: null), PipelineCallCache.Entity, "pipeline", _resolver.Registry,
             _resolver.Artifact, entry, _resolver.BaseDirectory);
@@ -202,6 +203,27 @@ public sealed class ClientResolver
 
         _pipelineCaches[pipelineId] = tiers;
         return true;
+    }
+
+    /// <summary>
+    /// The cache of the calls of pipeline <paramref name="pipelineId"/> by a node whose <c>cache</c> has no settings: no
+    /// tier, so nothing of the environment's (<c>pipelines.&lt;id&gt;.cache</c> is not asked for). Its table, which stays
+    /// empty, is what the calls of one request that share a result are found by, and is not the table of the tiers
+    /// the environment may bind for the nodes that keep their results: those calls share among themselves.
+    /// </summary>
+    internal ServiceCache RequestPipelineCache(string pipelineId)
+    {
+        if (!_requestCaches.TryGetValue(pipelineId, out var cache))
+        {
+            var spec = new CacheSpec(CachePolicy.Unlimited, null, null, null, null);
+            var table = LocalTableSpec.CreateCache(
+                ServiceCache.Schema(pipelineId, PipelineCallCache.Entity), spec.TableOptions(_clock, origin: null), PipelineCallCache.Entity, "pipeline",
+                _resolver.Registry, _resolver.Artifact, "/" + BindingKind.PipelineCacheStore.Section() + "/" + JsonPointer.Escape(pipelineId), _resolver.BaseDirectory);
+            cache = new ServiceCache(pipelineId, _instances.Acquire(table), spec.Policy, null, 0, string.Empty);
+            _requestCaches[pipelineId] = cache;
+        }
+
+        return cache;
     }
 
     /// <summary>

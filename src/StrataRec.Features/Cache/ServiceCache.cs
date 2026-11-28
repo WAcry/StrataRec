@@ -58,6 +58,11 @@ internal sealed class ServiceCache
         Table = table;
         Policy = policy;
         TableCache = table.Cache ?? throw new ArgumentException("A service's cache table is a cache table.", nameof(table));
+        if (TableCache.Kept != (TableCache.Memory || distributed is not null))
+        {
+            throw new ArgumentException("A cache is kept when it has a tier, and only then.", nameof(table));
+        }
+
         Distributed = distributed;
         DistributedTimeoutMs = distributedTimeoutMs;
         Io = new IoTarget(IoRoles.Cache, service);
@@ -78,6 +83,12 @@ internal sealed class ServiceCache
     public LocalTableCache TableCache { get; }
 
     public DistributedCacheTier? Distributed { get; }
+
+    /// <summary>
+    /// Whether a tier keeps the cache's records (<see cref="CacheTableOptions.Kept"/>). One that keeps nothing has the
+    /// calls of one request share an answer: of use to a call the request's other calls can share, and to no other.
+    /// </summary>
+    public bool Kept => TableCache.Kept;
 
     /// <summary>The longest one read of the distributed tier may take (its <c>timeout_ms</c>, or half the service's).</summary>
     public int DistributedTimeoutMs { get; }

@@ -88,9 +88,11 @@ public class RequestReadsEndToEndTests
         new(host, stores: stores ?? new SharedStores(), bind: bindings => bindings.Add(connectors ?? new CountedConnectors()).Add(lists ?? new CountedLists()),
             pipelines: pipelines ?? Pipelines);
 
-    /// <summary>Each row's list and bids, as text.</summary>
+    /// <summary>Each row's list and bids, as text; nothing for a row that calls no pipeline.</summary>
     private static List<string> Lists(RecResult result) =>
-        result.Items.Select(i => string.Join(",", i.Columns["games"].AsInt64List().ToArray()) + " at " + string.Join(",", i.Columns["bids"].AsFloat64List().ToArray())).ToList();
+        result.Items.Select(i => i.Columns["bids"].IsMissing
+            ? string.Empty
+            : string.Join(",", i.Columns["games"].AsInt64List().ToArray()) + " at " + string.Join(",", i.Columns["bids"].AsFloat64List().ToArray())).ToList();
 
     private static TaskCompletionSource Gate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -136,6 +138,83 @@ public class RequestReadsEndToEndTests
             .GroupBy(m => $"{m.Tags[StrataRecTags.CacheTier]}/{m.Tags[StrataRecTags.Outcome]}").ToDictionary(g => g.Key, g => g.Sum(m => (long)m.Value));
         Assert.Equal(2, keys.GetValueOrDefault("request/hit"));
         Assert.Equal(3, keys.GetValueOrDefault("distributed/miss"));
+    }
+
+    /// <summary>
+    /// A cache with no settings keeps nothing and is one request's: its runs share what one of them got from the origin
+    /// (a connector, a service, a pipeline), with no tier read or written, and the next request asks the origin again.
+    /// What a call's result comes from is said as for a kept one: the run of this request that computed it. A user's
+    /// record is one for the page, which reads the user's tenure, and for the runs it calls, which read another feature
+    /// of the user: whole, whichever of them gets it. And the node whose cache keeps nothing reads no tier the
+    /// environment keeps the pipeline's results in for other nodes.
+    /// </summary>
+    [Theory]
+    [InlineData("a user's features", 1, 3)] // the page's read, which its three runs of promoted take
+    [InlineData("a service's answer", 2, 2)] // the page's own recall, and one for its three runs of promoted
+    [InlineData("a pipeline's result", 1, 1)]
+    public async Task ACacheWithNoSettings_IsOneRequests_WhoseRunsAskTheOriginOnce(string of, int asked, int taken)
+    {
+        const string None = "\"cache\": { }";
+        const string Twice = """
+            "config": { "by": "col.entity_id", "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
+                        "pipelines": { "5": { "pipeline": "promoted", "inputs": { "slots": "3" }CACHE },
+                                       "8": { "pipeline": "promoted", "inputs": { "slots": "3" }CACHE } },
+                        "computed_by": { "request_id": "games.from", "time_ms": "games.at", "called_by": "games.by" } }
+            """;
+        var connectors = new CountedConnectors();
+        var lists = new CountedLists { HoldFrom = 20 }; // the runs' calls: the page's own recall asks for 3
+        var stores = new SharedStores();
+        var release = Gate();
+        Action<string> tenure = root => ReplayTests.Edit(
+            root, "pipelines/page.jsonc", "\"columns\": { \"games\": \"col.games\",", "\"columns\": { \"tenure\": \"ctx.user.tenure_days\", \"games\": \"col.games\",");
+        await using var reference = Engine(of switch
+        {
+            "a user's features" => Host(more: tenure),
+            "a service's answer" => Host(),
+            _ => Host(content: Twice.Replace("CACHE", string.Empty, StringComparison.Ordinal)),
+        });
+        await using var rig = Engine(
+            of switch
+            {
+                "a user's features" => Host(userCache: None, more: tenure),
+                "a service's answer" => Host(listCache: None),
+                _ => Host(content: Twice.Replace("CACHE", ", " + None, StringComparison.Ordinal), more: root => SampleBindings.BindPipeline(
+                    root, "promoted", """{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""")),
+            },
+            connectors, lists, stores);
+        Func<int> origin = of switch
+        {
+            "a user's features" => () => connectors.Calls,
+            "a service's answer" => () => lists.Calls,
+            _ => () => rig.Probe.Runs,
+        };
+        switch (of)
+        {
+            case "a user's features": connectors.Hold = release.Task; break;
+            case "a service's answer": lists.Hold = release.Task; break;
+            default: rig.Probe.Hold = release.Task; break;
+        }
+
+        using var metrics = new MetricCapture();
+        var expected = await reference.Run("req-1", pipeline: "page");
+        var running = Start(rig, "req-1", () => origin() == asked); // the first run's is held, and the others wait for it
+        release.SetResult();
+        var first = await running;
+        var second = await rig.Run("req-2", pipeline: "page");
+
+        Assert.True(expected.Succeeded && first.Succeeded && second.Succeeded, expected.Error ?? first.Error ?? second.Error);
+        Assert.Equal(Lists(expected), Lists(first));
+        Assert.Equal(Lists(expected), Lists(second));
+        Assert.Equal(2 * asked, origin()); // nothing was kept for the second request
+        Assert.Equal((0, 0), (stores.Gets, stores.Records));
+        Assert.Equal(2 * taken, metrics.Of(StrataRecMetrics.Names.CacheKeys)
+            .Where(m => Equals(m.Tags[StrataRecTags.CacheTier], "request") && Equals(m.Tags[StrataRecTags.Outcome], "hit")).Sum(m => (long)m.Value));
+        if (of == "a pipeline's result")
+        {
+            // The call that took the other's result says which run of its own request computed it.
+            Assert.Equal(["req-1 by page/content#0"], first.Calls!.Where(c => c.Cached is not null).Select(c => $"{c.Cached!.RequestId} by {c.Cached.CalledBy}"));
+            Assert.Equal(["req-2 by page/content#0"], second.Calls!.Where(c => c.Cached is not null).Select(c => $"{c.Cached!.RequestId} by {c.Cached.CalledBy}"));
+        }
     }
 
     /// <summary>
@@ -357,6 +436,39 @@ public class RequestReadsEndToEndTests
         Assert.False(expired.Succeeded);
         Assert.True(within.Succeeded, within.Error);
         Assert.Equal("req-1", within.Cached?.RequestId);
+    }
+
+    /// <summary>
+    /// A node's cache with no settings is not the cache of the tiers the environment keeps the pipeline's results in: a
+    /// call of such a node and a call of a node that keeps its results, for the same result, each run the pipeline, and
+    /// the kept one is kept. Joined, the call that keeps its results took the other's, which no tier is written from, and
+    /// ran the pipeline again in the next request.
+    /// </summary>
+    [Fact]
+    public async Task ACallThatKeepsNothing_AndACallThatKeepsItsResults_EachRunThePipeline()
+    {
+        const string Distributed = """{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""";
+        var host = PageHost(content: """
+            "config": { "by": "col.entity_id", "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
+                        "pipelines": { "5": { "pipeline": "promoted", "inputs": { "slots": "3" }, "cache": { } },
+                                       "8": { "pipeline": "promoted", "inputs": { "slots": "3" }, "cache": { "ttl_ms": 3600000 } } },
+                        "computed_by": { "request_id": "games.from", "time_ms": "games.at", "called_by": "games.by" } }
+            """, more: root => SampleBindings.BindPipeline(root, "promoted", Distributed));
+        var stores = new SharedStores();
+        await using var rig = new Rig(host, stores: stores, pipelines: Pipelines);
+        var release = Gate();
+        rig.Probe.Hold = release.Task;
+
+        var running = Start(rig, "req-1", () => rig.Probe.Runs == 2); // both under way: neither waits for the other
+        release.SetResult();
+        var first = await running;
+        await CacheEngineTests.Eventually(() => stores.Records == 1, () => "the kept call's result in the store");
+        var second = await rig.Run("req-2", pipeline: "page");
+
+        Assert.True(first.Succeeded && second.Succeeded, first.Error ?? second.Error);
+        Assert.All(first.Calls!, c => Assert.Null(c.Cached));
+        Assert.Equal(3, rig.Probe.Runs); // the second request's: the call that keeps nothing
+        Assert.Equal(["req-1 by page/content#1"], second.Calls!.Where(c => c.Cached is not null).Select(c => $"{c.Cached!.RequestId} by {c.Cached.CalledBy}"));
     }
 
     /// <summary>

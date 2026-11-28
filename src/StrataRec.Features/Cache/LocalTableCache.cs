@@ -27,6 +27,14 @@ public sealed class CacheTableOptions
     public bool Memory { get; init; } = true;
 
     /// <summary>
+    /// Whether a tier keeps the cache's records: this table (<see cref="Memory"/>) or a distributed store. False for a
+    /// cache with no tier (<c>"cache": {}</c>), which only has the reads of one request share what one of them got. Its
+    /// table is its own, not that of a cache of the same origin that keeps its records in a store: the reads of a request
+    /// share a record of one cache, and a read that took another cache's would leave its own tier unwritten.
+    /// </summary>
+    public bool Kept { get; init; } = true;
+
+    /// <summary>
     /// The most bytes waiting for the table's writer (<see cref="CacheWriteBatch.Bytes"/>: records and keys); a write-back
     /// past it is dropped and counted (the key is fetched again on its next miss), but for one larger than the whole limit
     /// handed to an empty queue, which takes it (<see cref="WriteQueueBudget"/>). 0 takes a sixteenth of <c>max_bytes</c>,
@@ -53,6 +61,10 @@ public sealed class CacheTableOptions
     {
         ArgumentOutOfRangeException.ThrowIfNegative(WriteQueueBytes);
         ArgumentNullException.ThrowIfNull(Clock);
+        if (Memory && !Kept)
+        {
+            throw new ArgumentException("A cache whose table keeps records is kept.", nameof(Kept));
+        }
     }
 }
 
@@ -212,6 +224,9 @@ public sealed class LocalTableCache
 
     /// <summary>Whether the table keeps records (<see cref="CacheTableOptions.Memory"/>).</summary>
     public bool Memory => Options.Memory;
+
+    /// <summary>Whether a tier keeps the cache's records (<see cref="CacheTableOptions.Kept"/>).</summary>
+    public bool Kept => Options.Kept;
 
     /// <summary>The most bytes that wait for the writer: the option, or a sixteenth of the table's <c>max_bytes</c> now, within 1–64 MiB.</summary>
     private long QueueLimit => Options.WriteQueueBytes > 0 ? Options.WriteQueueBytes : Math.Clamp(_table.MaxBytes / 16, 1L << 20, 64L << 20);

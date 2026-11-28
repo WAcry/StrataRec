@@ -1554,7 +1554,8 @@ public sealed class PipelineCallCacheEndToEndTests
     /// </summary>
     [Theory]
     [InlineData(Hour, null, "PIPELINE_CALL_CACHE_UNBOUND", "/nodes/promoted/config/cache")]
-    [InlineData("{ }", Memory, "CACHE_TTL", "/nodes/promoted/config/cache")]
+    [InlineData("""{ "version": "3" }""", Memory, "CACHE_TTL", "/nodes/promoted/config/cache")]
+    [InlineData("""{ "stale_if_error_ms": -1 }""", null, "CACHE_TTL", "/nodes/promoted/config/cache")] // one error: nothing else of it applies without a time
     [InlineData("""{ "ttl_ms": 0 }""", Memory, "CACHE_TTL", "/nodes/promoted/config/cache/ttl_ms")]
     [InlineData("""{ "ttl_ms": 1000, "stale_if_error_ms": -1 }""", Memory, "CACHE_STALE_IF_ERROR", "/nodes/promoted/config/cache/stale_if_error_ms")]
     [InlineData("""{ "ttl_ms": 1000, "version": "a b" }""", Memory, "CACHE_VERSION", "/nodes/promoted/config/cache/version")]
@@ -1575,6 +1576,22 @@ public sealed class PipelineCallCacheEndToEndTests
         var error = Assert.Single(load.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
         Assert.Equal((code, pointer), (error.Code, error.Pointer));
         Assert.False(string.IsNullOrEmpty(error.Hint));
+    }
+
+    /// <summary>
+    /// A node's cache with no settings keeps nothing, so it asks the environment for no tier: the pipeline loads where
+    /// one whose cache gives a time does not (<c>PIPELINE_CALL_CACHE_UNBOUND</c>).
+    /// </summary>
+    [Fact]
+    public void ANodesCacheWithNoSettings_NeedsNoTierOfTheEnvironment()
+    {
+        var host = Host("{ }", bound: null);
+        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new Probe()) });
+
+        var load = engine.Load(Compile(host.Root, "feed"));
+
+        Assert.True(load.Applied, string.Join("; ", load.Diagnostics));
+        Assert.DoesNotContain(load.Diagnostics, d => d.Severity != DiagnosticSeverity.Info);
     }
 
     /// <summary>The columns that say where a result comes from are a string and an integer, declared or not; any other type is an error at the column.</summary>

@@ -117,7 +117,7 @@ public sealed class LocalTableSpec
             throw new ArgumentException("A cache spec has a cache schema and cache options.", nameof(options));
         }
 
-        var what = new JsonObject { ["of"] = kind, ["origin"] = origin, ["memory"] = options.Cache.Memory };
+        var what = new JsonObject { ["of"] = kind, ["origin"] = origin, ["memory"] = options.Cache.Memory, ["kept"] = options.Cache.Kept };
         return new LocalTableSpec(
             schema, options, what, Cache.CacheWriterSource.Instance, owner, artifact, pointer, BindingContext.PinBaseDirectory(baseDirectory));
     }

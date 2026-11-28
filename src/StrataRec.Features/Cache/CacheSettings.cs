@@ -24,6 +24,12 @@ internal readonly record struct CacheOwner(BindingKind StoreKind, string Name, s
 internal readonly record struct CacheSpec(CachePolicy Policy, string? Version, long? MemoryBytes, DistributedCacheTier? Distributed, int? DistributedTimeoutMs)
 {
     /// <summary>
+    /// Whether a tier keeps the cache's records. A cache with no tier (<c>"cache": {}</c>) has the reads of one request
+    /// share what one of them got from the origin, and nothing more.
+    /// </summary>
+    public bool Kept => MemoryBytes is not null || Distributed is not null;
+
+    /// <summary>
     /// What a cache's records come from, in its keys and its table's identity: the binding's <c>version</c> when it names
     /// one (<c>v.3</c>: no digest has a dot), otherwise <paramref name="derived"/>, a digest of the configuration that
     /// decides the values.
@@ -36,7 +42,7 @@ internal readonly record struct CacheSpec(CachePolicy Policy, string? Version, l
         MaxBytes = MemoryBytes ?? long.MaxValue,
         Cache = new CacheTableOptions
         {
-            TtlMs = Policy.TtlMs, StaleIfErrorMs = Policy.StaleIfErrorMs, Clock = clock, Origin = origin, Memory = MemoryBytes is not null,
+            TtlMs = Policy.TtlMs, StaleIfErrorMs = Policy.StaleIfErrorMs, Clock = clock, Origin = origin, Memory = MemoryBytes is not null, Kept = Kept,
         },
     };
 }
@@ -44,6 +50,8 @@ internal readonly record struct CacheSpec(CachePolicy Policy, string? Version, l
 /// <summary>
 /// The one reading of a cache's settings: its times, its version and its tiers, each problem reported at its setting.
 /// Feature sources, services and pipeline calls read their caches here, so they say the same about the same mistake.
+/// A cache with tiers says how long they serve a value; one with no setting at all keeps nothing, and only has the
+/// reads of one request share a value (<see cref="CacheSpec.Kept"/>); anything between is a mistake.
 /// </summary>
 internal static class CacheSettings
 {
@@ -60,6 +68,22 @@ internal static class CacheSettings
         var ok = true;
         long ttlMs = 0;
         spec = default;
+        if (!HasTier(cache))
+        {
+            if (Unkept(cache.TtlMs, cache.StaleIfErrorMs, cache.Version) is { } given)
+            {
+                // One error, whatever the settings' values: whether they apply at all is what there is to decide first.
+                diagnostics.Error("CACHE_TIERS", artifact, pointer,
+                    $"The cache of {owner.Noun} '{owner.Name}' gives {given} but neither a 'memory' nor a 'distributed' tier: nothing would keep its values.",
+                    "add \"memory\": { \"max_bytes\": \"64MiB\" } to keep them in process, or \"distributed\": { \"store\": \"redis@1\", ... } to keep them in a store the instances share; "
+                    + $"or remove {given}: a cache with no settings keeps nothing, and has the reads of one request share a value");
+                return false;
+            }
+
+            spec = new CacheSpec(CachePolicy.Unlimited, null, null, null, null);
+            return true;
+        }
+
         if (cache.TtlMs is not { } ttl)
         {
             ok = false;
@@ -85,6 +109,30 @@ internal static class CacheSettings
         }
 
         return ok;
+    }
+
+    /// <summary>Whether the binding names a tier that keeps the cache's records, right or wrong (<see cref="CacheSpec.Kept"/> of what it compiles to).</summary>
+    public static bool HasTier(CacheBinding cache) => cache.Memory is not null || cache.Distributed is not null;
+
+    /// <summary>
+    /// The settings a cache that keeps nothing gives all the same, as a message names them (<c>'ttl_ms' and 'version'</c>);
+    /// null when it gives none, which is the cache of a request's reads alone.
+    /// </summary>
+    public static string? Unkept(long? ttlMs, long? staleIfErrorMs, string? version)
+    {
+        string? given = null;
+        Add(ttlMs is not null, "'ttl_ms'");
+        Add(staleIfErrorMs is not null, "'stale_if_error_ms'");
+        Add(version is not null, "'version'");
+        return given;
+
+        void Add(bool has, string name)
+        {
+            if (has)
+            {
+                given = given is null ? name : given + " and " + name;
+            }
+        }
     }
 
     /// <summary>

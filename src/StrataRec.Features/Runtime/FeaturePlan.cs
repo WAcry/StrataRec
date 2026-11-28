@@ -549,15 +549,17 @@ public sealed class FeaturePlan
     }
 
     /// <summary>
-    /// Whether a plan that reads one feature of <paramref name="source"/> must hold every physical feature of the source's
-    /// tables, as the plan builder registers them. A <c>cache</c> table is filled by the misses of the plans
-    /// that read it, and a record written back must be complete, or a later read of another field would take the field
-    /// for missing: a miss fetches every member of the group, so every field of the table must be a member. A <c>local</c>
+    /// Whether a plan that reads one feature of <paramref name="entity"/> from <paramref name="source"/> must hold every
+    /// physical feature of that table, as the plan builder registers them. A <c>cache</c> table is filled by the misses
+    /// of the plans that read it, and a record written back, or shared with the request's other reads, must be complete,
+    /// or a later read of another field would take the field for missing: a miss fetches every member of the group, so
+    /// every field of the table must be a member. That is every entity the binding's cache applies to
+    /// (<see cref="FeatureSourceResolver.Caches"/>). A <c>local</c>
     /// table is loaded whole by its source, whatever the plan reads (<see cref="Create"/> lays it out from the catalog),
     /// and a <c>fetch</c> carries only the features a request needs: those plans hold only what they read. False for a
     /// source with no binding or an unknown mode, which the feature plan reports.
     /// </summary>
-    public static bool NeedsWholeTable(SourceBindingArtifact bindings, string source)
+    public static bool NeedsWholeTable(SourceBindingArtifact bindings, string source, EntityDefinition entity)
     {
         if (!bindings.Sources.TryGetValue(source, out var binding) || !FeatureSourceResolver.TryMode(binding, out var mode))
         {
@@ -567,7 +569,7 @@ public sealed class FeaturePlan
         return mode switch
         {
             SupplyMode.Fetch or SupplyMode.Local or SupplyMode.Service => false,
-            SupplyMode.Cache => true,
+            SupplyMode.Cache => FeatureSourceResolver.Caches(binding, entity),
         };
     }
 

@@ -2689,7 +2689,7 @@ public sealed class PlanBuilder
         _catalog = catalog;
         var bindings = sources.Bindings;
         _catalogFeatures = new CatalogFeatures(
-            catalog, schema, _scope!, _diagnostics, CatalogLabel, _features, source => FeaturePlan.NeedsWholeTable(bindings, source), whole.Failed);
+            catalog, schema, _scope!, _diagnostics, CatalogLabel, _features, (source, entity) => FeaturePlan.NeedsWholeTable(bindings, source, entity), whole.Failed);
         schema.AttachFeatures(_catalogFeatures);
     }
 

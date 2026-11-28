@@ -547,7 +547,11 @@ public sealed class OperatorCompileContext
         return true;
     }
 
-    /// <summary>The node's cache of a call: its times and version checked at their keys, over the tiers the environment binds for the pipeline.</summary>
+    /// <summary>
+    /// The node's cache of a call: its times and version checked at their keys, over the tiers the environment binds for
+    /// the pipeline. With no setting at all, a cache that keeps nothing and asks the environment for nothing: the node's
+    /// calls for one result within a request run the pipeline once.
+    /// </summary>
     private void DeclareCallCache(PipelineCall call, PipelineCallCacheConfig cache, string cacheKey)
     {
         var at = Pointer + "/config" + cacheKey;
@@ -555,9 +559,19 @@ public sealed class OperatorCompileContext
         long ttlMs = 0;
         if (cache.TtlMs is not { } ttl)
         {
-            ok = false;
-            _diagnostics.Error("CACHE_TTL", Artifact, at, $"The cache of node '{NodeId}' has no 'ttl_ms'.",
-                "add how long a result of the call is served, in milliseconds, e.g. \"ttl_ms\": 3600000");
+            if (Features.Cache.CacheSettings.Unkept(null, cache.StaleIfErrorMs, cache.Version) is not { } given)
+            {
+                call.Cache = new PipelineCallCache(_clients.RequestPipelineCache(call.PipelineId), Features.Cache.CachePolicy.Unlimited, null);
+                return;
+            }
+
+            // One error, whatever those settings' values and whatever the environment binds: whether any of it applies
+            // is what there is to decide first.
+            HasErrors = true;
+            _diagnostics.Error("CACHE_TTL", Artifact, at, $"The cache of node '{NodeId}' gives {given} but no 'ttl_ms'.",
+                "add how long a result of the call is served, in milliseconds, e.g. \"ttl_ms\": 3600000; "
+                + $"or remove {given}: a cache with no settings keeps nothing, and has the calls of one request share a result");
+            return;
         }
         else if (!Features.Cache.CacheSettings.TryTtl(ttl, _diagnostics, Artifact, at))
         {

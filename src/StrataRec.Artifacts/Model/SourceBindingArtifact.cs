@@ -167,12 +167,16 @@ public sealed class UpdateSourceBinding
 /// only, <see cref="PipelineCacheBinding"/>: the calling nodes give the times). Each value is served for <see cref="TtlMs"/> (RFC 9111 <c>max-age</c>) and may be served
 /// <see cref="StaleIfErrorMs"/> longer when the origin (the connector, the service) fails (RFC 5861
 /// <c>stale-if-error</c>). It is kept in process (<see cref="Memory"/>), in a store the deployment's instances share
-/// (<see cref="Distributed"/>), or both: at least one.
+/// (<see cref="Distributed"/>), or both. A cache with no member at all (<c>"cache": {}</c>) keeps nothing: the reads of
+/// one request share a value (a context entity's features, a call of a service about no items), and the next request
+/// asks the origin again.
 /// </summary>
 public sealed class CacheBinding
 {
-    [Description("Required: how long a value fetched from the origin (the connector, or the service) is served, in milliseconds. " +
-        "Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together.")]
+    [Description("How long a value fetched from the origin (the connector, or the service) is served, in milliseconds: required " +
+        "with a tier. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire " +
+        "together. A cache with no member at all, \"cache\": {}, keeps nothing: the reads of one request share a value " +
+        "(the features of the request's user, a call of a service about no items) and the next request asks the origin again.")]
     public long? TtlMs { get; init; }
 
     [Description("How much longer (milliseconds, default 0) an expired value may be served when the origin fails or times " +

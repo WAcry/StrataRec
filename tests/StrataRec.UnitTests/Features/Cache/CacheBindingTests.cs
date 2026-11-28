@@ -27,16 +27,61 @@ public class CacheBindingTests
         Assert.Equal(60_000, rig.Tables["item_store"].Cache!.Options.TtlMs);
     }
 
-    [Fact]
-    public void ACacheBinding_WithoutItsRequiredSettings_ReportsEachAtTheBinding()
+    /// <summary>
+    /// A cache says how long its tiers serve a value, or says nothing and keeps nothing. A tier without a time, and a
+    /// time or a version without a tier, are one error at the cache, whatever the values given: whether they apply is
+    /// what there is to decide first.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "memory": { "max_bytes": "64MiB" } }""", "CACHE_TTL", "\"ttl_ms\": 60000")]
+    [InlineData("""{ "ttl_ms": 60000 }""", "CACHE_TIERS", "\"memory\": { \"max_bytes\": \"64MiB\" }")]
+    [InlineData("""{ "ttl_ms": 60000 }""", "CACHE_TIERS", "or remove 'ttl_ms': a cache with no settings keeps nothing")]
+    [InlineData("""{ "ttl_ms": -1, "version": "a b" }""", "CACHE_TIERS", "or remove 'ttl_ms' and 'version':")]
+    [InlineData("""{ "stale_if_error_ms": 1000 }""", "CACHE_TIERS", "or remove 'stale_if_error_ms':")]
+    public void ATierWithoutATime_OrATimeWithoutATier_IsOneErrorAtTheCache(string cache, string code, string hint)
     {
-        var items = Errors(Build("""{ "cache": { } }"""));
+        var error = Assert.Single(Errors(Build($$"""{ "connector": "memory@1", "cache": {{cache}} }""")));
+
+        Assert.Equal((code, "/sources/item_store/cache"), (error.Code, error.Pointer));
+        Assert.Contains(hint, error.Hint);
+    }
+
+    /// <summary>
+    /// A cache with no settings keeps nothing: every request asks the connector. It is the cache of a context entity's
+    /// record, which the reads of one request share; for the candidates' keys, whose reads share nothing, the binding is
+    /// a fetch of the features a node reads, not of whole records nothing would keep.
+    /// </summary>
+    [Fact]
+    public async Task ACacheWithNoSettings_KeepsNothing_AndIsAFetchOfTheCandidatesKeys()
+    {
+        var connector = ScriptedConnector.Values((key, _) => key / 1000.0);
+        var rig = new FeatureTestRig().Source("store", connector);
+        rig.Bind("store", new FeatureSourceBinding { Connector = TestConnectorFactory.TypeName, TimeoutMs = FeatureTestRig.UntimedMs, Cache = new CacheBinding() });
+        var ctr = rig.Physical("user.ctr", FeatureTestRig.User, ColumnType.Float64, "store");
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "store");
+        rig.Physical("item.views", FeatureTestRig.Item, ColumnType.Float64, "store");
+        rig.Build();
 
         Assert.Equal(
-            new[] { ("BINDING_TYPE_UNKNOWN", "/sources/item_store"), ("CACHE_TTL", "/sources/item_store/cache"), ("CACHE_TIERS", "/sources/item_store/cache") },
-            items.Select(d => (d.Code, d.Pointer)));
-        Assert.Contains("\"ttl_ms\": 60000", items[1].Hint);
-        Assert.Contains("\"memory\": { \"max_bytes\": \"64MiB\" }", items[2].Hint);
+            [("item", SupplyMode.Fetch), ("user", SupplyMode.Cache)],
+            rig.Plan.Groups.Select(g => (g.Entity.Name, g.Supply.Mode)).Order());
+        var table = Assert.Single(rig.Tables).Value;
+        Assert.False(table.Cache!.Kept || table.Cache.Memory);
+
+        for (var read = 0; read < 2; read++)
+        {
+            var request = rig.NewRequest([3000], userId: 50);
+            request.Fetcher.StartContextFetch(new[] { ctr }, CancellationToken.None);
+            Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(ctr, clicks)).State);
+            Assert.Equal((0.05, 3.0), (request.ContextValue(ctr).AsFloat64(), request.Value(clicks, 0).AsFloat64()));
+            Assert.Equal(0, rig.WriteBack("store")); // nothing was handed to a writer
+        }
+
+        Assert.Equal(0, table.Pin().RecordCount);
+        Assert.Equal(2, connector.Calls.Count(c => c.Keys.Length == 0 && c.ContextKey.Int64Value == 50));
+        var ofItems = connector.Calls.Where(c => c.Keys.Length == 1).ToList();
+        Assert.Equal(2, ofItems.Count);
+        Assert.All(ofItems, c => Assert.Equal(["clicks"], c.Fields)); // what the node reads, as a fetch asks: a cache's miss asks for the whole record
     }
 
     [Fact]

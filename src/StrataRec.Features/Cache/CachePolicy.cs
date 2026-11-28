@@ -22,6 +22,13 @@ public sealed class CachePolicy
 
     private const double Jitter = 0.1;
 
+    /// <summary>
+    /// The policy by which no record is ever past its time (the longest <c>ttl_ms</c>): of what does not judge records by
+    /// their age itself. The table of a pipeline's results, whose calling nodes each judge by their own times; and a cache
+    /// with no tier, whose records are the request's that got them and are gone with it.
+    /// </summary>
+    internal static CachePolicy Unlimited { get; } = new(CacheSettings.MaxMs);
+
     public CachePolicy(long ttlMs, long staleIfErrorMs = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ttlMs);

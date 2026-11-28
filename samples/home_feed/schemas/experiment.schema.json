@@ -1315,7 +1315,7 @@
                                   ],
                                   "properties": {
                                     "ttl_ms": {
-                                      "description": "Required: how long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together.",
+                                      "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: the calls for one result within a request then run the pipeline once, and the next request runs it again.",
                                       "type": [
                                         "integer",
                                         "null"
@@ -1415,7 +1415,7 @@
                             ],
                             "properties": {
                               "ttl_ms": {
-                                "description": "Required: how long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together.",
+                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: the calls for one result within a request then run the pipeline once, and the next request runs it again.",
                                 "type": [
                                   "integer",
                                   "null"
@@ -1557,7 +1557,7 @@
                             ],
                             "properties": {
                               "ttl_ms": {
-                                "description": "Required: how long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together.",
+                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: the calls for one result within a request then run the pipeline once, and the next request runs it again.",
                                 "type": [
                                   "integer",
                                   "null"

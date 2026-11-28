@@ -252,7 +252,8 @@ internal sealed class FeatureSourceResolver
     {
         SupplyMode.Fetch => SupportsKey(supply, entity) ? GroupSupply.Fetch(supply.Connector!, supply.TimeoutMs, supply.MaxBatch) : null,
         SupplyMode.Local => LocalTable(supply, entity, members) is { } table ? GroupSupply.Local(table) : null,
-        SupplyMode.Cache => CacheGroup(supply, entity, members),
+        SupplyMode.Cache when Caches(supply.Binding, entity) => CacheGroup(supply, entity, members),
+        SupplyMode.Cache => SupportsKey(supply, entity) ? GroupSupply.Fetch(supply.Connector!, supply.TimeoutMs, supply.MaxBatch) : null,
         SupplyMode.Service => OutputsServeTheirReaders(supply, members) ? GroupSupply.ForService(supply.Service!, supply.TimeoutMs) : null,
     };
 
@@ -354,6 +355,16 @@ internal sealed class FeatureSourceResolver
 
         return true;
     }
+
+    /// <summary>
+    /// Whether the features of <paramref name="entity"/> are read through the cache of a fetch binding that has one.
+    /// Through a cache with a tier, every entity's. Through one with none (<c>"cache": {}</c>), a context entity's alone:
+    /// a request reads one record of it, which its runs share. The reads of candidates' keys share nothing, and are
+    /// fetched as from a binding without a cache (only the features a node needs, ahead of the node) rather than pay
+    /// for whole records nothing keeps.
+    /// </summary>
+    internal static bool Caches(FeatureSourceBinding binding, EntityDefinition entity) =>
+        binding.Cache is { } cache && (CacheSettings.HasTier(cache) || entity.IsContextScoped);
 
     /// <summary>A cache group: its table, its connector's support of the key, and where a miss's record takes each table
     /// field from.</summary>
