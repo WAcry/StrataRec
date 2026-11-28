@@ -8,10 +8,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>
-/// What a cache read allocates: a read whose keys are all fresh in the table is a local read and
-/// allocates nothing at any key count; a read that misses allocates what resolving the misses needs, measured here.
-/// </summary>
 [Collection(AllocationMeasurement.Name)]
 public class CacheAllocationTests(ITestOutputHelper output)
 {
@@ -40,18 +36,10 @@ public class CacheAllocationTests(ITestOutputHelper output)
         output.WriteLine($"L1 miss, distributed hit: 100 keys {fromStore[0]} B, 1000 keys {fromStore[1]} B ({(fromStore[1] - fromStore[0]) / 900.0:F1} B/key)");
         output.WriteLine($"L1 miss, connector: 100 keys {fromOrigin[0]} B, 1000 keys {fromOrigin[1]} B ({(fromOrigin[1] - fromOrigin[0]) / 900.0:F1} B/key)");
 
-        // The write-back is the per-key cost: a key and a record reference for the table's writer (32 B), and from the
-        // connector the encoded record (33 B here; the distributed tier, when there is one, adds its entry). With a
-        // distributed tier, each miss's key text too (32 B for these int64 keys; formatted once, for its read and its
-        // write-back, where a store used to format it itself). Bounded, so a regression that allocates per field or per row shows.
         Assert.True((fromStore[1] - fromStore[0]) / 900.0 < 96, $"{fromStore[0]} B, {fromStore[1]} B");
         Assert.True((fromOrigin[1] - fromOrigin[0]) / 900.0 < 96, $"{fromOrigin[0]} B, {fromOrigin[1]} B");
     }
 
-    /// <summary>
-    /// A cache with only the distributed tier keeps nothing in process, so its hits are not gathered for the table's
-    /// writer: a key and a record reference a hit, which the writer of a cache without that tier dropped unread.
-    /// </summary>
     [Fact]
     public void HitsOfTheDistributedTier_AreNotGatheredForAnInProcessTierTheCacheDoesNotHave()
     {
@@ -65,10 +53,6 @@ public class CacheAllocationTests(ITestOutputHelper output)
         Assert.True(kept - passedOn >= 1_000 * 24, $"{kept} B with an in-process tier, {passedOn} B without");
     }
 
-    /// <summary>
-    /// A record holds every field of its source; a read fills the ones its node reads. A list of strings nobody reads is
-    /// walked, not decoded: decoding it cost an array and a string per tag for every record.
-    /// </summary>
     [Fact]
     public void AStringListNobodyReads_IsNotDecoded()
     {
@@ -97,14 +81,12 @@ public class CacheAllocationTests(ITestOutputHelper output)
         // What reading the tags too costs is some 1.9 MB; the number alone stays what a record without a list costs.
         Assert.True(number < 200_000, $"{number} B");
 
-        // And a read of the list still gets it.
         var request = rig.NewRequest([7L]);
         Assert.True(request.Fetcher.EnsureAsync([tags], CancellationToken.None).IsCompletedSuccessfully);
         Assert.Equal("tag-0007-23", request.Value(tags, 0).AsStringList()[Tags - 1]);
         request.Memory.Release();
     }
 
-    /// <summary>A distributed tier holding prepared records by int64 key.</summary>
     private sealed class RecordStore : ICacheStore
     {
         public string StoreType => TestCacheStoreFactory.TypeName;
@@ -149,7 +131,6 @@ public class CacheAllocationTests(ITestOutputHelper output)
         rig.WriteBack("item_store");
     }
 
-    /// <summary>Bytes the first ensure allocates beyond a second one with nothing to read: best of three after a warm-up.</summary>
     private static long MeasureHits(FeatureTestRig rig, int[] features, int keys)
     {
         var candidates = Enumerable.Range(1, keys).Select(i => (long)i).ToArray();
@@ -183,8 +164,7 @@ public class CacheAllocationTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// Bytes of a whole request whose keys all miss the table: best of three after a warm-up. The table's writer does not
-    /// run, so what the requests hand it waits in its queue and the table stays empty.
+    /// The table's writer does not run, so what the requests hand it waits in its queue and the table stays empty.
     /// </summary>
     private static long Measure(FeatureTestRig rig, int[] features, int keys)
     {
@@ -195,7 +175,7 @@ public class CacheAllocationTests(ITestOutputHelper output)
             var before = GC.GetAllocatedBytesForCurrentThread();
             var request = rig.NewRequest(candidates);
             var read = request.Fetcher.EnsureAsync(features, CancellationToken.None);
-            var completed = read.IsCompletedSuccessfully; // the store and the connector answer synchronously
+            var completed = read.IsCompletedSuccessfully;
             var last = completed ? request.Value(features[0], keys - 1).AsFloat64() : double.NaN;
             request.Memory.Release();
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -210,7 +190,6 @@ public class CacheAllocationTests(ITestOutputHelper output)
         return best;
     }
 
-    /// <summary>Answers every key at once (score = key × 0.5, clicks = key) without allocating.</summary>
     private sealed class SynchronousConnector : IFeatureSourceConnector
     {
         public string ConnectorType => TestConnectorFactory.TypeName;
@@ -242,7 +221,6 @@ public class CacheAllocationTests(ITestOutputHelper output)
         }
     }
 
-    /// <summary>A distributed tier that has a fresh record of keys 1..n, answers at once and allocates nothing.</summary>
     private sealed class PreparedStore : ICacheStore
     {
         private ReadOnlyMemory<byte>[] _records = [];
@@ -270,7 +248,7 @@ public class CacheAllocationTests(ITestOutputHelper output)
             var into = records.Span;
             for (var i = 0; i < span.Length; i++)
             {
-                into[i] = _records[int.Parse(span[i], System.Globalization.CultureInfo.InvariantCulture)]; // the key's text: its decimal
+                into[i] = _records[int.Parse(span[i], System.Globalization.CultureInfo.InvariantCulture)];
             }
 
             return ValueTask.CompletedTask;

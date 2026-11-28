@@ -7,20 +7,13 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// The request's I/O drain (<see cref="FeatureFetcher.WhenIoCompleteAsync"/>) promises that every operation the request
-/// started has really finished, and the request memory is back once the request released it: here, operations that go on
-/// after the request stopped reading them.
-/// </summary>
 public class IoDrainTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// A candidate cache read the request stopped reading (another source's call failed the fill first) sends
-    /// its origin call once its distributed tier answered, after every call the request had sent completed. The drain
-    /// tracked the calls only, so it returned while the origin call was being sent, the memory still held. The read's
-    /// resolution, which starts it, is tracked now.
+    /// A candidate cache read the request stopped reading (another source's call failed the fill first) sends its
+    /// origin call once its distributed tier answered, after every call the request had sent completed.
     /// </summary>
     [Fact]
     public async Task TheDrain_WaitsForACacheReadTheRequestStoppedReading_AndTheOriginCallItSendsLater()
@@ -45,7 +38,7 @@ public class IoDrainTests
         var fill = request.EnsureAsync(broken, cached).AsTask();
         try
         {
-            Assert.Equal(1, store.Calls); // the read waits for its distributed tier
+            Assert.Equal(1, store.Calls);
             siblingDone.SetResult(FetchStatus.Ok); // recording it throws: the fill ends before it reads the cache read
             await Assert.ThrowsAsync<IOException>(() => fill.WaitAsync(Timeout, ct));
             request.Fetcher.EndRequest();
@@ -54,7 +47,7 @@ public class IoDrainTests
             var drain = request.Fetcher.WhenIoCompleteAsync();
             store.Answer(); // nothing for the key: the read sends it to the origin
             await originEntered.Task.WaitAsync(Timeout, ct);
-            Assert.False(drain.IsCompleted); // the origin call is being sent
+            Assert.False(drain.IsCompleted);
             originResume.Set();
             Assert.False(drain.IsCompleted);
             Assert.False(request.Memory.IsReturned);
@@ -73,11 +66,6 @@ public class IoDrainTests
         }
     }
 
-    /// <summary>
-    /// The drain tracked a call's connector, not its call site. A prefetch nobody read is recorded where its
-    /// connector's answer is observed; the drain returned once the connector completed, while the recording still read the
-    /// call's keys and staging and the memory was held. A call is done when both are.
-    /// </summary>
     [Fact]
     public async Task TheDrain_WaitsForAnUnreadPrefetch_ToBeRecorded_NotOnlyForItsConnector()
     {
@@ -89,14 +77,14 @@ public class IoDrainTests
         rig.Build();
         var hook = new BlockingRecord();
         var request = rig.NewRequest([1, 2], hook: hook);
-        request.Fetcher.Prefetch([score], ct); // never read
+        request.Fetcher.Prefetch([score], ct);
         request.Fetcher.EndRequest();
         request.Memory.Release();
 
         var answering = Task.Run(() => answer.SetResult(FetchStatus.Ok), ct);
         try
         {
-            await hook.Entered.Task.WaitAsync(Timeout, ct); // the connector completed; its call site is recording it
+            await hook.Entered.Task.WaitAsync(Timeout, ct);
             var drain = request.Fetcher.WhenIoCompleteAsync();
             Assert.False(drain.IsCompleted);
             Assert.False(request.Memory.IsReturned);
@@ -112,7 +100,6 @@ public class IoDrainTests
         }
     }
 
-    /// <summary>A store whose first read waits for <see cref="Answer"/>, then has nothing; later reads have nothing at once.</summary>
     private sealed class FirstReadWaits : ICacheStore
     {
         private readonly TaskCompletionSource _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -131,7 +118,6 @@ public class IoDrainTests
             ValueTask.CompletedTask;
     }
 
-    /// <summary>Records nothing, and throws when it records a call of <paramref name="source"/>.</summary>
     private sealed class FailingRecord(string source) : IFeatureCallHook
     {
         public bool Replays => false;
@@ -150,7 +136,6 @@ public class IoDrainTests
             throw new NotSupportedException();
     }
 
-    /// <summary>Records nothing; each recording says it began and waits for <see cref="Resume"/>.</summary>
     private sealed class BlockingRecord : IFeatureCallHook
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

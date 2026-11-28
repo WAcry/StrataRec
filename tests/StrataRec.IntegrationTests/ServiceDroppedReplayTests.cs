@@ -9,11 +9,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// A node that reads how many items its service added past the limit (<see cref="ServiceResponse.Dropped"/>) replays as it
-/// ran: the recording has the count. It replayed with none, and the node took another branch, with no
-/// gap to say so.
-/// </summary>
 public sealed class ServiceDroppedReplayTests
 {
     [Fact]
@@ -55,7 +50,6 @@ public sealed class ServiceDroppedReplayTests
         Replay = replay,
     };
 
-    /// <summary>Adds 11 when its service dropped one item past the limit of 2, 22 otherwise.</summary>
     private sealed class ReadsDropped : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("reads_dropped", 1, Effects.RowSource, typeof(NoSettings), "Reads the items its service dropped.");
@@ -82,7 +76,6 @@ public sealed class ServiceDroppedReplayTests
         }
     }
 
-    /// <summary>Adds three items whatever the limit.</summary>
     private sealed class Overflowing : IBindingFactory<IServiceClient>, IServiceClient
     {
         public string Type => "overflowing@1";

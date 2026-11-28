@@ -27,47 +27,7 @@ public sealed class ReplayBundle
     /// <remarks>
     /// A format version is the date its layout changed and that day's sequence (<c>2026-11-14.1</c>, then
     /// <c>2026-11-14.2</c>): it says when a bundle was laid out, and sorts as text. It changes also when what a bundle
-    /// records means something else for the same layout: 2026-11-20.2 batches calls evenly (Batching.Size), so a bundle
-    /// recorded before holds calls cut at other boundaries, which a replay could not answer as recorded: a model call is
-    /// matched as a whole and a recorded timeout belongs to its batch. 2026-11-20.3 adds the ignored arm's
-    /// reason <c>yielded</c>: a build before cannot read it, and refuses such a bundle at its format, with
-    /// a hint to record again, instead of at a reason it does not know. 2026-11-21.1 records each model output
-    /// with its element type, and model inputs of every declared type (their digests include it): tensors follow the
-    /// declared column types. 2026-11-21.2 records the result's columns at their declared types, and a
-    /// float32 request input recorded as the host gave it now replays as the nearest float, as it is served: the same
-    /// bundle would replay to other values in a build before. 2026-11-21.3 records each request input at the type of the
-    /// value the host gave (a fallback pipeline may declare it otherwise), and a computation the binder folds to a name
-    /// (<c>max(col.x)</c>) is no longer a reference: result types and model input digests of a bundle before can differ.
-    /// 2026-11-21.4 records every call but a feature fetch as one service call (<c>service_calls</c>), a
-    /// model's and a recall's alike: a recall's query is a digest of its inputs, as a model's, and only the outputs the
-    /// operator reads are recorded. 2026-11-21.5 has the same layout, but a service sees only its call's inputs: in a bundle
-    /// before, a recall service could pick its answer by a request field that no digest covers, and a replay that no longer
-    /// sends it would still find that answer, and call the run identical. 2026-11-21.6 digests a call about no items that
-    /// reads named outputs with its limit, a missing input of a call about items by its rows when its shape is per item,
-    /// and records why a call left its node Degraded; a recall query of a negative zero or of a declared float32 is sent
-    /// as served since: a bundle before could replay identical to a run whose answers changed. 2026-11-21.7 digests every
-    /// call about no items without its limit again (a recorded call answers the named outputs a call reads only at the
-    /// call's limit), and records the items a service added past a call's limit. 2026-11-21.8 records the service call of
-    /// a feature source in mode <c>service</c> with its source and no node. 2026-11-21.9 records the outputs each
-    /// call asked for (an output the service left unwritten is replayed so, and a failure answers only a call asking for the
-    /// same), and a feature source's call carries the request's seed: a bundle before replayed a source's failure for a
-    /// call asking for other outputs, and the answer of a call made without the seed. 2026-11-21.10 records the entity a
-    /// source's call computed: a source's two entities of the same arguments and outputs took each other's answers.
-    /// 2026-11-21.11 digests an item by what it saw of each input: a shared <c>[1, d]</c> input left the digest of the
-    /// same item in a batch of one another. 2026-11-21.12 adds what an item saw of each input to its digest as a digest of
-    /// its own, so a shared input is hashed once for a call, not once for every item; 2026-11-21.13 only when it is more
-    /// than a few values, and a few inline; 2026-11-21.14 only when it is more than four numbers or bools, and strings
-    /// always so; 2026-11-21.15 when it is more than sixteen numbers or bools, or strings. 2026-11-22.1 records the result's
-    /// request-level values (<c>values</c>, <c>value_types</c>): a bundle before has none, and its replay would differ by
-    /// every value the output returns. 2026-11-25.1 records the calls of other pipelines a run's nodes made
-    /// (<c>pipeline_calls</c>), each with what it returned: a build before cannot read them. 2026-11-26.1 numbers a node's
-    /// calls over the run, not over an attempt (a fallback node that ran for two nodes recorded two calls 0), and records
-    /// how many each attempt made, so a replay that skips an attempt recorded as timed out skips its calls too: a bundle
-    /// before has neither, and its second call would be answered with the first one's result. 2026-11-27.1 records where
-    /// a pipeline call's cached result comes from (<c>cached_from</c>): a build before cannot read it, and its replay would
-    /// lack what the node wrote of it. 2026-11-27.2 records how each call is named (<c>called_by</c>, of the call and of
-    /// the run a cached result comes from) and whether what it returned was degraded: a bundle before has neither, and
-    /// its replay would not degrade the node nor write which call computed a row.
+    /// records means something else for the same layout.
     /// </remarks>
     public const string CurrentFormat = "stratarec.replay_bundle/2026-11-27.2";
 

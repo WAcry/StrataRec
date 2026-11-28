@@ -5,7 +5,6 @@ using StrataRec.Artifacts.Storage;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary>Behaviour every <see cref="IArtifactStore"/> must have; run once per implementation.</summary>
 public abstract class ArtifactStoreContractTests
 {
     protected const string Pipeline = """
@@ -181,7 +180,7 @@ public sealed class FileSystemArtifactStoreTests : ArtifactStoreContractTests, I
         var id = await _store.PutAsync(Jsonc.Parse(Pipeline)!, TestContext.Current.CancellationToken);
         var path = _store.GetBlobPath(id);
         var bytes = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
-        bytes[^2] ^= 0x01; // same length, different content
+        bytes[^2] ^= 0x01;
         await File.WriteAllBytesAsync(path, bytes, TestContext.Current.CancellationToken);
 
         var ex = await Assert.ThrowsAsync<ArtifactIntegrityException>(async () => await _store.TryGetAsync(id, TestContext.Current.CancellationToken));

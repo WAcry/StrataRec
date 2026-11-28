@@ -5,30 +5,17 @@ using StrataRec.Core.Keys;
 
 namespace StrataRec.Features.Local;
 
-/// <summary>
-/// How a local table stores its keys: the one place that knows the canonical encoding of a key's parts.
-/// </summary>
 /// <remarks>
-/// <para>A one-part int64 key is the index's key itself: no encoding, no hash, nothing stored in the record. Every other
-/// key is <em>hashed</em>: the index holds the XXH3-64 (seed 0) of the key's canonical bytes, the record the bytes, and a
-/// lookup compares them, so keys whose hashes collide are told apart.</para>
 /// <para>The canonical bytes are the parts in declared order: an int64 as 8 bytes little-endian; a string as its UTF-16
-/// code units, preceded by its length in code units (int32 little-endian) unless it is the last part, whose length is the
-/// rest of the key. The layout fixes each part's type, so the encoding is unambiguous: no two tuples of one layout have
-/// the same bytes. A one-string key is its code units alone, as keys were before they had several parts: the same bytes,
-/// the same hash. The encoding lives in memory only (snapshots and update streams write keys as JSON); it may change with
-/// the binary.</para>
+/// code units, preceded by its length in code units (int32 little-endian) unless it is the last part, whose length is
+/// the rest of the key. The encoding lives in memory only; it may change with the binary.</para>
 /// </remarks>
 internal static class TableKeys
 {
-    /// <summary>Keys of up to this many bytes are encoded on the stack.</summary>
     public const int StackBytes = 256;
 
-    /// <summary>Whether keys of <paramref name="layout"/> are hashed (anything but one int64 part).</summary>
     public static bool IsHashed(EntityKeyLayout layout) => layout.PartCount != 1 || layout[0].Type != EntityKeyType.Int64;
 
-    /// <summary>The canonical length of a key with these parts, each encoded as its own type (so of its layout once
-    /// <see cref="Check"/> or <see cref="Matches"/> accepted it).</summary>
     public static int Length(ReadOnlySpan<EntityKey> parts)
     {
         var length = 0L;
@@ -70,10 +57,6 @@ internal static class TableKeys
         return at;
     }
 
-    /// <summary>
-    /// Null when <paramref name="parts"/> is a key of <paramref name="layout"/>: as many parts, each of its part's type;
-    /// otherwise what is wrong, for an exception or a diagnostic.
-    /// </summary>
     public static string? Check(EntityKeyLayout layout, ReadOnlySpan<EntityKey> parts)
     {
         if (parts.Length != layout.PartCount)
@@ -92,7 +75,6 @@ internal static class TableKeys
         return null;
     }
 
-    /// <summary>The layout's string parts as a bit mask (bit p for part p), for <see cref="Matches"/>.</summary>
     public static int StringMask(EntityKeyLayout layout)
     {
         var mask = 0;
@@ -117,11 +99,9 @@ internal static class TableKeys
         return mask == stringMask;
     }
 
-    /// <summary>E.g. <c>int64</c>, or <c>(int64,string)</c> for a key of several parts.</summary>
     public static string Describe(EntityKeyLayout layout) => layout.TypeText;
 }
 
-/// <summary>Room for the parts of one key on the stack.</summary>
 [InlineArray(EntityKeyLayout.MaxParts)]
 internal struct KeyPartBuffer
 {

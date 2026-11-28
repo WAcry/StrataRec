@@ -9,36 +9,20 @@ using StrataRec.Testing;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Which budgets a test of the home_feed sample runs under (see <see cref="HomeFeedTestHost"/>).</summary>
 internal enum SampleTiming
 {
-    /// <summary>
-    /// The default: a copy of the sample whose every budget is <see cref="HomeFeedTestHost.UntimedMs"/>
-    /// (<see cref="SampleBudgets.Relax"/>), so that no machine is slow enough to hit one and two runs of a request take
-    /// the same decisions. The fallback wiring is as written.
-    /// </summary>
     Untimed,
 
-    /// <summary>
-    /// The sample's budgets as written (ctr_ranker's 50 ms, the request files' 200 ms): for tests of those budgets, which
-    /// decide when a client answers instead of racing the clock, and for tests of the sample's own files.
-    /// </summary>
     AsWritten,
 }
 
-/// <summary>Compiles and runs the home_feed sample workspace (or a modified copy of it).</summary>
 /// <remarks>
-/// <para>The timing policy of every test of the sample lives here. The sample keeps a realistic budget: ctr_ranker gives
-/// its model 50 ms and falls back to ctr_backup. A cold call takes about 20 ms on a dev box and can take more than 50 ms
-/// on a busy CI runner, and an answer after the budget is a timeout however it arrived, so a test comparing
-/// two live runs would sometimes compare the backup's scores with the model's. Tests therefore run on an untimed copy
-/// (<see cref="SampleTiming.Untimed"/>) and ask for <see cref="SampleTiming.AsWritten"/> when the budgets are what they
-/// test. A budget a test writes into its own edits is the test's.</para>
-/// <para>Requests built here, and by the other request helpers of the sample tests, use <see cref="Deadline"/>.</para>
+/// <para>Tests run on an untimed copy (<see cref="SampleTiming.Untimed"/>) and ask for
+/// <see cref="SampleTiming.AsWritten"/> when the budgets are what they test. A budget a test writes into its own edits
+/// is the test's.</para>
 /// </remarks>
 internal sealed class HomeFeedTestHost
 {
-    /// <inheritdoc cref="SampleBudgets.UntimedMs"/>
     public const int UntimedMs = SampleBudgets.UntimedMs;
 
     private static readonly Lazy<string> UntimedSample = new(CreateUntimedSample);
@@ -51,7 +35,6 @@ internal sealed class HomeFeedTestHost
         Environment = new PlanEnvironment { BaseDirectory = root };
     }
 
-    /// <summary>The deadline of an untimed request (<see cref="UntimedMs"/>).</summary>
     public static TimeSpan Deadline { get; } = TimeSpan.FromMilliseconds(UntimedMs);
 
     public string Root { get; }
@@ -63,8 +46,7 @@ internal sealed class HomeFeedTestHost
     public PlanEnvironment Environment { get; }
 
     /// <summary>
-    /// What the plans this host compiles bind (the sample binds <c>author_store</c> locally). Plans compiled by
-    /// <see cref="Compile()"/> keep their tables and clients loaded for the life of the test.
+    /// Plans compiled by <see cref="Compile()"/> keep their tables and clients loaded for the life of the test.
     /// </summary>
     public BindingHost Bindings { get; } = new();
 
@@ -80,7 +62,6 @@ internal sealed class HomeFeedTestHost
 
     public static HomeFeedTestHost Load(SampleTiming timing = SampleTiming.Untimed) => Open(SampleRoot(timing));
 
-    /// <summary>Copies the sample to a temp directory, lets the test edit files, and loads the copy.</summary>
     public static HomeFeedTestHost LoadModified(Action<string> edit, SampleTiming timing = SampleTiming.Untimed)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-home-feed-").FullName;
@@ -89,10 +70,8 @@ internal sealed class HomeFeedTestHost
         return Open(root);
     }
 
-    /// <summary>Compiles the plan and loads what it binds, as the engine does before serving it.</summary>
     public PlanCompilation Compile() => Compile(Request);
 
-    /// <summary>Compiles <paramref name="request"/> (this host's, changed: experiments added) and loads what it binds.</summary>
     public PlanCompilation Compile(PlanCompileRequest request)
     {
         var lease = Bindings.OpenLease();
@@ -102,7 +81,6 @@ internal sealed class HomeFeedTestHost
         return compilation;
     }
 
-    /// <summary><see cref="PlanCompiler.CompileMerged"/> with the local tables loaded, like <see cref="Compile()"/>.</summary>
     public PlanCompilation CompileMerged(IReadOnlyList<string> arms)
     {
         var lease = Bindings.OpenLease();

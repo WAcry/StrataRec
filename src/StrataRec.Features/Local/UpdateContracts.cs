@@ -9,8 +9,6 @@ namespace StrataRec.Features.Local;
 
 /// <summary>
 /// A background feed of a local feature table: a snapshot loader, an update stream consumer, or both.
-/// Like a connector, it decodes bytes straight into the writer (<see cref="IFeatureTableWriter.Begin(long, long)"/> and
-/// <see cref="RecordBuilder"/>), with no object per message.
 /// </summary>
 public interface IFeatureUpdateSource
 {
@@ -39,8 +37,8 @@ public interface IFeatureUpdateSource
 }
 
 /// <summary>
-/// The write side of a local feature table, as seen by update sources. Implemented by the engine
-/// (<see cref="LocalTableWriter"/>); there is one per table and it has a single writer.
+/// The write side of a local feature table, as seen by update sources; there is one per table and it has a single
+/// writer.
 /// </summary>
 /// <remarks>
 /// <para><b>Versions.</b> Every update carries a version: the event version for <c>local</c> tables, the write time for
@@ -275,7 +273,7 @@ public sealed class FeatureUpdateException : Exception
 
 /// <summary>
 /// A write would take a local table past its <c>max_bytes</c> even after compaction. For a <c>local</c> table the load
-/// fails and the source is unavailable; a <c>cache</c> table will evict instead (phase 2).
+/// fails and the source is unavailable; a <c>cache</c> table will evict instead.
 /// </summary>
 public sealed class LocalTableFullException : InvalidOperationException
 {

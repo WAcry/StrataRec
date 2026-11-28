@@ -8,11 +8,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>list&lt;float32&gt;</c>, <c>list&lt;float64&gt;</c> and <c>list&lt;bool&gt;</c> end to end: request
-/// inputs, node outputs read by later expressions, a float list that does not fit float32 replaced as a whole and
-/// counted in <see cref="PipelineResult.NonFiniteValues"/>, results and log taps.
-/// </summary>
 public class ListElementEndToEndTests
 {
     [Fact]
@@ -32,7 +27,6 @@ public class ListElementEndToEndTests
         Assert.True(result.Succeeded, result.Error);
         var byId = result.Items.ToDictionary(i => i.Id.Int64Value, i => i.Columns);
 
-        // Stored as float32: the values read back are the floats, printed as such.
         Assert.Equal(ScalarValue.FromFloat32List(new[] { 0.1f, 2.5f }), byId[1]["w"]);
         Assert.Equal("[0.1, 2.5]", byId[1]["w"].ToString());
         Assert.Equal(ScalarValue.FromFloat32List(new[] { 0.1f, 2.5f }), byId[2]["w"]);
@@ -42,9 +36,8 @@ public class ListElementEndToEndTests
         Assert.True(byId[3]["wn"].IsMissing);
         Assert.Equal(2, result.NonFiniteValues);
 
-        // A later node reads the float32 list column: size, and membership compared as float64.
         Assert.Equal(12L, byId[1]["n"].AsInt64()); // 2 elements, 2.5 among them
-        Assert.Equal(1L, byId[3]["n"].AsInt64()); // the default [0.0]
+        Assert.Equal(1L, byId[3]["n"].AsInt64());
 
         Assert.Equal(new[] { true, false }, byId[1]["f"].AsBoolList().ToArray());
         Assert.Equal(new[] { false }, byId[3]["f"].AsBoolList().ToArray());
@@ -71,7 +64,7 @@ public class ListElementEndToEndTests
 
         Assert.False(rejected.Succeeded);
         Assert.Contains("Input 'flags' must be an array of true or false (list<bool>)", rejected.Error);
-        Assert.True(converted.Succeeded, converted.Error); // integers into a float list, as [2, 3] in JSON
+        Assert.True(converted.Succeeded, converted.Error);
         Assert.Equal(ScalarValue.FromFloat64List(new double[] { 2, 3 }), converted.Items[0].Columns["w"]);
     }
 

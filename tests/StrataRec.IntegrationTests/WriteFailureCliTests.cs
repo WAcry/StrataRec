@@ -3,11 +3,6 @@ using StrataRec.Hosting.Manifests;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// What the command line cannot write is a diagnostic at the option that names it, with what the system said and a hint,
-/// not an exception and its stack: the store of build, publish and revoke, the files of build --manifest and
-/// run --record; and a store whose pointers cannot be listed is not one that publishes nothing.
-/// </summary>
 public sealed class WriteFailureCliTests
 {
     [Fact]
@@ -15,7 +10,7 @@ public sealed class WriteFailureCliTests
     {
         if (OperatingSystem.IsWindows() || Environment.UserName == "root")
         {
-            return; // permissions
+            return;
         }
 
         await StoreUnwritableAsync();
@@ -71,13 +66,11 @@ public sealed class WriteFailureCliTests
         var store = ManifestStores.NewStore();
         var scratch = Directory.CreateTempSubdirectory("stratarec-out-").FullName;
 
-        // A directory that does not exist yet is created, as run --record, init and schema --out do.
         var nested = Path.Combine(scratch, "releases", "local", "home_feed.json");
         var (code, _, errors) = await Cli("build", "-c", root, "-s", store, "-m", nested);
         Assert.True(code == 0, errors);
         Assert.True(File.Exists(nested));
 
-        // A file where its directory belongs: said at the option, and run prints the result of the request all the same.
         var blocker = Path.Combine(scratch, "blocker");
         File.WriteAllText(blocker, "x");
         (code, _, errors) = await Cli("build", "-c", root, "-s", store, "-m", Path.Combine(blocker, "m.json"));
@@ -116,7 +109,6 @@ public sealed class WriteFailureCliTests
             Assert.DoesNotContain("nothing is published", output);
         }
 
-        // An environment directory that is a file, when it is asked for or listed.
         File.Delete(Path.Combine(store, "pointers"));
         Directory.CreateDirectory(Path.Combine(store, "pointers"));
         File.WriteAllText(Path.Combine(store, "pointers", "local"), "x");
@@ -140,7 +132,6 @@ public sealed class WriteFailureCliTests
         File.WriteAllText(path, edited);
     }
 
-    /// <summary>Every directory and file under <paramref name="root"/> made read-only, or writable again.</summary>
     [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     private static void SetWritable(string root, bool writable)
     {

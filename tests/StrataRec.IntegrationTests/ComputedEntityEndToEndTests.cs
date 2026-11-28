@@ -16,11 +16,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Entities with args: a service computes their features once per request from the arguments, a request input
-/// or a context feature of any type, through the service's own path: its cache, the source's and its own timeout, the
-/// recording and the replay. A failed argument fails the entity without a call; a failed call fails its features.
-/// </summary>
 public sealed class ComputedEntityEndToEndTests
 {
     [Fact]
@@ -42,7 +37,7 @@ public sealed class ComputedEntityEndToEndTests
         Assert.All(result.Items, item =>
         {
             Assert.Equal(0.75, item.Columns["score"].AsFloat64(), 6); // a float32 output for the float32 feature
-            Assert.Equal("sporty", item.Columns["label"].AsString()); // a text output
+            Assert.Equal("sporty", item.Columns["label"].AsString());
             Assert.Equal([3L, 4L], item.Columns["topics"].AsInt64List().ToArray());
         });
     }
@@ -86,7 +81,7 @@ public sealed class ComputedEntityEndToEndTests
         var boost = Assert.Single(result.Outcomes, n => n.NodeId == "boost");
         Assert.Equal(NodeOutcomeKind.Failed, boost.Kind);
         Assert.Contains("source 'intent' failed: service 'intent_model': the model is down", boost.Detail);
-        Assert.All(result.Items, item => Assert.True(item.Columns["s"].IsMissing)); // not written
+        Assert.All(result.Items, item => Assert.True(item.Columns["s"].IsMissing));
     }
 
     [Fact]
@@ -105,11 +100,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Contains("source 'intent' timed out", boost.Detail);
     }
 
-    /// <summary>
-    /// An output of another type than the feature's, or of several values for a scalar, fails the call, saying what the
-    /// feature takes: no number is widened or rounded (a float64 output was rounded to the
-    /// float32 feature, and an int32 list widened to an int64 one).
-    /// </summary>
     [Theory]
     [InlineData("string", "output 'score' as string, which a float32 feature cannot take: it takes float32, the type it is declared with")]
     [InlineData("float64", "output 'score' as float64, which a float32 feature cannot take: it takes float32, the type it is declared with")]
@@ -126,7 +116,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Contains(error, boost.Detail);
     }
 
-    /// <summary>A list's elements are of the feature's element type too: int32 elements are not widened to an int64 list.</summary>
     [Fact]
     public async Task AListOfAnotherElementType_FailsTheCall()
     {
@@ -139,7 +128,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Contains("output 'topics' as int32, which a list<int64>? feature cannot take: it takes int64, the type it is declared with", result.Error);
     }
 
-    /// <summary>A service's cache keys the answer by the arguments: requests with the same ones share it.</summary>
     [Fact]
     public async Task TheServicesCache_AnswersRequestsWithTheSameArguments()
     {
@@ -172,10 +160,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Equal(["query:String[]=shoes", "query:String[]=hats"], service.Calls.Select(c => c.Inputs.Single(i => i.StartsWith("query", StringComparison.Ordinal))));
     }
 
-    /// <summary>
-    /// Values past the TTL that the service's cache answers with, when the service fails, degrade the entity's features
-    /// (and the node reading them), as a connector's partial answer does; a replay of the request is identical.
-    /// </summary>
     [Fact]
     public async Task AStaleAnswerOfTheServicesCache_DegradesItsFeatures_AndReplaysAsServed()
     {
@@ -199,7 +183,7 @@ public sealed class ComputedEntityEndToEndTests
             Assert.True((await engine.ExecuteAsync(Request("warm-" + attempt), token)).Succeeded);
             if (service.Calls.Count == calls)
             {
-                break; // answered from the cache
+                break;
             }
 
             Assert.True(attempt < 2_000, "no request was answered from the cache");
@@ -218,10 +202,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.All(replay.Report.Nodes, n => Assert.False(n.Changed, $"{n.Node}: {n.Recorded} -> {n.Replayed}"));
     }
 
-    /// <summary>
-    /// The call is recorded as the source's (no node), in role fetch, and a replay answers it from the recording without
-    /// calling the service; a replay whose arguments changed has no answer for it: a gap, and the features fail.
-    /// </summary>
     [Fact]
     public async Task ARecordedCall_IsTheSourcesAndReplaysAsRecorded_AndChangedArgumentsAreAGap()
     {
@@ -237,7 +217,7 @@ public sealed class ComputedEntityEndToEndTests
         var again = await Execute(plan, Inputs(user: 7, query: "shoes", recent: [11]), replay: replay);
         Assert.True(again.Succeeded, again.Error);
         Assert.Empty(replay.Gaps);
-        Assert.Single(service.Calls); // the live run's
+        Assert.Single(service.Calls);
         Assert.Equal(live.Items.Select(i => i.Columns["label"].AsString()), again.Items.Select(i => i.Columns["label"].AsString()));
 
         var changed = RunReplay.Create(live.Recording, "/runs/0");
@@ -284,7 +264,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Contains(diagnostics, d => d.Code == "SOURCE_SERVICE_ENTITY" && d.Pointer == "/sources/users/service" && d.Message.Contains("entity 'user' has a key"));
     }
 
-    /// <summary>An argument that leads back to its entity is a cycle, as a key part that does.</summary>
     [Fact]
     public void AnArgumentLeadingBackToItsEntity_IsAKeyCycle()
     {
@@ -296,10 +275,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Contains(diagnostics, d => d.Code == "ENTITY_KEY_CYCLE" && d.Message.Contains("leads to a key cycle", StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// An element of a list of strings the service left unwritten fails the feature, and an argument reading it sends no
-    /// call (the null element reached the later call's digest and failed the recording).
-    /// </summary>
     [Fact]
     public async Task AStringListWithAnUnwrittenElement_FailsTheFeature_AndAnArgumentReadingItSendsNoCall()
     {
@@ -316,14 +291,9 @@ public sealed class ComputedEntityEndToEndTests
 
         Assert.False(result.Succeeded);
         Assert.Contains("answered output 'topics' with element 1 of 2 unwritten", result.Error);
-        Assert.Single(service.Calls); // intent's; later's argument failed
+        Assert.Single(service.Calls);
     }
 
-    /// <summary>
-    /// Two entities of one source are two calls, each answered by its own in a replay: a recorded call keeps the outputs it
-    /// asked for, so the call of the entity that reads other outputs does not take the other's failure
-    /// (it did; and a first fix let one source compute one entity only, which a reload changed anyway).
-    /// </summary>
     [Fact]
     public async Task TwoEntitiesOfOneSource_AreTwoCalls_EachReplayedByItsOwn()
     {
@@ -336,7 +306,7 @@ public sealed class ComputedEntityEndToEndTests
         var inputs = Inputs(user: 7, query: "shoes", recent: null);
 
         var live = await Execute(plan, inputs, record: true);
-        Assert.True(live.Succeeded, live.Error); // boost skipped: intent's call (score) failed; other's (label) answered
+        Assert.True(live.Succeeded, live.Error);
         Assert.Equal(2, service.Calls.Count);
         var replay = RunReplay.Create(live.Recording!, "/runs/0");
         var again = await Execute(plan, inputs, replay: replay);
@@ -347,11 +317,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Equal(NodeOutcomeKind.Failed, Assert.Single(again.Outcomes, o => o.NodeId == "boost").Kind);
     }
 
-    /// <summary>
-    /// Two entities of one source whose calls are the same (arguments and outputs) are still each answered by its own in a
-    /// replay, made in whatever order: a source's call is recorded with its entity, as a node's with its node
-    /// (the replay made them in another order, and the transient failure of one went to the other).
-    /// </summary>
     [Fact]
     public async Task TwoEntitiesOfOneSourceMakingTheSameCall_AreEachReplayedByItsOwn_WhateverTheOrder()
     {
@@ -377,13 +342,9 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Equal((NodeOutcomeKind.Succeeded, NodeOutcomeKind.Failed), Boosts(live)); // other's call went first, and failed
         Assert.Equal(Boosts(live), Boosts(again));
         Assert.Empty(replay.Gaps);
-        Assert.Equal(2, service.Calls.Count); // the live run's
+        Assert.Equal(2, service.Calls.Count);
     }
 
-    /// <summary>
-    /// A replay counts a service source's fields in its feature stats, as a fetch's: read once, missing when the service
-    /// left the output unwritten or the call failed (a comparison's missing rate left them out).
-    /// </summary>
     [Theory]
     [InlineData("answered", 0)]
     [InlineData("omitted", 1)]
@@ -402,10 +363,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Equal((1L, missing), (stats.Requested, stats.Missing));
     }
 
-    /// <summary>
-    /// Two entities of one source each ask with the names their group built once, request after request: they were kept
-    /// for the last group only, and built again at every entity's call.
-    /// </summary>
     [Fact]
     public async Task TwoEntitiesOfOneSource_AskWithTheNamesTheirGroupBuiltOnce()
     {
@@ -431,10 +388,6 @@ public sealed class ComputedEntityEndToEndTests
         }
     }
 
-    /// <summary>
-    /// An output the service left unwritten is missing, live and in a replay of the same configuration, which neither
-    /// reports it as a gap nor takes it from another call that has it.
-    /// </summary>
     [Fact]
     public async Task AnOutputTheServiceLeftUnwritten_IsMissing_AndReplaysSo()
     {
@@ -447,14 +400,10 @@ public sealed class ComputedEntityEndToEndTests
         var again = await Execute(plan, inputs, replay: replay);
 
         Assert.True(live.Succeeded && again.Succeeded, live.Error ?? again.Error);
-        Assert.All(live.Items.Concat(again.Items), item => Assert.Equal(0.5, item.Columns["score"].AsFloat64(), 6)); // the default
+        Assert.All(live.Items.Concat(again.Items), item => Assert.Equal(0.5, item.Columns["score"].AsFloat64(), 6));
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// Two features of one field ask the service for it once, and both take its answer, of the one
-    /// type both are declared with: an output has one type.
-    /// </summary>
     [Fact]
     public async Task TwoFeaturesOfOneField_AskForItOnce()
     {
@@ -470,11 +419,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.All(result.Items, item => Assert.Equal((0.75, 0.75), (item.Columns["score"].AsFloat64(), item.Columns["alias"].AsFloat64())));
     }
 
-    /// <summary>
-    /// Two features reading one output as two types is a load error at the second's type, in name order: the service
-    /// answers the output once, and a feature takes only the type it is declared with (the plan
-    /// loaded, and every call failed, whichever type the service answered).
-    /// </summary>
     [Theory]
     [InlineData("intent.wide", "float64", "score", "as float64, but feature 'intent.score' reads it as float32")]
     [InlineData("intent.wide", "list<int32>", "topics", "as list<int32>, but feature 'intent.pair' reads it as list<int64,2>")]
@@ -493,11 +437,6 @@ public sealed class ComputedEntityEndToEndTests
             && d.Message.Contains(message, StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// Readers that one answer can serve load, and are served by one output: a list and a fixed-length list of its type,
-    /// a scalar and a list (the load check compared whole types, and rejected the list read as a
-    /// fixed-length list).
-    /// </summary>
     [Fact]
     public async Task ReadersOneAnswerServes_Load_AndShareTheOutput()
     {
@@ -518,10 +457,6 @@ public sealed class ComputedEntityEndToEndTests
         });
     }
 
-    /// <summary>
-    /// An argument may read a derived feature of its own entity: what it reads is in its expression, not in the entity
-    /// (the catalog reported a key cycle).
-    /// </summary>
     [Fact]
     public async Task AnArgumentReadingADerivedFeatureOfItsOwnEntity_IsNoCycle()
     {
@@ -536,7 +471,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Equal(["query:String[]=none"], Assert.Single(service.Calls).Inputs);
     }
 
-    /// <summary>The call carries the request's id and seed, as a node's does.</summary>
     [Fact]
     public async Task TheCall_CarriesTheRequestsIdAndSeed()
     {
@@ -549,10 +483,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Equal(("r", (long?)PipelineRequest.DefaultSeed("r")), (call.RequestId, call.Seed));
     }
 
-    /// <summary>
-    /// A source's call that the caller cancelled in the recording is cancelled in the replay too, whose own caller did not
-    /// cancel (it replayed as a timeout).
-    /// </summary>
     [Fact]
     public async Task ARecordedCancellation_ReplaysAsACancellation()
     {
@@ -575,10 +505,6 @@ public sealed class ComputedEntityEndToEndTests
         Assert.Contains("source 'intent' was cancelled", boost.Detail);
     }
 
-    /// <summary>
-    /// The fetch's drain waits for a source's call it abandoned at the source's timeout, as for a connector's;
-    /// the call holds the request memory until then either way.
-    /// </summary>
     [Fact]
     public async Task TheFetchsDrain_WaitsForASourcesCallItAbandoned()
     {
@@ -593,7 +519,7 @@ public sealed class ComputedEntityEndToEndTests
         {
             fetcher.StartContextFetch([feature.Index], TestContext.Current.CancellationToken);
             await fetcher.ContextStoredTask(feature.Index);
-            Assert.Equal(FeatureState.Failed, fetcher.ContextStoredState(feature.Index).State); // timed out
+            Assert.Equal(FeatureState.Failed, fetcher.ContextStoredState(feature.Index).State);
 
             var drained = fetcher.WhenIoCompleteAsync();
             await Task.Delay(50, TestContext.Current.CancellationToken);
@@ -653,7 +579,6 @@ public sealed class ComputedEntityEndToEndTests
         return compilation.Plan!;
     }
 
-    /// <summary>Every diagnostic of loading and compiling the workspace.</summary>
     private static List<ConfigDiagnostic> Diagnostics(string root)
     {
         var diagnostics = new DiagnosticBag();
@@ -667,10 +592,6 @@ public sealed class ComputedEntityEndToEndTests
         return all;
     }
 
-    /// <summary>
-    /// A workspace whose entity <c>intent</c> has args (a string and a list input, and the user's CTR, fetched first) and
-    /// three features of three kinds, which the boost node and the output read.
-    /// </summary>
     private static string Workspace(
         string intent = """{ "args": { "query": "ctx.request.query", "ctr": "ctx.user.ctr", "recent": "ctx.request.recent" } }""",
         string intentSource = """{ "mode": "service", "service": "intent_model", "timeout_ms": 5000 }""",
@@ -734,10 +655,6 @@ public sealed class ComputedEntityEndToEndTests
         return root;
     }
 
-    /// <summary>
-    /// <c>intent_test@1</c>: records each call (its inputs as <c>name:Type[shape]=values</c>) and answers <c>score</c>
-    /// 0.75 (float64), <c>label</c> "sporty" (a text) and <c>topics</c> [3, 4] (int32); or fails, or answers late.
-    /// </summary>
     private sealed class IntentService : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "intent_test@1";
@@ -758,15 +675,12 @@ public sealed class ComputedEntityEndToEndTests
         /// <summary><c>int32</c>, or two strings of which the second is left unwritten.</summary>
         public string Topics { get; init; } = "int64";
 
-        /// <summary>Fails the first call, as a service failing for a moment.</summary>
         public bool FailFirst { get; init; }
 
         private int _sent;
 
-        /// <summary>Fails a call that asks for this output.</summary>
         public string? FailWhenAsked { get; init; }
 
-        /// <summary>An output it leaves unwritten (<c>score</c>).</summary>
         public string? Omit { get; init; }
 
         /// <summary>Answers only once this completes, whatever its token.</summary>
@@ -785,7 +699,6 @@ public sealed class ComputedEntityEndToEndTests
 
         public IServiceClient Create(BindingContext context) => this;
 
-        /// <summary>Forgets the calls after the first <paramref name="kept"/>.</summary>
         public void Forget(int kept)
         {
             lock (_calls)
@@ -816,7 +729,7 @@ public sealed class ComputedEntityEndToEndTests
 
             if (Gate is { } gate)
             {
-                await gate.Task.ConfigureAwait(false); // ignores the token
+                await gate.Task.ConfigureAwait(false);
             }
 
             if (Fail || (FailWhenAsked is { } failing && call.Outputs.Span.Contains(failing)) || (FailFirst && Interlocked.Increment(ref _sent) == 1))
@@ -857,7 +770,7 @@ public sealed class ComputedEntityEndToEndTests
             }
             else
             {
-                response.GetValues<string>("topics", 2).Span[0] = "shoe"; // the second left unwritten
+                response.GetValues<string>("topics", 2).Span[0] = "shoe";
             }
 
             return ServiceStatus.Ok;

@@ -11,9 +11,7 @@ namespace StrataRec.Experiments.Compilation;
 /// </summary>
 /// <remarks>
 /// The typed <see cref="Pipeline"/> and <see cref="Catalog"/> always agree with <see cref="Document"/>, except that
-/// nodes and log taps are read from the document only: a merged node may be incomplete (a misspelled node id becomes a
-/// new node without <c>op</c>), and the node compiler reports that precisely per node instead of failing the whole
-/// pipeline's deserialization.
+/// nodes and log taps are read from the document only.
 /// </remarks>
 public sealed class PatchableView
 {
@@ -102,7 +100,7 @@ public sealed class PatchableView
             RequestColumns = requestColumns!,
             ParamSchema = paramSchema!,
             Params = (JsonObject)merged["params"]!,
-            Nodes = new Dictionary<string, NodeSpec>(), // read from Document (see remarks)
+            Nodes = new Dictionary<string, NodeSpec>(),
             FunnelGroups = funnelGroups!,
             LogTaps = new Dictionary<string, LogTapSpec>(),
             Output = p.Output,

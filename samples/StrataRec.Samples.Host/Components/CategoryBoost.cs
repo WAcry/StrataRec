@@ -29,28 +29,22 @@ public sealed class CategoryBoostConfig
 }
 
 /// <summary>
-/// <c>CategoryBoost@1</c>: a business rule as an operator. It multiplies a score by a per-category factor and writes the
-/// result to another column; a sort after it (<c>TopK@1</c>) turns that into the ranking.
+/// <c>CategoryBoost@1</c>: a business rule as an operator. It multiplies a score by a per-category factor and writes
+/// the result to another column; a sort after it (<c>TopK@1</c>) turns that into the ranking.
 /// </summary>
 /// <remarks>
-/// <para>How an operator is written:</para>
 /// <list type="bullet">
-/// <item>Effects: it only writes a column, so it declares <see cref="Effects.ColumnWriter"/> and nothing else. The
-/// engine enforces the declaration (filtering or reordering rows would throw), and data-flow checks and experiment
-/// footprints rely on it.</item>
-/// <item>Compile does every check, once per node variant: the config, the columns it reads (recorded as the node's reads,
-/// so the features it needs are fetched before it runs) and the column it writes. Errors point into the config with a
-/// hint; the request path checks nothing again.</item>
-/// <item>The compiled operator is immutable and shared by every request. A request's buffers come from its
-/// <see cref="Core.Memory.RequestMemory"/> and are never returned by the operator; per row it does array reads and one
-/// multiplication, and allocates nothing.</item>
-/// <item>Missing values: the score must be non-nullable (checked at compile). A row whose category is missing keeps its
-/// score; that is this operator's stated rule, not a default value standing in for the category.</item>
-/// <item>Budget and cancellation: it does no I/O and takes microseconds, so it has nothing to cancel; an attempt that
-/// returns after the node's budget has timed out all the same. A long CPU loop would check
-/// <see cref="OperatorContext.CancellationToken"/> between chunks. An operator that calls a service (a model, a recall
-/// source, any other) does it through <see cref="OperatorContext.CallAsync"/>, which bounds, records and replays the
-/// call (<c>StockFilter@1</c>, <see cref="StockFilterFactory"/>, is one).</item>
+/// <item>It only writes a column, so it declares <see cref="Effects.ColumnWriter"/> and nothing else; the engine
+/// enforces the declaration.</item>
+/// <item>Compile does every check, once per node variant: the config, the columns it reads (so the features it needs
+/// are fetched before it runs) and the column it writes. The request path checks nothing again.</item>
+/// <item>The compiled operator is immutable and shared by every request. Buffers come from the request's
+/// <see cref="Core.Memory.RequestMemory"/>; per row it allocates nothing.</item>
+/// <item>A row whose category is missing keeps its score: this operator's stated rule, not a default standing in for
+/// the category.</item>
+/// <item>It does no I/O, so it has nothing to cancel; a long CPU loop would check
+/// <see cref="OperatorContext.CancellationToken"/>. A service is called through <see cref="OperatorContext.CallAsync"/>
+/// (<see cref="StockFilterFactory"/> is one).</item>
 /// </list>
 /// </remarks>
 public sealed class CategoryBoostFactory : IOperatorFactory
@@ -136,13 +130,12 @@ public sealed class CategoryBoostFactory : IOperatorFactory
                 return ValueTask.CompletedTask;
             }
 
-            // A string column holds a string reference per row, and the rows of one category usually share an instance (the
-            // local table's, or the one a connector interned), so a row holding the previous row's instance reuses its factor
-            // without a lookup. A column not produced in this request has no categories: no row is boosted.
+            // A string column holds a string reference per row, and the rows of one category usually share an instance
+            // (the local table's, or the one a connector interned), so a row holding the previous row's instance reuses
+            // its factor without a lookup.
             var categories = context.Read(category) as StringColumn;
             var memory = context.Memory;
 
-            // The boosted score of each live row, by rank position.
             var floats = scores as ScalarColumn<float>;
             var doubles = scores as ScalarColumn<double>;
             if (floats is null && doubles is null)

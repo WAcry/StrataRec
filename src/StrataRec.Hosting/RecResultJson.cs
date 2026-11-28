@@ -269,7 +269,6 @@ public static class RecResultJson
         json.WriteEndObject();
     }
 
-    /// <summary>Named values as an object, in their order; nothing when there are none.</summary>
     private static void WriteNamed(Utf8JsonWriter json, string name, IReadOnlyList<ExplainValue> values)
     {
         if (values.Count == 0)
@@ -288,11 +287,10 @@ public static class RecResultJson
     }
 
     /// <summary>
-    /// A result's items as a JSON array, each <c>{ "rank", "id", "columns": { … } }</c>, written from the columns (no row
-    /// dictionaries are made). The output columns are a member of their own, so a column named <c>id</c> or <c>rank</c>
-    /// cannot collide with the item's (<c>stratarec replay</c> writes its items with this too: it flattened the columns
-    /// into the item and wrote duplicate members). A column's declared type decides how its floats
-    /// print (<see cref="ResultColumns.Types"/>): a <c>float32</c> or <c>list&lt;float32&gt;</c> column's as floats.
+    /// A result's items as a JSON array, each <c>{ "rank", "id", "columns": { … } }</c>. The output columns are a
+    /// member of their own, so a column named <c>id</c> or <c>rank</c> cannot collide with the item's. A column's
+    /// declared type decides how its floats print (<see cref="ResultColumns.Types"/>): a <c>float32</c> or
+    /// <c>list&lt;float32&gt;</c> column's as floats.
     /// </summary>
     public static void WriteItems(Utf8JsonWriter json, ResultColumns items)
     {
@@ -349,10 +347,6 @@ public static class RecResultJson
         }
     }
 
-    /// <summary>
-    /// A list as a JSON array of its elements, each written as a scalar of its element type is (a float32 list's
-    /// elements as the floats they are, a non-finite element as null, as a non-finite float is).
-    /// </summary>
     private static void WriteList(Utf8JsonWriter json, in ScalarValue value, bool float32)
     {
         json.WriteStartArray();
@@ -411,8 +405,6 @@ public static class RecResultJson
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value) =>
         WriteValue(json, value, float32: value.IsFloat32 || value.IsFloat32List);
 
-    /// <summary><see cref="WriteValue(Utf8JsonWriter, in ScalarValue)"/>, a float written as a float when
-    /// <paramref name="float32"/>: the declared type's decision, not the value's origin.</summary>
     private static void WriteValue(Utf8JsonWriter json, in ScalarValue value, bool float32)
     {
         switch (value.Kind)
@@ -435,7 +427,7 @@ public static class RecResultJson
             case StorageKind.List:
                 WriteList(json, value, float32);
                 break;
-            default: // missing, or a non-finite float
+            default:
                 json.WriteNullValue();
                 break;
         }

@@ -10,30 +10,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Hosting;
 
-/// <summary>
-/// The node side of releases for <see cref="ServiceCollectionExtensions.AddStrataRec"/> with
-/// <see cref="StrataRecOptions.Releases"/>: loads the manifest each pipeline's pointer names before the host starts, then
-/// polls the pointers and loads each new manifest in the background (<see cref="ReleaseOptions"/> has the schedule).
-/// </summary>
-/// <remarks>
-/// <para>The startup load is in <see cref="StartingAsync"/> for the reason <see cref="StrataRecStartup"/>'s is: the host
-/// takes no request before every plan has loaded. Anything short of every pipeline applied stops the host, since a node
-/// that serves part of its pipelines, or a fallback that is never loaded, fails requests silently.</para>
-/// <para>The polling starts in <see cref="StartAsync"/>, once every service's starting phase has succeeded, with one task
-/// per pipeline: a load, or a pointer read that hangs until its <see cref="ReleaseOptions.PointerTimeout"/>, delays only
-/// its own pipeline's polls, so an emergency revocation of one pipeline never waits for another (a blocked report
-/// of one pipeline held a newer release of another for 25 polls). Loads of different pipelines may run at the same time,
-/// as the engine allows. The background outcomes go to the reporter through a bounded queue and one task of their own
-/// (<see cref="IReleaseStatusReporter"/>); at startup each is reported before the next pipeline loads, so a host that
-/// fails to start has reported why. Stopping the host cancels all of it, a load in progress included (the current plan
-/// stays), and waits for it to end, before the container disposes the engine.</para>
-/// <para>The source, the store and the reporter get tokens of the framework's (<see cref="CancellationSite.Release"/>), never
-/// the host's: their callbacks run on the thread pool when the host cancels, and what they throw is counted, not thrown
-/// on the host's timer. A stop waits for the callbacks of its cancellation as for the polling, within the host's stop
-/// timeout: the container disposes the extensions next, and a callback cleaning up must not find them disposed.
-/// Neither a logger nor a metric listener that throws changes what the polling does: the record is lost, the
-/// schedule and the reports are not.</para>
-/// </remarks>
 internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyncDisposable, IDisposable
 {
     private readonly RecEngine _engine;
@@ -46,7 +22,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     private readonly ReleaseOptions _options;
     private readonly ILogger _logger;
     private readonly ObservedCancellationSource _stopping = new(CancellationSite.Release);
-    private readonly Channel<ManifestLoadResult>? _reports; // background outcomes waiting for the reporter
+    private readonly Channel<ManifestLoadResult>? _reports;
     private readonly List<ObservedCancellationSource> _calls = new(); // calls in flight, or whose callbacks still run (see BeginCall); its own lock
     private Task? _polling;
     private bool _stopRequested;
@@ -74,7 +50,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
 
         if (reporter is not null)
         {
-            // Room for a few outcomes of every pipeline; past that, the oldest is the least worth reporting.
             var queue = new BoundedChannelOptions(Math.Max(16, 4 * _pipelines.Count))
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
@@ -90,7 +65,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     {
         RequireServices();
 
-        // From here on the token the extensions get: cancelled with the host's, its callbacks on the pool.
         using var startup = new ObservedCancellationSource(CancellationSite.Release, cancellationToken);
         cancellationToken = startup.Token;
         var errors = new DiagnosticBag();
@@ -98,7 +72,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         foreach (var state in _pipelines)
         {
             var pipelineId = state.PipelineId;
-            // Within PointerTimeout, as in the background: a read that hangs fails the start instead of holding it.
             var call = BeginCall(_options.PointerTimeout, cancellationToken) ?? throw new OperationCanceledException(cancellationToken);
             string? manifestId;
             try
@@ -113,7 +86,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
                 errors.Error("RELEASE_POINTER_UNREADABLE", PipelineLabel(pipelineId), string.Empty,
                     $"The manifest pointer of pipeline '{pipelineId}' in environment '{_environment}' could not be read: {why}",
                     _source is FileSystemManifestSource && ex is ArgumentException
-                        ? FileSystemManifestSource.NameHint // a name the file system source refuses: one an earlier version accepted
+                        ? FileSystemManifestSource.NameHint
                         : "check the manifest source the host registered (IManifestSource) and that it can be reached");
                 statuses.Add($"{pipelineId}: pointer unreadable");
                 continue;
@@ -154,8 +127,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
             }
         }
 
-        // The fallbacks of the plans served now (a fallback that is not served never happens), and the inputs
-        // a served fallback would fail requests on, as for a workspace.
         var checks = new DiagnosticBag();
         foreach (var state in _pipelines)
         {
@@ -199,8 +170,8 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
-    /// Cancels the polling, a load in progress included, and waits for it to end and for the callbacks the extensions
-    /// registered on its token to run, or for the host's stop timeout, which bounds the stop whatever they do.
+    /// Cancels the polling and waits for it to end and for the callbacks the extensions registered on its token to run,
+    /// or for the host's stop timeout.
     /// </summary>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
@@ -212,8 +183,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         _stopRequested = true;
         var stopped = Stopped(CancelAll());
         await stopped.WaitAsync(cancellationToken).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-
-        // At the host's stop timeout it stops waiting: the polling ends on its own, its load cancelled.
     }
 
     public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -249,9 +218,8 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     }
 
     /// <summary>
-    /// Cancels the calls in flight, then the polling. Each call's token is cancelled here, not through its link to the
-    /// polling's, so the returned task covers its callbacks too: a source's cleanup on the token of a pointer read ends
-    /// before the container disposes the source. No call starts after this.
+    /// Each call's token is cancelled here, not through its link to the polling's, so the returned task covers its
+    /// callbacks too: a source's cleanup on the token of a pointer read ends before the container disposes the source.
     /// </summary>
     private Task CancelAll()
     {
@@ -270,10 +238,8 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     }
 
     /// <summary>
-    /// The token of one call into an extension (a pointer read, a report): cancelled after <paramref name="timeout"/>, with
-    /// <paramref name="linkedTo"/>, or by a stop (<see cref="CancelAll"/>). Null once the stop has begun: the call is not
-    /// made. End it with <see cref="EndCall"/> once the call has returned. A stop waits for the callbacks of every call
-    /// that is not over, including one that has returned while its timeout's callbacks still run (<see cref="EndCall"/>).
+    /// Null once the stop has begun: the call is not made. End it with <see cref="EndCall"/> once the call has
+    /// returned.
     /// </summary>
     private ObservedCancellationSource? BeginCall(TimeSpan timeout, CancellationToken linkedTo)
     {
@@ -292,10 +258,9 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     }
 
     /// <summary>
-    /// Ends a call that has returned. A call cancelled before (its timeout, mostly) may have returned while the callbacks
-    /// of that cancellation still run, a source's cleanup on its token, say: it stays listed until they have run, so a
-    /// stop still waits for them before the container disposes the source (the call was dropped on return,
-    /// and the stop finished first). Not waited for here, which would hold the polling.
+    /// A call cancelled before may have returned while the callbacks of that cancellation still run: it stays listed
+    /// until they have run, so a stop still waits for them before the container disposes the source. Not waited for
+    /// here, which would hold the polling.
     /// </summary>
     private void EndCall(ObservedCancellationSource call)
     {
@@ -322,9 +287,8 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
     }
 
     /// <summary>
-    /// Completes when the polling has ended and the callbacks of the stopping cancellation (<paramref name="callbacks"/>,
-    /// the winning cancellation's) have run. Only their end counts here: what they threw is the source's to observe, and a
-    /// task faulted with it again would go unobserved.
+    /// Only their end counts here: what they threw is the source's to observe, and a task faulted with it again would
+    /// go unobserved.
     /// </summary>
     private Task Stopped(Task callbacks)
     {
@@ -334,7 +298,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         return _polling is { } polling ? Task.WhenAll(polling, ended) : ended;
     }
 
-    /// <summary>For a container disposed synchronously.</summary>
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     private void RequireServices()
@@ -354,7 +317,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
     }
 
-    /// <summary>Every <see cref="ReleaseOptions.PollInterval"/>, the pipeline's pointer; ends when the host stops.</summary>
     private async Task PollEveryIntervalAsync(PipelineState state, CancellationToken stopping)
     {
         try
@@ -369,8 +331,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
                 catch (Exception ex) when (!stopping.IsCancellationRequested)
                 {
                     // A defect: the polling must outlive it, or the node would serve the plan and never take another
-                    // release. The attempt it cut short is tried again, as a rejected one is (a new id left
-                    // final, its manifest was never loaded).
+                    // release. The attempt it cut short is tried again, as a rejected one is.
                     state.Final = false;
                     state.RetryDelay = NextDelay(state.RetryDelay);
                     state.RetryAt = Clock.GetUtcNow() + state.RetryDelay;
@@ -394,7 +355,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
 
         if (BeginCall(_options.PointerTimeout, stopping) is not { } call)
         {
-            return; // stopping
+            return;
         }
 
         string? manifestId;
@@ -415,26 +376,25 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
             EndCall(call);
         }
 
-        // No pointer (any more): the pipeline keeps the plan it serves. The id tried last: final, or not due yet.
         if (manifestId is null || (manifestId == state.ManifestId && (state.Final || Clock.GetUtcNow() < state.RetryAt)))
         {
             return;
         }
 
         var result = await AttemptAsync(state, manifestId, retry: true, stopping).ConfigureAwait(false);
-        _reports?.Writer.TryWrite(result); // bounded, dropping the oldest: never waits
+        _reports?.Writer.TryWrite(result);
         if (result.Applied)
         {
             var warnings = new DiagnosticBag();
-            CheckFallbacksAround(state.PipelineId, warnings); // applied already: it can only be said
+            CheckFallbacksAround(state.PipelineId, warnings);
             LogWarnings(warnings.Items);
         }
     }
 
     /// <summary>
-    /// The checks a plan that loaded after startup changes, as warnings: its own fallback (<see cref="CheckFallback"/>), and
-    /// every served pipeline that falls back to it, since a fallback's new plan may require an input those do not give
-    /// (found otherwise only when one of them first falls back, failing the request).
+    /// The checks a plan that loaded after startup changes, as warnings: its own fallback
+    /// (<see cref="CheckFallback"/>), and every served pipeline that falls back to it, since a fallback's new plan may
+    /// require an input those do not give.
     /// </summary>
     private void CheckFallbacksAround(string pipelineId, DiagnosticBag diagnostics)
     {
@@ -454,17 +414,15 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
 
             if (loaded.Plan.Calls.Contains(pipelineId))
             {
-                CheckCalls(other.PipelineId, diagnostics, DiagnosticSeverity.Warning, only: pipelineId); // its calls of the new plan
+                CheckCalls(other.PipelineId, diagnostics, DiagnosticSeverity.Warning, only: pipelineId);
             }
         }
     }
 
     /// <summary>
-    /// The pipelines a served pipeline's nodes call: one this host does not serve fails every such call (an
-    /// error at startup, a warning afterwards, as for a fallback), and a served one is checked against what each call
-    /// needs of it, which a compile without the other pipelines could not (the call would fail when made).
+    /// The pipelines a served pipeline's nodes call: one this host does not serve fails every such call, and a served
+    /// one is checked against what each call needs of it, which a compile without the other pipelines could not.
     /// </summary>
-    /// <param name="only">Check the calls of this pipeline alone: the one whose plan changed.</param>
     private void CheckCalls(string pipelineId, DiagnosticBag diagnostics, DiagnosticSeverity notServed, string? only = null)
     {
         if (!_engine.TryGetPipeline(pipelineId, out var loaded) || loaded.Plan.Calls.IsEmpty)
@@ -503,16 +461,10 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
     }
 
-    /// <summary>
-    /// Reads the manifest, loads it, and decides when it is tried again: never for an outcome that trying again would not
-    /// change, with a growing interval otherwise. The caller reports the outcome.
-    /// </summary>
-    /// <param name="retry">False at startup, where anything not applied stops the host instead.</param>
     private async Task<ManifestLoadResult> AttemptAsync(PipelineState state, string manifestId, bool retry, CancellationToken cancellationToken)
     {
         if (manifestId != state.ManifestId)
         {
-            // Nothing of the last manifest's outcome carries over, whatever ends this attempt.
             state.ManifestId = manifestId;
             state.Final = false;
             state.RetryDelay = TimeSpan.Zero;
@@ -542,7 +494,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            // A store or source that throws its own exceptions (a transport's), or a defect: logged and tried again.
             var diagnostics = new DiagnosticBag();
             diagnostics.Error("MANIFEST_LOAD_FAILED", ManifestBuilder.Label(manifestId), string.Empty,
                 $"Loading the manifest threw {ex.GetType().Name}: {ExceptionText.Of(ex)}", "the node tries again; check the artifact store and the manifest source");
@@ -575,10 +526,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         return result;
     }
 
-    /// <summary>
-    /// A served pipeline whose fallback is not served falls back to nothing (an error at startup, a warning afterwards,
-    /// when its plan is applied already); a served fallback is checked for the inputs it would fail requests on.
-    /// </summary>
     private void CheckFallback(string pipelineId, DiagnosticBag diagnostics, DiagnosticSeverity notServed)
     {
         if (!_engine.TryGetPipeline(pipelineId, out var loaded) || loaded.FallbackPipeline is not { } fallback || fallback == pipelineId)
@@ -598,7 +545,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
     }
 
-    /// <summary>Reports the background outcomes in the order they were queued, one at a time; ends when the host stops.</summary>
     private async Task ReportQueuedAsync(CancellationToken stopping)
     {
         try
@@ -613,14 +559,9 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception) when (stopping.IsCancellationRequested)
         {
-            // The host stops: the reports still waiting are dropped with it.
         }
     }
 
-    /// <summary>
-    /// Tells the reporter one outcome, cancelling its token after <see cref="ReleaseOptions.ReportTimeout"/>, and returns when
-    /// the call does: the reporter is never called concurrently.
-    /// </summary>
     private async Task ReportAsync(ManifestLoadResult result, CancellationToken cancellationToken)
     {
         if (_reporter is null)
@@ -630,7 +571,7 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
 
         if (BeginCall(_options.ReportTimeout, cancellationToken) is not { } call)
         {
-            return; // stopping
+            return;
         }
 
         try
@@ -666,13 +607,11 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
                 }
                 catch (Exception)
                 {
-                    // As for the records below.
                 }
             }
         }
     }
 
-    /// <summary>The next wait before a failed manifest or pointer is tried again: the poll interval, then twice the last, up to the cap.</summary>
     private TimeSpan NextDelay(TimeSpan last)
     {
         if (last <= TimeSpan.Zero)
@@ -706,7 +645,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         ? $"{result.PipelineId}: applied manifest {result.ManifestId} (sequence {result.Sequence})"
         : $"{result.PipelineId}: {StatusName(result.Status)} manifest {result.ManifestId}: {result.Reason}";
 
-    /// <summary>The status as the messages and logs write it (<c>applied</c>, <c>rejected</c>, <c>incompatible</c>, …).</summary>
     private static string StatusName(ManifestLoadStatus status) => status switch
     {
         ManifestLoadStatus.Applied => "applied",
@@ -727,7 +665,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception)
         {
-            // See above.
         }
     }
 
@@ -739,7 +676,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception)
         {
-            // See above.
         }
     }
 
@@ -751,7 +687,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception)
         {
-            // See above.
         }
     }
 
@@ -763,7 +698,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception)
         {
-            // See above.
         }
     }
 
@@ -775,7 +709,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception)
         {
-            // See above.
         }
     }
 
@@ -788,7 +721,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception)
         {
-            // See above.
         }
     }
 
@@ -800,7 +732,6 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         }
         catch (Exception)
         {
-            // See above.
         }
     }
 
@@ -843,12 +774,10 @@ internal sealed partial class StrataRecReleases : IHostedLifecycleService, IAsyn
         /// <summary>Its outcome will not change by trying again: it is not tried again.</summary>
         public bool Final { get; set; }
 
-        /// <summary>The last wait before trying it again, and when that is.</summary>
         public TimeSpan RetryDelay { get; set; }
 
         public DateTimeOffset RetryAt { get; set; }
 
-        /// <summary>The last wait before reading a pointer that failed again, and when that is.</summary>
         public TimeSpan PointerDelay { get; set; }
 
         public DateTimeOffset PointerRetryAt { get; set; }

@@ -16,10 +16,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The sample's local <c>author_store</c> through the engine: readiness and plan swaps, load failures,
-/// restarts, replay, and the same results as fetching the same records.
-/// </summary>
 public sealed class LocalTableEngineTests
 {
     private const string Snapshot = "fixtures/author_snapshot";
@@ -32,7 +28,6 @@ public sealed class LocalTableEngineTests
         await using var engine = new RecEngine(host.Environment, loggerFactory: logs);
         var first = AuthorTable(Load(engine, host.Root));
 
-        // Another configuration of the pipeline: everything but the table's binding and fields changes nothing for it.
         ReplayTests.Edit(host.Root, "pipelines/home_feed.jsonc", "\"coarse_k\": 30,", "\"coarse_k\": 25,");
         var second = AuthorTable(Load(engine, host.Root));
 
@@ -74,7 +69,7 @@ public sealed class LocalTableEngineTests
         Assert.Contains("Local table author_store/author (source 'author_store' in bindings:local) failed to load from snapshot_files@1", error.Message);
         Assert.Contains("part-0000.jsonl:3", error.Message);
         Assert.NotNull(error.Hint);
-        Assert.Equal(0, engine.Bindings.TableCount); // the failed plan's table is released with it
+        Assert.Equal(0, engine.Bindings.TableCount);
     }
 
     [Fact]
@@ -85,7 +80,6 @@ public sealed class LocalTableEngineTests
         var current = AuthorTable(Load(engine, host.Root));
         var before = await engine.ExecuteAsync(MetricsTests.Request("req-before"), TestContext.Current.CancellationToken);
 
-        // A new release reads a new snapshot directory, whose third line is broken.
         CopySnapshot(host.Root, Snapshot, "fixtures/author_snapshot_v2");
         BreakLine(host.Root, "fixtures/author_snapshot_v2", 3);
         ReplayTests.Edit(host.Root, "bindings/local.jsonc", Snapshot + "\"", "fixtures/author_snapshot_v2\"");
@@ -105,7 +99,7 @@ public sealed class LocalTableEngineTests
 
         Assert.NotSame(current, retried);
         Assert.True(retried.IsLoaded);
-        Assert.Equal(2, engine.Bindings.TableCount); // and item_country_store's
+        Assert.Equal(2, engine.Bindings.TableCount);
     }
 
     [Fact]
@@ -122,16 +116,15 @@ public sealed class LocalTableEngineTests
         // A snapshot job publishes a manifest the source cannot read: the source fails, and is restarted with backoff.
         File.WriteAllText(Path.Combine(host.Root, Snapshot, "snapshot.json"), "{ \"format\": \"jsonl\", ");
         await Eventually(() => logs.Entries.Count(e => e.EventId.Id == 1203) >= 2, "two restarts of the failed source");
-        Assert.Equal(186443.0, Followers(table, 100)); // still serving its last complete load
+        Assert.Equal(186443.0, Followers(table, 100));
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-failing-source"), TestContext.Current.CancellationToken)).Succeeded);
 
-        // The next good snapshot is picked up by the restarted source.
         File.WriteAllText(Path.Combine(host.Root, Snapshot, "part-0001.jsonl"), "{\"key\": 100, \"version\": 2, \"fields\": {\"a_followers\": 5.0}}\n");
         File.WriteAllText(Path.Combine(host.Root, Snapshot, "snapshot.json"), """{ "format": "jsonl", "files": ["part-0001.jsonl"] }""");
         await Eventually(() => Followers(table, 100) == 5.0, "the fixed snapshot to be loaded");
 
         Assert.Same(table, AuthorTable(engine));
-        Assert.Equal(2, tables.TableCount); // and item_country_store's
+        Assert.Equal(2, tables.TableCount);
     }
 
     [Fact]
@@ -144,18 +137,16 @@ public sealed class LocalTableEngineTests
         Assert.Equal("ok", authorCall.Status);
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
 
-        // Same configuration, different data: every author has ten times the followers.
         var changed = HomeFeedTestHost.LoadModified(root => ScaleFollowers(root, 10));
         var (changedEngine, _) = MetricsTests.LoadEngine(changed);
         var live = await changedEngine.ExecuteAsync(ReplayTests.Request("req-local-live", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         LiveRunAssert.SameNodeOutcomes(recorded, live);
-        Assert.NotEqual(Items(recorded), Items(live)); // the same decisions: the table matters to the result
+        Assert.NotEqual(Items(recorded), Items(live));
         var replayed = await changedEngine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
         Assert.Empty(replayed.Report.Gaps);
 
-        // An engine for replays only (stratarec replay): its tables are never loaded, and never needed.
         var sample = HomeFeedTestHost.Load();
         await using var replayOnly = new RecEngine(sample.Environment, bindings: new BindingHost(new BindingHostOptions { Load = false }));
         Assert.True(replayOnly.Load(sample.Request).Applied);
@@ -189,7 +180,6 @@ public sealed class LocalTableEngineTests
         LiveRunAssert.SameNodeOutcomes(fromFetch, fromTable);
         Assert.Equal(Items(fromFetch), Items(fromTable));
 
-        // Recorded alike too: one call with the same keys and the stored values (missing where there is no record).
         Assert.Equal(AuthorCalls(fromFetch), AuthorCalls(fromTable));
     }
 
@@ -222,7 +212,6 @@ public sealed class LocalTableEngineTests
         return version.Read(table.Schema.FieldIndex("a_followers"), version.Find(EntityKey.FromInt64(author))).AsFloat64();
     }
 
-    /// <summary>Replaces line <paramref name="line"/> (1-based) of the snapshot's data file with a value of the wrong type.</summary>
     private static void BreakLine(string root, string snapshot, int line)
     {
         var path = Path.Combine(root, snapshot, "part-0000.jsonl");
@@ -253,7 +242,6 @@ public sealed class LocalTableEngineTests
         File.WriteAllLines(path, lines);
     }
 
-    /// <summary>The snapshot's records as a <c>memory@1</c> data file.</summary>
     private static string MemoryJson(string snapshotFile)
     {
         var json = new StringBuilder("{");
@@ -277,7 +265,6 @@ public sealed class LocalTableEngineTests
     private static List<(long, int, string)> Items(RecResult result) =>
         result.Items.Select(i => (i.Id.Int64Value, i.Rank, string.Join(";", i.Columns.OrderBy(c => c.Key).Select(c => $"{c.Key}={c.Value}")))).ToList();
 
-    /// <summary>Waits for a condition another thread brings about (a background source); fails after a generous bound.</summary>
     private static async Task Eventually(Func<bool> condition, string what)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
@@ -351,7 +338,6 @@ public sealed class LocalReadRecordingTests
             Assert.Empty(replayed.Report.Gaps);
         }
 
-        // The update did land: a later read sees it.
         var version = table.Pin();
         Assert.Equal(Updated, version.Read(followers, version.Find(EntityKey.FromInt64(100))).AsFloat64());
     }

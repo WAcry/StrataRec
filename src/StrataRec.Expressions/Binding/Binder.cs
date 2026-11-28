@@ -7,14 +7,9 @@ using StrataRec.Expressions.Syntax;
 namespace StrataRec.Expressions.Binding;
 
 /// <summary>
-/// Resolves names, checks types and nullability and lowers the AST into typed IR. Sugar is expanded here
-/// so that both backends only implement primitives: n-ary <c>min</c>/<c>max</c>, <c>clamp</c>, <c>logit</c>,
-/// <c>soft_floor</c>, <c>linear_decay</c> and <c>x in l</c>. <c>let</c> bindings become shared IR nodes.
-/// Built-ins lift every argument, so an expansion must not reach a constant through a
-/// conditional branch that skips an argument: <c>?:</c> only lifts its condition.
+/// Built-ins lift every argument, so an expansion must not reach a constant through a conditional branch that skips an
+/// argument: <c>?:</c> only lifts its condition.
 /// </summary>
-/// <remarks>Errors are collected rather than thrown; an ill-typed subexpression gets the poison type
-/// <see cref="TypeKind.Error"/>, which silently propagates so one mistake produces one diagnostic.</remarks>
 internal sealed class Binder
 {
     private readonly IExpressionScope _scope;
@@ -24,10 +19,6 @@ internal sealed class Binder
 
     private const string StringOperations = "strings support ==, !=, 'in', size(), contains(), startsWith() and endsWith()";
 
-    /// <summary>
-    /// True when the expression reads a name its scope declares with an error (<see cref="IExpressionScope.IsUnusable"/>):
-    /// it does not compile, but the error is the declaration's, reported there.
-    /// </summary>
     public bool ReadsUnusable { get; private set; }
 
     /// <summary>Every name resolved, in the order first seen: what the scope must declare (<see cref="CompiledExpression.Names"/>).</summary>
@@ -61,9 +52,6 @@ internal sealed class Binder
         StorageKind.Float64 => ExprType.Float,
         _ => ExprType.String,
     };
-
-    // ----------------------------------------------------------------------------------------------------------
-    // Names and literals
 
     private IrNode BindList(ListAst list)
     {
@@ -109,7 +97,6 @@ internal sealed class Binder
         }
         else if (allNumeric)
         {
-            // Mixed integers and floats are floats, as in arithmetic.
             var floats = new double[values.Length];
             for (var i = 0; i < floats.Length; i++)
             {
@@ -140,7 +127,6 @@ internal sealed class Binder
         }
         else
         {
-            // Point at the first element of another kind than the first element.
             AstNode odd = list.Items[0];
             for (var i = 1; i < values.Length; i++)
             {
@@ -216,7 +202,6 @@ internal sealed class Binder
         {
             if (_scope.IsUnusable(name))
             {
-                // Declared with an error that was reported at the declaration: one mistake, one diagnostic.
                 ReadsUnusable = true;
                 return Poison(n);
             }
@@ -247,8 +232,7 @@ internal sealed class Binder
     }
 
     /// <summary>
-    /// The hint for a name written in the other request-level namespace: a request input read as <c>req.x</c>, or a request
-    /// column read as <c>ctx.x</c> or <c>ctx.request.x</c>. Only those lookups, which register nothing.
+    /// The hint for a name written in the other request-level namespace. Only those lookups, which register nothing.
     /// </summary>
     private string? NamespaceHint(string name)
     {
@@ -263,7 +247,6 @@ internal sealed class Binder
             : null;
     }
 
-    /// <summary>What to do about a name nothing near it is declared as: where a name of its namespace comes from.</summary>
     private static string DeclareHint(string name)
     {
         var dot = name.IndexOf('.', StringComparison.Ordinal);
@@ -351,9 +334,6 @@ internal sealed class Binder
         _lets.RemoveRange(_lets.Count - pushed, pushed);
         return body;
     }
-
-    // ----------------------------------------------------------------------------------------------------------
-    // Operators
 
     private IrNode BindUnary(UnaryAst u)
     {
@@ -508,8 +488,6 @@ internal sealed class Binder
             hint = StringOperations;
         }
 
-        // Equality compares numbers, bools and strings; ordering only numbers. An operand of a kind the operator never
-        // takes is at fault; two acceptable kinds that differ (a string and a number) leave the operator itself.
         var culprit = equality
             ? Culprit(b, !IsEquatable(l.Type), !IsEquatable(r.Type))
             : Culprit(b, !l.Type.IsNumeric, !r.Type.IsNumeric);
@@ -541,9 +519,6 @@ internal sealed class Binder
         var type = new ExprType(kind, cond.Type.Nullable || a.Type.Nullable || b.Type.Nullable, length);
         return IrNode.Make(IrOp.Conditional, type, new[] { cond, Coerce(a, kind), Coerce(b, kind) }, c.Start, c.Length);
     }
-
-    // ----------------------------------------------------------------------------------------------------------
-    // Functions
 
     private IrNode BindCall(CallAst call)
     {
@@ -627,9 +602,8 @@ internal sealed class Binder
                 return AllNumeric(args, call, name, out var absKind) ? Lift(IrOp.Abs, absKind, call, args[0]) : Poison(call);
 
             case "int":
-                // Truncates toward zero. A float64 that is not finite or whose truncation leaves the int64 range has no
-                // int64 value: the result is missing, never a saturated or wrapped number. So int() of a
-                // float64 is nullable even when its argument is not; int() of an int64 is that value.
+                // A float64 that is not finite or whose truncation leaves the int64 range has no int64 value: the
+                // result is missing, never a saturated or wrapped number.
                 if (!AllNumeric(args, call, name, out _))
                 {
                     return Poison(call);
@@ -669,7 +643,6 @@ internal sealed class Binder
 
             case "logit":
             {
-                // logit(p) = log(p / (1 - p))
                 if (!AllNumeric(args, call, name, out _))
                 {
                     return Poison(call);
@@ -701,11 +674,8 @@ internal sealed class Binder
 
             case "linear_decay":
             {
-                // x <= start ? 1.0 : (x >= end ? 0.0 : (end - x) / (end - start)); end <= start gives a step at start.
-                // That form returns 1.0 without looking at end, so a missing end would not make the result missing.
-                // Lowered instead as x >= end ? (x <= start ? 1.0 : 0.0) : (x <= start ? 1.0 : fraction): the same
-                // value for every present input, but every path tests both conditions, so the result is missing
-                // whenever any argument is.
+                // Lowered so that every path tests both conditions, and the result is missing whenever any argument is:
+                // the plain x <= start ? 1.0 : ... returns 1.0 without looking at end.
                 if (!AllNumeric(args, call, name, out _))
                 {
                     return Poison(call);
@@ -841,7 +811,7 @@ internal sealed class Binder
         }
         else if (list.Type.Kind == TypeKind.ListFloat && x.Type.Kind == TypeKind.Int)
         {
-            return Lift(IrOp.Contains, TypeKind.Bool, at, list, ToFloat(x)); // an int64 compares as a float64, as in ==
+            return Lift(IrOp.Contains, TypeKind.Bool, at, list, ToFloat(x));
         }
 
         var hint = list.Type.Kind == TypeKind.String && isIn ? "'in' tests list membership; use contains(s, part) for a substring" : null;
@@ -850,7 +820,6 @@ internal sealed class Binder
             hint = "the list holds int64 values; compare with an int64";
         }
 
-        // Not a list (or a string, for contains) is the list's fault; a list of other elements is the value's.
         var container = list.Type.IsList || (!isIn && list.Type.Kind == TypeKind.String);
         return FailAt(container ? xAt : listAt, ExpressionErrorCodes.TypeMismatch,
             isIn ? $"{what} needs a value and a list of the same element type, got {x.Type} in {list.Type}"
@@ -969,11 +938,6 @@ internal sealed class Binder
         return null;
     }
 
-    // ----------------------------------------------------------------------------------------------------------
-    // Result checks
-
-    /// <summary>Checks the bound result against the site's requirements; returns the result, with an integer list
-    /// literal written for a float list site turned into that float list (<see cref="AsFloatList"/>).</summary>
     public IrNode CheckResult(IrNode root, AstNode ast)
     {
         if (root.Type.IsError)
@@ -1016,9 +980,8 @@ internal sealed class Binder
             return root;
         }
 
-        // A computed value outside the int32 or float32 range is replaced at run time; a constant one can only
-        // be a configuration mistake, so it is reported here, where it can be fixed. (A constant list of another length
-        // than a fixed-length site's is a type mismatch above: a literal's type has its length.)
+        // A computed value outside the int32 or float32 range is replaced at run time; a constant one can only be a
+        // configuration mistake, so it is reported here, where it can be fixed.
         if (_options.ExpectedType is { } narrow && root.IsConst && !ColumnValues.FitsStorage(root.Value, narrow))
         {
             var (range, width) = narrow.IsInt32Storage ? ($"[{int.MinValue}, {int.MaxValue}]", "int32") : (Float32Range.Text, "float32");
@@ -1036,14 +999,6 @@ internal sealed class Binder
         return root;
     }
 
-    /// <summary>
-    /// An integer list literal where a float list is expected is that float list, converted here: <c>[1, 2]</c> for a
-    /// <c>list&lt;float32&gt;</c> column, in <c>col.weights ?? [0]</c>, or in <c>overlap_count(col.prices, [10, 20])</c>.
-    /// Like an untyped constant, a literal's numbers take the type the site needs, and so does an expression that only
-    /// chooses between such literals (<c>col.x > 0 ? [1, 2] : [3]</c>, <c>let</c> included). A typed int64 list (a column,
-    /// a feature, an input) is not converted: lists of ids and lists of weights are different data, and mixing them is a
-    /// mistake to report, not to paper over.
-    /// </summary>
     private static IrNode AsFloatList(IrNode node)
     {
         if (node.Type.Kind != TypeKind.ListInt || node.Op is not (IrOp.Const or IrOp.Conditional or IrOp.Coalesce))
@@ -1055,9 +1010,8 @@ internal sealed class Binder
     }
 
     /// <summary>
-    /// The float list of an integer list made only of list literals (a literal, or a <c>?:</c> or <c>??</c> choosing
-    /// between such lists), or null when it is not one. Memoized by node: a <c>let</c>'s references share one node, so the
-    /// IR is a graph whose paths can be exponentially more than its nodes.
+    /// Memoized by node: a <c>let</c>'s references share one node, so the IR is a graph whose paths can be
+    /// exponentially more than its nodes.
     /// </summary>
     private static IrNode? ToFloatList(IrNode node, Dictionary<IrNode, IrNode?>? converted)
     {
@@ -1081,7 +1035,6 @@ internal sealed class Binder
         }
         else if (node.Op is IrOp.Conditional or IrOp.Coalesce)
         {
-            // A condition stays as it is; the lists it chooses between are converted.
             var args = (IrNode[])node.Args.Clone();
             var all = true;
             for (var i = node.Op == IrOp.Conditional ? 1 : 0; i < args.Length && all; i++)
@@ -1098,12 +1051,6 @@ internal sealed class Binder
         return result;
     }
 
-    /// <summary>
-    /// True when every list <paramref name="node"/> can give is read from a column or a request-level value declared
-    /// <c>list&lt;float32&gt;</c> (of a fixed length or not), directly or through <c>let</c>, <c>?:</c> and <c>??</c>: then
-    /// <c>dot</c>, <c>cosine</c> and <c>l2_norm</c> compute in float32 (<see cref="Float32Lists"/>). A literal, and a list
-    /// that may be declared <c>list&lt;float64&gt;</c>, is float64. Memoized by node, as <see cref="ToFloatList"/> is.
-    /// </summary>
     private static bool IsFloat32List(IrNode node, Dictionary<IrNode, bool>? known = null)
     {
         switch (node.Op)
@@ -1133,7 +1080,6 @@ internal sealed class Binder
         }
     }
 
-    /// <summary>Where one side is a float list, an integer list literal on the other is one too (<see cref="AsFloatList"/>).</summary>
     private static void AdaptListLiterals(ref IrNode a, ref IrNode b)
     {
         if (a.Type.Kind == TypeKind.ListFloat)
@@ -1197,7 +1143,6 @@ internal sealed class Binder
         Report(ExpressionErrorCodes.NullableResult, message, offset, Math.Max(1, length), hint);
     }
 
-    /// <summary>Finds the nullable symbols that make <paramref name="node"/> nullable (in source order).</summary>
     private static void CollectNullableSources(IrNode node, List<IrNode> sources, HashSet<IrNode> visited)
     {
         if (!node.Type.Nullable || !visited.Add(node))
@@ -1232,11 +1177,6 @@ internal sealed class Binder
         _ => null,
     };
 
-    // ----------------------------------------------------------------------------------------------------------
-    // Helpers
-
-    /// <summary>The type two branches (of <c>?:</c> or <c>??</c>) have together. Lists of one kind unify whatever their
-    /// lengths: the result keeps a length only when both branches have it, and is a list of any length otherwise.</summary>
     private static bool TryUnify(ExprType a, ExprType b, out TypeKind kind, out int length)
     {
         length = 0;
@@ -1278,7 +1218,6 @@ internal sealed class Binder
         return true;
     }
 
-    /// <summary>The argument check of the vector functions: a float list, of any length or of a fixed one.</summary>
     private bool RequireFloatList(IrNode arg, string name, AstNode at)
     {
         if (arg.Type.Kind == TypeKind.ListFloat)
@@ -1339,7 +1278,6 @@ internal sealed class Binder
         return Poison(at);
     }
 
-    /// <summary>What to write after <c>??</c> for a value of <paramref name="type"/>: its type, with a literal where one exists.</summary>
     private static string DefaultHint(ExprType type)
     {
         var plain = type.WithNullable(false);
@@ -1354,23 +1292,17 @@ internal sealed class Binder
         return $"the default after '??' is used where the value before it is missing: give a {plain}{example}";
     }
 
-    /// <summary>Reports at <paramref name="culprit"/>, the part at fault (an operand, an argument, an operator), and poisons <paramref name="at"/>, the whole operation.</summary>
     private IrNode FailAt(Span culprit, string code, string message, AstNode at, string? hint = null)
     {
         Report(code, message, culprit.Start, culprit.Length, hint);
         return Poison(at);
     }
 
-    /// <summary>
-    /// The operand of <paramref name="b"/> at fault: the one that is wrong when only one is, otherwise the operator, since
-    /// neither operand alone is the mistake.
-    /// </summary>
     private static Span Culprit(BinaryAst b, bool leftWrong, bool rightWrong) =>
         leftWrong == rightWrong ? new Span(b.OpStart, b.OpLength) : leftWrong ? b.Left : b.Right;
 
     private static bool IsEquatable(ExprType type) => type.IsNumeric || type.Kind is TypeKind.Bool or TypeKind.String;
 
-    /// <summary>A span of the source: an AST node's, or an operator's.</summary>
     private readonly record struct Span(int Start, int Length)
     {
         public static implicit operator Span(AstNode node) => new(node.Start, node.Length);

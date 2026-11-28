@@ -4,7 +4,6 @@ using StrataRec.Artifacts.Json;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary><see cref="JsonWords"/>: values as the JSON a person wrote, quoted short.</summary>
 public class JsonWordsTests
 {
     [Theory]

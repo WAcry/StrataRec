@@ -12,10 +12,6 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// A request's configuration override (<see cref="DebugOptions.ConfigOverride"/>): a merge patch of the pipeline
-/// applied after the request's arms, compiled for that request alone, on the home_feed sample.
-/// </summary>
 public sealed class ConfigOverrideTests
 {
     private static readonly string[] TreatmentArms = { "exp_freshness_calibration/calibrated", "exp_mmr_diversity/mmr", "exp_quality_weight/strong" };
@@ -38,14 +34,14 @@ public sealed class ConfigOverrideTests
         Assert.Equal(3, overridden.Items.Count);
         var parameters = overridden.Recording!.Runs[0].Params;
         Assert.Equal("3", parameters["final_top_k"].Value!.Value.GetRawText());
-        Assert.Equal("0.8", parameters["quality_weight"].Value!.Value.GetRawText()); // the arm's, which the override does not touch
+        Assert.Equal("0.8", parameters["quality_weight"].Value!.Value.GetRawText());
         Assert.Equal(TreatmentArms.Order(), overridden.Experiments.Assigned.Order());
         Assert.Empty(overridden.Experiments.Triggered); // the plan it ran has no experiments
         Assert.Equal(served.ManifestId, overridden.ManifestId);
 
         Assert.True(served.Succeeded, served.Error);
         Assert.Equal(8, served.Items.Count);
-        Assert.Equal(overridden.Items.Take(3).Select(i => i.Id), served.Items.Take(3).Select(i => i.Id)); // the same ranking, cut shorter
+        Assert.Equal(overridden.Items.Take(3).Select(i => i.Id), served.Items.Take(3).Select(i => i.Id));
     }
 
     [Fact]
@@ -62,8 +58,6 @@ public sealed class ConfigOverrideTests
     }
 
     [Theory]
-    // What the compile of the merged configuration finds at a value the override sets is the override's, at its pointer
-    //: it was at the pipeline's pointer, and the request had no ErrorPointer.
     [InlineData("""{ "params": { "final_top_k": "three" } }""", "PARAM_BAD_VALUE request/config_override/params/final_top_k: Parameter 'final_top_k'",
         "/config_override/params/final_top_k")]
     [InlineData("""{ "nodez": {} }""", "CONFIG_OVERRIDE_UNKNOWN_SECTION request/config_override/nodez", "/config_override/nodez")]
@@ -80,11 +74,8 @@ public sealed class ConfigOverrideTests
         "/config_override/params/recall_quotas/popular")]
     [InlineData("""{ "features": { "item.clicks_7d": { "default": "many" } } }""", "request/config_override/features/item.clicks_7d/default",
         "/config_override/features/item.clicks_7d/default")]
-    // An integer beyond 2^53 RFC 8785 cannot hold exactly: the compiler's hash of the node threw out of the request.
     [InlineData("""{ "nodes": { "coarse_top_k": { "order": 1152921504606846976 } } }""",
         "CONFIG_OVERRIDE_NOT_CANONICAL request/config_override/nodes/coarse_top_k/order", "/config_override/nodes/coarse_top_k/order")]
-    // A host's JsonNode.Parse keeps a repeated member, and the object threw ArgumentException out of the request
-    // when the compiler first enumerated it (the patch's sections, or a nested object when it was canonicalized).
     [InlineData("""{ "params": { "final_top_k": 3 }, "params": { "final_top_k": 4 } }""",
         "CONFIG_OVERRIDE_INVALID request/config_override/params: Member 'params' is given more than once. (hint: give each member once", "/config_override/params")]
     [InlineData("""{ "params": { "final_top_k": 3, "final_top_k": 4 } }""",
@@ -102,19 +93,9 @@ public sealed class ConfigOverrideTests
         Assert.Contains(error, result.Error, StringComparison.Ordinal);
         Assert.Equal(pointer, result.ErrorPointer);
         Assert.Equal(TreatmentArms.Order(), result.Experiments.Assigned.Order());
-        Assert.Null(result.Recording); // nothing ran
+        Assert.Null(result.Recording);
     }
 
-    /// <summary>
-    /// What a host builds in code, beyond what its text can say. Each was an exception out of the request (or,
-    /// for the integer, an error with no pointer): names that differ only in case under a case-insensitive parse, which the
-    /// check passed and the object threw on when first enumerated; an object repeating a member beside a NaN, which made
-    /// the check give up and the canonical form throw; a tree nested deeper than a reader's default depth, which threw in
-    /// the check. Each is an invalid request at the override's pointer. A number JSON cannot write is
-    /// CONFIG_OVERRIDE_NOT_CANONICAL whatever its CLR type, as a NaN double is: a Half NaN or infinity threw
-    /// JsonReaderException out of the request where the canonical form wrote it, and a boxed NaN was
-    /// CONFIG_OVERRIDE_INVALID, written by the check.
-    /// </summary>
     [Theory]
     [InlineData("ignore_case", "CONFIG_OVERRIDE_INVALID request/config_override/params/FINAL_TOP_K: Member 'FINAL_TOP_K' is given more than once",
         "/config_override/params/FINAL_TOP_K")]
@@ -151,12 +132,6 @@ public sealed class ConfigOverrideTests
         Assert.Equal(pointer, result.ErrorPointer);
     }
 
-    /// <summary>
-    /// An override nested deeper than a reader's default depth (64) threw out of the request where it was
-    /// checked. It may nest <see cref="PlanCompiler.OverrideMaxDepth"/> levels (62), so that every override that runs can be
-    /// recorded and replayed from its file: at the limit it compiles as before (an array is no value of final_top_k), one
-    /// level more is an invalid request at the first level too deep.
-    /// </summary>
     [Theory]
     [InlineData(62)]
     [InlineData(63)]
@@ -181,18 +156,12 @@ public sealed class ConfigOverrideTests
             return;
         }
 
-        var deepest = "/config_override/params/final_top_k" + string.Concat(Enumerable.Repeat("/0", PlanCompiler.OverrideMaxDepth - 2)); // level 63
+        var deepest = "/config_override/params/final_top_k" + string.Concat(Enumerable.Repeat("/0", PlanCompiler.OverrideMaxDepth - 2));
         Assert.Contains($"CONFIG_OVERRIDE_INVALID request{deepest}: Objects and arrays nest deeper than 62 levels here: this one is level 63. " +
             "(hint: nest objects and arrays at most 62 levels deep, counting the outermost)", result.Error, StringComparison.Ordinal);
         Assert.Equal(deepest, result.ErrorPointer);
     }
 
-    /// <summary>
-    /// A CLR value the host wraps (JsonValue.Create) is JSON only once it is written, and the check passed it as a
-    /// leaf: an object holding one name twice (a property and extension data) threw ArgumentException out of the request
-    /// where the canonical form wrote it (it used to be an invalid request at its member), and a cycle threw
-    /// JsonException there. Each is an invalid request at its pointer.
-    /// </summary>
     [Theory]
     [InlineData("repeated", "/config_override/nodes/probe/config/payload/A", "Member 'A' is given more than once.")]
     [InlineData("cycle", "/config_override/nodes/probe/config/payload", "This value cannot be written as JSON: A possible object cycle was detected.")]
@@ -210,11 +179,6 @@ public sealed class ConfigOverrideTests
         Assert.Equal(pointer, result.ErrorPointer);
     }
 
-    /// <summary>
-    /// A wrapped CLR <c>object[]</c> nested past the limit ran, and writing its recording threw JsonException at
-    /// <c>$.Request.ConfigOverride</c>; the same arrays built of JsonArray were an invalid request. Wrapped or not, an
-    /// override of 62 levels runs, and its recording is written, read and replayed; one of 63 is an invalid request at level 63.
-    /// </summary>
     [Theory]
     [InlineData(62, false)]
     [InlineData(62, true)]
@@ -250,12 +214,6 @@ public sealed class ConfigOverrideTests
         Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
     }
 
-    /// <summary>
-    /// Every reader of a wrapped CLR value writes it anew, and a value may write something else the second time:
-    /// the canonical form, the merge and the recording each wrote this one, which writes another popular quota each time,
-    /// so the recording held a quota that did not run. It is written by the check, and what it wrote then runs and is
-    /// recorded: the replay is identical, and nothing writes it after the request.
-    /// </summary>
     [Fact]
     public async Task AWrappedClrValue_IsWrittenOnce_AndRunsAndIsRecordedAsItWasWritten()
     {
@@ -266,7 +224,7 @@ public sealed class ConfigOverrideTests
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var writes = quotas.Writes;
-        Assert.Equal(1, writes); // Asking the value its kind wrote it, then writing it wrote it again
+        Assert.Equal(1, writes);
         var ran = recorded.Recording!.Runs[0].Params["recall_quotas.popular"].Value!.Value.GetRawText();
         Assert.Equal("21", ran);
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
@@ -277,10 +235,6 @@ public sealed class ConfigOverrideTests
         Assert.Equal(writes, quotas.Writes);
     }
 
-    /// <summary>
-    /// A wrapped CLR value is checked as the JSON it writes, by its own converter: a double NaN one writes as
-    /// the string "NaN" is that string, which runs and is recorded, not the number JSON cannot write.
-    /// </summary>
     [Fact]
     public async Task AClrNaNItsConverterWritesAsAString_IsThatString()
     {
@@ -303,11 +257,6 @@ public sealed class ConfigOverrideTests
             writer.WriteStringValue(double.IsNaN(value) ? "NaN" : value.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
-    /// <summary>
-    /// A wrapped CLR value that writes an object is merged as RFC 7396 merges an object, as the same object
-    /// built of JsonObject is: the merge set it whole, a leaf to it, and the baseline's two_tower quota was dropped
-    /// (RECALL_UNKNOWN_SOURCE). The JSON of a patch, not how the host built it, decides how it merges.
-    /// </summary>
     [Fact]
     public async Task AWrappedClrObject_MergesAsTheObjectItWrites()
     {
@@ -330,12 +279,6 @@ public sealed class ConfigOverrideTests
 
     private static JsonObject Quotas(JsonNode? quotas) => new() { ["params"] = new JsonObject { ["recall_quotas"] = quotas } };
 
-    /// <summary>
-    /// What the merged compile finds at the baseline's <c>final_top_k</c> (its value, below the minimum the
-    /// override sets) stays at the baseline when the override sets only <c>FINAL_TOP_K</c>, another parameter to the
-    /// merge, which compares names by ordinal. Traced back through a host's object parsed ignoring case, it moved to
-    /// <c>/config_override/params/final_top_k</c>, a member the override does not have. Only the host's options differ.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -353,7 +296,6 @@ public sealed class ConfigOverrideTests
         Assert.Null(result.ErrorPointer);
     }
 
-    /// <summary>An engine on home_feed with <c>Opaque@1</c>, a node that takes any JSON as its <c>payload</c> and does nothing.</summary>
     private static RecEngine OpaqueEngine()
     {
         var host = HomeFeedTestHost.Load();
@@ -363,7 +305,6 @@ public sealed class ConfigOverrideTests
         return engine;
     }
 
-    /// <summary>An override adding an <c>Opaque@1</c> node <c>probe</c> with <paramref name="payload"/>, at level 5.</summary>
     private static JsonObject Probe(JsonNode? payload) => new()
     {
         ["nodes"] = new JsonObject
@@ -372,7 +313,7 @@ public sealed class ConfigOverrideTests
         },
     };
 
-    /// <summary>Writes <c>{"A":1,"A":2}</c>: a property, and extension data holding its name.</summary>
+    /// <summary>Writes <c>{"A":1,"A":2}</c>.</summary>
     public sealed class RepeatedName
     {
         public int A { get; } = 1;
@@ -427,7 +368,6 @@ public sealed class ConfigOverrideTests
         }
     }
 
-    /// <summary>What a configuration nobody released produced never reaches the log sinks; asked for, it is captured.</summary>
     [Fact]
     public async Task AnOverride_WritesNoLogs_AndCapturesThemWhenAsked()
     {
@@ -450,7 +390,7 @@ public sealed class ConfigOverrideTests
         var plain = await engine.ExecuteAsync(Request("plain", null, null), TestContext.Current.CancellationToken);
         await logs.FlushAsync(TestContext.Current.CancellationToken);
         Assert.True(plain.Succeeded, plain.Error);
-        Assert.NotEmpty(sink.Snapshot()); // the served configuration logs as before
+        Assert.NotEmpty(sink.Snapshot());
     }
 
     [Fact]
@@ -477,11 +417,6 @@ public sealed class ConfigOverrideTests
         Assert.All(report.Nodes, n => Assert.False(n.Changed, $"{n.Node}: {n.Recorded} -> {n.Replayed}"));
     }
 
-    /// <summary>
-    /// An override builds on the configuration as it was loaded, not on the host's objects: the host edits them
-    /// after the load (a parameter, an arm removed), and an empty override still runs what is served, takes the arm the
-    /// served plan has, and replays identically on a fresh engine loaded from the files.
-    /// </summary>
     [Fact]
     public async Task AnOverride_BuildsOnTheConfigurationAsLoaded_NotOnTheHostsObjectsEditedSince()
     {
@@ -505,8 +440,8 @@ public sealed class ConfigOverrideTests
     }
 
     /// <summary>
-    /// The override's plan takes over what the served plan has loaded and holds nothing after its request: once the engine
-    /// is disposed, nothing of the binding host is left (a plan the request kept would keep its tables and instances).
+    /// The override's plan holds nothing after its request: once the engine is disposed, nothing of the binding host is
+    /// left (a plan the request kept would keep its tables and instances).
     /// </summary>
     [Fact]
     public async Task AnOverride_SharesTheServedBindings_AndReleasesThemWithItsRequest()
@@ -520,7 +455,7 @@ public sealed class ConfigOverrideTests
 
         var result = await engine.ExecuteAsync(Request("ov", null, Override("""{ "params": { "final_top_k": 3 } }""")), TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal((tables, instances), (bindings.TableCount, bindings.InstanceCount)); // nothing loaded twice
+        Assert.Equal((tables, instances), (bindings.TableCount, bindings.InstanceCount));
 
         await engine.DisposeAsync();
         Assert.True(SpinWait.SpinUntil(() => bindings.TableCount == 0 && bindings.InstanceCount == 0, TimeSpan.FromSeconds(30)),

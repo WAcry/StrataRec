@@ -18,13 +18,11 @@ public sealed class FeatureCatalogArtifact
 
 /// <summary>An entity that features hang off: keyed by <see cref="Key"/>, or computed from <see cref="Args"/>.</summary>
 /// <remarks>
-/// A keyed entity declares only the key, an ordered tuple of parts. Whether the entity is per request or per candidate, and each
-/// part's type, follow from it: a request input (<c>ctx.request.user_id</c>) has its declared type; <c>col.entity_id</c>
-/// the pipeline's <c>entity_key_type</c>; a candidate feature (<c>col.item.creator_id</c>, a foreign key) that feature's
-/// type. A key of request inputs only keys a context entity; any other a candidate entity. Declaring scope and key type
-/// as well only gave them a way to disagree: a <c>key_type</c> of int64 on <c>col.entity_id</c> in a pipeline of string
-/// ids made every lookup miss without an error. An entity with <see cref="Args"/> instead is per request: a service
-/// computes its features from the arguments.
+/// A keyed entity declares only the key, an ordered tuple of parts. Whether the entity is per request or per candidate,
+/// and each part's type, follow from it: a request input (<c>ctx.request.user_id</c>) has its declared type;
+/// <c>col.entity_id</c> the pipeline's <c>entity_key_type</c>; a candidate feature (<c>col.item.creator_id</c>, a
+/// foreign key) that feature's type. An entity with <see cref="Args"/> instead is per request: a service computes its
+/// features from the arguments.
 /// </remarks>
 public sealed class EntitySpec
 {

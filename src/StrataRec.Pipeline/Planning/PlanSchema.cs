@@ -15,7 +15,7 @@ public enum ColumnKind : byte
     /// <summary>A catalog feature (physical or derived) with a single fixed slot.</summary>
     Feature,
 
-    /// <summary>A node-produced column: one slot per producer, resolved through output bindings.</summary>
+    /// <summary>A node-produced column.</summary>
     Output,
 }
 
@@ -62,7 +62,7 @@ public enum ContextFieldKind : byte
 
 /// <summary>
 /// A request-level value: one addressable as <c>ctx.&lt;name&gt;</c>, or a request column, <c>req.&lt;name&gt;</c>.
-/// Expressions read both alike (<see cref="SymbolKind.Context"/>), from the request's one array of request-level values.
+/// Expressions read both alike (<see cref="SymbolKind.Context"/>).
 /// </summary>
 public sealed class ContextField
 {
@@ -188,8 +188,7 @@ public sealed class ParamLeaf
 }
 
 /// <summary>
-/// Adds a catalog feature to a plan schema the first time a name resolves to it: a plan holds only the
-/// features it reads, so what a request sizes by feature, slot or context field does not grow with a shared catalog.
+/// Adds a catalog feature to a plan schema the first time a name resolves to it.
 /// </summary>
 internal interface IFeatureRegistrar
 {
@@ -218,12 +217,9 @@ internal interface IFeatureRegistrar
 /// parameter leaves. Built once per plan; all requests share it.
 /// </summary>
 /// <remarks>
-/// <para>It is filled while the plan compiles, by the plan builder and the operators' compile context (so its mutators
-/// are internal); afterwards it is read-only like the rest of the plan.</para>
-/// <para>Catalog features are added on first reference (<see cref="IFeatureRegistrar"/>): while the plan compiles, a
-/// lookup of a feature not added yet adds it, so every way of reading one (expressions, operator configs, taps, the
-/// output) brings in exactly what is read. Once the feature plan is built the registrar is detached, and the schema of a
-/// plan that serves answers only for what it holds.</para>
+/// <para>It is filled while the plan compiles; afterwards it is read-only like the rest of the plan.</para>
+/// <para>Catalog features are added on first reference. Once the feature plan is built the schema of a plan that serves
+/// answers only for what it holds.</para>
 /// </remarks>
 public sealed class PlanSchema
 {
@@ -282,22 +278,22 @@ public sealed class PlanSchema
     public TableSchema CreateTableSchema() => new(KeyType, _slotTypes);
 
     /// <summary>
-    /// The type an expression's values have where they leave the engine: log columns and context fields, result columns,
-    /// a replay bundle's output types. For an expression that is nothing but a reference
+    /// The type an expression's values have where they leave the engine: log columns and context fields, result
+    /// columns, a replay bundle's output types. For an expression that is nothing but a reference
     /// (<see cref="CompiledExpression.Reference"/>), the type the name is declared with: a column's or feature's
-    /// (<c>int32</c>, <c>float32?</c>, <c>list&lt;float32,64&gt;</c>), a context field's <see cref="ContextField.DeclaredType"/>,
-    /// a parameter's; a host or log sink whose own types are narrow reads it at that width. For a computed expression,
-    /// which declares nothing, its promoted <see cref="CompiledExpression.ResultType"/>: inside the engine every expression
-    /// computes on promoted types, and a user who wants a computed value at a narrow type declares a derived feature of
-    /// that type and reads it.
+    /// (<c>int32</c>, <c>float32?</c>, <c>list&lt;float32,64&gt;</c>), a context field's
+    /// <see cref="ContextField.DeclaredType"/>, a parameter's; a host or log sink whose own types are narrow reads it
+    /// at that width. For a computed expression, which declares nothing, its promoted
+    /// <see cref="CompiledExpression.ResultType"/>, and a user who wants a computed value at a narrow type declares a
+    /// derived feature of that type and reads it.
     /// </summary>
     public ColumnType DeclaredType(CompiledExpression expression)
     {
         ArgumentNullException.ThrowIfNull(expression);
         return expression.Reference switch
         {
-            { Kind: SymbolKind.Context } context => _contextList[context.Id].DeclaredType, // the symbol's type is promoted
-            { } symbol => symbol.Type, // a column's is its declared type; a parameter's is only ever promoted
+            { Kind: SymbolKind.Context } context => _contextList[context.Id].DeclaredType,
+            { } symbol => symbol.Type,
             null => expression.ResultType,
         };
     }
@@ -317,9 +313,9 @@ public sealed class PlanSchema
     }
 
     /// <summary>
-    /// The index of the catalog feature <paramref name="name"/> (a candidate one's column, or a context one's field) when
-    /// the compile has registered it, otherwise -1. Unlike <see cref="TryGetColumn"/> and <see cref="TryGetContext"/> it
-    /// registers nothing and notes no read: it is for checks of what the compile registered.
+    /// The index of the catalog feature <paramref name="name"/> (a candidate one's column, or a context one's field)
+    /// when the compile has registered it, otherwise -1. Unlike <see cref="TryGetColumn"/> and
+    /// <see cref="TryGetContext"/> it registers nothing and notes no read.
     /// </summary>
     internal int RegisteredFeature(string name, bool context) =>
         context ? (_context.TryGetValue(name, out var field) ? field.FeatureIndex : -1)
@@ -345,9 +341,8 @@ public sealed class PlanSchema
     public bool TryGetParam(string name, [NotNullWhen(true)] out ParamLeaf? leaf) => _params.TryGetValue(name, out leaf);
 
     /// <summary>
-    /// Records a name whose declaration has an error, reported at the declaration (a column, parameter, request input or
-    /// feature of an unknown type): it is left out of the schema, and every use of it fails without a second error, so one
-    /// mistake is reported once (<see cref="IExpressionScope.IsUnusable"/>).
+    /// Records a name whose declaration has an error, reported at the declaration: it is left out of the schema, and
+    /// every use of it fails without a second error.
     /// </summary>
     /// <param name="qualifiedName">The name as expressions write it: <c>col.score.x</c>, <c>ctx.request.user_id</c>,
     /// <c>param.coarse_k</c> (for a map parameter, every leaf <c>param.quotas.*</c> too).</param>
@@ -368,15 +363,10 @@ public sealed class PlanSchema
             return true;
         }
 
-        // param.<map>.<key>: the map's declaration decides.
         var dot = name.StartsWith("param.", StringComparison.Ordinal) ? name.LastIndexOf('.') : -1;
         return dot > "param.".Length && _unusable.Contains(name[..dot]);
     }
 
-    /// <summary>
-    /// The candidate column names a reference may name (without <c>col.</c>), for suggestions: the schema's, and while
-    /// the plan compiles the catalog features not registered yet.
-    /// </summary>
     internal List<string> KnownColumnNames()
     {
         var names = new List<string>(_columnList.Count);
@@ -389,7 +379,6 @@ public sealed class PlanSchema
         return names;
     }
 
-    /// <summary>The request column names (without <c>req.</c>), for suggestions.</summary>
     internal List<string> KnownRequestColumnNames()
     {
         var names = new List<string>(_requestColumnList.Count);
@@ -401,16 +390,12 @@ public sealed class PlanSchema
         return names;
     }
 
-    /// <summary>Whether a column of this name is in the schema now, without registering a catalog feature.</summary>
     internal bool HoldsColumn(string name) => _columns.ContainsKey(name);
 
-    /// <summary>Whether a context field of this name is in the schema now, without registering a catalog feature.</summary>
     internal bool HoldsContext(string name) => _context.ContainsKey(name);
 
-    /// <summary>From now on, looking up a catalog feature registers it (<see cref="IFeatureRegistrar"/>).</summary>
     internal void AttachFeatures(IFeatureRegistrar registrar) => _features = registrar;
 
-    /// <summary>Stops registering catalog features: the plan's features are final once its feature plan is built.</summary>
     internal void DetachFeatures() => _features = null;
 
     /// <summary>
@@ -447,11 +432,9 @@ public sealed class PlanSchema
         return leaves;
     }
 
-    /// <param name="declared">The type as declared; expressions see its promoted form.</param>
     internal ContextField AddRequestInput(string name, ColumnType declared) =>
         AddContext("request." + name, declared.Promoted(), ContextFieldKind.RequestInput, declaredType: declared);
 
-    /// <param name="declared">The type as declared; expressions see its promoted form.</param>
     internal ContextField AddContextFeature(string featureName, ColumnType declared, int featureIndex) =>
         AddContext(featureName, declared.Promoted(), ContextFieldKind.Feature, featureIndex, declared);
 
@@ -485,7 +468,6 @@ public sealed class PlanSchema
             Implicit = isImplicit,
         });
 
-    /// <summary>Declares a request column (<c>req.&lt;name&gt;</c>); expressions see its type promoted, as a request input's.</summary>
     internal ContextField DeclareRequestColumn(string name, ColumnType type, bool flow, bool hasDefault, ScalarValue defaultValue, string pointer)
     {
         var field = new ContextField
@@ -498,7 +480,7 @@ public sealed class PlanSchema
             RequestIndex = _requestColumnList.Count,
             Flow = flow,
             HasDefault = hasDefault,
-            Default = hasDefault ? ColumnValues.AsStored(defaultValue, type) : defaultValue, // as a written value is held
+            Default = hasDefault ? ColumnValues.AsStored(defaultValue, type) : defaultValue,
             Pointer = pointer,
         };
         _requestColumns.Add(name, field);
@@ -528,7 +510,6 @@ public sealed class PlanSchema
 
     internal void AddLookupTable(ILookupTable table) => _tables[table.Name] = table;
 
-    /// <summary>The slot holding <paramref name="node"/>'s version of an output column (allocated on first use).</summary>
     internal int GetNodeSlot(string node, LogicalColumn column)
     {
         if (!_nodeSlots.TryGetValue((node, column.Id), out var slot))

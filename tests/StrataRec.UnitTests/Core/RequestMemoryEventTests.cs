@@ -5,10 +5,6 @@ using StrataRec.Core.Memory;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// The two memory events: a buffer pool that will not take a request's buffers back, and buffers still
-/// rented long after their request returned because calls it abandoned have not finished.
-/// </summary>
 public sealed class RequestMemoryEventTests
 {
     [Fact]
@@ -24,8 +20,8 @@ public sealed class RequestMemoryEventTests
         _ = memory.Rent<float>(16);
 
         Assert.Equal(0, memory.Release()); // never throws for the pool: the last release may run on a client's thread
-        Assert.Equal((1, true), (pool.Taken, memory.IsReturned)); // the int buffer went back; the floats are the GC's
-        Assert.Equal(1, ended.Count); // and what the request borrowed is no longer borrowed
+        Assert.Equal((1, true), (pool.Taken, memory.IsReturned));
+        Assert.Equal(1, ended.Count);
 
         events.Flush();
         var entry = Assert.Single(logger.Entries);
@@ -50,7 +46,7 @@ public sealed class RequestMemoryEventTests
 
         logger.Entries.Clear();
         events.Flush();
-        Assert.Empty(logger.Entries); // once per request: the watch ends with the report
+        Assert.Empty(logger.Entries);
 
         Assert.Equal(0, memory.Release());
     }
@@ -63,7 +59,7 @@ public sealed class RequestMemoryEventTests
         var memory = Abandoned();
         events.WatchHeld(memory, "home_feed", "req-late");
 
-        Assert.Equal(0, memory.Release()); // the abandoned call ended before the flush
+        Assert.Equal(0, memory.Release());
         events.Flush();
         Assert.Empty(logger.Entries);
     }
@@ -83,7 +79,6 @@ public sealed class RequestMemoryEventTests
         Assert.Equal(0, memory.Release());
     }
 
-    /// <summary>A request's memory after the request returned, held by one call it abandoned.</summary>
     private static RequestMemory Abandoned()
     {
         var memory = new RequestMemory();
@@ -93,7 +88,6 @@ public sealed class RequestMemoryEventTests
         return memory;
     }
 
-    /// <summary>Takes back int buffers only.</summary>
     private sealed class RefusingPool : IBufferPool
     {
         public int Taken { get; private set; }

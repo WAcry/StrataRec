@@ -5,11 +5,6 @@ using StrataRec.Testing;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>stratarec run</c> writes the document a service answers with (<see cref="RecResultJson"/>), and the CLI's entry point
-/// (<see cref="StrataRecCommandLine"/>) writes where its caller says, so a host binary runs the commands with its own
-/// components and a test reads what they wrote.
-/// </summary>
 public sealed class RunOutputTests : IDisposable
 {
     private readonly string _directory = Directory.CreateTempSubdirectory("stratarec-run-output-").FullName;
@@ -35,10 +30,9 @@ public sealed class RunOutputTests : IDisposable
         Assert.All(items, item =>
         {
             Assert.Equal(new[] { "rank", "id", "columns" }, item.EnumerateObject().Select(m => m.Name));
-            Assert.Equal(JsonValueKind.Number, item.GetProperty("id").ValueKind); // an int64 entity id, written exactly
+            Assert.Equal(JsonValueKind.Number, item.GetProperty("id").ValueKind);
             Assert.Equal(new[] { "category", "primary_source", "score" }, item.GetProperty("columns").EnumerateObject().Select(m => m.Name).Order(StringComparer.Ordinal));
         });
-        // The request-level values beside the items, at their declared types: the recall's count, the best final score.
         var values = root.GetProperty("values");
         Assert.Equal(new[] { "best_score", "popular", "recalled" }, values.EnumerateObject().Select(m => m.Name));
         Assert.True(values.GetProperty("recalled").GetInt64() >= items.Count);

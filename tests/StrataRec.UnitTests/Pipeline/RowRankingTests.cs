@@ -7,10 +7,6 @@ using StrataRec.Pipeline.Operators.Standard;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// Ranking by a score column compares the scores exactly: int64 scores beyond 2^53, where a double cannot
-/// tell neighbours apart, keep their numeric order; missing and NaN go last; ties go to the lower entity id.
-/// </summary>
 public sealed class RowRankingTests
 {
     private const long TwoTo53 = 1L << 53;
@@ -20,8 +16,6 @@ public sealed class RowRankingTests
     [InlineData(true)]
     public void EntityIdsJustAbove2To53_RankByTheirExactValue(bool ascending)
     {
-        // {"score_col": "entity_id", "k": 2}. As doubles both ids are 2^53 and tie, so the tie-break
-        // put the lower id first whatever the direction.
         var ids = new[] { TwoTo53, TwoTo53 + 1 };
         var (table, memory) = Table(ids);
 
@@ -55,7 +49,6 @@ public sealed class RowRankingTests
     [InlineData(true)]
     public void TruncatedTopK_IsTheBestKInOrder_WithMissingLastAndTiesByEntityId(bool ascending)
     {
-        // Ids 1..12; two ties (ids 3 and 9, ids 4 and 11), three missing values, values that differ only past 2^53.
         long?[] scores =
         {
             TwoTo53 + 5, null, TwoTo53 + 2, TwoTo53 + 7, long.MinValue, TwoTo53 + 3, null, TwoTo53 + 6, TwoTo53 + 2, long.MaxValue, TwoTo53 + 7,
@@ -71,7 +64,6 @@ public sealed class RowRankingTests
             Assert.Equal(full.Take(k), Rank(table, column, k, ascending, memory));
         }
 
-        // Missing values are last in both directions, and among themselves by entity id.
         Assert.Equal(new long[] { 2, 7, 12 }, full.TakeLast(3));
         Assert.Equal(ascending ? new long[] { 5, 3, 9 } : new long[] { 10, 4, 11 }, full.Take(3));
     }
@@ -99,14 +91,13 @@ public sealed class RowRankingTests
 
         var ranked = Rank(table, column, scores.Length, ascending, memory);
 
-        // -0.0 (id 3) ties with 0.0 (id 1) and so follows it; NaN (id 2) and missing (id 6) are last, by id.
         long[] numeric = { 4, 8, 10, 1, 3, 9, 5, 7 };
         Assert.Equal((ascending ? numeric : DescendingWithTies(numeric)).Concat(new long[] { 2, 6 }), ranked);
 
         static long[] DescendingWithTies(long[] ascendingOrder)
         {
             var reversed = ascendingOrder.Reverse().ToList();
-            var zero = reversed.IndexOf(3); // 3 then 1 reversed: ties keep the lower id first
+            var zero = reversed.IndexOf(3);
             (reversed[zero], reversed[zero + 1]) = (reversed[zero + 1], reversed[zero]);
             return reversed.ToArray();
         }
@@ -138,13 +129,11 @@ public sealed class RowRankingTests
 
         RowRanking.Sort(rows, scores, table, memory);
 
-        // "c" (2) after "f" (∞); the zeros tie, so "a" before "b"; "e" and "h" tie at 1; the NaNs last, by id too.
         Assert.Equal(new[] { "f", "c", "e", "h", "a", "b", "d", "g" }, rows.Select(row => table.StringIds.Get(row)));
     }
 
     private static long[] Ids(int count) => Enumerable.Range(1, count).Select(i => (long)i).ToArray();
 
-    /// <summary>The expected rank order: present scores by value (best first), ties and missing values by id.</summary>
     private static long[] Expected(long[] ids, long?[] scores, bool ascending)
     {
         var present = ids.Where(id => scores[id - 1] is not null);
@@ -184,7 +173,6 @@ public sealed class RowRankingTests
     private static ScalarColumn<long> Int64Scores(CandidateTable table, long[] scores) =>
         Int64Scores(table, scores.Select(s => (long?)s).ToArray());
 
-    /// <summary>The entity ids of the best <paramref name="k"/> rows, in rank order.</summary>
     private static long[] Rank(CandidateTable table, ColumnBuffer score, int k, bool ascending, RequestMemory memory)
     {
         var rows = table.Rows.Order.ToArray();

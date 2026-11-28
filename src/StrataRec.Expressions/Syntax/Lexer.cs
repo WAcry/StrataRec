@@ -40,7 +40,7 @@ internal enum TokenKind : byte
     At,
 }
 
-/// <summary>One token. <see cref="IntValue"/> holds the magnitude of integer literals (up to 2^63 so that
+/// <summary><see cref="IntValue"/> holds the magnitude of integer literals (up to 2^63 so that
 /// <c>-9223372036854775808</c> can be written).</summary>
 internal readonly record struct Token(TokenKind Kind, int Start, int Length, string? Text = null, ulong IntValue = 0, double FloatValue = 0)
 {
@@ -53,7 +53,6 @@ internal sealed class SyntaxErrorException(ExpressionDiagnostic diagnostic) : Ex
     public ExpressionDiagnostic Diagnostic { get; } = diagnostic;
 }
 
-/// <summary>CEL-compatible tokenizer: literals, identifiers, operators, <c>//</c> comments.</summary>
 internal static class Lexer
 {
     public static List<Token> Tokenize(string source)
@@ -78,7 +77,6 @@ internal static class Lexer
 
             if (IsIdentStart(c))
             {
-                // r'..' raw strings; b'..' bytes are not supported.
                 if ((c is 'r' or 'R' or 'b' or 'B') && i + 1 < source.Length && source[i + 1] is '\'' or '"')
                 {
                     if (c is 'b' or 'B')
@@ -354,9 +352,7 @@ internal static class Lexer
     }
 
     /// <summary>
-    /// Reads a fixed-width numeric escape (hex <c>x</c>, <c>u</c>, <c>U</c> or octal) and appends its code point, which
-    /// must be a Unicode scalar value: at most U+10FFFF and not a surrogate. Eight hex digits reach 0xFFFFFFFF, so the
-    /// value is accumulated in 64 bits. Every rejection is a syntax diagnostic with a hint, never a runtime exception.
+    /// Eight hex digits reach 0xFFFFFFFF, so the value is accumulated in 64 bits.
     /// </summary>
     private static void AppendCodePoint(string s, ref int i, int digits, int radix, int start, StringBuilder sb, string hint)
     {

@@ -11,10 +11,8 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Hosting;
 
 /// <summary>
-/// The lifetime of the instances bindings name: shared by identity and factory, loaded once before a plan is
-/// served, never handed out again after a failed load, and disposed only once their lease is retired and its last user
-/// (a request, a run, a call the run abandoned) has left, never while their load runs. Loads and disposals signal through
-/// task completion sources, so nothing here depends on timing except the timeouts under test.
+/// Loads and disposals signal through task completion sources, so nothing here depends on timing except the timeouts
+/// under test.
 /// </summary>
 public sealed class BindingHostClientTests
 {
@@ -33,11 +31,11 @@ public sealed class BindingHostClientTests
         using var b = host.OpenLease();
 
         var first = a.Acquire(Spec(factory), factory.Create);
-        Assert.Same(first, a.Acquire(Spec(factory), factory.Create)); // a lease takes each identity once
+        Assert.Same(first, a.Acquire(Spec(factory), factory.Create));
         Assert.Same(first, b.Acquire(Spec(factory, """{ "uri": "m.bin" }"""), factory.Create));
         Assert.NotSame(first, b.Acquire(Spec(factory, """{ "uri": "other.bin" }"""), factory.Create));
         var other = new Factory();
-        Assert.NotSame(first, b.Acquire(Spec(other), other.Create)); // another registry never shares
+        Assert.NotSame(first, b.Acquire(Spec(other), other.Create));
 
         Assert.Equal((2, 1), (factory.Created.Count, other.Created.Count));
         Assert.Equal(3, host.InstanceCount);
@@ -60,7 +58,7 @@ public sealed class BindingHostClientTests
 
         instance.FinishLoad();
         Assert.Empty(await waiting.WaitAsync(Wait, TestContext.Current.CancellationToken));
-        Assert.Empty(await b.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken)); // taken over loaded
+        Assert.Empty(await b.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Equal(1, instance.Loads);
     }
 
@@ -83,11 +81,11 @@ public sealed class BindingHostClientTests
 
         using var retry = host.OpenLease();
         var fresh = retry.Acquire(Spec(factory), factory.Create);
-        Assert.NotSame(broken, fresh); // the next load really retries
+        Assert.NotSame(broken, fresh);
         fresh.FinishLoad();
         Assert.Empty(await retry.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
 
-        failed.Dispose(); // the failed plan returns its lease: its instance goes
+        failed.Dispose();
         await broken.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.False(fresh.Disposed.Task.IsCompleted);
         Assert.Equal(1, host.InstanceCount);
@@ -107,9 +105,9 @@ public sealed class BindingHostClientTests
         Assert.Contains("LoadTimeout", failure.Hint, StringComparison.Ordinal);
 
         lease.Dispose();
-        Assert.True(SpinWait.SpinUntil(() => slow.LoadToken.IsCancellationRequested, Wait)); // the release cancels the load...
+        Assert.True(SpinWait.SpinUntil(() => slow.LoadToken.IsCancellationRequested, Wait));
         await Task.Delay(50, TestContext.Current.CancellationToken);
-        Assert.False(slow.Disposed.Task.IsCompleted); // ...and does not dispose under it
+        Assert.False(slow.Disposed.Task.IsCompleted);
 
         slow.FinishLoad();
         await slow.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -123,16 +121,16 @@ public sealed class BindingHostClientTests
         var factory = new Factory();
         var lease = host.OpenLease();
         var instance = Loaded(lease, factory);
-        Assert.True(lease.TryEnter()); // a request
+        Assert.True(lease.TryEnter());
         var run = lease.Join(); // its run, ended by its request memory
 
-        lease.Dispose(); // the plan is replaced
-        Assert.False(lease.TryEnter()); // no new request enters a retired lease
-        lease.RequestEnded(); // the request returned...
+        lease.Dispose();
+        Assert.False(lease.TryEnter());
+        lease.RequestEnded();
         await Task.Delay(20, TestContext.Current.CancellationToken);
         Assert.False(instance.Disposed.Task.IsCompleted); // ...but a call its run abandoned still runs
 
-        run.RequestEnded(); // that call returned
+        run.RequestEnded();
         await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(0, host.InstanceCount);
     }
@@ -209,11 +207,11 @@ public sealed class BindingHostClientTests
         var waiting = loading.WaitLoadedAsync(TestContext.Current.CancellationToken);
         await instance.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         var used = Loaded(held, factory, """{ "uri": "used.bin" }""");
-        Assert.True(held.TryEnter()); // a request still runs on the plan
+        Assert.True(held.TryEnter());
 
         loading.Dispose();
         held.Dispose();
-        await host.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken); // bounded: the request is still running
+        await host.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         Assert.True(instance.LoadToken.IsCancellationRequested);
         await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -223,13 +221,13 @@ public sealed class BindingHostClientTests
         Assert.Contains("stopped before the load completed", failure.Message, StringComparison.Ordinal);
         Assert.Throws<ObjectDisposedException>(() => host.OpenLease());
 
-        held.RequestEnded(); // the request returns after shutdown: its instance is still disposed
+        held.RequestEnded();
         await used.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
     }
 
     [Theory]
-    [InlineData(true)] // the lease is released, then the host shuts down
-    [InlineData(false)] // the host shuts down, then the lease is released
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task ALoadsCancellationCallbackStillCleaningUp_DelaysTheDisposal_AndShutdownReportsIt(bool releasedFirst)
     {
         var logs = new ListLoggerFactory();
@@ -254,9 +252,9 @@ public sealed class BindingHostClientTests
             lease.Dispose(); // a second cancellation must still wait for the first one's callbacks
         }
 
-        await shutdown.WaitAsync(Wait, TestContext.Current.CancellationToken); // bounded by its timeout
+        await shutdown.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Contains(logs.Entries, e => e.EventId == 1210);
-        Assert.False(instance.Disposed.Task.IsCompleted); // the load returned, its cancellation callback has not
+        Assert.False(instance.Disposed.Task.IsCompleted);
 
         cleanup.Set();
         await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -282,7 +280,7 @@ public sealed class BindingHostClientTests
 
         await instance.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal((1, 0), (instance.DisposeCount, instance.DisposalsDuringCleanup));
-        Assert.Contains(logs.Entries, e => e.EventId == 1212); // logged before the disposal, which waited for the callback
+        Assert.Contains(logs.Entries, e => e.EventId == 1212);
     }
 
     [Fact]
@@ -314,7 +312,7 @@ public sealed class BindingHostClientTests
         var compiled = await lease.CompileAsync(bindings =>
         {
             var client = bindings.Acquire(Spec(factory), factory.Create);
-            var lookup = bindings.Signature(client, "ctr_model", null); // starts the load, which waits for the test
+            var lookup = bindings.Signature(client, "ctr_model", null);
             statuses.Add(lookup.Status);
             client.FinishLoad();
             return lookup;
@@ -323,7 +321,7 @@ public sealed class BindingHostClientTests
         Assert.Equal([SignatureStatus.Pending, SignatureStatus.Known], statuses);
         Assert.Equal("p_click", Assert.Single(compiled.Signature!.Outputs).Name);
         var instance = Assert.Single(factory.Created);
-        Assert.Equal((1, 1), (instance.Loads, instance.SignatureCalls)); // asked once per (model, version)
+        Assert.Equal((1, 1), (instance.Loads, instance.SignatureCalls));
     }
 
     [Fact]
@@ -359,7 +357,7 @@ public sealed class BindingHostClientTests
             var baseline = bindings.Signature(client, "ctr_model", null);
             compiles.Add(baseline.Status);
             answer.TrySetResult();
-            Assert.True(SpinWait.SpinUntil(() => bindings.Signature(client, "ctr_model", null).Status == SignatureStatus.Known, Wait)); // an arm
+            Assert.True(SpinWait.SpinUntil(() => bindings.Signature(client, "ctr_model", null).Status == SignatureStatus.Known, Wait));
             return baseline;
         }, TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
@@ -380,16 +378,16 @@ public sealed class BindingHostClientTests
             var lookup = await Task.Run(() => lease.CompileAsync(bindings =>
                 bindings.Signature(bindings.Acquire(Spec(server), server.Create), "ctr_model", null))).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-            Assert.Equal(SignatureStatus.Failed, lookup.Status); // the client has not returned: its answer is not waited for
+            Assert.Equal(SignatureStatus.Failed, lookup.Status);
             Assert.Contains("within 50 ms", lookup.Error, StringComparison.Ordinal);
 
             // The bound may end the wait before the pool even started the client's method: what follows needs
             // the client inside it, so wait for that instead of assuming the pool started it within the 50 ms.
             await server.Entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
             Assert.True(server.Inside);
-            lease.Dispose(); // the plan is rejected
+            lease.Dispose();
             await Task.Delay(50, TestContext.Current.CancellationToken);
-            Assert.False(server.Disposed.Task.IsCompleted); // the client is still inside its method
+            Assert.False(server.Disposed.Task.IsCompleted);
         }
         finally
         {
@@ -441,7 +439,7 @@ public sealed class BindingHostClientTests
         await server.Entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         lease.Dispose(); // cancels the lookup: its callback ends the lookup, then goes on cleaning up with the instance
         await server.CleanupStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => compiling.WaitAsync(Wait, TestContext.Current.CancellationToken)); // the second compile meets the retired lease
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => compiling.WaitAsync(Wait, TestContext.Current.CancellationToken));
         await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(server.Disposed.Task.IsCompleted);
 
@@ -469,12 +467,12 @@ public sealed class BindingHostClientTests
         }, cancel.Token);
         Assert.True(SpinWait.SpinUntil(() => client?.SignatureCalls == 1, Wait));
 
-        cancel.Cancel(); // the engine's load is cancelled...
+        cancel.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait, TestContext.Current.CancellationToken));
-        lease.Dispose(); // ...and returns its lease
-        Assert.True(SpinWait.SpinUntil(() => client!.SignatureToken.IsCancellationRequested, Wait)); // the lookup is cancelled...
+        lease.Dispose();
+        Assert.True(SpinWait.SpinUntil(() => client!.SignatureToken.IsCancellationRequested, Wait));
         await Task.Delay(50, TestContext.Current.CancellationToken);
-        Assert.False(client!.Disposed.Task.IsCompleted); // ...and the client is not disposed under it
+        Assert.False(client!.Disposed.Task.IsCompleted);
 
         answer.SetResult();
         await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -485,9 +483,8 @@ public sealed class BindingHostClientTests
     [Fact]
     public async Task ACancelledPlansLookupWaitingForTheLoad_EndsAtOnce_SoItsLeaseEndsAndTheLoadIsCancelled()
     {
-        // The lookup holds the lease, the lease holds the client, and the client's load is cancelled only once nobody holds
-        // it. A lookup that went on waiting for the load after its plan was cancelled held all three until LoadTimeout
-        // (two minutes here); the bound below is far shorter.
+        // The lookup holds the lease, the lease holds the client, and the client's load is cancelled only once nobody
+        // holds it.
         await using var host = new BindingHost();
         var factory = new Factory();
         var lease = host.OpenLease();
@@ -496,23 +493,21 @@ public sealed class BindingHostClientTests
         var compiling = lease.CompileAsync(bindings =>
             bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), cancel.Token);
         var client = Assert.Single(factory.Created);
-        await client.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the load waits for its token, or for the test
+        await client.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         cancel.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => compiling.WaitAsync(Wait, TestContext.Current.CancellationToken));
         lease.Dispose();
 
-        await client.Disposed.Task.WaitAsync(Prompt, TestContext.Current.CancellationToken); // the lease ended and released the client: its load was cancelled
+        await client.Disposed.Task.WaitAsync(Prompt, TestContext.Current.CancellationToken);
         Assert.True(client.LoadToken.IsCancellationRequested);
         Assert.Empty(lease.Instances);
-        Assert.Equal(0, client.SignatureCalls); // nobody waits for the answer any more, so the client is never asked
+        Assert.Equal(0, client.SignatureCalls);
     }
 
     [Fact]
     public async Task APlanSharingTheClient_KeepsItsLoadWhenAnotherPlanIsCancelled_AndGetsItsAnswer()
     {
-        // The control: only the cancelled plan's wait ends. The other plan holds the same client, so its load goes on, and
-        // that plan's lookup is answered once the load completes.
         await using var host = new BindingHost();
         var factory = new Factory();
         var cancelled = host.OpenLease();
@@ -523,15 +518,15 @@ public sealed class BindingHostClientTests
             bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), cancel.Token);
         var second = surviving.CompileAsync(bindings =>
             bindings.Signature(bindings.Acquire(Spec(factory), factory.Create), "ctr_model", null), TestContext.Current.CancellationToken);
-        var client = Assert.Single(factory.Created); // one client, one load, both lookups waiting for it
+        var client = Assert.Single(factory.Created);
         await client.LoadStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         cancel.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(Wait, TestContext.Current.CancellationToken));
         cancelled.Dispose();
 
-        Assert.True(SpinWait.SpinUntil(() => cancelled.Instances.Count == 0, Prompt)); // its lookup ended, and its lease with it
-        Assert.False(client.LoadToken.IsCancellationRequested); // the other plan still holds the client
+        Assert.True(SpinWait.SpinUntil(() => cancelled.Instances.Count == 0, Prompt));
+        Assert.False(client.LoadToken.IsCancellationRequested);
         Assert.False(second.IsCompleted);
 
         client.FinishLoad();
@@ -601,7 +596,6 @@ public sealed class BindingHostClientTests
         lease.Acquire(Spec(factory, """{ "uri": "slow.bin" }"""), factory.Create); // still loading when the other fails
         broken.FailLoad(new UnreadableException());
 
-        // Stops early only with a failure to show.
         var failure = Assert.Single(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
 
         Assert.Equal(("BINDING_LOAD_FAILED", "bindings:test", "/services/ctr_model"), (failure.Code, failure.Artifact, failure.Pointer));
@@ -629,14 +623,14 @@ public sealed class BindingHostClientTests
         await using var host = new BindingHost();
         var a = new ValueFactory("test");
         var b = new ValueFactory("test");
-        Assert.Equal(a, b); // a record: equal by value
+        Assert.Equal(a, b);
         using var first = host.OpenLease();
         using var second = host.OpenLease();
 
         var fromA = first.Acquire(Spec(a), a.Create);
         var fromB = second.Acquire(Spec(b), b.Create);
 
-        Assert.NotSame(fromA, fromB); // instances are shared only by the same factory object
+        Assert.NotSame(fromA, fromB);
         Assert.Equal(2, host.InstanceCount);
     }
 
@@ -653,7 +647,7 @@ public sealed class BindingHostClientTests
         lease.Dispose();
 
         await Task.WhenAll(first.Disposed.Task, second.Disposed.Task).WaitAsync(Wait, TestContext.Current.CancellationToken);
-        Assert.Equal(0, host.InstanceCount); // both entries were found again, although the factory's hash changed
+        Assert.Equal(0, host.InstanceCount);
     }
 
     private static Instance Loaded(BindingLease lease, Factory factory, string settings = """{ "uri": "m.bin" }""")
@@ -689,13 +683,11 @@ public sealed class BindingHostClientTests
         }
     }
 
-    /// <summary>An implementation's exception whose message cannot be read: describing it throws.</summary>
     private sealed class UnreadableException : Exception
     {
         public override string Message => throw new InvalidOperationException("the message failed");
     }
 
-    /// <summary>A factory with value equality: two with the same kind are equal, and neither may get the other's instances.</summary>
     private sealed record ValueFactory(string Kind)
     {
         public Instance Create(BindingContext context) => new(context);
@@ -713,10 +705,6 @@ public sealed class BindingHostClientTests
         }
     }
 
-    /// <summary>
-    /// A client without a load whose signature only its model server knows: each lookup answers once
-    /// <paramref name="answer"/> completes, or is cancelled. Its own factory (one instance).
-    /// </summary>
     private sealed class ModelServer(Task answer) : IServiceClient
     {
         private int _lookups;
@@ -736,10 +724,6 @@ public sealed class BindingHostClientTests
             ValueTask.FromResult(ServiceStatus.Ok);
     }
 
-    /// <summary>
-    /// A client without a load whose signature method blocks (synchronous I/O, say) before it returns its task, until
-    /// <see cref="Gate"/> is set; disposable. Its own factory.
-    /// </summary>
     private sealed class BlockingServer : IServiceClient, IDisposable
     {
         private int _inside;
@@ -763,7 +747,7 @@ public sealed class BindingHostClientTests
             try
             {
                 Entered.TrySetResult();
-                Gate.Wait(); // ignores the token, and has not returned a task yet
+                Gate.Wait();
                 return ValueTask.FromResult(Instance.Signature());
             }
             finally
@@ -788,7 +772,7 @@ public sealed class BindingHostClientTests
 
     /// <summary>
     /// A client without a load whose signature lookup waits for its server; when the lookup is cancelled, its callback
-    /// ends the lookup at once and then goes on cleaning up until <see cref="Gate"/> is set. Disposable; its own factory.
+    /// ends the lookup at once and then goes on cleaning up until <see cref="Gate"/> is set.
     /// </summary>
     private sealed class CleaningServer : IServiceClient, IDisposable
     {
@@ -814,10 +798,10 @@ public sealed class BindingHostClientTests
             {
                 Volatile.Write(ref _cleaningUp, 1);
                 CleanupStarted.TrySetResult();
-                answer.TrySetCanceled(); // the lookup returns first...
+                answer.TrySetCanceled();
                 try
                 {
-                    Gate.Wait(); // ...while the cleanup goes on using the instance
+                    Gate.Wait();
                 }
                 finally
                 {
@@ -842,7 +826,6 @@ public sealed class BindingHostClientTests
         }
     }
 
-    /// <summary>A loadable, disposable model client whose load the test finishes or fails.</summary>
     private sealed class Instance(BindingContext context) : IServiceClient, ILoadable, IAsyncDisposable
     {
         private readonly TaskCompletionSource _load = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -898,7 +881,6 @@ public sealed class BindingHostClientTests
 
         public TaskCompletionSource CleanupStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        /// <summary>Disposals that began while a cancellation callback was still cleaning up: always 0.</summary>
         public int DisposalsDuringCleanup => Volatile.Read(ref _disposalsDuringCleanup);
 
         public async ValueTask LoadAsync(CancellationToken cancellationToken)
@@ -911,10 +893,10 @@ public sealed class BindingHostClientTests
                 {
                     Volatile.Write(ref _cleaningUp, 1);
                     CleanupStarted.TrySetResult();
-                    _load.TrySetCanceled(); // the load returns first...
+                    _load.TrySetCanceled();
                     try
                     {
-                        gate.Wait(); // ...while the cleanup goes on using the instance
+                        gate.Wait();
                         if (ThrowingCleanup)
                         {
                             throw new InvalidOperationException("cleanup failed");
@@ -949,7 +931,7 @@ public sealed class BindingHostClientTests
                 Interlocked.Increment(ref _signatureCalls);
                 if (SignatureGate is not null)
                 {
-                    await SignatureGate; // ignores the cancellation
+                    await SignatureGate;
                 }
 
                 return Signature();
@@ -989,7 +971,6 @@ public sealed class BindingHostClientTests
         public ValueTask<string?> ResolveAsync(string name, CancellationToken cancellationToken) => ValueTask.FromResult<string?>("value-of-" + name);
     }
 
-    /// <summary>Records every log entry; with <paramref name="throwOn"/>, the log call for that event id throws instead.</summary>
     private sealed class ListLoggerFactory(int? throwOn = null) : ILoggerFactory
     {
         public int? ThrowOn { get; } = throwOn;

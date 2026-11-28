@@ -2,7 +2,6 @@ using StrataRec.Hosting.Manifests;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>The pointer files <c>stratarec publish</c> writes and a node reads: the format, atomic replacement, strictness.</summary>
 public sealed class FileSystemManifestSourceTests : IDisposable
 {
     private const string IdA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -34,7 +33,7 @@ public sealed class FileSystemManifestSourceTests : IDisposable
 
         await source.WritePointerAsync("home_feed", "prod", IdB, TestContext.Current.CancellationToken);
         Assert.Equal(IdB, await source.GetManifestIdAsync("home_feed", "prod", CancellationToken.None));
-        Assert.Equal(new[] { "home_feed.json" }, Directory.GetFiles(Path.GetDirectoryName(path)!).Select(Path.GetFileName)); // no temporary left
+        Assert.Equal(new[] { "home_feed.json" }, Directory.GetFiles(Path.GetDirectoryName(path)!).Select(Path.GetFileName));
     }
 
     [Fact]
@@ -48,7 +47,7 @@ public sealed class FileSystemManifestSourceTests : IDisposable
 
     [Theory]
     [InlineData("", "is not valid: ")]
-    [InlineData("{ \"manifest\": \"" + IdA + "\", }", "is not valid: ")] // strict JSON: no trailing comma
+    [InlineData("{ \"manifest\": \"" + IdA + "\", }", "is not valid: ")]
     [InlineData("// a comment\n{ \"manifest\": \"" + IdA + "\" }", "is not valid: ")]
     [InlineData("[\"" + IdA + "\"]", "it is a JSON array, not an object")]
     [InlineData("{ \"id\": \"" + IdA + "\" }", "it has no string member 'manifest'")]
@@ -80,10 +79,6 @@ public sealed class FileSystemManifestSourceTests : IDisposable
         Assert.ThrowsAny<ArgumentException>(() => source.GetPointerPath(pipelineId, environment));
     }
 
-    /// <summary>
-    /// A name starting with '.' is refused for writing, reading and listing alike: listing skips such entries (temporary
-    /// and lock files), so a pointer written under one was never listed.
-    /// </summary>
     [Theory]
     [InlineData("p", ".preview")]
     [InlineData(".p", "e")]

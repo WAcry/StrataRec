@@ -76,10 +76,6 @@ public sealed class TopKFactory : IOperatorFactory
     {
         private int K(ScalarValue parameter) => kParam is null ? fixedK : parameter.IsMissing ? 0 : (int)Math.Clamp(parameter.AsInt64(), 0, int.MaxValue);
 
-        /// <summary>
-        /// For each row it ranked: k, the row's key and the last kept row's key, and whether the key, a tie on
-        /// it (broken by <c>entity_id</c>) or a missing key put the row past the cut.
-        /// </summary>
         public void Explain(ExplainContext context)
         {
             var k = K(kParam is { } p ? context.Param(p) : default);
@@ -201,7 +197,7 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
             var count = Place(groupOf.AsSpan(0, n), groups, window, maxPerWindow, placed, memory);
             for (var i = 0; i < count; i++)
             {
-                placed[i] = live[placed[i]]; // in place: each index is read before its slot is written
+                placed[i] = live[placed[i]];
             }
 
             context.SetOrder(placed.AsSpan(0, count)); // copied
@@ -211,19 +207,6 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
         }
     }
 
-    /// <summary>
-    /// The quota's placement: at each position, the earliest row (by index) whose group has fewer than
-    /// <paramref name="maxPerWindow"/> rows among the last <paramref name="window"/> − 1 placed; a row without a group
-    /// (−1) is never limited. Stops when no row can be placed; returns how many were, their indices in
-    /// <paramref name="placed"/>.
-    /// </summary>
-    /// <remarks>
-    /// Each group's pending rows form a queue in index order, the earliest is its head, and a group under quota is
-    /// eligible: the earliest placeable row is the smallest head among eligible groups, kept in a heap. Placing a row
-    /// counts it in the window and uncounts the row the window leaves, which may make that group eligible again. O(n log G)
-    /// for n rows in G groups; the first version rescanned the pending rows and recounted the window at every position,
-    /// O(n² · window), 9 ms for 5,000 rows in two groups.
-    /// </remarks>
     internal static int Place(ReadOnlySpan<int> groupOf, int groups, int window, int maxPerWindow, Span<int> placed, Core.Memory.RequestMemory memory)
     {
         var n = groupOf.Length;
@@ -273,7 +256,6 @@ public sealed class SlidingWindowQuotaFactory : IOperatorFactory
                 inWindow[g]++;
             }
 
-            // The window of the next position is the last window − 1 placed: the row placed window positions back leaves.
             if (count >= window && groupOf[placed[count - window]] is var left and >= 0)
             {
                 inWindow[left]--;
@@ -424,7 +406,6 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             return null;
         }
 
-        // λ outside [0, 1] turns the similarity penalty into a reward (or the score into a penalty).
         if (config.Lambda is { } fixedLambda && !(fixedLambda >= 0 && fixedLambda <= 1))
         {
             context.Error("/lambda", "MMR_LAMBDA", $"lambda must be between 0 and 1, got {fixedLambda}.", "1 ranks by score alone, 0 by diversity alone");
@@ -451,27 +432,7 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
         return new MmrDiversifier(score, embedding, config.Lambda ?? 0, lambdaParam, config.Window);
     }
 
-    /// <summary>
-    /// The MMR order of a window of rows: the first pick is the row with the largest relevance, then each step picks the
-    /// largest λ·relevance − (1−λ)·(the row's largest similarity to a row already picked); equal values keep the incoming
-    /// order. Rows without relevance come after every row with one, in their incoming order. The similarity is the cosine
-    /// of the rows' vectors, and 0 where either has none (or a zero one, or one of another length than the column's); with
-    /// λ = 1 it has no weight and is not computed. As the expressions' <c>cosine</c> is, to the bit: a <c>list&lt;float32,N&gt;</c>
-    /// column's dot product and norms are computed in float32 (TensorPrimitives' SIMD), a <c>list&lt;float64,N&gt;</c> one's in
-    /// float64, and the cosine from them in float64.
-    /// </summary>
-    /// <remarks>
-    /// The similarity was floored at 0 (the largest started at 0), so a row opposite every pick counted as merely
-    /// unrelated. A row without a score had relevance −∞, which λ = 0 turned into 0 (to avoid 0·−∞),
-    /// so it went before rows with a score. With λ = 1, vectors whose norm overflows float made every
-    /// similarity NaN, and 0·NaN left the order to the incoming one instead of the score. Rows without a
-    /// score are kept out of the choice while one with a score is left, not given the lowest value: a NaN value compares
-    /// below every value too. Among rows with a score, such vectors still give NaN; their order is not
-    /// rescaled for that magnitude.
-    /// </remarks>
-    /// <param name="rows">The window's rows, in their incoming order.</param>
     /// <param name="relevance">Each row's score; negative infinity for a row without one.</param>
-    /// <param name="order">Receives the rows in MMR order (as many as <paramref name="rows"/>).</param>
     /// <param name="vectors">The embedding column: a <c>ListColumn&lt;float&gt;</c> or <c>ListColumn&lt;double&gt;</c>, or null when
     /// the request has none.</param>
     internal static void Order(ReadOnlySpan<int> rows, ReadOnlySpan<double> relevance, ListColumn? vectors, double lambda, Span<int> order, RequestMemory memory)
@@ -498,7 +459,7 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
         var length = vectors?.Type.FixedLength ?? 0;
         for (var i = 0; i < n; i++)
         {
-            // The column's writers keep every row at its length; a row of another one is treated as no vector, never paired.
+            // The column's writers keep every row at its length.
             norms[i] = similar && vectors!.IsValid(rows[i]) && vectors.LengthOf(rows[i]) == length ? TensorPrimitives.Norm(vectors.Get(rows[i])) : T.Zero;
         }
 
@@ -546,7 +507,7 @@ public sealed class MmrDiversifierFactory : IOperatorFactory
             order[step] = rows[best];
             if (double.IsNegativeInfinity(relevance[best]))
             {
-                continue; // the rest have no score either: their similarities decide nothing
+                continue;
             }
 
             scoredLeft--;

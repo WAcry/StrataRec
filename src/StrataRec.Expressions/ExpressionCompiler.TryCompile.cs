@@ -11,7 +11,6 @@ public static partial class ExpressionCompiler
     /// <summary>Longest accepted source text in characters; bounds compile-time work for unreviewed drafts.</summary>
     public const int MaxSourceLength = 64 * 1024;
 
-    /// <summary>Default options when none are given: any non-nullable result.</summary>
     private static readonly CompileOptions DefaultOptions = new();
 
     /// <summary>
@@ -19,11 +18,6 @@ public static partial class ExpressionCompiler
     /// expression reads a name the scope declares with an error (<see cref="IExpressionScope.IsUnusable"/>), whose
     /// diagnostic belongs to the declaration.
     /// </summary>
-    /// <remarks>
-    /// Pipeline: tokenize → parse (depth-checked while parsing) → bind (names, types,
-    /// nullability; diagnostics are collected, not thrown) → result checks against <paramref name="options"/> →
-    /// optimize (constant folding, CSE, invariant marking) → lower to the vectorized backend.
-    /// </remarks>
     public static bool TryCompile(
         string source,
         IExpressionScope scope,
@@ -73,11 +67,9 @@ public static partial class ExpressionCompiler
         bound = binder.CheckResult(bound, ast);
         if (found.Count > 0 || binder.ReadsUnusable)
         {
-            return false; // without a diagnostic only for a name declared with an error (IExpressionScope.IsUnusable)
+            return false;
         }
 
-        // A reference as written: a name, in parentheses or not (CompiledExpression.Reference), never what binding or
-        // optimizing reduced to one.
         var written = ast;
         while (written is ParenAst paren)
         {

@@ -17,8 +17,6 @@ namespace StrataRec.Pipeline.Operators;
 /// waiting for (its timeout, the node's budget, the caller) is abandoned: the client may still be writing, so from then on
 /// the response reads as empty, and nobody reads the buffers it may be writing; they stay rented until it completes (the
 /// call holds the request memory).</para>
-/// <para>Being a framework type lets the call record what a service returned, and answer it from a recording, for every
-/// operator. Public so that operators outside this assembly read answers the way the built-in ones do.</para>
 /// </remarks>
 public sealed class ServiceResponse : IServiceResponse
 {
@@ -64,7 +62,7 @@ public sealed class ServiceResponse : IServiceResponse
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentOutOfRangeException.ThrowIfNegative(elementCount);
-        _ = TensorValues.TypeOf<T>(); // an element type, before anything is rented
+        _ = TensorValues.TypeOf<T>();
         lock (_gate)
         {
             if (_closed)
@@ -143,8 +141,8 @@ public sealed class ServiceResponse : IServiceResponse
     }
 
     /// <summary>
-    /// Counts items a service added past the limit, which a cache's answer and a recording carry (<see cref="Dropped"/>);
-    /// at most <see cref="int.MaxValue"/>.
+    /// Counts items a service added past the limit, which a cache's answer and a recording carry
+    /// (<see cref="Dropped"/>).
     /// </summary>
     internal void AddDropped(int count)
     {
@@ -175,7 +173,6 @@ public sealed class ServiceResponse : IServiceResponse
     /// <summary>The tensor outputs written, for the recording: read after <see cref="Close"/> of a call that answered.</summary>
     internal IReadOnlyList<(string Name, TensorValues Values)> Tensors => (IReadOnlyList<(string, TensorValues)>?)_tensors ?? [];
 
-    /// <summary>The text outputs set, for the recording.</summary>
     internal IReadOnlyList<(string Name, string Text)> Texts => (IReadOnlyList<(string, string)>?)_texts ?? [];
 
     internal void Close()

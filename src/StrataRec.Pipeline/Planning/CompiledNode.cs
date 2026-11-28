@@ -23,9 +23,7 @@ public enum CompactMode : byte
 }
 
 /// <summary>
-/// A read of one node's own version of a column, <c>col.x@node</c>. Recorded on each node and tap variant
-/// that reads it, so the data-flow check judges it against the nodes of every arm combination the reader runs in, as a
-/// compile of that combination alone would, and not against nodes that only other combinations have.
+/// A read of one node's own version of a column, <c>col.x@node</c>.
 /// </summary>
 /// <param name="Node">The pinned node's id.</param>
 /// <param name="Logical">The column's logical id.</param>
@@ -109,9 +107,8 @@ public sealed class CompiledNode
     public ImmutableArray<int> CurrentReads { get; init; } = [];
 
     /// <summary>
-    /// Feature indices read directly (expanded to dependencies by the fetcher), including the context features the operator
-    /// waits for itself (<see cref="Operators.OperatorCompileContext.CompileAwaitedExpression"/>): what the node reads, for
-    /// prefetching, data-flow checks, footprints and taps.
+    /// Feature indices read directly, including the context features the operator waits for itself
+    /// (<see cref="Operators.OperatorCompileContext.CompileAwaitedExpression"/>).
     /// </summary>
     public required ImmutableArray<int> ReadFeatures { get; init; }
 
@@ -145,8 +142,8 @@ public sealed class CompiledNode
     public ImmutableArray<int> RequestReads { get; init; } = [];
 
     /// <summary>
-    /// The node's <c>when</c> reads a request column: it is evaluated at the node's position, when what the nodes before it
-    /// wrote is there, not ahead of it with the other conditions of its segment (which decide what to prefetch).
+    /// The node's <c>when</c> reads a request column: it is evaluated at the node's position, when what the nodes
+    /// before it wrote is there, not ahead of it with the other conditions of its segment.
     /// </summary>
     public bool WhenReadsRequest { get; init; }
 
@@ -162,8 +159,7 @@ public sealed class CompiledNode
     public ImmutableArray<ColumnDeclaration> Declares { get; init; } = [];
 
     /// <summary>
-    /// Experiments whose arms override a parameter this node reads (trigger sites). Assigned by the experiment
-    /// compiler once every variant is compiled, before the plan is built.
+    /// Experiments whose arms override a parameter this node reads (trigger sites).
     /// </summary>
     public ImmutableArray<int> ParamExperiments { get; internal set; } = [];
 

@@ -7,11 +7,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// How a request ends, as a host maps it to its transport (<see cref="RecResult.ErrorKind"/>): one kind for each way, the
-/// caller's mistakes checked against the plan the request runs before anything else, and a fallback pipeline given the
-/// inputs it declares.
-/// </summary>
 public sealed class RecErrorKindTests : IDisposable
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(30);
@@ -67,7 +62,6 @@ public sealed class RecErrorKindTests : IDisposable
                 break;
         }
 
-        // "broken" fails when it runs and has a fallback: a request that cannot run is not one for the fallback to serve.
         var result = await engine.ExecuteAsync(Request("broken", inputs), TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
@@ -140,12 +134,6 @@ public sealed class RecErrorKindTests : IDisposable
         Assert.Equal(new long[] { 7, 8, 9 }, result.Items.Select(i => i.Id.Int64Value));
     }
 
-    /// <summary>
-    /// A fallback that declares an input wider than its primary (int32 as int64, <c>list&lt;float32,2&gt;</c> as
-    /// <c>list&lt;float64&gt;</c>) serves every request that falls back, the values at the edge of the primary's ranges
-    /// included, and loading says nothing about it: FALLBACK_INPUT_TYPE flagged it. The reverse is flagged, and fails such
-    /// a request when it falls back, as the warning says.
-    /// </summary>
     [Fact]
     public async Task AFallbackThatWidensAnInput_ServesTheRequest_AndOnlyTheNarrowingOneIsFlagged()
     {
@@ -182,8 +170,6 @@ public sealed class RecErrorKindTests : IDisposable
     [Fact]
     public async Task InputsReadWithOnePlan_AndRunOnTheNext_AreCheckedAgainstTheNext()
     {
-        // A host reads the body with the schema served now; a release loaded before ExecuteAsync no longer
-        // declares one of the inputs. The engine's own check, against the plan it runs, is the answer: invalid, at the pointer.
         await using var engine = Load(_root);
         Assert.True(engine.TryGetRequestSchema("feed", out var before));
         using var body = JsonDocument.Parse("""{ "user_id": 1001, "tenant_id": 7 }""");
@@ -206,8 +192,6 @@ public sealed class RecErrorKindTests : IDisposable
     [InlineData(true)]
     public async Task AReplay_OnASchemaThatNowRejectsTheRecordedInputs_IsAnInvalidRequest_AsTheRequestWouldBe(bool withFallback)
     {
-        // The replay ran the inputs it decoded without the check, so a release that requires a new input turned
-        // the recorded request into a failure, or a success of the fallback, where the engine answers it as invalid.
         await using var engine = Load(_root);
         var recorded = await engine.ExecuteAsync(Request("feed", Inputs(1001), debug: new DebugOptions { Record = true }), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
@@ -231,14 +215,13 @@ public sealed class RecErrorKindTests : IDisposable
         Assert.Equal((false, RecErrorKind.InvalidRequest, "/inputs/tenant_id"), (replayed.Succeeded, replayed.ErrorKind, replayed.ErrorPointer));
         Assert.Equal((live.Succeeded, live.ErrorKind, live.ErrorPointer, live.Error), (replayed.Succeeded, replayed.ErrorKind, replayed.ErrorPointer, replayed.Error));
         Assert.StartsWith("Input 'tenant_id' is required by the request_schema of pipeline 'feed'.", replayed.Error, StringComparison.Ordinal);
-        Assert.Equal(("feed", "feed"), (live.ServedBy, replayed.ServedBy)); // not the fallback
+        Assert.Equal(("feed", "feed"), (live.ServedBy, replayed.ServedBy));
         Assert.False(outcome.Report.Diff.Identical);
     }
 
     [Fact]
     public async Task AReplay_WhoseFallbackRejectsTheInputs_IsFailed_AsTheRequestIs()
     {
-        // The caller's inputs suit the pipeline asked for; its fallback's do not: the configuration's fault, not the caller's.
         await using var engine = Load(_root);
         var recorded = await engine.ExecuteAsync(Request("strict_broken", Inputs(1001), debug: new DebugOptions { Record = true }), TestContext.Current.CancellationToken);
         Assert.Equal((false, RecErrorKind.Failed), (recorded.Succeeded, recorded.ErrorKind));
@@ -253,8 +236,6 @@ public sealed class RecErrorKindTests : IDisposable
     [Fact]
     public void Loading_WarnsAboutAFallbackThatRequiresAnInputThePrimaryDoesNotDeclare()
     {
-        // strict_backup requires tenant_id, which strict_broken does not declare: every request that falls back fails. It
-        // was found only when such a request failed; backup declaring fewer inputs than broken is fine.
         using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = _root });
 
         var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, _root, "local");
@@ -269,8 +250,6 @@ public sealed class RecErrorKindTests : IDisposable
     [Fact]
     public void Validate_ChecksAPipelinesFallback_AsLoadingDoes()
     {
-        // validate -p of a pipeline compiles its fallback too (a service loading it serves both) and reports the same
-        // warning at the file and line of fallback_pipeline; an unknown fallback, found before only at load, is an error.
         var output = new StringWriter();
         Assert.Equal(0, StrataRec.CommandLine.Commands.ValidateCommand.Run(Tool.Environment, _root, "local", "strict_broken", "text", warningsAsErrors: false, output));
         var text = output.ToString();
@@ -317,11 +296,6 @@ public sealed class RecErrorKindTests : IDisposable
         return region is null ? inputs : inputs.Set("region", ScalarValue.FromString(region));
     }
 
-    /// <summary>
-    /// Pipelines over one source that serves and one that fails: <c>feed</c> serves; <c>broken</c> fails and falls back to
-    /// <c>backup</c>, which declares fewer inputs; <c>lonely</c> fails with no fallback; <c>strict_broken</c> falls back to
-    /// <c>strict_backup</c>, which requires an input the primary does not declare.
-    /// </summary>
     private static string Workspace()
     {
         var root = Directory.CreateTempSubdirectory("stratarec-error-kinds-").FullName;
@@ -354,7 +328,6 @@ public sealed class RecErrorKindTests : IDisposable
         return root;
     }
 
-    /// <summary>A pipeline that recalls from <paramref name="source"/> (<c>good</c> or <c>failing</c>), with the request schema's members.</summary>
     private static void WritePipeline(string root, string id, string source, string? fallback, string schema)
     {
         var fallbackMember = fallback is null ? string.Empty : $"\"fallback_pipeline\": \"{fallback}\",";
@@ -375,7 +348,6 @@ public sealed class RecErrorKindTests : IDisposable
         File.WriteAllText(path, text.Replace(from, to, StringComparison.Ordinal));
     }
 
-    /// <summary>Counts its calls; answers no arms, or never (until its token is cancelled).</summary>
     private sealed class CountingProvider(bool answers = true) : IAssignmentProvider
     {
         public int Calls;

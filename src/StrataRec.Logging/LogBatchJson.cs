@@ -136,8 +136,8 @@ public static class LogBatchJson
 
     /// <summary>
     /// A context field's value as its declared <paramref name="type"/> writes it: a <c>float32</c> field's value and a
-    /// <c>list&lt;float32&gt;</c> field's elements as floats, by the type rather than by the value's flag (a value made by
-    /// hand may lack it); every other value as <see cref="WriteValue"/> writes it, a float64 field's as the double.
+    /// <c>list&lt;float32&gt;</c> field's elements as floats, by the type rather than by the value's flag (a value made
+    /// by hand may lack it).
     /// </summary>
     private static void WriteField(Utf8JsonWriter json, in ScalarValue value, ColumnType type)
     {
@@ -167,7 +167,7 @@ public static class LogBatchJson
         {
             if (!float.IsFinite((float)elements[i]))
             {
-                json.WriteNullValue(); // a list with a non-finite element is missing in logs, as a column's is
+                json.WriteNullValue();
                 return;
             }
         }
@@ -226,10 +226,6 @@ public static class LogBatchJson
         }
     }
 
-    /// <summary>A list value as a JSON array of its elements, each written as a scalar of its element type is: a bool as
-    /// 0 or 1, numbers as numbers (<c>list&lt;int32&gt;</c> and <c>list&lt;float32&gt;</c> values are held promoted, see
-    /// <see cref="ScalarValue"/>). A float list holding NaN or ±∞ is null in logs, as a non-finite float is, and keeps
-    /// names per element in replay bundles.</summary>
     private static void WriteList(Utf8JsonWriter json, in ScalarValue value, bool nonFiniteAsStrings)
     {
         if (value.ListElement == StorageKind.Float64 && !nonFiniteAsStrings && !ColumnValues.AllFinite(value.AsFloat64List()))
@@ -298,7 +294,6 @@ public static class LogBatchJson
     /// </param>
     public static bool TryReadValue(JsonElement json, ColumnType type, out ScalarValue value, out string? error, bool nonFiniteAsStrings = false)
     {
-        // The double as written; a float32 value (as every value of a float32 column is) also prints as the float it is.
         static ScalarValue Float(ColumnType type, double d) =>
             type.Kind == StorageKind.Float32 && ((double)(float)d).Equals(d)
                 ? ScalarValue.FromFloat32((float)d)
@@ -329,8 +324,7 @@ public static class LogBatchJson
                 return true;
             case StorageKind.Float32 or StorageKind.Float64 when json.ValueKind == JsonValueKind.Number:
                 // A JSON number is finite: one beyond the float64 range reads as an infinity, which a writer would have
-                // spelled "Infinity". Read as one, it compared equal to a real infinity. A float32 value beyond
-                // the float32 range is not one either: stored, it would be an infinity.
+                // spelled "Infinity".
                 if (type.Kind == StorageKind.Float32 && !nonFiniteAsStrings)
                 {
                     // A log's float32 is parsed as a float, and its range judged on that float: through the double, it
@@ -368,8 +362,6 @@ public static class LogBatchJson
         return false;
     }
 
-    /// <summary>Reads a list written by <see cref="WriteList"/>: each element as <see cref="TryReadValue"/> reads a scalar
-    /// of the element type.</summary>
     private static bool TryReadList(JsonElement json, ColumnType type, out ScalarValue value, out string? error, bool nonFiniteAsStrings)
     {
         value = ScalarValue.Missing;
@@ -424,7 +416,6 @@ public static class LogBatchJson
                     single &= d.IsFloat32 || !double.IsFinite(d.AsFloat64());
                 }
 
-                // As for a scalar: a list<float32> value whose elements are all floats prints as the floats they are.
                 // Converting keeps the array: its elements are floats already.
                 var read = ScalarValue.FromFloat64List(doubles);
                 value = single && read.TryConvert(ColumnType.List(StorageKind.Float32), out var floats) ? floats : read;
@@ -486,7 +477,7 @@ public static class LogBatchJson
         json.WriteEndObject();
     }
 
-    /// <summary>A row of a column, from its typed arrays; missing is null. Logged values are finite (<see cref="LogColumn.Capture"/>).</summary>
+    /// <summary>Logged values are finite (<see cref="LogColumn.Capture"/>).</summary>
     private static void WriteRow(Utf8JsonWriter json, LogColumn column, int row)
     {
         if (column.IsMissing(row))
@@ -506,7 +497,7 @@ public static class LogBatchJson
             switch (column.Values)
             {
                 case bool[] b:
-                    json.WriteNumberValue(b[i] ? 1 : 0); // as every other bool of a log: 0/1 in int_cols (decisions)
+                    json.WriteNumberValue(b[i] ? 1 : 0);
                     break;
                 case int[] n:
                     json.WriteNumberValue(n[i]);
@@ -515,7 +506,7 @@ public static class LogBatchJson
                     json.WriteNumberValue(l[i]);
                     break;
                 case float[] f:
-                    json.WriteNumberValue(f[i]); // the shortest text of the float
+                    json.WriteNumberValue(f[i]);
                     break;
                 case double[] d:
                     json.WriteNumberValue(d[i]);

@@ -15,26 +15,11 @@ namespace StrataRec.Hosting.Bindings;
 /// <param name="Exception">A <see cref="LocalTableLoadException"/> or a <see cref="BindingLoadException"/>.</param>
 public sealed record BindingLoadFailure(string Code, string Artifact, string Pointer, string Message, string? Hint, Exception Exception);
 
-/// <summary>
-/// Everything one plan binds, taken from its <see cref="BindingHost"/>: the plan compiles with it
-/// (<see cref="IPlanBindings"/>), the engine waits for its loads before serving the plan, and each request of the plan
-/// enters it, so the plan's instances outlive the plan by as long as anything of its requests can still call them.
-/// </summary>
 /// <remarks>
-/// <para><b>One reference per identity.</b> Acquiring what the lease already holds (the plan compiles twice when it waited
-/// for model signatures, and its validation passes compile its nodes again) returns it without another reference.</para>
-/// <para><b>Retiring.</b> <see cref="Dispose"/> retires the lease: when its plan is replaced, when its load failed or was
-/// cancelled, when the engine is disposed. Its tables are released at once (requests read the versions they pinned).
-/// Its instances are released once the lease is retired and its last user has left: a request enters with
-/// <see cref="TryEnter"/> and leaves with <see cref="RequestEnded"/>; each run of it joins, and its request memory leaves
-/// once the run and every call it started have ended, so a call abandoned at a timeout keeps its client alive until it
-/// returns. A signature lookup is a user too, from the moment it is asked until the client answered, so retiring the
-/// lease (which cancels the lookup) never disposes a client inside its <see cref="IServiceClient.DescribeAsync"/>. One
-/// count holds them all, so no order of these events releases an instance a user still holds.</para>
-/// <para><b>Model signatures</b>. <see cref="Signature"/> asks a client once per (model, version) and keeps
-/// the answer for the lease's compiles. An answer that needs the client loaded or I/O is pending during the first compile;
-/// <see cref="CompileAsync{T}"/> then waits for every pending answer, concurrently and within
-/// <see cref="BindingHostOptions.LoadTimeout"/>, and compiles the plan again, which counts.</para>
+/// <para>Acquiring what the lease already holds returns it without another reference.</para>
+/// <para><see cref="Dispose"/> retires the lease. Its tables are released at once. Its instances are released once the
+/// lease is retired and its last user has left: a request enters with <see cref="TryEnter"/> and leaves with
+/// <see cref="RequestEnded"/>.</para>
 /// </remarks>
 public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposable
 {
@@ -175,7 +160,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         ArgumentNullException.ThrowIfNull(client);
         if (!_host.Options.Load && client is ILoadable)
         {
-            return SignatureLookup.Unchecked; // an engine that loads nothing (replay) cannot ask it
+            return SignatureLookup.Unchecked;
         }
 
         Task<SignatureLookup>? answer;
@@ -215,7 +200,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
 
         if (answer.IsCompleted)
         {
-            return answer.Result; // LookupAsync never faults
+            return answer.Result;
         }
 
         if (Volatile.Read(ref _lookupsWaited))
@@ -225,16 +210,15 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
                 "check the model server, or raise BindingHostOptions.LoadTimeout");
         }
 
-        Volatile.Write(ref _answeredPending, true); // this compile skipped a check, so it cannot be the one that counts
+        Volatile.Write(ref _answeredPending, true);
         return SignatureLookup.Pending;
     }
 
     /// <summary>
-    /// Compiles a plan with this lease as an engine load does: once, and once more when a check of the first compile was
-    /// answered <see cref="SignatureStatus.Pending"/>, after waiting for the lookups (concurrently, within
-    /// <see cref="BindingHostOptions.LoadTimeout"/>); the second compile has every answer (or a timeout error) and is the
-    /// one returned. Every lookup runs off the compile's thread, so a plan that checks model signatures normally compiles
-    /// twice; it compiles once only when every answer was already in when its check asked, and then every check ran.
+    /// Compiles a plan with this lease as an engine load does: once, and once more when a check of the first compile
+    /// was answered <see cref="SignatureStatus.Pending"/>, after waiting for the lookups (concurrently, within
+    /// <see cref="BindingHostOptions.LoadTimeout"/>); the second compile has every answer (or a timeout error) and is
+    /// the one returned.
     /// </summary>
     /// <param name="compile">Compiles the plan with the bindings it is given (this lease).</param>
     /// <param name="cancellationToken">Cancels the wait and the lookups; the instances' loads go on.</param>
@@ -247,7 +231,6 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             ObjectDisposedException.ThrowIf(_disposed, this);
         }
 
-        // The caller giving up cancels the lookups through the one path that waits for their callbacks (CancelLookups).
         using var giveUp = cancellationToken.Register(static lease => ((BindingLease)lease!).CancelLookups(), this);
 
         // Whether the compile skipped a check decides, not whether lookups are still pending afterwards: a lookup that was
@@ -270,7 +253,6 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             }
             catch (TimeoutException)
             {
-                // The second compile reports what is still unanswered.
             }
         }
 
@@ -298,7 +280,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             clients = new List<BindingHost.ClientEntry>(_clients);
         }
 
-        cancellationToken.ThrowIfCancellationRequested(); // whether or not there is anything to wait for
+        cancellationToken.ThrowIfCancellationRequested();
 
         var pending = new List<Task>(tables.Count + clients.Count);
         if (_host.Options.Load)
@@ -323,7 +305,6 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             }
         }
 
-        // Stop at the first failure: the plan cannot be served, and a large table still loading should not delay the error.
         // Every load that ended other than successfully is a failure below, whatever it ended with, so stopping early
         // always has a failure to show and the plan is never served without its loads.
         while (pending.Count > 0)
@@ -360,7 +341,6 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         return failures;
     }
 
-    /// <summary>The failure of a table's first load that has ended other than successfully, whatever it ended with; null otherwise.</summary>
     private static LocalTableLoadException? TableFailure(BindingHost.TableEntry entry) => entry.Ready switch
     {
         { IsCompletedSuccessfully: true } or { IsCompleted: false } => null,
@@ -369,7 +349,6 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
                        ?? new LocalTableLoadException(entry.Spec, faulted.Exception.InnerException ?? faulted.Exception),
     };
 
-    /// <summary>The failure of an instance's load that has ended other than successfully, whatever it ended with; null otherwise.</summary>
     private static BindingLoadException? ClientFailure(BindingSpec spec, Task ready) => ready switch
     {
         { IsCompletedSuccessfully: true } or { IsCompleted: false } => null,
@@ -460,7 +439,6 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         }
     }
 
-    /// <summary>The instances go back to the host: exactly once, when the lease is retired and no request of it runs.</summary>
     private void ReleaseClients()
     {
         if (Interlocked.Exchange(ref _clientsReleased, 1) != 0)
@@ -479,22 +457,19 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
 
         foreach (var entry in clients)
         {
-            _host.Release(entry); // disposal runs on the pool, never on this (possibly a client's) thread
+            _host.Release(entry);
         }
     }
 
     /// <summary>
-    /// Cancels the signature lookups, once: when the lease retires, or when the compile's caller gives up first. The
-    /// callbacks the clients registered on the lookups' token are their code, and may go on using the instance after the
-    /// lookup returned: the cancellation enters the lease as a user and leaves once they have run (on the pool, never
-    /// here), so no instance is disposed under one. Their exceptions are logged.
+    /// The callbacks the clients registered on the lookups' token are their code, and may go on using the instance
+    /// after the lookup returned: the cancellation enters the lease as a user and leaves once they have run (on the
+    /// pool, never here), so no instance is disposed under one.
     /// </summary>
     private void CancelLookups()
     {
         lock (_gate)
         {
-            // Under the lock, and before Dispose marks the lease retired (Dispose calls this first): whoever cancels first
-            // always enters.
             if (_lookupsCancelled || !TryEnter())
             {
                 return;
@@ -506,7 +481,6 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
         _ = EndAfterAsync(_lookups.CancelObservedAsync());
     }
 
-    /// <summary>Leaves the lease once the lookups' cancellation callbacks have run; a failure of theirs is logged.</summary>
     private async Task EndAfterAsync(Task callbacks)
     {
         try
@@ -544,20 +518,18 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
     }
 
     /// <summary>
-    /// The client's answer once it can give one: after its load, unless the lookups are cancelled first; never faults. A
-    /// cancellation ends only the wait for the load: a call already inside the client keeps the lease until the client's
-    /// method returns. The client's method runs on the pool, its
-    /// synchronous part included, so a method that blocks before it returns its task holds up neither the compile nor the
-    /// bounded wait for the answers (<see cref="CompileAsync{T}"/>); its answer is then pending, and late. The caller
-    /// entered the lease for the lookup, and this ends that entry once the client returned.
+    /// The client's answer once it can give one: after its load, unless the lookups are cancelled first; never faults.
+    /// A cancellation ends only the wait for the load: a call already inside the client keeps the lease until the
+    /// client's method returns. The caller entered the lease for the lookup, and this ends that entry once the client
+    /// returned.
     /// </summary>
     private async Task<SignatureLookup> LookupAsync(BindingHost.ClientEntry entry, IServiceClient client, string model, string? version)
     {
         try
         {
-            // The wait for the load ends with the lookups. The lookup holds the lease, the lease holds the client, and the
-            // client's load is cancelled only once nobody holds it: a lookup that waited out the load after its plan was
-            // cancelled would keep all three until LoadTimeout. Another plan holding the client keeps the load going.
+            // The lookup holds the lease, the lease holds the client, and the client's load is cancelled only once
+            // nobody holds it: a lookup that waited out the load after its plan was cancelled would keep all three
+            // until LoadTimeout.
             var token = _lookups.Token;
             try
             {
@@ -565,7 +537,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
-                return SignatureLookup.Failure(new OperationCanceledException(token)); // nobody waits for the answer any more
+                return SignatureLookup.Failure(new OperationCanceledException(token));
             }
             catch (Exception)
             {
@@ -574,7 +546,7 @@ public sealed class BindingLease : IPlanBindings, IRequestEndObserver, IDisposab
 
             if (token.IsCancellationRequested)
             {
-                return SignatureLookup.Failure(new OperationCanceledException(token)); // nobody waits for the answer any more
+                return SignatureLookup.Failure(new OperationCanceledException(token));
             }
 
             try

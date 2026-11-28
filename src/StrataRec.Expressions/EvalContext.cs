@@ -10,8 +10,7 @@ namespace StrataRec.Expressions;
 /// only through the context; see <see cref="CandidateTableView"/>).</para>
 /// <para><see cref="Table"/> and <see cref="Bindings"/> are required for row-level expressions and may be null for
 /// request-level ones (<c>when</c>, context-only derived features, funnel keys).</para>
-/// <para>A column symbol is read from <c>FixedSlot</c> when it is ≥ 0, otherwise from
-/// <c>Bindings.Resolve(Id)</c>. An unresolved slot (<c>-1</c>) or a slot that was never written reads as missing.</para>
+/// <para>An unresolved slot (<c>-1</c>) or a slot that was never written reads as missing.</para>
 /// </remarks>
 public readonly struct EvalContext
 {
@@ -34,7 +33,6 @@ public readonly struct EvalContext
     /// <summary>Parameter snapshot indexed by <see cref="SymbolKind.Param"/> symbol id.</summary>
     internal ScalarValue[] Params { get; }
 
-    /// <summary>Optional counters of values that did not fit their storage.</summary>
     internal ExpressionCounters? Counters { get; }
 }
 
@@ -51,9 +49,7 @@ public sealed class ExpressionCounters
     /// </summary>
     /// <remarks>Kept apart from the non-finite count (<c>column_nonfinite_total</c>): NaN/±∞ points at the arithmetic
     /// of an expression, an out-of-range value at a column declared too narrow for its data (or an embedding of another
-    /// model than the one declared). It is also detected earlier: a NaN survives in float storage until the engine
-    /// sanitizes it at commit, while an int64 that does not fit int32 storage, or a list of another length, cannot be
-    /// stored at all, so the write itself must apply the rule.</remarks>
+    /// model than the one declared).</remarks>
     public long OutOfRange => Interlocked.Read(ref _outOfRange);
 
     public void AddOutOfRange(long count) => Interlocked.Add(ref _outOfRange, count);

@@ -9,7 +9,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary><c>memory_vectors@1</c>, the two-tower service's stand-in: a dot-product scan over its items with the query vector.</summary>
 public sealed class MemoryVectorsServiceTests
 {
     private const string Items = """
@@ -34,10 +33,6 @@ public sealed class MemoryVectorsServiceTests
         Assert.Equal(["1:1", "a:1", "b:1", "3:0.75", "2:0.5"], found);
     }
 
-    /// <summary>
-    /// A float32 embedding (<c>list&lt;float32,2&gt;</c>, as a catalog declares it) is a query vector: a query sends a
-    /// reference at its declared type, and the scan scores it in float64 as it scores a float64 one.
-    /// </summary>
     [Fact]
     public async Task AFloat32QueryVector_IsScoredAsAFloat64One()
     {
@@ -93,7 +88,7 @@ public sealed class MemoryVectorsServiceTests
     public async Task TheVectorsLength_IsItsShapes_NotItsBuffers()
     {
         // A longer buffer than the shape holds is allowed (a rented one): a vector of shape [0] with two values in its
-        // buffer has no elements. It searched with the two.
+        // buffer has no elements.
         var source = Create($$"""{ "query": "user_embedding", {{Items}} }""");
 
         var (status, found) = await RetrieveAsync(source, [NamedInput.FromFloat64("user_embedding", [0], new[] { 1.0, 0.5 })]);
@@ -109,7 +104,7 @@ public sealed class MemoryVectorsServiceTests
 
         var (status, found) = await RetrieveAsync(source, Values(ScalarValue.FromFloat64List([1.0, 2.0])));
 
-        Assert.True(status.Succeeded, status.Error); // it said "the items' vectors have 0"
+        Assert.True(status.Succeeded, status.Error);
         Assert.Empty(found);
     }
 
@@ -118,7 +113,6 @@ public sealed class MemoryVectorsServiceTests
     {
         var source = Create($$"""{ "query": "user_embedding", {{Items}} }""");
 
-        // A missing value of a wrong type was taken as nothing to search with.
         var (wrongType, _) = await RetrieveAsync(source, Values(ScalarValue.Missing, ColumnType.Int64.AsNullable()));
         Assert.Equal("The query vector 'user_embedding' must be a list of floats; it is int64 of shape [].", wrongType.Error);
 
@@ -129,7 +123,6 @@ public sealed class MemoryVectorsServiceTests
     [Fact]
     public async Task AScoreThatOverflows_FailsTheCall_InsteadOfRankingByNaN()
     {
-        // 1e308 · 2 overflows to +∞ and 1e308 · −2 to −∞: their sum is NaN, which dropped the right first item.
         var source = Create("""
             { "query": "user_embedding", "min_score": 1, "items": [
               { "id": 1, "vector": [1e308, 1e308, 2.0] },
@@ -179,7 +172,6 @@ public sealed class MemoryVectorsServiceTests
         new MemoryVectorsServiceFactory().Create(
             new BindingContext("two_tower", JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(settings)!, directory ?? Path.GetTempPath(), null));
 
-    /// <summary>The query as a recall node sends it (<see cref="ServiceInputs.Create"/>).</summary>
     private static NamedInput[] Values(ScalarValue value, ColumnType? type = null) =>
         [ServiceInputs.Create("user_embedding", type ?? ColumnType.List(StorageKind.Float64, nullable: true, fixedLength: 2), value, new RequestMemory())];
 

@@ -6,8 +6,8 @@ namespace StrataRec.UnitTests.Artifacts;
 public class JsonDiffTests
 {
     [Theory]
-    [InlineData("""{"a":1,"b":{"c":[1,2],"d":"x"}}""", """{"b":{"d":"x","c":[1,2]},"a":1}""")] // member order
-    [InlineData("""{"a":1}""", """{"a":1.0}""")] // numbers by value
+    [InlineData("""{"a":1,"b":{"c":[1,2],"d":"x"}}""", """{"b":{"d":"x","c":[1,2]},"a":1}""")]
+    [InlineData("""{"a":1}""", """{"a":1.0}""")]
     [InlineData("""{"a":0.1}""", """{"a":1e-1}""")]
     [InlineData("null", "null")]
     [InlineData("[1,{\"a\":2}]", "[1,{\"a\":2.0}]")]

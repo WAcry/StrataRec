@@ -5,10 +5,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>
-/// A fallback pipeline stands in for its primary with the inputs it declares (<see cref="RecEngine.FallbackInputs"/>):
-/// those it does not declare are not its caller's mistake, and the request was valid for the pipeline it asked for.
-/// </summary>
 public sealed class FallbackInputsTests
 {
     private static readonly RequestSchema Backup = new("backup", new Dictionary<string, ColumnType>
@@ -22,7 +18,7 @@ public sealed class FallbackInputsTests
     {
         var inputs = new RequestInputs().Set("user_id", ScalarValue.FromInt64(1)).Set("surface", ScalarValue.FromString("home"));
 
-        Assert.Same(inputs, RecEngine.FallbackInputs(inputs, Backup)); // nothing allocated for the common case
+        Assert.Same(inputs, RecEngine.FallbackInputs(inputs, Backup));
         var none = new RequestInputs();
         Assert.Same(none, RecEngine.FallbackInputs(none, Backup));
     }

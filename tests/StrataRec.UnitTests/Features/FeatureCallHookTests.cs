@@ -7,10 +7,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// The fetcher's call-site hook: any connector is recorded with the values it wrote per key, and a
-/// replaying hook answers calls without the connector being called.
-/// </summary>
 public class FeatureCallHookTests
 {
     [Fact]
@@ -29,7 +25,7 @@ public class FeatureCallHookTests
         Assert.Equal(new[] { 0, 1 }, calls.Select(c => c.Sequence));
         Assert.All(calls, c => Assert.Equal(("item_store", true, IoOutcome.Ok, FetchOutcome.Ok), (c.Source, c.Sent, c.Outcome, c.Status.Outcome)));
         Assert.Equal(new long[] { 1, 2, 3 }, calls.SelectMany(c => c.Keys));
-        Assert.Equal(new double?[] { 1.5, null, 4.5 }, calls.SelectMany(c => c.Values!)); // missing stays missing
+        Assert.Equal(new double?[] { 1.5, null, 4.5 }, calls.SelectMany(c => c.Values!));
         Assert.Equal(1.5, request.Value(score, 0).AsFloat64());
     }
 
@@ -57,7 +53,7 @@ public class FeatureCallHookTests
         var call = Assert.Single(hook.Recorded);
         Assert.Equal(IoOutcome.Timeout, call.Outcome);
         Assert.Equal(FetchOutcome.Failed, call.Status.Outcome);
-        Assert.Null(call.Values); // the late write is never recorded
+        Assert.Null(call.Values);
     }
 
     [Theory]
@@ -65,8 +61,7 @@ public class FeatureCallHookTests
     [InlineData(true)]
     public async Task AnAbandonedCall_HoldsTheRequestMemoryOnce_AndIsRecordedFromLiveBuffers(bool record)
     {
-        // A prefetch nobody awaits is still running when the request releases its memory: one external operation is
-        // abandoned, recorded or not. The recording reads the keys and staging after the request has let go of them.
+        // The recording reads the keys and staging after the request has let go of them.
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
         {
@@ -81,7 +76,7 @@ public class FeatureCallHookTests
         var request = rig.NewRequest(new long[] { 1, 2 }, pool: new PoisoningPool(), deadlineMs: 600_000, hook: hook);
 
         request.Fetcher.Prefetch(new[] { score }, CancellationToken.None);
-        var abandoned = request.Memory.Release(); // the request returns without awaiting the prefetch
+        var abandoned = request.Memory.Release();
 
         Assert.Equal(1, abandoned);
         release.SetResult();
@@ -107,7 +102,7 @@ public class FeatureCallHookTests
 
         var pending = request.EnsureAsync(score);
 
-        Assert.True(pending.IsCompletedSuccessfully); // nothing to wait for, not even the 1 ms source timeout
+        Assert.True(pending.IsCompletedSuccessfully);
         Assert.False((await pending).Failed);
         Assert.Empty(connector.Calls);
         Assert.Empty(hook.Recorded);
@@ -118,8 +113,6 @@ public class FeatureCallHookTests
     [Fact]
     public async Task AHookThatThrowsWhileRecording_SeesTheCallOnce()
     {
-        // The call is completed once, after the wait decided it: a completion that throws (here the hook) is not run again
-        // from the failure path, which would record a successful call a second time as an error.
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
         {
@@ -152,8 +145,6 @@ public class FeatureCallHookTests
     [Fact]
     public async Task AFailureWhoseDescriptionThrows_StillReturnsTheMemory()
     {
-        // The wait, the classification of a failure and the completion all end in the call site's one finally: an exception
-        // whose Message throws fails the fetch, but never keeps the request memory held.
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector(async (_, _, _, _) =>
         {
@@ -177,7 +168,7 @@ public class FeatureCallHookTests
         }
 
         await request.Fetcher.WhenIoCompleteAsync();
-        Assert.Equal(0, request.Memory.Release()); // the request's own hold was the last
+        Assert.Equal(0, request.Memory.Release());
         Assert.True(request.Memory.IsReturned);
     }
 
@@ -186,7 +177,6 @@ public class FeatureCallHookTests
         public override string Message => throw new InvalidOperationException("message formatting failed");
     }
 
-    /// <summary>Notes each recorded call, then throws.</summary>
     private sealed class ThrowingHook : IFeatureCallHook
     {
         public bool Replays => false;
@@ -205,7 +195,6 @@ public class FeatureCallHookTests
             throw new NotSupportedException();
     }
 
-    /// <summary>Records calls like a bundle recorder would; when replaying, answers 10 × key for every field.</summary>
     internal sealed class ListHook(bool replays = false) : IFeatureCallHook
     {
         private int _sequence;

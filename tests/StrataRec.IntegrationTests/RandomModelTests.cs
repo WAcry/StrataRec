@@ -4,11 +4,6 @@ using StrataRec.Hosting.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The sample's <c>ctr_model</c> bound to <c>random@1</c> instead of <c>linear@1</c>, as a dev or test environment binds a
-/// real model's name to the stand-in: only the binding changes, the plan loads because the stand-in
-/// declares the signature the scorer maps, the request is served with its scores, and a recording replays identically.
-/// </summary>
 public sealed class RandomModelTests
 {
     private const string Binding = """{ "client": "random@1", "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click"] }""";
@@ -23,12 +18,11 @@ public sealed class RandomModelTests
         Assert.True(recorded.Succeeded, recorded.Error);
         Assert.Equal(10, recorded.Items.Count);
         var run = Assert.Single(recorded.Recording!.Runs);
-        Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "ctr_ranker").Outcome); // the stand-in answered: no fallback
+        Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "ctr_ranker").Outcome);
         var scores = Scores(run);
         Assert.Equal(30, scores.Count);
         Assert.All(scores.Values, s => Assert.InRange(s, 0.0, 1.0 - Math.Pow(2, -24)));
 
-        // The same request scores the same; a request with another seed scores the same candidates differently.
         var again = await engine.ExecuteAsync(ReplayTests.Request("req-random", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.Equal(scores, Scores(Assert.Single(again.Recording!.Runs)));
         var reseeded = await engine.ExecuteAsync(ReplayTests.Request("req-random-2", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
@@ -37,7 +31,6 @@ public sealed class RandomModelTests
         Assert.Equal(scores.Keys.Order(), other.Keys.Order());
         Assert.True(scores.Count(p => other[p.Key] != p.Value) >= 29, "a new seed draws new scores");
 
-        // Through JSON, on a fresh engine.
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
         var (fresh, _) = MetricsTests.LoadEngine(Host(Binding));
         var outcome = await fresh.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
@@ -48,7 +41,6 @@ public sealed class RandomModelTests
         Assert.All(outcome.Report.Nodes, n => Assert.False(n.Changed, $"{n.Node}: {n.Recorded} -> {n.Replayed}"));
     }
 
-    /// <summary>What <c>stratarec validate</c> finds without loading anything: the stand-in answers its signature at once.</summary>
     [Theory]
     [InlineData("""{ "client": "random@1", "inputs": ["smoothed_ctr"], "outputs": ["p_click"] }""",
         "SERVICE_SIGNATURE", "pipeline:home_feed", "/nodes/ctr_ranker/config/inputs/log_followers")]
@@ -71,7 +63,6 @@ public sealed class RandomModelTests
     private static HomeFeedTestHost Host(string binding) =>
         HomeFeedTestHost.LoadModified(root => SampleBindings.RebindService(root, "ctr_model", binding));
 
-    /// <summary>The recorded <c>p_click</c> of the run's one model call, by candidate id.</summary>
     private static Dictionary<long, double> Scores(ReplayRunRecord run)
     {
         var call = Assert.Single(run.ServiceCalls, c => c.Role == "model");

@@ -8,24 +8,9 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
-/// Registers catalog features into a plan schema the first time a name resolves to one, with what each
-/// needs: a derived feature compiles then, and its own reads register the features it is computed from; a feature of an
-/// entity keyed by features (candidate or context) registers them first; a feature of a cached source registers every feature of its table
-/// (<see cref="FeaturePlan.NeedsWholeTable"/>). The one place that decides what of a catalog a plan holds, and that
-/// compiles derived features and finds their cycles.
+/// Registers catalog features into a plan schema the first time a name resolves to one.
 /// </summary>
 /// <remarks>
-/// <para>A catalog is shared by many pipelines, and what a request sizes by feature, slot or context field (the candidate
-/// table's slots, the context values, the fetcher's per-feature state, the output bindings) used to grow with all of it:
-/// every feature was registered when the schema was defined. Registering on reference, through the schema's lookups,
-/// covers every way of reading a feature (expressions, operator configs, <c>when</c>, fallbacks, every arm's variants,
-/// taps, the output, funnel keys) without each of them knowing about it; compiling the configuration once more to
-/// collect what it reads would double the compile.</para>
-/// <para>The plan builder runs one instance over a schema of its own that registers the whole catalog
-/// (<see cref="RegisterAll"/>), for the diagnostics on the catalog's content, which must not depend on which pipeline
-/// reads what: the errors of a derived feature no node reads, cycles. What fails there is marked unusable in the plan's
-/// schema (<see cref="Failed"/>), so the plan's instance never compiles it again and a reference to it is not a second
-/// error.</para>
 /// <para>Registration order is reference order, so feature indices and slots follow the compile order, which is
 /// deterministic; nothing persisted or compared depends on them (logs, replay bundles and plan documents name features).</para>
 /// </remarks>
@@ -45,11 +30,6 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
     private readonly HashSet<string>? _deprecated;
     private readonly SortedSet<string> _deprecatedReads = new(StringComparer.Ordinal);
 
-    /// <param name="features">Where registered features go; a feature's index is its position.</param>
-    /// <param name="needsWholeTable">Whether the features of a source and an entity are registered together (their
-    /// table's records are written whole); null registers each feature alone.</param>
-    /// <param name="failed">Features that failed when the whole catalog was registered: they are not registered again,
-    /// and reading one fails without a second error.</param>
     public CatalogFeatures(
         FeatureCatalog catalog,
         PlanSchema schema,
@@ -94,8 +74,6 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         Failed,
     }
 
-    /// <summary>The names of the features that could not be registered (an error reported at their declaration, a cycle,
-    /// a name taken, or what they read failed), in name order.</summary>
     public List<string> Failed
     {
         get
@@ -114,8 +92,8 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         }
     }
 
-    /// <summary>Registers every feature of the catalog, in name order: what plans did before they registered on
-    /// reference, kept for the diagnostics on the catalog's content.</summary>
+    /// <summary>Registers every feature of the catalog, in name order, so the catalog's own diagnostics cover features
+    /// no plan reads.</summary>
     public void RegisterAll()
     {
         foreach (var feature in _catalog.Features)
@@ -132,7 +110,6 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
             return false;
         }
 
-        // The namespace is the entity's: ctx.item.x names no feature, as before.
         return _catalog.TryGet(qualifiedName[4..], out var feature) && feature.IsContext == context && Register(feature);
     }
 
@@ -141,9 +118,8 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
 
     public void NoteRead(string name, bool context)
     {
-        // A feature of an entity keyed by features reads its key features too (they are fetched first), and
-        // so on along the chains (a deprecated key read only through its entity's features did not warn). Each
-        // feature once, so a chain that loops (an error reported elsewhere) ends.
+        // A feature of an entity keyed by features reads its key features too (they are fetched first), and so on along
+        // the chains.
         if (_deprecated is null || !_catalog.TryGet(name, out var first) || first.IsContext != context)
         {
             return;
@@ -202,16 +178,15 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
 
         if (_schema.IsUnusable(feature.ExpressionName))
         {
-            return false; // declared with an error (or what it reads was), reported there
+            return false;
         }
 
         if (feature.IsContext ? _schema.HoldsContext(feature.Name) : _schema.HoldsColumn(feature.Name))
         {
-            // A context feature of an entity named 'request' and a request input of the same name.
             _diagnostics.Error("FEATURE_DUPLICATE", _artifact, feature.Pointer,
                 $"'{feature.ExpressionName}' is a feature and another {(feature.IsContext ? "context field" : "column")}.",
                 "rename the feature or its entity");
-            _status[feature.Name] = Status.Failed; // the other keeps its name
+            _status[feature.Name] = Status.Failed;
             return false;
         }
 
@@ -225,8 +200,8 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
             return false;
         }
 
-        // A table is expanded once: its members register the rest of it, so expanding again for each member scanned the
-        // table once per member, quadratic in its width (40,000 features took 40 s to compile, not 1 s).
+        // A table is expanded once: its members register the rest of it, and expanding per member is quadratic in its
+        // width.
         if (!feature.IsDerived && feature.Source is { } source && _needsWholeTable is not null && _needsWholeTable(source, feature.Entity)
             && _expanded.Add((source, feature.Entity.Name)))
         {
@@ -239,9 +214,6 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         return true;
     }
 
-    /// <summary>A physical feature: its key features first when its entity's key reads features, candidate or context
-    /// (they are fetched first); an entity a key feature of which cannot be registered has no key, and its
-    /// features fail with the key's error.</summary>
     private bool RegisterPhysical(FeatureDefinition feature)
     {
         foreach (var read in feature.Entity.FeatureReads)
@@ -269,7 +241,6 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
         // as a feature still being registered).
         if (!ExpressionCompiler.TryCompile(feature.Expr!, _scope, options, out var expression, out var errors))
         {
-            // Without an error it reads a name declared with an error (or a cycle reported once): it fails with that.
             ExpressionErrors.Report(_diagnostics, errors, _artifact, feature.Pointer + "/expr", feature.Expr!);
             return false;
         }
@@ -295,24 +266,19 @@ internal sealed class CatalogFeatures : IFeatureRegistrar
     }
 
     /// <summary>
-    /// A feature met again while it is being registered: it depends on itself. Through a derived feature this is reported
-    /// here, once: a cycle that also passes through an entity's key (a physical feature registers its key's features
-    /// first) is an <c>ENTITY_KEY_CYCLE</c> at the first key part on it, the key that can never be computed, candidate or
-    /// context alike; a cycle of derived features alone is a <c>FEATURE_CYCLE</c> at the first derived feature of it; a
-    /// cycle of keys alone is the catalog's <c>ENTITY_KEY_CYCLE</c>, reported there. The feature is marked unusable at once,
-    /// so every expression on the way fails without an error of its own.
+    /// The feature is marked unusable at once, so every expression on the way fails without an error of its own.
     /// </summary>
     private bool Cycle(FeatureDefinition feature)
     {
         if (_schema.IsUnusable(feature.ExpressionName))
         {
-            return false; // met again in the same expressions: reported already
+            return false;
         }
 
         var start = _registering.IndexOf(feature);
         var path = new List<string>(_registering.Count - start + 1);
         FeatureDefinition? derived = null;
-        FeatureDefinition? keyed = null; // the first physical feature on the cycle: its entity's key (or args) reads the next one
+        FeatureDefinition? keyed = null;
         EntityFeatureRead keyRead = default;
         for (var i = start; i < _registering.Count; i++)
         {

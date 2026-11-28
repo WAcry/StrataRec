@@ -11,14 +11,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.Pipeline.Operators;
 
-/// <summary>
-/// A feature source in mode <c>service</c>: asks its service, once per request, for the features of an entity
-/// with args, through the one service call path (<see cref="ServiceCallPath"/>). The call has no items and adds none:
-/// its inputs are the arguments (a scalar of shape <c>[]</c>, a list of shape <c>[n]</c>, a missing value sent as
-/// missing), and it reads one output per feature, the feature's field. It is waited for within the fetch's bound and the
-/// service's <c>timeout_ms</c>, answered by the service's cache, measured in role <c>fetch</c>, and recorded and replayed
-/// as a call of the source, made by no node.
-/// </summary>
 internal sealed class FeatureServiceSupply(BoundService service, string source) : IServiceSupply
 {
     public string ServiceName => service.Name;
@@ -46,9 +38,8 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
         }
         catch (OperationCanceledException ex)
         {
-            // The fetch's bound ran out, or the caller cancelled, live or where the recorded call was (a
-            // recorded cancellation replayed as a timeout, the replay's caller not having cancelled): the features fail,
-            // as a connector's cut off at its bound do; the caller's cancellation is the request's to throw.
+            // The bound ran out or the caller cancelled (in a replay, as recorded): the features fail; the caller's
+            // cancellation is the request's to throw.
             var cancelled = ex is ReplayedCutOff replayed ? replayed.Outcome == IoOutcome.Cancelled : call.Bound.Caller.IsCancellationRequested;
             return Counted(FetchStatus.Failed(cancelled ? $"source '{source}' was cancelled" : $"source '{source}' timed out"), scope, call);
         }
@@ -70,9 +61,8 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
     }
 
     /// <summary>
-    /// A replay counts the fields it served, as it counts a fetch's (the feature-missing rate a comparison reports): each
-    /// read once, missing when the call failed or the service left its output unwritten, before any default (they
-    /// were once left out of the rate).
+    /// A replay counts the fields it served, as it counts a fetch's (the feature-missing rate a comparison reports):
+    /// each read once, missing when the call failed or the service left its output unwritten, before any default.
     /// </summary>
     private FetchStatus Counted(FetchStatus status, Scope scope, ServiceSupplyCall call)
     {
@@ -81,12 +71,8 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
     }
 
     /// <summary>
-    /// The value of <paramref name="field"/> in the answer: missing when the service did not write the output; one element
-    /// for a scalar, the elements for a list, a text or a string element for a string. The output is of the type the
-    /// feature is declared with, as a model's output is of its column's: no number is widened or rounded on the way
-    /// (docs/development.md, boundaries; an int32 output was widened, and a float64 one rounded
-    /// to a float32 feature). An output of another type, or of several elements for a scalar, is no answer the feature can
-    /// take: the call fails, and says what the feature takes.
+    /// The output is of the type the feature is declared with, as a model's output is of its column's: no number is
+    /// widened or rounded on the way.
     /// </summary>
     internal static bool TryRead(ServiceResponse response, in CompiledFieldBinding field, out ScalarValue value, out string? error)
     {
@@ -106,7 +92,7 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
                 value = ScalarValue.FromString(text);
             }
 
-            return true; // not answered: missing
+            return true;
         }
 
         var kind = type.IsList ? type.Element : type.Kind;
@@ -132,7 +118,7 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
                 StorageKind.Int64 => ScalarValue.FromInt64(values.Int64.Span[0]),
                 StorageKind.Float32 => ScalarValue.FromFloat64(values.Float32.Span[0]), // exact: stored back as the float32 it is
                 StorageKind.Float64 => ScalarValue.FromFloat64(values.Float64.Span[0]),
-                _ => values.String.Span[0] is { } text ? ScalarValue.FromString(text) : ScalarValue.Missing, // left unwritten
+                _ => values.String.Span[0] is { } text ? ScalarValue.FromString(text) : ScalarValue.Missing,
             };
             return true;
         }
@@ -152,8 +138,7 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
                 value = ScalarValue.FromFloat64List(values.Float64.ToArray());
                 return true;
             default:
-                // An element the service left unwritten is null, which no list of strings holds (one
-                // reached a later call's digest as an argument, and failed the recording).
+                // An element the service left unwritten is null, which no list of strings holds.
                 var strings = values.String.Span;
                 for (var i = 0; i < strings.Length; i++)
                 {
@@ -181,14 +166,12 @@ internal sealed class FeatureServiceSupply(BoundService service, string source) 
     }
 
     /// <summary>
-    /// The outputs the call reads: each field's name once, though two features may read one field (a
-    /// service was asked for an output twice); each feature still takes the output as its own type does. A whole group's,
-    /// built once for it; a subset's (a request that needs only some of the group), for it.
+    /// The outputs the call reads: each field's name once, though two features may read one field; each feature still
+    /// takes the output as its own type does.
     /// </summary>
     private static string[] Outputs(ServiceSupplyCall call) =>
         ReferenceEquals(call.Fields, call.Group.FieldArray) ? call.Group.FieldNames : FetchGroup.DistinctNames(call.Fields);
 
-    /// <summary>One request's call: the fetch's bound and memory, the request's recorder or replay, and whether a stale answer degraded it.</summary>
     private sealed class Scope(ServiceCaller caller, ServiceSupplyCall call) : IServiceCallScope
     {
         public ServiceCaller Caller => caller;

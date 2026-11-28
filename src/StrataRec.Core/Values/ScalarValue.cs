@@ -8,11 +8,11 @@ namespace StrataRec.Core.Values;
 /// A single request-level value: a request input, a context feature, a parameter or a constant.
 /// <para>
 /// Numeric values are stored promoted (int64 / float64), and so are a list's elements: a <c>list&lt;int32&gt;</c> value
-/// is a <c>long[]</c>, a <c>list&lt;float32&gt;</c> one a <c>double[]</c>, exactly as an <c>int32</c> value is an int64.
-/// The kinds <see cref="StorageKind.Int32"/> and <see cref="StorageKind.Float32"/> therefore never occur here, as a value or
-/// as a list's <see cref="ListElement"/>; storage narrowing happens when a value is written into a column, which checks
-/// the int32 range. A value with <see cref="IsMissing"/> = true represents a legitimately absent value of a
-/// nullable type (layer 3).
+/// is a <c>long[]</c>, a <c>list&lt;float32&gt;</c> one a <c>double[]</c>, exactly as an <c>int32</c> value is an
+/// int64. The kinds <see cref="StorageKind.Int32"/> and <see cref="StorageKind.Float32"/> therefore never occur here,
+/// as a value or as a list's <see cref="ListElement"/>; storage narrowing happens when a value is written into a
+/// column, which checks the int32 range. A value with <see cref="IsMissing"/> = true represents a legitimately absent
+/// value of a nullable type.
 /// </para>
 /// <para>
 /// A float64 value read from float32 storage (<see cref="FromFloat32"/>) remembers it, only so that its text is the float's
@@ -183,7 +183,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         {
             if (target.Kind == StorageKind.Float64 && IsFloat32)
             {
-                converted = FromFloat64(AsFloat64()); // a float64 value prints as the double it is
+                converted = FromFloat64(AsFloat64());
             }
 
             switch (target.Kind)
@@ -232,7 +232,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         {
             if (target.Element == StorageKind.Float64 && IsFloat32List)
             {
-                converted = FromFloat64List((double[])_ref!); // a float64 list prints as the doubles it holds
+                converted = FromFloat64List((double[])_ref!);
             }
 
             switch (target.Element)
@@ -240,7 +240,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 case StorageKind.Int32:
                     return Int32Range.AllFit(AsInt64List());
                 case StorageKind.String:
-                    // A list's elements are values: a host's string[] may hold a null, JSON cannot.
                     foreach (var text in AsStringList())
                     {
                         if (text is null)
@@ -258,7 +257,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
                     if (!IsFloat32List)
                     {
-                        // Elements that are floats already are kept, not copied (a request checks its inputs, then binds them).
                         var elements = AsFloat64List();
                         var exact = true;
                         foreach (var e in elements)
@@ -289,7 +287,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
                 var single = target.Element == StorageKind.Float32;
                 for (var i = 0; i < longs.Length; i++)
                 {
-                    // Through the double, as a scalar converts; for list<float64> the double itself.
                     double d = longs[i];
                     doubles[i] = single ? (double)(float)d : d;
                 }
@@ -314,7 +311,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         }
     }
 
-    /// <summary>An integral double within int64 (or int32) as that integer.</summary>
     private static bool TryInteger(double d, bool int32, out long integer)
     {
         const double TwoPow63 = 9223372036854775808.0;

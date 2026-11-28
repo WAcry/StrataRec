@@ -21,8 +21,6 @@ namespace StrataRec.Features.Connectors;
 /// </code>
 /// Key parts are JSON property names (int64 parts in decimal). Absent keys or fields are reported as missing. Every key
 /// layout is supported.
-/// <para>Names that are canonical int64 decimals are also indexed by <c>long</c>, so int64 lookups format no strings per
-/// key: the top level when the data is loaded, each nested level the first time a lookup goes through it.</para>
 /// </remarks>
 public sealed class MemoryFeatureConnector : IFeatureSourceConnector
 {
@@ -123,8 +121,7 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
             return;
         }
 
-        // Fields start missing; each value is marked present only after it decoded, so a record that throws half-way
-        // never exposes a field it did not write.
+        // A value is marked present only after it decoded: a record that throws half-way exposes no field it did not write.
         foreach (var field in fields)
         {
             if (!record.TryGetProperty(field.Field, out var v) || v.ValueKind == JsonValueKind.Null)
@@ -163,8 +160,7 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
     }
 
     /// <summary>A list value, decoded straight to the field's element storage into a pooled buffer, which can go back
-    /// right away: the writer copies. Written as it is, whatever its length: the engine checks a fixed-length field's
-    /// length where it stores the value, as for any connector.</summary>
+    /// right away: the writer copies.</summary>
     private static void WriteList(JsonElement array, int keyIndex, in CompiledFieldBinding field, IFeatureBatchWriter writer)
     {
         var count = array.GetArrayLength();
@@ -204,8 +200,6 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
         }
     }
 
-    /// <summary>Decodes the array's items into <paramref name="buffer"/>; a buffer a decoding error leaves behind is
-    /// simply not returned to the pool.</summary>
     private static ReadOnlySpan<T> Fill<T>(JsonElement array, in CompiledFieldBinding field, T[] buffer)
     {
         var i = 0;
@@ -223,10 +217,6 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
         return buffer.AsSpan(0, i);
     }
 
-    /// <summary>
-    /// An <c>int32</c> value or <c>list&lt;int32&gt;</c> element. Data that does not fit is a broken fixture, not a value to
-    /// wrap: the call fails (the source is reported failed) with the field and value named.
-    /// </summary>
     private static int ReadInt32(JsonElement value, in CompiledFieldBinding field)
     {
         if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var result))
@@ -240,8 +230,7 @@ public sealed class MemoryFeatureConnector : IFeatureSourceConnector
     }
 
     /// <summary>
-    /// One level of the data: an object whose properties are the values of one key part (or, at the last level, a record's
-    /// fields). Indexed on first use, by name and, for canonical int64 names, by <c>long</c>; later duplicates win, as
+    /// Indexed on first use, by name and, for canonical int64 names, by <c>long</c>; later duplicates win, as
     /// <see cref="JsonElement.TryGetProperty(string, out JsonElement)"/> resolves them.
     /// </summary>
     private sealed class Node(JsonElement value)

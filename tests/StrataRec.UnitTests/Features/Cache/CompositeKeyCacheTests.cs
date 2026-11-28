@@ -9,10 +9,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>
-/// Cache sources of entities keyed by several parts: the in-process table keyed by the tuple,
-/// the distributed tier by the key's text, records fingerprinted with the layout, and eviction as for one-part keys.
-/// </summary>
 [Collection(MetricMeasurement.Name)]
 public class CompositeKeyCacheTests
 {
@@ -21,7 +17,6 @@ public class CompositeKeyCacheTests
 
     private static readonly EntityKeyLayout Layout = ItemCountry.KeyLayout;
 
-    /// <summary>boost = item × 10 + the country's length.</summary>
     private static ScriptedConnector Boosts() => new((keys, fields, writer, _) =>
     {
         for (var k = 0; k < keys.Count; k++)
@@ -57,8 +52,8 @@ public class CompositeKeyCacheTests
 
         Assert.Equal(new[] { 12.0, 22 }, await Read(rig, country, boost, "US", 1, 2));
         Assert.Equal(1, rig.WriteBack("ic_store"));
-        Assert.Equal(new[] { 22.0, 12, 32 }, await Read(rig, country, boost, "US", 2, 1, 3)); // 3 misses
-        Assert.Equal(new[] { 13.0 }, await Read(rig, country, boost, "FRA", 1)); // another country: a miss
+        Assert.Equal(new[] { 22.0, 12, 32 }, await Read(rig, country, boost, "US", 2, 1, 3));
+        Assert.Equal(new[] { 13.0 }, await Read(rig, country, boost, "FRA", 1));
 
         var calls = connector.Calls.ToArray();
         Assert.Equal(3, calls.Length);
@@ -79,23 +74,18 @@ public class CompositeKeyCacheTests
         var (writer, writerConnector, writerCountry, writerBoost) = Rig(store);
         await Read(writer, writerCountry, writerBoost, "U:S%", 1, 2);
         await store.WhenWrittenAsync(2);
-        var keys = writer.Tables["ic_store"].Cache!.Keyspace.Prefix; // ic_store:item_country:<where its values come from>:
+        var keys = writer.Tables["ic_store"].Cache!.Keyspace.Prefix;
         Assert.StartsWith("ic_store:item_country:", keys, StringComparison.Ordinal);
         Assert.Equal(new[] { keys + "1:U%3AS%25", keys + "2:U%3AS%25" }, store.Gets.Single());
         Assert.True(store.TryGet(keys + "2:U%3AS%25", out _, out _));
 
-        var (reader, readerConnector, readerCountry, readerBoost) = Rig(store); // another instance: an empty table
+        var (reader, readerConnector, readerCountry, readerBoost) = Rig(store);
         Assert.Equal(new[] { 24.0, 14, 34 }, await Read(reader, readerCountry, readerBoost, "U:S%", 2, 1, 3));
 
         Assert.Equal(new EntityKey[][] { [EntityKey.FromInt64(3), EntityKey.FromString("U:S%")] }, Assert.Single(readerConnector.Calls).Tuples);
         Assert.Single(writerConnector.Calls);
     }
 
-    /// <summary>
-    /// 4,096 candidates whose keys share a 128-char request input, fetched in chunks of 512, write back one
-    /// batch, which holds that string once. It was charged once per key, about 1.44 MiB, and the table's empty 1 MiB queue
-    /// (a sixteenth of 16 MiB) dropped the whole batch: nothing was cached, whatever the table's room.
-    /// </summary>
     [Fact]
     public async Task AWriteBack_WhoseKeysShareARequestInput_IsChargedItOnce_AndWritten()
     {
@@ -122,7 +112,7 @@ public class CompositeKeyCacheTests
     [Theory]
     [InlineData(new object[] { 10042L }, "10042")]
     [InlineData(new object[] { -7L }, "-7")]
-    [InlineData(new object[] { "a:b%c" }, "a:b%c")] // one part: as is, as before keys had parts
+    [InlineData(new object[] { "a:b%c" }, "a:b%c")]
     [InlineData(new object[] { 10042L, "US" }, "10042:US")]
     [InlineData(new object[] { "a:b", 1L }, "a%3Ab:1")]
     [InlineData(new object[] { "a%3Ab", 1L }, "a%253Ab:1")]
@@ -164,7 +154,7 @@ public class CompositeKeyCacheTests
         };
 
         Assert.Equal(fingerprints.Length, fingerprints.Distinct().Count());
-        Assert.Equal(fingerprints[2], Of(Layout)); // the references do not count, only the stored types
+        Assert.Equal(fingerprints[2], Of(Layout));
         Assert.Equal(fingerprints[0], CacheRecord.Fingerprint(new LocalTableSchema("s", "e", EntityKeyType.Int64, LocalTableMode.Cache, fields)));
     }
 
@@ -186,7 +176,6 @@ public class CompositeKeyCacheTests
         long item;
         for (item = 0; item < 200; item++)
         {
-            // About 2 KiB of string per record, distinct per key; two countries per item.
             var keys = new[] { EntityKey.FromInt64(item), EntityKey.FromString("US"), EntityKey.FromInt64(item), EntityKey.FromString("DE") };
             var spans = new ReadOnlyMemory<byte>[2];
             for (var k = 0; k < 2; k++)
@@ -205,8 +194,8 @@ public class CompositeKeyCacheTests
 
         var version = table.Pin();
         Assert.True(version.RecordCount < 400);
-        Assert.False(version.Find([EntityKey.FromInt64(0), EntityKey.FromString("US")]).Found); // the oldest
-        Assert.True(version.Find([EntityKey.FromInt64(199), EntityKey.FromString("DE")]).Found); // the newest
+        Assert.False(version.Find([EntityKey.FromInt64(0), EntityKey.FromString("US")]).Found);
+        Assert.True(version.Find([EntityKey.FromInt64(199), EntityKey.FromString("DE")]).Found);
         Assert.Equal("199-1" + new string('n', 1_000), version.Read(0, version.Find([EntityKey.FromInt64(199), EntityKey.FromString("DE")])).AsString());
     }
 }

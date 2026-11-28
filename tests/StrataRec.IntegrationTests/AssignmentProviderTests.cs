@@ -9,12 +9,6 @@ using StrataRec.Testing;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Where a request's arms come from: forced arms, then the platform's answer the caller passed, then the
-/// assignment provider, otherwise none. A pending provider and the deadline are covered by <see cref="PipelineRegressionTests"/>;
-/// the provider is waited for by the framework's one bounded wait, whose rules (who came first, the tokens' lifetime) are
-/// locked in <c>BoundedCallTests</c>.
-/// </summary>
 public sealed class AssignmentProviderTests
 {
     private static readonly string[] ProviderArms = { "exp_quality_weight/strong", "exp_mmr_diversity/mmr" };
@@ -51,12 +45,10 @@ public sealed class AssignmentProviderTests
         Assert.Equal(served.Plan.Experiments.Select(e => e.Id), context.Experiments.Select(e => e.Id));
         Assert.Equal(served.Plan.Arms.Select(a => a.Id), context.Arms.Select(a => a.Id));
 
-        // Views of the plan's arrays, not the arrays: a provider cannot change what the plan serves.
         Assert.False(context.Layers is LayerInfo[]);
         Assert.True(((ICollection<LayerInfo>)context.Layers).IsReadOnly);
         Assert.Throws<NotSupportedException>(() => ((IList<ArmInfo>)context.Arms)[0] = context.Arms[1]);
 
-        // Built once per plan: every request of the plan passes the same views.
         await engine.ExecuteAsync(Request("req-ctx-2"), TestContext.Current.CancellationToken);
         Assert.Same(provider.Calls[0].Arms, provider.Calls[1].Arms);
     }
@@ -80,11 +72,11 @@ public sealed class AssignmentProviderTests
         Assert.Equal("provider", fromProvider.Recording!.Request.Assignment.Source);
         Assert.Equal(platform, fromCaller.Experiments.Assigned);
         Assert.Equal("external", fromCaller.Recording!.Request.Assignment.Source);
-        Assert.Empty(fromNothing.Experiments.Assigned); // the platform answered "no arms": not a reason to ask again
+        Assert.Empty(fromNothing.Experiments.Assigned);
         Assert.Equal("external", fromNothing.Recording!.Request.Assignment.Source);
         Assert.Equal(forced, fromForce.Experiments.Assigned);
         Assert.Equal("forced", fromForce.Recording!.Request.Assignment.Source);
-        Assert.Single(provider.Calls); // asked only when nothing else decided
+        Assert.Single(provider.Calls);
     }
 
     [Fact]
@@ -115,9 +107,8 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AProviderAnsweringSynchronouslyAfterTheCallerCancelled_CancelsTheRequest()
     {
-        // An answer the engine observes complete is judged when it is observed, as BoundedCall judges a
-        // client's: the caller's cancellation comes first, so the request ends there and no pipeline runs on the answer
-        // (a run would deliver its aborted bundle to OnRecording).
+        // An answer the engine observes complete is judged when it is observed: the caller's cancellation comes first,
+        // so no pipeline runs on the answer (a run would deliver its aborted bundle to OnRecording).
         using var caller = new CancellationTokenSource();
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment, new BlockingProvider(_ => caller.Cancel()));
@@ -139,8 +130,6 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AProviderAnsweringSynchronouslyPastTheDeadline_IsRejectedAsPastIt()
     {
-        // The provider blocks the request's thread until the deadline has cancelled its token, then answers.
-        // The engine cannot cut that short, but it does not take the late answer.
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment, new BlockingProvider(token => Assert.True(token.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)))));
         Assert.True(engine.Load(host.Request).Applied);
@@ -150,19 +139,15 @@ public sealed class AssignmentProviderTests
             PipelineId = "home_feed",
             RequestId = "req-late",
             Inputs = HomeFeedTestHost.Inputs(1001, "home"),
-            Deadline = TimeSpan.FromMilliseconds(500), // room to reach the provider on a loaded machine: 50 ms ran out before it
+            Deadline = TimeSpan.FromMilliseconds(500),
         }, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal("deadline exceeded during assignment", result.Error);
-        Assert.Empty(result.Experiments.Assigned); // rejected before the arms were decided
+        Assert.Empty(result.Experiments.Assigned);
         Assert.Empty(result.Experiments.Ignored);
     }
 
-    /// <summary>
-    /// Ends only when its token is cancelled: the provider that token is for. If the engine let go of the token without
-    /// cancelling it, this provider would never end, holding whatever it holds.
-    /// </summary>
     private sealed class TokenOnlyProvider : IAssignmentProvider
     {
         private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -183,7 +168,6 @@ public sealed class AssignmentProviderTests
         }
     }
 
-    /// <summary>Waits for a provider the engine abandoned to end, with a watchdog: one whose token is never cancelled never does.</summary>
     private static async Task AssertEnds(TokenOnlyProvider provider)
     {
         var ended = await Task.WhenAny(provider.Ended, Task.Delay(TimeSpan.FromSeconds(30)));
@@ -193,9 +177,6 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AProviderAbandonedAtTheDeadline_SeesItsTokenCancelled()
     {
-        // The wait and the timer that cancels the provider's token both aim at the deadline, and
-        // the wait can end first. Disposing the source then stopped that timer: the token was never cancelled. The token
-        // lives until the provider ends (BoundedCall, rule 3; the order where the wait ends first is fixed in BoundedCallTests).
         var provider = new TokenOnlyProvider();
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment, provider);
@@ -211,9 +192,6 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AProviderAbandonedForTheCallersCancellation_SeesItsTokenCancelled()
     {
-        // When the caller cancels, the wait's own registration on the caller's token can end the
-        // request (inline, in Cancel) before the registration that cancels the provider's linked token runs; disposing the
-        // source then removed that registration, and the provider's token was never cancelled.
         using var caller = new CancellationTokenSource();
         var provider = new TokenOnlyProvider();
         var host = HomeFeedTestHost.Load();
@@ -221,7 +199,7 @@ public sealed class AssignmentProviderTests
         Assert.True(engine.Load(host.Request).Applied);
 
         var request = engine.ExecuteAsync(Request("req-caller-abandons"), caller.Token).AsTask();
-        Assert.False(request.IsCompleted); // waiting for the provider
+        Assert.False(request.IsCompleted);
 
         // From a thread without a synchronization context, as in a server: xUnit's would keep the request's continuation
         // out of Cancel, hiding the order above.
@@ -232,8 +210,7 @@ public sealed class AssignmentProviderTests
     }
 
     /// <summary>
-    /// Registers a cancellation callback that throws, and ends when told to (with a failure): a provider whose cleanup
-    /// fails, and which outlives the request. Keeps its token, to tell when its source is disposed.
+    /// Keeps its token, to tell when its source is disposed.
     /// </summary>
     private sealed class FailingCleanupProvider : IAssignmentProvider
     {
@@ -255,9 +232,6 @@ public sealed class AssignmentProviderTests
     [Fact]
     public async Task AnAbandonedProviderWhoseCallbackThrows_IsSummarized_AndKeepsItsTokenUntilItEnds_ThenItIsDisposed()
     {
-        // The callback's failure is counted and summarized as every token's is (the request events, subject
-        // 'assignment'), and the provider's token stays valid while it runs, then is disposed once it has ended. A logger
-        // that threw on the failure used to end the cleanup there: the token source was never disposed.
         var provider = new FailingCleanupProvider();
         var loggers = new ListLoggerFactory();
         using var events = new RequestEventLog(loggers.CreateLogger("events"), autoFlush: false);
@@ -277,13 +251,12 @@ public sealed class AssignmentProviderTests
             },
             TimeSpan.FromSeconds(30)), "the callback's failure was not summarized");
         Assert.True(provider.Token.IsCancellationRequested);
-        Assert.False(DisposedTokens.Disposed(provider.Token)); // the provider is still running: its token stays valid
+        Assert.False(DisposedTokens.Disposed(provider.Token));
 
         provider.End();
         Assert.True(DisposedTokens.WaitUntilDisposed(provider.Token, TimeSpan.FromSeconds(30)), "the abandoned provider's token source was not disposed after it ended");
     }
 
-    /// <summary>Answers when told to: a provider whose answer comes at a moment the test picks.</summary>
     private sealed class GatedProvider : IAssignmentProvider
     {
         private readonly TaskCompletionSource<IReadOnlyList<string>> _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -302,7 +275,7 @@ public sealed class AssignmentProviderTests
         Assert.True(engine.Load(host.Request).Applied);
 
         var request = engine.ExecuteAsync(Request("req-provider-first"), TestContext.Current.CancellationToken).AsTask();
-        Assert.False(request.IsCompleted); // waiting for the provider
+        Assert.False(request.IsCompleted);
         provider.Answer();
         var result = await request;
 
@@ -333,7 +306,7 @@ public sealed class AssignmentProviderTests
     public async Task AProviderCompletingBeforeItsWaitIsSetUp_IsObservedThenAndTaken()
     {
         // The fast path: the provider's task is complete once it is a task, so no wait is set up (OnCompleted would
-        // throw); nothing decided who came first, and the answer is judged when it is observed, well before the deadline.
+        // throw).
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment, new CompletesOnSecondLook());
         Assert.True(engine.Load(host.Request).Applied);
@@ -344,10 +317,6 @@ public sealed class AssignmentProviderTests
         Assert.Equal(ProviderArms.Order(), result.Experiments.Assigned.Order());
     }
 
-    /// <summary>
-    /// The provider is an external call like a connector or a model: its duration and its timeouts are
-    /// measured under <c>assignment provider</c>, and its health is tracked. It had no telemetry of its own.
-    /// </summary>
     [Fact]
     public async Task TheProvidersCall_IsMeasuredAsAnExternalCall()
     {
@@ -370,7 +339,6 @@ public sealed class AssignmentProviderTests
         public ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken) => new((IReadOnlyList<string>)null!);
     }
 
-    /// <summary>A provider that answers null assigns no arms: the request runs the baseline, as with an empty answer (ExternalArms).</summary>
     [Fact]
     public async Task AProviderAnsweringNull_AssignsNoArms()
     {
@@ -385,10 +353,6 @@ public sealed class AssignmentProviderTests
         Assert.Empty(result.Experiments.Ignored);
     }
 
-    /// <summary>
-    /// The longest deadline a request can have is no deadline, not one in the past: the provider is waited for and the
-    /// pipeline runs. The sum of the start and the deadline overflowed into the past, and every node timed out at once.
-    /// </summary>
     [Fact]
     public async Task ARequestWithTheLongestDeadline_IsNotCutOff()
     {

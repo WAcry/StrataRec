@@ -11,10 +11,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// A row source that finishes below its limit gives the rest back: columns created after it are sized for the
-/// rows that exist and the rows later row sources may still append, not for the quota it did not fill.
-/// </summary>
 public sealed class RowBudgetTests
 {
     [Fact]
@@ -24,14 +20,14 @@ public sealed class RowBudgetTests
         var table = new CandidateTable(schema, 2000 + 100, new RequestMemory());
         table.AppendRows(new long[] { 1, 2, 3 });
 
-        table.ReleaseRowBudget(2000 - 3); // the recall found 3 of its 2,000
+        table.ReleaseRowBudget(2000 - 3);
 
         Assert.Equal((100, 103), (table.FreeRows, table.StorageCapacity));
         Assert.Equal(103, table.GetOrCreateSlot(1).Capacity);
-        table.AppendRows(Enumerable.Range(10, 100).Select(i => (long)i).ToArray()); // the later source's 100 still fit
+        table.AppendRows(Enumerable.Range(10, 100).Select(i => (long)i).ToArray());
         Assert.Equal(0, table.FreeRows);
 
-        table.ReleaseRowBudget(5); // never below what is appended
+        table.ReleaseRowBudget(5);
         Assert.Equal((0, 103), (table.FreeRows, table.PhysicalRowCount));
     }
 

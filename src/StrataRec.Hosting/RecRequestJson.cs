@@ -18,8 +18,7 @@ public sealed record RecRequestDocument(RequestInputs Inputs, string? RequestId,
 
 /// <summary>
 /// Reads the request document a caller sends a host, <c>{ "inputs": { … }, "request_id": "…", "assignment":
-/// ["experiment/arm", …] }</c> with every member optional, by the engine's rules, as <see cref="RecResultJson"/> writes the
-/// result document: every host speaks the same document, and a transport is a few lines (parse, read, execute, write).
+/// ["experiment/arm", …] }</c> with every member optional.
 /// </summary>
 /// <remarks>
 /// <para>The inputs follow the pipeline's <c>request_schema</c> (<see cref="RequestSchema.TryRead"/>). What

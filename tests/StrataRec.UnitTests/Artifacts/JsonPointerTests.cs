@@ -207,16 +207,16 @@ public class JsonPointerTests
     }
 
     [Theory]
-    [InlineData("/b/c/d")]   // into a scalar
-    [InlineData("/a/x")]     // into null
-    [InlineData("/arr/3")]   // past the end
+    [InlineData("/b/c/d")]
+    [InlineData("/a/x")]
+    [InlineData("/arr/3")]
     [InlineData("/arr/-")]   // the element after the last never exists
-    [InlineData("/arr/01")]  // leading zero
+    [InlineData("/arr/01")]
     [InlineData("/arr/-1")]
     [InlineData("/arr/x")]
     [InlineData("/arr/")]
     [InlineData("/arr/99999999999")]
-    [InlineData("/B")]       // names are case-sensitive
+    [InlineData("/B")]
     public void TryEvaluate_InvalidOrMissingPath_IsAbsent(string pointer)
     {
         var document = Jsonc.Parse("""{"a": null, "b": {"c": 1}, "arr": [10, 20, null]}""");
@@ -278,7 +278,7 @@ public class JsonPointerTests
     {
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PolicyModel>(text, "policy.jsonc"));
 
-        Assert.StartsWith("/", ex.Pointer); // at the value
+        Assert.StartsWith("/", ex.Pointer);
     }
 
     private sealed class PolicyModel

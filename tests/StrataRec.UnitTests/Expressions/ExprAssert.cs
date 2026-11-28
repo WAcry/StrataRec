@@ -6,11 +6,6 @@ namespace StrataRec.UnitTests.Expressions;
 
 internal static class ExprAssert
 {
-    /// <summary>
-    /// Evaluates <paramref name="source"/> over the first <c>expected.Length</c> rows three ways — vectorized over all
-    /// rows (full-range path), vectorized one row at a time (gather path) and with the reference interpreter — and
-    /// checks each against <paramref name="expected"/> (null = missing; double NaN matches NaN).
-    /// </summary>
     public static void Rows(ExprFixture f, string source, params object?[] expected)
     {
         var compiled = f.Compile(source);
@@ -42,7 +37,6 @@ internal static class ExprAssert
         }
     }
 
-    /// <summary>Request-level evaluation equals <paramref name="expected"/>.</summary>
     public static void Scalar(ExprFixture f, string source, object? expected) =>
         Same(expected, f.Compile(source).EvaluateScalar(f.Context), source);
 
@@ -86,7 +80,6 @@ internal static class ExprAssert
                 Assert.Equal(list, actual.AsBoolList().ToArray());
                 break;
             case float[] floats:
-                // A list<float32> value: its elements are float32s, held promoted.
                 Assert.False(actual.IsMissing, $"{what}: expected a list, got missing");
                 Assert.Equal(floats, actual.AsFloat64List().ToArray().Select(d => (float)d).ToArray());
                 break;

@@ -6,16 +6,8 @@ using StrataRec.UnitTests.Core;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>
-/// An expression writing into a real table slot keeps the slot's write contract (<see cref="TableWrites"/>): the rows it
-/// wrote a value into are present, the rows it wrote as missing and the rows it did not write are missing. The other
-/// expression tests write into buffers made directly, which count every row valid and so cannot tell.
+/// The other expression tests write into buffers made directly, which count every row valid and so cannot tell.
 /// </summary>
-/// <remarks>
-/// The matrix covers each storage type, nullable and not; the identity domain (most rows, lanes indexed by row) and the
-/// gather domain (few rows, lanes indexed by position), in no particular row order; and each way a value reaches the
-/// destination: a column read, a request-level value broadcast to every row, and an in-place update that reads the
-/// destination itself (<c>col.dst ?? param.v</c>).
-/// </remarks>
 public class TableWriteContractTests
 {
     private const int Physical = 130; // three validity words
@@ -54,7 +46,6 @@ public class TableWriteContractTests
             .Param("param.v", type, broadcast)
             .Build(Physical);
 
-        // The source: a value on every row, or (nullable) missing on every fourth.
         var source = Enumerable.Range(0, Physical)
             .Select(r => columnType.Nullable && r % 4 == 1 ? ScalarValue.Missing : TableWrites.Sample(columnType, r)).ToArray();
         var sourceSlot = f.Table.GetOrCreateSlot(f.SlotOf("col.src"));
@@ -63,8 +54,6 @@ public class TableWriteContractTests
             ColumnValues.Set(sourceSlot, r, source[r]);
         }
 
-        // The destination is the table's slot, created after the rows were appended. For an in-place update, an earlier
-        // writer gave every third row a value.
         var destination = f.Table.GetOrCreateSlot(f.SlotOf("col.dst"));
         var expected = new ScalarValue[Physical];
         if (shape == "in place")

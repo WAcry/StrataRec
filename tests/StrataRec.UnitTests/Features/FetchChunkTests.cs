@@ -11,9 +11,7 @@ using StrataRec.Testing;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// The chunks of one fetch share its staging area, its budget and its cancellation source: each chunk
-/// writes only its own region, the source lives until the last connector really completed, and the memory is held once
-/// per call still running. Asynchronous connectors here complete on dedicated threads, released by the test.
+/// Asynchronous connectors here complete on dedicated threads, released by the test.
 /// </summary>
 public class FetchChunkTests
 {
@@ -47,9 +45,6 @@ public class FetchChunkTests
 
             return FetchStatus.Ok;
         });
-        // A budget a loaded machine cannot use up while the three chunks are sent one after another: a chunk whose time is
-        // up before it is sent is not sent (FetchCandidates), its connector never sees the cancellation, and the wait for
-        // it below ran into its patience under a parallel test run with 100 ms.
         var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 1000, maxBatch: 1);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
@@ -57,13 +52,13 @@ public class FetchChunkTests
         var request = rig.NewRequest(new long[] { 1, 2, 3 }, hook: hook);
 
         var result = await request.EnsureAsync(score).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
-        await Task.WhenAll(observed.Select(o => o.Task)).WaitAsync(Patience, TestContext.Current.CancellationToken); // both cooperative connectors saw the budget
+        await Task.WhenAll(observed.Select(o => o.Task)).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.True(result.Failed);
         Assert.Contains("timed out after 1000 ms", result.Error);
         Assert.Equal(3, hook.Recorded.Count);
         Assert.All(hook.Recorded, call => Assert.Equal(IoOutcome.Timeout, call.Outcome));
-        var token = Assert.Single(tokens.Distinct()); // one source for the fetch, not one per chunk
+        var token = Assert.Single(tokens.Distinct());
         Assert.True(token.IsCancellationRequested);
         _ = token.WaitHandle; // still alive: the first connector holds it
 
@@ -122,9 +117,8 @@ public class FetchChunkTests
     [Fact]
     public async Task TheWaitsEndAtTheBudget_WhileAConnectorCancellationCallbackBlocks()
     {
-        // Both chunks answer later. The second registers a cancellation callback that blocks until the test releases it.
-        // Cancelling the shared source runs its callbacks one after another, so a wait that hung on that source would stay
-        // behind the blocked callback; the waits have a bound of their own and both chunks time out at the budget.
+        // Cancelling the shared source runs its callbacks one after another, so a wait that hung on that source would
+        // stay behind the blocked callback; the waits have a bound of their own and both chunks time out at the budget.
         using var callbackEntered = new ManualResetEventSlim();
         using var releaseCallback = new ManualResetEventSlim();
         using var callbackReturned = new ManualResetEventSlim();
@@ -158,17 +152,17 @@ public class FetchChunkTests
         try
         {
             var ensure = request.EnsureAsync(score).AsTask();
-            Assert.True(callbackEntered.Wait(Patience, TestContext.Current.CancellationToken)); // the budget ran out and the callback blocks
+            Assert.True(callbackEntered.Wait(Patience, TestContext.Current.CancellationToken));
             var result = await ensure.WaitAsync(Patience, TestContext.Current.CancellationToken);
-            Assert.False(callbackReturned.IsSet); // the callback still blocks
+            Assert.False(callbackReturned.IsSet);
 
             Assert.True(result.Failed);
             Assert.Contains("timed out after 100 ms", result.Error);
             Assert.Equal(2, hook.Recorded.Count);
             Assert.All(hook.Recorded, call => Assert.Equal(IoOutcome.Timeout, call.Outcome));
 
-            Assert.Equal(2, request.Memory.Release()); // both connectors still run: one hold each
-            Assert.True(pool.Outstanding > 0); // the ledger is still out
+            Assert.Equal(2, request.Memory.Release());
+            Assert.True(pool.Outstanding > 0);
         }
         finally
         {
@@ -187,9 +181,6 @@ public class FetchChunkTests
     [InlineData(true)]
     public async Task ChunksNotSentBeforeTheBudgetRanOut_AreNotSent_AndFailAsTimeouts(bool cached)
     {
-        // The first chunk answers synchronously, but only once the fetch's budget has run out. The fetch has control back
-        // then: the other chunks are not sent (each was sent with no time left, its synchronous part
-        // run in turn), and fail as timeouts. Recorded as not sent, a replay fails them alike without a connector.
         var sent = new ConcurrentQueue<long>();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
@@ -234,7 +225,7 @@ public class FetchChunkTests
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
             Interlocked.Increment(ref sent);
-            caller.Cancel(); // while the first chunk's synchronous part runs
+            caller.Cancel();
             ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 2.0);
             return ValueTask.FromResult(FetchStatus.Ok);
         });
@@ -257,8 +248,6 @@ public class FetchChunkTests
     [Fact]
     public async Task AContextFetchNotSentBeforeTheCallerCancelled_IsNotSent_AndFailsAsCancelled()
     {
-        // The context fetches of a request are sent one after another; once one connector's synchronous part
-        // has seen the caller cancel, the next was still sent with a cancelled token.
         using var caller = new CancellationTokenSource();
         var first = new ScriptedConnector((keys, fields, writer, _) =>
         {
@@ -289,8 +278,6 @@ public class FetchChunkTests
     [InlineData(true)]
     public async Task AbandonedIo_IsOneHoldPerCallStillRunning_NotPerFetch(bool record)
     {
-        // Three chunks: the first answers synchronously and is finished; the other two are still running when the request
-        // returns without awaiting the prefetch.
         using var hang = new ManualResetEventSlim();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
@@ -317,10 +304,10 @@ public class FetchChunkTests
         var abandoned = request.Memory.Release();
 
         Assert.Equal(2, abandoned);
-        Assert.True(pool.Outstanding > 0); // the ledger is still out
+        Assert.True(pool.Outstanding > 0);
         hang.Set();
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
-        Assert.True(SpinWait.SpinUntil(() => request.Memory.IsReturned, Patience)); // the last call site lets go right after
+        Assert.True(SpinWait.SpinUntil(() => request.Memory.IsReturned, Patience));
         if (hook is not null)
         {
             Assert.Equal(new[] { 2.0, 4.0, 6.0 }, hook.Recorded.OrderBy(c => c.Keys[0]).Select(c => c.Values!.Single()!.Value));
@@ -330,8 +317,8 @@ public class FetchChunkTests
     [Fact]
     public async Task SynchronousAndAsynchronousChunks_AnAsynchronousCallKeepsItsWriterUntilItCompletes()
     {
-        // Chunks 1 and 4 answer later, on threads of their own; the others answer at once. A view handed to a call that is
-        // still running is never handed to another chunk, so the late writes land in the right keys.
+        // A view handed to a call that is still running is never handed to another chunk, so the late writes land in
+        // the right keys.
         using var gate = new ManualResetEventSlim();
         var writers = new ConcurrentDictionary<long, IFeatureBatchWriter>();
         static object? ValueOf(long key, string field) => field == "tag" ? "t" + key : key * 1.5;
@@ -381,11 +368,6 @@ public class FetchChunkTests
     [Fact]
     public async Task ConcurrentChunks_WriteNumbersStringsAndLists_WhileAnAbandonedChunkKeepsWriting_AndItsResultIsNeverRead()
     {
-        // Sixteen chunks of four keys write at the same time on threads of their own: their numeric values, strings, lists
-        // and "written" bits share fetch-wide buffers (several chunks per 64-bit word, were the bits dense). The first chunk
-        // writes and marks all of its values, then hangs, and goes on writing after the request returned. The caller cuts
-        // it off once the fetch has decided the other fifteen, so no budget decides anything here: a budget is the
-        // fetch's, and on a busy machine it also cut off chunks still finishing their writes.
         const int Chunks = 16;
         const int MaxBatch = 4;
         using var start = new ManualResetEventSlim();
@@ -416,7 +398,7 @@ public class FetchChunkTests
                     late.Wait(Patience);
                     for (var i = 0; i < 100; i++)
                     {
-                        ScriptedConnector.WriteAll(keys, fields, writer, LateValueOf); // grows its list arena
+                        ScriptedConnector.WriteAll(keys, fields, writer, LateValueOf);
                     }
 
                     return FetchStatus.Ok;
@@ -453,13 +435,11 @@ public class FetchChunkTests
 
         var ensure = request.Fetcher.EnsureAsync(new[] { score, tag, history }, caller.Token).AsTask();
         start.Set();
-        await hook.WhenDecided(Chunks - 1, Patience); // every chunk but the hung one
+        await hook.WhenDecided(Chunks - 1, Patience);
         Assert.True(abandonedWrote.Wait(Patience, TestContext.Current.CancellationToken));
         caller.Cancel();
-        var result = await ensure.WaitAsync(Patience, TestContext.Current.CancellationToken); // returns at once, the first chunk still running
+        var result = await ensure.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        // The controls are the chunks the fetch accepted, not the ones that merely finished their work; every message
-        // carries each chunk's outcome and timing, so a failure explains itself.
         Assert.True(result.State == FeatureState.Degraded && result.Error!.Contains("was cancelled", StringComparison.Ordinal), $"{result.State}, {result.Error}; {hook.Describe()}");
         Assert.True(hook.Decided == Chunks && hook.Outcomes.Count == Chunks, $"each chunk is decided once; {hook.Describe()}");
         Assert.True(hook.Outcomes.All(call => call.Value.Outcome == (call.Key == 1 ? IoOutcome.Cancelled : IoOutcome.Ok)), hook.Describe());
@@ -468,7 +448,6 @@ public class FetchChunkTests
             long key = row + 1;
             if (key <= MaxBatch)
             {
-                // Written and marked before the cut-off, but the call was cut off: never read.
                 Assert.True(request.Value(score, row).IsMissing);
                 Assert.True(request.Value(tag, row).IsMissing);
                 Assert.True(request.Value(history, row).IsMissing);
@@ -481,9 +460,9 @@ public class FetchChunkTests
             Assert.Equal(new[] { key, key + 1, key + 2 }, request.Value(history, row).AsInt64List());
         }
 
-        request.Memory.Release(); // the request returns; the abandoned chunk still holds the memory
+        request.Memory.Release();
         Assert.False(request.Memory.IsReturned);
-        Assert.True(pool.Outstanding > 0); // the ledger is still out
+        Assert.True(pool.Outstanding > 0);
         late.Set();
         await request.Fetcher.WhenIoCompleteAsync().WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(request.Memory.IsReturned);
@@ -512,7 +491,6 @@ public class FetchChunkTests
             }
         }
 
-        // Neighbouring chunks write their edges through their own views; nothing leaks across.
         var views = Enumerable.Range(0, chunks).Select(c =>
         {
             var view = new StagingBuffer(area);
@@ -539,7 +517,6 @@ public class FetchChunkTests
         }
     }
 
-    /// <summary>Completes the call on a dedicated thread once <paramref name="gate"/> is set.</summary>
     private static ValueTask<FetchStatus> OnThread(ManualResetEventSlim gate, Func<FetchStatus> work)
     {
         var done = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -566,8 +543,8 @@ public class FetchChunkTests
 
     /// <summary>
     /// Records each call's outcome by its first key and when the fetch decided it, and tells when a number of calls has
-    /// been decided: what a test waits for before it cuts off the calls still running, instead of hoping a budget runs out
-    /// after the others. <see cref="Describe"/> puts it all in a failure message.
+    /// been decided: what a test waits for before it cuts off the calls still running, instead of hoping a budget runs
+    /// out after the others.
     /// </summary>
     private sealed class DecisionHook : IFeatureCallHook
     {
@@ -583,7 +560,6 @@ public class FetchChunkTests
 
         public bool Replays => false;
 
-        /// <summary>Notes that the connector's call for <paramref name="key"/> has done its work and is about to return.</summary>
         public void Answered(long key) => _answered[key] = Stopwatch.GetTimestamp();
 
         public async Task WhenDecided(int count, TimeSpan patience)

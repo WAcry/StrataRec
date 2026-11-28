@@ -9,13 +9,11 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Defects of logging, expressions and whole runs that were fixed, one test each.</summary>
 public sealed class PipelineRegressionTests
 {
     [Fact]
     public void ReloadWithAnUnknownFallbackPipelineKeepsTheCurrentPlan()
     {
-        // The FALLBACK_PIPELINE_UNKNOWN error must block the primary's publication.
         var host = HomeFeedTestHost.LoadModified(_ => { });
         var engine = new RecEngine(host.Environment);
         ServiceCollectionExtensions.LoadWorkspace(engine, host.Root, "local", new[] { "home_feed" }).ThrowIfErrors("initial load");
@@ -45,7 +43,6 @@ public sealed class PipelineRegressionTests
     [InlineData(false)]
     public async Task ExternalAssignmentIsBoundedByTheRequestDeadline(bool honorCancellation)
     {
-        // A slow provider (cooperative or not) must not hold the request past its deadline.
         var host = HomeFeedTestHost.Load();
         var engine = new RecEngine(host.Environment, new SlowProvider(TimeSpan.FromMinutes(1), honorCancellation));
         Assert.True(engine.Load(host.Request).Applied);
@@ -58,13 +55,12 @@ public sealed class PipelineRegressionTests
 
         Assert.False(result.Succeeded);
         Assert.Contains("assignment", result.Error);
-        Assert.InRange(watch.ElapsedMilliseconds, 0, 30_000); // a generous watchdog: the provider takes a minute
+        Assert.InRange(watch.ElapsedMilliseconds, 0, 30_000);
     }
 
     [Fact]
     public async Task CallerCancellationStillPublishesTheExperimentRecord()
     {
-        // A cancelled request was assigned (and maybe exposed); its durable record must not vanish.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
@@ -99,13 +95,12 @@ public sealed class PipelineRegressionTests
     [Fact]
     public async Task ColumnsFromLogsTheInputsOfTheModelVariantThatServed()
     {
-        // A treatment that rewires a model input must log its own inputs, under its own schema id.
         var host = HomeFeedTestHost.Load();
         var swap = new ExperimentPlacement(ArtifactSerializer.Deserialize<ExperimentArtifact>("""
             { "experiment_id": "exp_inputs", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
               "arms": { "control": {}, "swap": { "nodes": { "ctr_ranker": { "config": { "inputs": { "log_followers": "col.item.smoothed_ctr" } } } } } } }
             """), "inputs");
-        var compilation = host.Compile(With(host.Request, swap)); // with its tables loaded, as the engine serves it
+        var compilation = host.Compile(With(host.Request, swap));
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         var plan = compilation.Plan!;
         var executor = new PipelineExecutor();
@@ -130,7 +125,6 @@ public sealed class PipelineRegressionTests
     [Fact]
     public void TapCannotReadAVersionProducedAfterItsAttachPoint()
     {
-        // Col.score.final@fusion does not exist yet right after recall.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
@@ -167,7 +161,6 @@ public sealed class PipelineRegressionTests
     [Fact]
     public async Task TapsArePassiveForContextFeatures()
     {
-        // A tap may log a context feature the pipeline reads anyway, but must not add a fetch of its own.
         var logOnly = WithPipelineEdit("\"context\": { \"user_id\": \"ctx.request.user_id\",", "\"context\": { \"tenure\": \"ctx.user.tenure_days\", \"user_id\": \"ctx.request.user_id\",");
         Assert.Contains(logOnly.Compile().Diagnostics, d => d.IsError && d.Code == "TAP_FEATURE_NOT_FETCHED" && d.Message.Contains("user.tenure_days"));
 
@@ -188,7 +181,6 @@ public sealed class PipelineRegressionTests
     [Fact]
     public void NodeCannotReadItsOwnPinnedVersion()
     {
-        // col.x@self resolves to the slot the node is about to write.
         var host = WithPipelineEdit("\"output_col\": \"score.coarse\", \"expr\": \"col.item.smoothed_ctr\"",
             "\"output_col\": \"score.coarse\", \"expr\": \"col.item.smoothed_ctr + (col.score.coarse@coarse_score ?? 0.0)\"");
 
@@ -200,7 +192,6 @@ public sealed class PipelineRegressionTests
     [Fact]
     public async Task CancelledCapturingRequestNeverWritesToTheProductionLogs()
     {
-        // A cancelled preview (CaptureLogs) must not fall back to persistent submission.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
@@ -226,7 +217,6 @@ public sealed class PipelineRegressionTests
     [Fact]
     public void FunnelKeysMustBeHashableScalars()
     {
-        // A list key compiled, then threw from sampling at request time.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
@@ -241,7 +231,6 @@ public sealed class PipelineRegressionTests
     [Fact]
     public void RowSourceOutputsCannotBePinned()
     {
-        // Row sources share one slot per column, so col.x@recall read an unwritten per-node slot.
         var host = WithPipelineEdit("\"primary_source\": \"col.recall.primary_source\"",
             "\"primary_source\": \"col.recall.primary_source\", \"pinned\": \"col.recall.best_score@recall ?? -100.0\"");
 

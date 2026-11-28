@@ -7,18 +7,12 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>stratarec init</c>: the workspace it writes validates without warnings, runs (in the arm the request's assignment
-/// names) and explains; it refuses a directory that is not empty unless <c>--force</c>, which overwrites only its own
-/// files; and the next commands it prints work when typed as printed.
-/// </summary>
 public sealed class InitCommandTests
 {
     private const string Experiment = InitTemplates.ExperimentId;
     private const string Boost = Experiment + "/" + InitTemplates.AssignedArm;
     private const string Control = Experiment + "/" + InitTemplates.ControlArm;
 
-    /// <summary>The weights of the final score: the pipeline's, and the one the assigned arm sets.</summary>
     private const double BaselineWeight = 0.05;
     private const double BoostWeight = 0.2;
 
@@ -38,7 +32,6 @@ public sealed class InitCommandTests
             Assert.StartsWith("// ", File.ReadAllText(Path.Combine(root, file.Path)));
         }
 
-        // schemas/, listed on one line, holds this binary's schemas, and every file but the fixtures names its own first.
         Assert.Contains(printed.Split('\n'), line => line.TrimStart().StartsWith(Path.Combine(root, "schemas") + Path.DirectorySeparatorChar + " ", StringComparison.Ordinal)
                                                      && line.Contains("the JSON Schema of each kind of file above", StringComparison.Ordinal));
         foreach (var schema in SchemaFiles.Generate(Tool.Environment))
@@ -77,10 +70,10 @@ public sealed class InitCommandTests
 
         Assert.Equal(new[] { Boost }, assigned.Arms);
         Assert.Equal(new[] { Control }, control.Arms);
-        Assert.Equal(10, assigned.Items.Count); // top_k of the 12 recalled
+        Assert.Equal(10, assigned.Items.Count);
         Assert.All(assigned.Items, item => AssertScore(item, BoostWeight));
         Assert.All(control.Items, item => AssertScore(item, BaselineWeight));
-        Assert.NotEqual(control.Items.Select(i => i.Id), assigned.Items.Select(i => i.Id)); // the weight reorders the feed
+        Assert.NotEqual(control.Items.Select(i => i.Id), assigned.Items.Select(i => i.Id));
 
         var plan = new StringWriter();
         var planErrors = new StringWriter();
@@ -103,12 +96,11 @@ public sealed class InitCommandTests
         Assert.Contains("--force", errors);
         Assert.Equal(new[] { "notes.txt" }, Directory.GetFileSystemEntries(temp.Path).Select(Path.GetFileName));
 
-        // A workspace already there: the file in the way is one init would overwrite.
         var workspace = Path.Combine(temp.Path, "ws");
         Assert.Equal(0, Init(workspace, InitTemplates.DefaultPipeline, force: false, out _, out _));
         Assert.Equal(2, Init(workspace, InitTemplates.DefaultPipeline, force: false, out _, out errors));
         Assert.Contains($"'{Path.Combine("catalog", "feed.jsonc")}' is in the way", errors);
-        Assert.Contains($"overwrite the {InitCommand.Files(Tool.Environment, InitTemplates.DefaultPipeline).Length} files", errors); // schemas/ too
+        Assert.Contains($"overwrite the {InitCommand.Files(Tool.Environment, InitTemplates.DefaultPipeline).Length} files", errors);
     }
 
     [Fact]
@@ -124,7 +116,6 @@ public sealed class InitCommandTests
         Assert.Equal("bin/\n", File.ReadAllText(Path.Combine(temp.Path, ".gitignore")));
         Assert.True(Directory.Exists(Path.Combine(temp.Path, ".git")));
 
-        // A visible file next to the hidden ones is still in the way.
         using var other = new TempDirectory();
         Directory.CreateDirectory(Path.Combine(other.Path, ".git"));
         File.WriteAllText(Path.Combine(other.Path, "notes.txt"), "mine");
@@ -186,16 +177,11 @@ public sealed class InitCommandTests
         Assert.Contains(lines, l => l.Contains($"bindings{Path.DirectorySeparatorChar}local.jsonc", StringComparison.Ordinal) && l.EndsWith("(overwritten)", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.Contains($"pipelines{Path.DirectorySeparatorChar}feed.jsonc", StringComparison.Ordinal) && !l.Contains("overwritten", StringComparison.Ordinal));
 
-        // Two pipelines now: validate and explain-plan are told which one.
         Assert.Contains(lines, l => l.Trim() == $"stratarec validate -c {root} -p feed");
         Assert.Contains(lines, l => l.Trim() == $"stratarec explain-plan -c {root} -p feed");
         Assert.Equal(0, ValidateCommand.Run(Tool.Environment, root, "local", "feed", "text", warningsAsErrors: true, TextWriter.Null));
     }
 
-    /// <summary>
-    /// The real command line, in its own processes, as a user types it: init, then every command it printed, from the
-    /// same directory. The workspace is a relative directory, or the current one.
-    /// </summary>
     [Theory]
     [InlineData("my-feed")]
     [InlineData(null)]
@@ -220,7 +206,7 @@ public sealed class InitCommandTests
         Assert.Contains(commands, c => c.Contains($"--arms {Control}", StringComparison.Ordinal));
         foreach (var command in commands)
         {
-            Assert.DoesNotContain("\"", command); // no quoting needed: split on spaces as a shell would
+            Assert.DoesNotContain("\"", command);
             var result = await Cli(temp.Path, command["stratarec ".Length..].Split(' '));
             Assert.True(result.Code == 0, $"{command}: exit {result.Code}\n{result.Stderr}\n{result.Stdout}");
             if (command.StartsWith("stratarec run ", StringComparison.Ordinal))
@@ -232,7 +218,7 @@ public sealed class InitCommandTests
                 Assert.Contains(lines, l => l.StartsWith($"  arms      {expected}", StringComparison.Ordinal));
                 if (command.Contains("--explain", StringComparison.Ordinal))
                 {
-                    Assert.Contains($"  explain   {InitTemplates.CutItem}: dropped by rank", lines); // the example says why
+                    Assert.Contains($"  explain   {InitTemplates.CutItem}: dropped by rank", lines);
                 }
             }
         }
@@ -250,14 +236,12 @@ public sealed class InitCommandTests
     [InlineData("")]
     public async Task Quote_IsReadBackAsWritten_ByAPosixShell(string argument)
     {
-        // Double quotes still expanded $ and backquotes, and a backslash went unquoted.
         var (code, stdout, stderr) = await Bash(Path.GetTempPath(), $"printf '%s' {InitCommand.Quote(argument)}");
 
         Assert.True(code == 0, stderr);
         Assert.Equal(argument, stdout);
     }
 
-    /// <summary>The printed commands, pasted into bash as they are, for a directory name a shell would split and expand.</summary>
     [Fact]
     public async Task PrintedNextCommands_WorkInBash_ForADirectoryNameAShellWouldExpand()
     {
@@ -286,12 +270,11 @@ public sealed class InitCommandTests
     }
 
     [Theory]
-    [InlineData("bindings/local.jsonc", "file")] // the file itself, pointing at a file outside
-    [InlineData("fixtures", "directory")] // a directory on the way, pointing at one outside
-    [InlineData("catalog", "nowhere")] // a dangling link
+    [InlineData("bindings/local.jsonc", "file")]
+    [InlineData("fixtures", "directory")]
+    [InlineData("catalog", "nowhere")]
     public void Force_NeverWritesThroughASymbolicLink_AndWritesNothing(string link, string target)
     {
-        // --force followed a link inside the workspace and replaced a file elsewhere.
         using var temp = new TempDirectory();
         var root = Path.Combine(temp.Path, "ws");
         Directory.CreateDirectory(root);
@@ -323,7 +306,7 @@ public sealed class InitCommandTests
         Assert.Equal("do not change", File.ReadAllText(outsideFile));
         Assert.Empty(Directory.GetFileSystemEntries(outsideDirectory));
         Assert.False(File.Exists(Path.Combine(temp.Path, "nowhere")));
-        Assert.Equal(new[] { top }, Directory.GetFileSystemEntries(root).Select(Path.GetFileName)); // nothing written
+        Assert.Equal(new[] { top }, Directory.GetFileSystemEntries(root).Select(Path.GetFileName));
         if (top != link)
         {
             Assert.Single(Directory.GetFileSystemEntries(Path.Combine(root, top)));
@@ -344,10 +327,9 @@ public sealed class InitCommandTests
     }
 
     [Fact]
-    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")] // CI is Linux only
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public void ADirectoryItCannotRead_IsADiagnostic_NotAnUnhandledException()
     {
-        // The emptiness check ran outside the I/O error handling.
         using var temp = new TempDirectory();
         var root = Directory.CreateDirectory(Path.Combine(temp.Path, "locked")).FullName;
         File.SetUnixFileMode(root, UnixFileMode.None);
@@ -383,10 +365,6 @@ public sealed class InitCommandTests
         return code;
     }
 
-    /// <summary>
-    /// The final score is the model's p_click plus the weight times the freshness term, an item of unknown age counting
-    /// as a week old: the score of every item says which weight the request ran with.
-    /// </summary>
     private static void AssertScore(Item item, double weight)
     {
         var freshness = 1.0 / (1.0 + ((item.AgeHours ?? 168.0) / 24.0));
@@ -395,7 +373,7 @@ public sealed class InitCommandTests
 
     /// <summary>
     /// Raises the generated fixture timeout, so that a busy machine running the tests in parallel cannot turn a fixture
-    /// read into a timeout (as the sample tests do with <see cref="Testing.SampleBudgets"/>); runs use an untimed deadline.
+    /// read into a timeout.
     /// </summary>
     private static void Untimed(string root)
     {
@@ -445,7 +423,6 @@ public sealed class InitCommandTests
         return (process.ExitCode, await stdout, await stderr);
     }
 
-    /// <summary>Runs a command line in bash, as a user pastes it; <c>stratarec</c> is this build's CLI.</summary>
     private static async Task<(int Code, string Stdout, string Stderr)> Bash(string workingDirectory, string commandLine)
     {
         var start = new ProcessStartInfo("bash")

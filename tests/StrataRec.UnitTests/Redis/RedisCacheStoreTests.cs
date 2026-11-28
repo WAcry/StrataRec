@@ -12,16 +12,11 @@ namespace StrataRec.UnitTests.Redis;
 /// <summary>
 /// <c>redis@1</c>'s lifetime without a Redis: the connect is held by the test, and what it connects to (port 1 on the
 /// loopback) refuses, so the connection it makes is one that keeps reconnecting in the background until disposed.
-/// Against a real Redis: <c>RedisCacheTests</c> in the integration tests.
 /// </summary>
 public class RedisCacheStoreTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
 
-    /// <summary>
-    /// A cancelled load stops waiting for the connect, which goes on; the connection it makes later is the
-    /// store's, and its disposal waits for it and disposes it.
-    /// </summary>
     [Fact]
     public async Task AConnectionMadeAfterTheLoadWasCancelled_IsDisposedWithTheStore()
     {
@@ -42,7 +37,7 @@ public class RedisCacheStoreTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loading.WaitAsync(Wait, TestContext.Current.CancellationToken));
 
         var disposing = store.DisposeAsync().AsTask();
-        release.SetResult(); // the connect ends only now, after the disposal began
+        release.SetResult();
         var connection = await made.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         await disposing.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
@@ -65,9 +60,8 @@ public class RedisCacheStoreTests
     }
 
     /// <summary>
-    /// A server certificate this host does not trust fails the load at <c>/tls</c>, not as a missing
-    /// password. The client reports a failed handshake as an authentication failure too, so the TLS failure is looked for
-    /// first, wherever the failure is read; a command's failure on the connection used to be read as refused credentials.
+    /// The client reports a failed handshake as an authentication failure too, so the TLS failure is looked for first,
+    /// wherever the failure is read.
     /// </summary>
     [Fact]
     public async Task AServerCertificateTheHostDoesNotTrust_FailsTheLoadAtTls()
@@ -98,7 +92,6 @@ public class RedisCacheStoreTests
         }
     }
 
-    /// <summary>Answers each connection with a TLS handshake that presents <paramref name="certificate"/>, until stopped.</summary>
     private static async Task ServeTlsAsync(TcpListener listener, X509Certificate2 certificate, CancellationToken stop)
     {
         var handshakes = new List<Task>();

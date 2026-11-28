@@ -33,7 +33,7 @@ public class EntityKeyIndexTests
             Assert.Equal(EntityKey.FromInt64(keys[i]), index.KeyAt(i));
         }
 
-        Assert.Equal(keys, index.Int64Keys.ToArray()); // insertion order
+        Assert.Equal(keys, index.Int64Keys.ToArray());
         foreach (var absent in new long[] { 2, -2, 10043, long.MinValue + 1, long.MaxValue - 1 })
         {
             Assert.False(index.TryGetValue(absent, out _));
@@ -67,7 +67,7 @@ public class EntityKeyIndexTests
         numbers.TryAdd(8, 2);
         Assert.True(numbers.TryReplace(7, 3));
         Assert.False(numbers.TryReplace(9, 4));
-        Assert.False(numbers.TryReplace("7", 4)); // other key type
+        Assert.False(numbers.TryReplace("7", 4));
         var strings = new EntityKeyIndex(EntityKeyType.String, 4, memory);
         strings.TryAdd("a", 1);
         strings.TryAdd("b", 2);
@@ -115,7 +115,6 @@ public class EntityKeyIndexTests
             Assert.False(index.TryGetValue(absent, out _)); // walks the whole chain and stops at an empty slot
         }
 
-        // The ninth colliding key grows the table; everything stays reachable.
         Assert.True(index.TryAdd(absentColliding[0], 8));
         for (var i = 0; i < colliding.Count; i++)
         {
@@ -141,7 +140,7 @@ public class EntityKeyIndexTests
             Assert.True(index.TryAdd(keys[i], i));
         }
 
-        Assert.True(memory.RentedBytes > rentedBefore); // grew by renting, not allocating
+        Assert.True(memory.RentedBytes > rentedBefore);
         Assert.Equal(keys.Length, index.Count);
         Assert.Equal(keys, index.Int64Keys.ToArray());
         for (var i = 0; i < keys.Length; i++)
@@ -162,7 +161,6 @@ public class EntityKeyIndexTests
     [Fact]
     public void SequentialAndStridedIds_DoNotDegrade()
     {
-        // Typical catalog ids are sequential or share low bits; all must be found with one index of the right size.
         foreach (var stride in new long[] { 1, 16, 1024, 1L << 32 })
         {
             var index = new EntityKeyIndex(EntityKeyType.Int64, 5000, new RequestMemory());
@@ -193,7 +191,6 @@ public class EntityKeyIndexTests
 
         for (var i = 0; i < keys.Length; i++)
         {
-            // A different instance with the same characters is the same key.
             Assert.True(index.TryGetValue(new string(keys[i].AsSpan()), out var value));
             Assert.Equal(i, value);
             Assert.True(index.TryGetValue(EntityKey.FromString(keys[i]), out value));
@@ -226,7 +223,7 @@ public class EntityKeyIndexTests
         var index = new EntityKeyIndex(EntityKeyType.String, 8, new RequestMemory());
         for (var i = 0; i < colliding.Count; i++)
         {
-            Assert.True(index.TryAdd(colliding[i], i)); // the ninth grows the table
+            Assert.True(index.TryAdd(colliding[i], i));
         }
 
         for (var i = 0; i < 5000; i++)
@@ -264,7 +261,7 @@ public class EntityKeyIndexTests
         var strings = new EntityKeyIndex(EntityKeyType.String, 4, new RequestMemory());
         strings.TryAdd("5", 1);
         Assert.False(strings.TryGetValue(EntityKey.FromInt64(5), out _));
-        Assert.False(strings.TryGetValue(0L, out _)); // EntityKey default: int64 0
+        Assert.False(strings.TryGetValue(0L, out _));
         Assert.Throws<InvalidOperationException>(() => strings.TryAdd(5L, 3));
         Assert.Throws<InvalidOperationException>(() => strings.Int64Keys.ToArray());
     }
@@ -294,7 +291,6 @@ public class EntityKeyIndexTests
         var index = new EntityKeyIndex(EntityKeyType.Int64, 4, new RequestMemory());
         index.TryAdd(7L, 0);
 
-        // To strings, larger than the slot table: every string lands without growing past the asked capacity.
         index.Reset(EntityKeyType.String, 100);
         Assert.Equal(EntityKeyType.String, index.KeyType);
         Assert.Equal(0, index.Count);
@@ -317,7 +313,6 @@ public class EntityKeyIndexTests
         Assert.Equal(49, value);
         Assert.Equal(Enumerable.Range(0, 50).Select(i => i * 1000L), index.Int64Keys.ToArray());
 
-        // Smaller again: the larger table is kept, and it is empty.
         index.Reset(EntityKeyType.String, 1);
         Assert.False(index.TryGetValue("k3", out _));
         Assert.True(index.TryAdd("k3", 3));
@@ -328,9 +323,8 @@ public class EntityKeyIndexTests
     [Fact]
     public void Reset_BackToStrings_ChecksEveryStringArray_WhenThePoolRoundsThemDifferently()
     {
-        // A pool may hand out more than asked, differently per element type: here string arrays come back with at least
-        // 64 entries while the hash array (int) is exact. After the index grew for int64 keys, switching back to strings
-        // must not take the long string array as proof that the hash array fits too.
+        // After the index grew for int64 keys, switching back to strings must not take the long string array as proof
+        // that the hash array fits too.
         var index = new EntityKeyIndex(EntityKeyType.String, 0, new RequestMemory(new StringRoundingPool(64)));
         Assert.True(index.TryAdd("first", 0));
 
@@ -352,12 +346,6 @@ public class EntityKeyIndexTests
         Assert.Equal(32, index.Count);
     }
 
-    /// <summary>Rents string arrays of at least <c>stringLength</c> entries and every other array at the exact length.</summary>
-    /// <summary>
-    /// A scratch index gives back each array it outgrows at once (growth, a larger reset, a key type's arrays
-    /// replaced), keeps the other key type's, and gives back the rest with <see cref="EntityKeyIndex.ReturnArrays"/>:
-    /// every array it rented goes back exactly once, and the request's end gives back none of them.
-    /// </summary>
     [Fact]
     public void AScratchIndex_GivesBackWhatItOutgrows_AndTheRestWhenAsked_EachOnce()
     {
@@ -366,7 +354,7 @@ public class EntityKeyIndexTests
         var index = new EntityKeyIndex(EntityKeyType.Int64, 4, memory, scratch: true);
         for (var k = 0L; k < 100; k++)
         {
-            Assert.True(index.TryAdd(k * 7, (int)k)); // grows several times
+            Assert.True(index.TryAdd(k * 7, (int)k));
         }
 
         for (var k = 0L; k < 100; k++)
@@ -440,7 +428,7 @@ public class EntityKeyIndexTests
             var before = GC.GetAllocatedBytesForCurrentThread();
             var memory = new RequestMemory();
             var ints = new EntityKeyIndex(EntityKeyType.Int64, Keys, memory);
-            var text = new EntityKeyIndex(EntityKeyType.String, 0, memory); // grows several times
+            var text = new EntityKeyIndex(EntityKeyType.String, 0, memory);
             for (var i = 0; i < Keys; i++)
             {
                 ints.TryAdd(i * 7919L, i);

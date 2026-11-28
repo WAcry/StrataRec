@@ -3,22 +3,17 @@ using StrataRec.Artifacts.Model;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary>
-/// One document, one verdict, whichever entry reads it: a workspace file is parsed strictly (<see cref="Jsonc.Parse(string, string?)"/>)
-/// and then bound; a manifest, a replay bundle or an artifact of the store is bound from a string. A key written twice
-/// was kept as its last value from a string (the serializer's default) and rejected in a file.
-/// </summary>
 public sealed class ArtifactEntryTests
 {
     public static TheoryData<string, string> Documents => new()
     {
         { """{ "owners": {}, "owners": { "/nodes": [] } }""", "Duplicate key 'owners'" },
         { """{ "owners": { "/nodes": ["t\uD800s"] } }""", "unpaired UTF-16 surrogate" },
-        { """{ "owners": {} """, "" }, // a syntax error
-        { """{ "log_bytes_per_request_budget": 1 }""", "Unknown key 'log_bytes_per_request_budget'" }, // removed: nothing enforced it
+        { """{ "owners": {} """, "" },
+        { """{ "log_bytes_per_request_budget": 1 }""", "Unknown key 'log_bytes_per_request_budget'" },
         { """{ "owners": null }""", "'owners' must be an object, got null." },
-        { """{ "owners": { "nodes/safety_filter": [] } }""", "nodes/safety_filter" }, // not a pointer: never a prefix that matches nothing
-        { """{ "experiment_patchable": ["/params"] }""", "Unknown key 'experiment_patchable'" }, // removed: the patchable view is the engine's
+        { """{ "owners": { "nodes/safety_filter": [] } }""", "nodes/safety_filter" },
+        { """{ "experiment_patchable": ["/params"] }""", "Unknown key 'experiment_patchable'" },
         { """{ "ownres": {} }""", "Unknown key 'ownres'" },
     };
 
@@ -31,11 +26,11 @@ public sealed class ArtifactEntryTests
 
         switch (fromFile)
         {
-            case JsoncException read: // the text: the same reason, at its line and column
+            case JsoncException read:
                 Assert.StartsWith(read.Reason, fromString.Reason);
                 Assert.Contains($"(line {read.Line}, column {read.Column})", fromString.Reason);
                 break;
-            case ArtifactFormatException bound: // the binding: the same pointer and reason
+            case ArtifactFormatException bound:
                 Assert.Equal((bound.Pointer, bound.Reason), (fromString.Pointer, fromString.Reason));
                 break;
             default:

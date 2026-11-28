@@ -17,8 +17,7 @@ public static class ArtifactSerializer
     public static JsonSerializerOptions Options { get; } = CreateOptions();
 
     /// <summary>
-    /// Every artifact type by its name, as <c>stratarec schema &lt;name&gt;</c> and messages name it. One table, so the
-    /// schema command, the workspace's hints and binding errors agree.
+    /// Every artifact type by its name, as <c>stratarec schema &lt;name&gt;</c> and messages name it.
     /// </summary>
     public static IReadOnlyList<(string Name, Type Type)> ArtifactTypes { get; } = new (string, Type)[]
     {
@@ -72,10 +71,10 @@ public static class ArtifactSerializer
 
     /// <inheritdoc cref="Deserialize{T}(JsonNode, string?)"/>
     /// <remarks>
-    /// The text is checked as a workspace file is before it is bound (<see cref="Jsonc"/>: a key written twice, text that
-    /// is not valid Unicode, a syntax error, told at its line and column), so a document read from a string (a manifest,
-    /// a replay bundle, an artifact of the store) is accepted or rejected as the same document read as a file. The
-    /// serializer alone keeps the last of two equal keys.
+    /// The text is checked as a workspace file is before it is bound (<see cref="Jsonc"/>: a key written twice, text
+    /// that is not valid Unicode, a syntax error, told at its line and column), so a document read from a string (a
+    /// manifest, a replay bundle, an artifact of the store) is accepted or rejected as the same document read as a
+    /// file.
     /// </remarks>
     public static T Deserialize<T>(string json, string? sourceName = null)
     {
@@ -101,7 +100,6 @@ public static class ArtifactSerializer
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
-            // Described on the document, which the check above has read already: the translator walks a tree.
             var document = Jsonc.Parse(json, sourceName);
 
             var error = ex is JsonException binding
@@ -109,7 +107,7 @@ public static class ArtifactSerializer
                 : JsonBindingErrors.MissingDiscriminator(document, typeof(T), Options, Subject(typeof(T)));
             if (error is null)
             {
-                throw; // not about the document
+                throw;
             }
 
             throw Failed(error, sourceName, ex);
@@ -161,11 +159,9 @@ public static class ArtifactSerializer
     }
 
     /// <summary>
-    /// <see cref="TryBind{T}(JsonNode, string, out T, out JsonBindingError)"/> for a document given as compact UTF-8 JSON,
-    /// with options that derive from <see cref="Options"/> (a binding's settings add converters of their own,
-    /// <see cref="BindingSettings"/>). Deserialized from the bytes themselves, so a converter's
-    /// <see cref="Utf8JsonReader.TokenStartIndex"/> is an offset into them. An exception that is not about the document,
-    /// such as a <see cref="Core.Bindings.BindingException"/> a converter throws, propagates.
+    /// Deserialized from the bytes themselves, so a converter's <see cref="Utf8JsonReader.TokenStartIndex"/> is an
+    /// offset into them. An exception that is not about the document, such as a
+    /// <see cref="Core.Bindings.BindingException"/> a converter throws, propagates.
     /// </summary>
     internal static bool TryBind<T>(
         ReadOnlySpan<byte> utf8, JsonSerializerOptions options, string subject, [NotNullWhen(true)] out T? value, [NotNullWhen(false)] out JsonBindingError? error)
@@ -205,11 +201,9 @@ public static class ArtifactSerializer
         return true;
     }
 
-    /// <summary>A null element of <paramref name="node"/> where <typeparamref name="T"/> requires a value; walked only when it has a null.</summary>
     private static JsonBindingError? NullElementOf<T>(JsonNode? node) =>
         NullElements.AnyNull(node) ? NullElements.Find(JsonSerializer.SerializeToElement(node, Options), typeof(T), Options) : null;
 
-    /// <summary>Whether the JSON has a <c>null</c> anywhere: without one, no null element needs looking for.</summary>
     private static bool HasNull(ReadOnlySpan<byte> utf8)
     {
         var reader = new Utf8JsonReader(utf8);
@@ -225,9 +219,7 @@ public static class ArtifactSerializer
     }
 
     /// <summary>
-    /// The error for a document the serializer rejects with an exception other than a <see cref="JsonException"/>: one
-    /// with a part that cannot be read (writing a leniently parsed node reads it), or an object of an abstract
-    /// polymorphic type without its discriminator. Null when the exception is not about the document, so it propagates.
+    /// Null when the exception is not about the document, so it propagates.
     /// </summary>
     private static JsonBindingError? NotBindable(Exception exception, JsonNode? node, Type type, JsonSerializerOptions options, string subject) => exception switch
     {
@@ -238,13 +230,11 @@ public static class ArtifactSerializer
 
     public static JsonNode ToNode<T>(T value) => JsonSerializer.SerializeToNode(value, Options)!;
 
-    /// <summary>How a sentence names a document of <paramref name="type"/>: <c>the pipeline</c>, <c>the replay bundle</c>.</summary>
     private static string Subject(Type type) => ArtifactName(type) is { } name ? "the " + name.Replace('_', ' ') : "the document";
 
     private static ArtifactFormatException Failed(JsonBindingError error, string? sourceName, Exception? inner) =>
         new(sourceName, error.Pointer, error.Message, inner, error.Hint);
 
-    /// <summary>A document the JSONC reader rejects (syntax, invalid Unicode, a duplicate key): it says where, with a line and column.</summary>
     private static ArtifactFormatException Unreadable(JsoncException ex, string? sourceName)
     {
         var where = ex.Line is { } line ? $" (line {line}, column {ex.Column})" : string.Empty;
@@ -264,8 +254,7 @@ public static class ArtifactSerializer
             NumberHandling = JsonNumberHandling.Strict,
             WriteIndented = true,
 
-            // null where a member is not nullable is an error at its pointer, as the generated JSON Schema says: bound,
-            // it was a null an operator or loader dereferenced. Elements of collections are not covered.
+            // Elements of collections are not covered.
             RespectNullableAnnotations = true,
 
             // A key written twice is an error, as the JSONC reader says (Deserialize checks the text first, with a line and

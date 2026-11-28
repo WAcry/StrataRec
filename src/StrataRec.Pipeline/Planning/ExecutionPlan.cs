@@ -26,10 +26,8 @@ public readonly struct RequestArms
     /// <summary>Global arm index assigned in <paramref name="layer"/>, or -1.</summary>
     public int ArmIn(int layer) => _armByLayer is null || layer >= _armByLayer.Length ? -1 : _armByLayer[layer];
 
-    /// <summary>Whether both are the same assignment object (what <see cref="ArmYields.Resolve"/> returns when nothing yields).</summary>
     internal bool SameAs(in RequestArms other) => ReferenceEquals(_armByLayer, other._armByLayer);
 
-    /// <summary>A copy of the arm per layer, to change (<see cref="ArmYields.Resolve"/>).</summary>
     internal int[] CopyArms() => _armByLayer is null ? [] : (int[])_armByLayer.Clone();
 }
 
@@ -76,10 +74,10 @@ public sealed class TimelineSlot
     /// <summary>Mixed-radix indexed variants; deduplicated variants are shared.</summary>
     public required ImmutableArray<CompiledNode?> Variants { get; init; }
 
-    /// <summary>Experiments whose site includes this position; assigned by the experiment compiler.</summary>
+    /// <summary>Experiments whose site includes this position.</summary>
     public ImmutableArray<int> SiteExperiments { get; internal set; } = [];
 
-    /// <summary>Selects this request's variant: one mixed-radix index computation.</summary>
+    /// <summary>Selects this request's variant.</summary>
     public CompiledNode? Select(in RequestArms arms) => Variants[IndexWith(arms, -1, -1)];
 
     /// <summary>
@@ -174,21 +172,20 @@ public sealed class OutputPlan
     public ImmutableArray<(string Column, VersionRead Read)> VersionReads { get; init; } = [];
 
     /// <summary>
-    /// Experiments overriding a parameter the output reads (<c>limit_param</c>, or a parameter in an output column or value);
-    /// a parameter trigger site. Assigned by the experiment compiler.
+    /// Experiments overriding a parameter the output reads (<c>limit_param</c>, or a parameter in an output column or
+    /// value); a parameter trigger site.
     /// </summary>
     public ImmutableArray<int> ParamExperiments { get; internal set; } = [];
 }
 
 /// <summary>
-/// The immutable unified execution plan: schema, feature plan, timeline of node variants, parameters and
-/// experiment metadata. Compiled once per manifest in the background and swapped atomically.
+/// The immutable unified execution plan: schema, feature plan, timeline of node variants, parameters and experiment
+/// metadata.
 /// </summary>
 /// <remarks>
 /// A plan is immutable once compiled: every concurrent request of it shares the one instance, and hosts inspect it
 /// (<c>RecEngine.TryGetPipeline</c>, <c>EffectivePlan</c>, <c>PlanDiff</c>). So everything reachable from it is
-/// read-only: collections are <see cref="ImmutableArray{T}"/> or read-only interfaces, and node and tap definitions are
-/// <see cref="System.Text.Json.JsonElement"/>s. Code that wants to sort or edit a collection for display copies it first.
+/// read-only. Code that wants to sort or edit a collection for display copies it first.
 /// </remarks>
 public sealed class ExecutionPlan
 {
@@ -258,7 +255,6 @@ public sealed class ExecutionPlan
     /// <summary>The inputs the pipeline accepts (<c>request_schema</c>) and the rules a request's inputs follow.</summary>
     public required RequestSchema RequestSchema { get; init; }
 
-    /// <summary>Metric tags of the plan's nodes, built once per plan.</summary>
     internal Execution.PlanTelemetry Telemetry =>
         _telemetry ?? Interlocked.CompareExchange(ref _telemetry, Execution.PlanTelemetry.Create(this), null) ?? _telemetry!;
 

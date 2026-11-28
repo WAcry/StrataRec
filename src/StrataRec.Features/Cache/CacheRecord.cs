@@ -10,10 +10,8 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Cache;
 
-/// <summary>What <see cref="CacheRecord.ReadHeader"/> found.</summary>
 internal enum CacheRecordHeader : byte
 {
-    /// <summary>A record of this format and field set.</summary>
     Ok = 1,
 
     /// <summary>Another format version, or another field set (an instance on another catalog version wrote it): a miss.</summary>
@@ -23,38 +21,8 @@ internal enum CacheRecordHeader : byte
     Corrupt,
 }
 
-/// <summary>
-/// The value encoding of a cache record: what the engine stores per (source, entity, key) in a
-/// distributed cache, and what it hands its in-process table's writer. The one owner of the format: encoding, the
-/// fingerprint of the field set, and decoding (with every length checked, so bytes from the network never throw).
-/// </summary>
-/// <remarks>
-/// <para>Layout, little-endian (as are the platforms .NET runs on):</para>
-/// <code>
-/// 0   uint32  format          2026111601: the format version 2026-11-16.1 (the date it changed, that day's sequence)
-/// 4   uint8   flags           bit 0: absent (the connector had no value for the key: every field missing)
-/// 5   uint8   (zero)
-/// 6   uint16  field count     of the table
-/// 8   int64   write time      Unix milliseconds: when the fetch that produced the values started
-/// 16  uint64  fingerprint     XXH3-64 of the field set (<see cref="Fingerprint"/>)
-/// 24  uint8[V] validity       bit f set = field f has a value (V = ceil(fields / 8))
-/// …   values of the fields that have one, in field order: bool 1 byte; int32, float32 4; int64, float64 8; string int32
-///     byte length + UTF-8; a list int32 count + its elements, each as the scalar of its element type is (a
-///     bool 1 byte, 0 or 1; list&lt;string&gt; items int32 byte length + UTF-8), a fixed-length list included
-/// </code>
-/// <para>2026-11-16.1 removed the vector encoding (N float32 values without a count): a vector is a
-/// <c>list&lt;float32,N&gt;</c>, encoded as every list is, and a record holds what the connector wrote, whose length the
-/// reader checks against the type as it does a connector's answer. Folding <c>text</c> into <c>string</c> left the format
-/// as it was: both were already an int32 byte length and UTF-8, and a field once declared <c>text</c> is declared
-/// <c>string</c> now, a field set of another fingerprint, so its old records are misses rather than misread.</para>
-/// <para>The fingerprint covers the format, the key type and every field's name and storage type in field order (the
-/// table's order, by name), so two instances whose catalogs bind different fields to the source never decode each
-/// other's records: a reader that finds another fingerprint treats the record as a miss. Values are not aligned: the
-/// record is a compact wire form, copied into aligned storage when read.</para>
-/// </remarks>
 internal static class CacheRecord
 {
-    /// <summary>The format version 2026-11-16.1 as a number: date, then that day's sequence in two digits.</summary>
     public const uint Format = 2026111601;
     public const byte AbsentFlag = 1;
     private const int FlagsOffset = 4;
@@ -63,7 +31,7 @@ internal static class CacheRecord
     private const int FingerprintOffset = 16;
     internal const int ValidityOffset = 24;
 
-    /// <summary>Writes the header (the validity bits are the caller's), as <see cref="ReadHeader"/> reads it.</summary>
+    /// <summary>Writes the header (the validity bits are the caller's).</summary>
     public static void WriteHeader(Span<byte> header, ushort fieldCount, long writtenMs, ulong fingerprint, bool absent)
     {
         BinaryPrimitives.WriteUInt32LittleEndian(header, Format);
@@ -74,22 +42,19 @@ internal static class CacheRecord
         BinaryPrimitives.WriteUInt64LittleEndian(header[FingerprintOffset..], fingerprint);
     }
 
-    /// <summary>Bytes of a record before its values: the header and the validity bits.</summary>
     public static int PrefixSize(int fieldCount) => ValidityOffset + ((fieldCount + 7) / 8);
 
-    /// <summary>The fingerprint of a table's field set, as records written for it carry.</summary>
     /// <remarks>
     /// Over the canonical encoding of <see cref="StableHash"/>, where every string is tagged and length-prefixed: field
     /// names are free text (a tab or a newline is legal), so a separator-joined text would let two different field sets
-    /// spell the same bytes, e.g. <c>["a\tfloat64\nb", "c"]</c> and <c>["a", "b\tfloat64\nc"]</c>, and read each
-    /// other's records.
+    /// spell the same bytes, and read each other's records.
     /// </remarks>
     public static ulong Fingerprint(LocalTableSchema schema)
     {
         using var hash = new StableHash.Builder();
         hash.Add("stratarec.cache.record");
         hash.Add((long)Format);
-        hash.Add(schema.Key.TypeText); // "int64" or "string" for one part, as before keys had parts; "(int64,string)" for several
+        hash.Add(schema.Key.TypeText);
         hash.Add((long)schema.Fields.Count);
         foreach (var field in schema.Fields)
         {
@@ -100,7 +65,8 @@ internal static class CacheRecord
         return hash.Finish();
     }
 
-    /// <summary>Reads the header; <paramref name="writtenMs"/> and <paramref name="absent"/> are meaningful when <see cref="CacheRecordHeader.Ok"/>.</summary>
+    /// <summary><paramref name="writtenMs"/> and <paramref name="absent"/> are meaningful when
+    /// <see cref="CacheRecordHeader.Ok"/>.</summary>
     public static CacheRecordHeader ReadHeader(ReadOnlySpan<byte> record, int fieldCount, ulong fingerprint, out long writtenMs, out bool absent)
     {
         writtenMs = 0;
@@ -125,8 +91,8 @@ internal static class CacheRecord
     }
 
     /// <summary>
-    /// Whether field <paramref name="field"/> of a record whose header was found <see cref="CacheRecordHeader.Ok"/> has a
-    /// value: its validity bit, which is what <see cref="Read"/> walks (an absent record has none set).
+    /// Whether field <paramref name="field"/> of a record whose header was found <see cref="CacheRecordHeader.Ok"/> has
+    /// a value.
     /// </summary>
     public static bool HasValue(ReadOnlySpan<byte> record, int field) => (record[ValidityOffset + (field >> 3)] & (1 << (field & 7))) != 0;
 
@@ -227,7 +193,6 @@ internal static class CacheRecord
         return at == record.Length;
     }
 
-    /// <summary>Walks a list value at the start of <paramref name="rest"/>; false when it runs past it or is not one.</summary>
     private static bool TryList<TVisitor>(ReadOnlySpan<byte> rest, StorageKind element, int f, ref TVisitor visitor, out int size)
         where TVisitor : struct, ICacheRecordVisitor
     {
@@ -308,15 +273,12 @@ internal static class CacheRecord
         return true;
     }
 
-    /// <summary>True when <see cref="Read"/> would walk the whole record: every length within it, nothing left over.</summary>
     public static bool IsWellFormed(ReadOnlySpan<byte> record, CacheRecordLayout layout)
     {
         var none = default(NoVisitor);
         return Read(record, layout, ref none);
     }
 
-    /// <summary>An int32 count of <paramref name="elementSize"/>-byte elements at the start of <paramref name="rest"/>, as a
-    /// byte length that fits what follows it.</summary>
     private static bool TryLength(ReadOnlySpan<byte> rest, int elementSize, out int bytes)
     {
         bytes = 0;
@@ -384,7 +346,6 @@ internal static class CacheRecord
     }
 }
 
-/// <summary>Receives the fields of a record from <see cref="CacheRecord.Read"/>, in field order (a struct, so calls are not virtual).</summary>
 internal interface ICacheRecordVisitor
 {
     void Missing(int field);
@@ -399,7 +360,7 @@ internal interface ICacheRecordVisitor
 
     void Float64(int field, double value);
 
-    /// <summary>A <c>string</c> value. The span is the record's own bytes.</summary>
+    /// <summary>The span is the record's own bytes.</summary>
     void String(int field, ReadOnlySpan<byte> utf8);
 
     /// <summary>A list of fixed-size elements: <c>bool</c>, <c>int</c>, <c>long</c>, <c>float</c> or <c>double</c>, as the
@@ -433,7 +394,6 @@ internal sealed class CacheRecordLayout
                 StorageKind.Bool => 1,
                 StorageKind.Int32 or StorageKind.Float32 => 4,
                 StorageKind.Int64 or StorageKind.Float64 => 8,
-                // A fixed-length list of fixed-size elements (an embedding) has a known size: its count and N elements.
                 StorageKind.List when type.IsFixedLength && type.Element != StorageKind.String =>
                     4 + (type.FixedLength * (type.Element switch
                     {
@@ -441,7 +401,7 @@ internal sealed class CacheRecordLayout
                         StorageKind.Int32 or StorageKind.Float32 => 4,
                         _ => 8,
                     })),
-                _ => 4 + 16, // a length and a short value
+                _ => 4 + 16,
             };
         }
 
@@ -465,10 +425,9 @@ internal sealed class CacheRecordLayout
 }
 
 /// <summary>
-/// Encodes records one after another into one growing array: the records a read writes back share it, so a batch costs
-/// a few arrays, not one per key. A record is begun, its fields are added in field order (a field not added is missing),
-/// and it is ended, which gives its offset and length; slices are taken from <see cref="Bytes"/> only once every record is
-/// written, since the array is replaced when it grows.
+/// A record is begun, its fields are added in field order (a field not added is missing), and it is ended, which gives
+/// its offset and length; slices are taken from <see cref="Bytes"/> only once every record is written, since the array
+/// is replaced when it grows.
 /// </summary>
 internal sealed class CacheRecordWriter
 {
@@ -484,7 +443,6 @@ internal sealed class CacheRecordWriter
         _bytes = new byte[Math.Max(64, capacity)];
     }
 
-    /// <summary>The array the records are in, valid once the last record is ended.</summary>
     public byte[] Bytes => _bytes;
 
     public void Begin(long writtenMs, ulong fingerprint, bool absent)
@@ -533,7 +491,6 @@ internal sealed class CacheRecordWriter
         WriteString(value);
     }
 
-    /// <summary>A list of fixed-size elements, stored as the field's element type is (see <see cref="ICacheRecordVisitor.List"/>).</summary>
     public void List<T>(int field, ReadOnlySpan<T> value)
         where T : unmanaged
     {
@@ -552,7 +509,6 @@ internal sealed class CacheRecordWriter
         }
     }
 
-    /// <summary>The row of a list column (of the field's element type) as the field's value.</summary>
     public void List(int field, ListColumn column, int row)
     {
         switch (column)
@@ -567,7 +523,6 @@ internal sealed class CacheRecordWriter
         }
     }
 
-    /// <summary>Ends the record begun last; its bytes are <c>Bytes[offset..offset + length]</c> once every record is written.</summary>
     public (int Offset, int Length) End() => (_start, _length - _start);
 
     private void Present(int field, StorageKind kind)

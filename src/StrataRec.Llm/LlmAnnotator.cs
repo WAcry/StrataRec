@@ -115,7 +115,6 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
         return new LlmAnnotator(model, prompts, config.Output, written, categories, config.Window, config.MaxOutputTokens);
     }
 
-    /// <summary>The allowed answers: non-empty, without surrounding whitespace (an answer is trimmed), each once.</summary>
     private static string[]? CompileCategories(OperatorCompileContext context, List<string>? categories, ref bool ok)
     {
         if (categories is null)
@@ -158,7 +157,6 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
         return categories.ToArray();
     }
 
-    /// <summary>The nullable column of a type an answer can be parsed as; an undeclared one is string?.</summary>
     private OutputColumn? CompileColumn(OperatorCompileContext context, string? name, bool categories, ref bool ok)
     {
         if (string.IsNullOrEmpty(name))
@@ -207,7 +205,7 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
         int maxOutputTokens)
         : Operator
     {
-        private readonly string[] _read = [output]; // the one output it reads, recorded and replayed
+        private readonly string[] _read = [output];
 
         private readonly KeyValuePair<string, object?>[] _used = LlmNode.Tags(model, "used");
         private readonly KeyValuePair<string, object?>[] _unusable = LlmNode.Tags(model, "unusable");
@@ -245,9 +243,6 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
                 calls[i] = model.InvokeAsync(context, version, inputs[i], 1, writers[i], rows.AsSpan(i, 1), _read, maxOutputTokens);
             }
 
-            // Each wait is bounded by the model's timeout and the node's budget. A call that failed (a client that threw is a
-            // failed status) is that row's failure; the budget running out or the caller cancelling cuts every call off, and
-            // fails the node once all ended.
             var statuses = new ServiceStatus[n];
             OperationCanceledException? cutOff = null;
             for (var i = 0; i < n; i++)
@@ -270,7 +265,6 @@ public sealed class LlmAnnotatorFactory : IOperatorFactory
             Apply(context, rows.AsSpan(0, n), statuses, writers);
         }
 
-        /// <summary>Writes every usable answer; fails the node when every call failed, and degrades it when some rows have no value.</summary>
         private void Apply(OperatorContext context, ReadOnlySpan<int> rows, ServiceStatus[] statuses, ServiceResponse[] writers)
         {
             int used = 0, unusable = 0, failed = 0;

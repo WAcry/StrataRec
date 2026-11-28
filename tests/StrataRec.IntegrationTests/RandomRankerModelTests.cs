@@ -4,24 +4,16 @@ using StrataRec.Hosting.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// A <c>ListwiseReranker@1</c> and a <c>PairwiseRanker@1</c> in the sample, their models bound to <c>random@1</c> through
-/// the binding's settings alone: the stand-in declares the listwise and pairwise signatures, so the
-/// plan loads as against the real models, the rankers order the window by the seeded stand-in scores, and a recording
-/// replays identically.
-/// </summary>
 public sealed class RandomRankerModelTests
 {
     private const string Pipeline = "pipelines/home_feed.jsonc";
 
-    /// <summary>As <c>PairwiseRanker@1</c> sends them: columns as <c>[pairs, 2]</c>, a context value as <c>[pairs]</c>.</summary>
     private const string PairBinding = """
         { "client": "random@1",
           "inputs": { "final": { "type": "float32", "shape": [-1, 2] }, "item_id": { "type": "int64", "shape": [-1, 2] }, "quality": { "type": "float64", "shape": [-1] } },
           "outputs": { "p_first": { "shape": [-1] } } }
         """;
 
-    /// <summary>As <c>ListwiseReranker@1</c> sends them: columns as <c>[1, n]</c>, a context value as <c>[1]</c>.</summary>
     private const string ListBinding = """
         { "client": "random@1",
           "inputs": { "final": { "type": "float32", "shape": [1, -1] }, "smoothed_ctr": { "type": "float32", "shape": [1, -1] }, "seed": { "type": "int64", "shape": [1] } },
@@ -32,13 +24,13 @@ public sealed class RandomRankerModelTests
     public async Task BoundToRandom_TheRankersLoad_OrderTheWindowDeterministically_ByTheRequestSeed_AndReplayIdentically()
     {
         var host = HomeFeedTestHost.LoadModified(root => AddRankers(root, PairBinding, ListBinding));
-        var (engine, _) = MetricsTests.LoadEngine(host); // the signature checks pass against the stand-in
+        var (engine, _) = MetricsTests.LoadEngine(host);
 
         var recorded = await engine.ExecuteAsync(Request("req-random-rankers"), TestContext.Current.CancellationToken);
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var run = Assert.Single(recorded.Recording!.Runs);
-        Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "listwise_rerank").Outcome); // not skipped: the stand-in answered
+        Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "listwise_rerank").Outcome);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "pairwise_rerank").Outcome);
         var pairCalls = run.ServiceCalls.FindAll(c => c.Role == "model").Where(c => c.Service == "pair_ranker").ToList();
         Assert.Equal(new[] { 3, 4, 4, 4 }, pairCalls.Select(c => c.BatchSize).Order()); // window 6: 15 pairs in batches of 4
@@ -56,7 +48,6 @@ public sealed class RandomRankerModelTests
         Assert.True(top[6].Listwise >= top[7].Listwise);
         Assert.True(top.Take(6).Min(i => i.Listwise) >= top[6].Listwise);
 
-        // The same request ranks the same; another request seed reranks the same window.
         Assert.Equal(top, Ranked(await engine.ExecuteAsync(Request("req-random-rankers"), TestContext.Current.CancellationToken)));
         var reseeded = await engine.ExecuteAsync(Request("req-random-rankers-2"), TestContext.Current.CancellationToken);
         Assert.NotEqual(recorded.Recording.Request.Seed, reseeded.Recording!.Request.Seed);
@@ -64,7 +55,6 @@ public sealed class RandomRankerModelTests
         Assert.Equal(top.Take(8).Select(i => i.Id).Order(), other.Take(8).Select(i => i.Id).Order());
         Assert.NotEqual(top.Take(8).Select(i => i.Id), other.Take(8).Select(i => i.Id));
 
-        // Through JSON, on a fresh engine.
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
         var (fresh, _) = MetricsTests.LoadEngine(host);
         var outcome = await fresh.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
@@ -75,7 +65,6 @@ public sealed class RandomRankerModelTests
         Assert.All(outcome.Report.Nodes, n => Assert.False(n.Changed, $"{n.Node}: {n.Recorded} -> {n.Replayed}"));
     }
 
-    /// <summary>The load-time check runs against what the stand-in declares: a shape the operator does not send is an error at the node.</summary>
     [Theory]
     [InlineData("""{ "client": "random@1", "inputs": { "final": { "type": "float32", "shape": [-1] }, "item_id": { "type": "int64", "shape": [-1, 2] }, "quality": { "type": "float64", "shape": [-1] } }, "outputs": { "p_first": { "shape": [-1] } } }""",
         ListBinding, "MODEL_TENSOR_MISMATCH", "/nodes/pairwise_rerank/config/inputs/final")]
@@ -93,10 +82,6 @@ public sealed class RandomRankerModelTests
         Assert.Equal(("pipeline:home_feed", pointer), (error.Artifact, error.Pointer));
     }
 
-    /// <summary>
-    /// After <c>rank_sort</c>: a listwise rerank of the top 8, then a pairwise rerank of its top 6 in batches of 4 pairs,
-    /// so both shape the served order; each fails the request rather than being skipped, with its scores in the output.
-    /// </summary>
     private static void AddRankers(string root, string pairBinding, string listBinding)
     {
         ReplayTests.Edit(root, Pipeline, "    \"diversity_cap\": {",

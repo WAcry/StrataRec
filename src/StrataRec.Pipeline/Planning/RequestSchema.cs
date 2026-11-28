@@ -10,10 +10,10 @@ using StrataRec.Features.Catalog;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
-/// The inputs a pipeline accepts (its <c>request_schema</c>) and the one set of rules every request's inputs
-/// follow, wherever they come from: a host reads a JSON body with <see cref="TryRead"/>, the engine checks the
-/// <see cref="RequestInputs"/> a host built itself with <see cref="Check"/> before it runs anything, and the executor binds
-/// them with the same rules. So a mistake reads alike, at the same pointer, from a service, the CLI and the engine.
+/// The inputs a pipeline accepts (its <c>request_schema</c>) and the one set of rules every request's inputs follow,
+/// wherever they come from: a host reads a JSON body with <see cref="TryRead"/>, the engine checks the
+/// <see cref="RequestInputs"/> a host built itself with <see cref="Check"/> before it runs anything. So a mistake reads
+/// alike, at the same pointer, from a service, the CLI and the engine.
 /// </summary>
 /// <remarks>
 /// <para>The rules: every input given is declared; a value has its declared type (an int32 must fit in int32, a
@@ -27,9 +27,9 @@ public sealed class RequestSchema
 {
     private readonly Dictionary<string, int> _index;
     private readonly string[] _names; // sorted (ordinal); the arrays below are in the same order
-    private readonly ColumnType[] _types; // as declared, e.g. int32? (values are held promoted)
+    private readonly ColumnType[] _types;
     private readonly int[] _contextIds; // the plan's context slot of each input; -1 for a schema not built with a plan
-    private readonly byte[][] _utf8Names; // to match a JSON member without allocating its name
+    private readonly byte[][] _utf8Names;
 
     /// <summary>A schema of declared types, e.g. for a host that checks inputs against a schema it keeps itself.</summary>
     /// <param name="pipelineId">Named in messages: <c>not declared in the request_schema of pipeline 'p'</c>.</param>
@@ -55,7 +55,6 @@ public sealed class RequestSchema
         }
     }
 
-    /// <summary>The schema of a compiled plan: each input bound to its context slot.</summary>
     internal static RequestSchema FromPlan(string pipelineId, IReadOnlyDictionary<string, ContextField> fields) =>
         new(pipelineId, Sorted(fields.Keys), name => (fields[name].DeclaredType, fields[name].Id));
 
@@ -82,13 +81,12 @@ public sealed class RequestSchema
     public bool Contains(string name) => _index.ContainsKey(name);
 
     /// <summary>
-    /// Warnings for a fallback pipeline that would fail the requests it is there to serve: a request that
-    /// falls back carries the inputs it was written for, those of <paramref name="primary"/>, and the fallback gets the ones
-    /// it declares, each converted to the type it declares as any request's inputs are (<see cref="Bind"/>). So the
-    /// fallback fails it when it requires an input the primary does not declare, or declares optional; and when an input's
-    /// value, which the primary accepted, does not convert to the fallback's type (<see cref="ConversionFailure"/>): a
-    /// fallback that widens a type (int32 to int64, a fixed length to any) serves every such request. Reported at the
-    /// primary's <c>/fallback_pipeline</c>.
+    /// Warnings for a fallback pipeline that would fail the requests it is there to serve: a request that falls back
+    /// carries the inputs it was written for, those of <paramref name="primary"/>, and the fallback gets the ones it
+    /// declares, each converted to the type it declares as any request's inputs are. So the fallback fails it when it
+    /// requires an input the primary does not declare, or declares optional; and when an input's value, which the
+    /// primary accepted, does not convert to the fallback's type: a fallback that widens a type (int32 to int64, a
+    /// fixed length to any) serves every such request. Reported at the primary's <c>/fallback_pipeline</c>.
     /// </summary>
     public static void CheckFallback(RequestSchema primary, RequestSchema fallback, string artifact, DiagnosticBag diagnostics)
     {
@@ -112,7 +110,6 @@ public sealed class RequestSchema
                 continue;
             }
 
-            // A value and its absence are judged apart: the type says which values convert, nullability whether none may.
             if (ConversionFailure(given, required) is { } failure)
             {
                 diagnostics.Warning("FALLBACK_INPUT_TYPE", artifact, Pointer,
@@ -130,12 +127,9 @@ public sealed class RequestSchema
     }
 
     /// <summary>
-    /// What fails when a value an input of type <paramref name="given"/> accepted is converted to <paramref name="required"/>,
-    /// as the fallback's binding converts it (<see cref="ScalarValue.TryConvert"/>); null when every value converts.
-    /// Nullability is not judged here. Widening converts every value: int32 to int64, float32 to float64, an integer to a
-    /// float (to the nearest double, as a number given for any float input is), a list's elements likewise, and a list of
-    /// a fixed length to one of any length or of that length. The rest fails some values or all: a narrower type, a float
-    /// to an integer, a list of another length, another kind.
+    /// What fails when a value an input of type <paramref name="given"/> accepted is converted to
+    /// <paramref name="required"/>, as the fallback's binding converts it (<see cref="ScalarValue.TryConvert"/>); null
+    /// when every value converts. Nullability is not judged here.
     /// </summary>
     /// <returns>A clause for a message: <c>a value outside the int32 range does not convert to it</c>.</returns>
     internal static string? ConversionFailure(ColumnType given, ColumnType required)
@@ -160,7 +154,6 @@ public sealed class RequestSchema
         return ScalarFailure(given.Element, required.Element, "an element", "no list converts to it");
     }
 
-    /// <summary>What fails converting a scalar (or a list's element) of kind <paramref name="from"/> to <paramref name="to"/>.</summary>
     private static string? ScalarFailure(StorageKind from, StorageKind to, string what, string none) => (from, to) switch
     {
         _ when from == to => null,
@@ -234,7 +227,7 @@ public sealed class RequestSchema
                             (problems ??= new()).Add(Required(i));
                         }
 
-                        continue; // missing, as if absent
+                        continue;
                     }
 
                     if (!ConfigValues.TryToScalar(member.Value, _types[i], out var value, out var error))
@@ -272,10 +265,10 @@ public sealed class RequestSchema
     }
 
     /// <summary>
-    /// Checks typed inputs a host built itself: the first problem, or null when the request may run. The engine calls it
-    /// before anything else (no assignment, no fallback pipeline for a request the caller got wrong). Valid inputs
-    /// allocate nothing, except a list whose elements convert (integers to a float list, doubles that are not floats to a
-    /// <c>list&lt;float32&gt;</c>): checking converts it, as binding does (<see cref="ScalarValue.TryConvert"/>).
+    /// Checks typed inputs a host built itself: the first problem, or null when the request may run. The engine calls
+    /// it before anything else (no assignment, no fallback pipeline for a request the caller got wrong). Valid inputs
+    /// allocate nothing, except a list whose elements convert (integers to a float list, doubles that are not floats to
+    /// a <c>list&lt;float32&gt;</c>).
     /// </summary>
     public JsonBindingError? Check(RequestInputs inputs) => Validate(inputs, null);
 

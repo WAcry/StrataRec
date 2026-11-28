@@ -14,23 +14,17 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// How a replay answers calls from a recorded run: exact calls first, then values synthesized from the
-/// successful calls, with whatever the recording lacks reported as a gap.
-/// </summary>
 public sealed class RunReplayTests
 {
     [Fact]
     public void ARecordedValueBeyondFloat32_IsATypeChangedGap_AndMissing_InExactAndSynthesizedCalls()
     {
-        // Recorded as float64; the replayed catalog declares the field float32. 1e100 does not fit (it would become +∞),
-        // a recorded +∞ is +∞ either way, and 0.5 rounds like any float32.
         var run = Run();
         run.FeatureCalls.Add(Feature(0, "[1, 2, 3]", ("score", "float64", "[1e100, 0.5, \"Infinity\"]")));
         var replay = RunReplay.Create(run, "/runs/0");
 
-        var (exactStatus, exact) = Fetch(replay, new long[] { 1, 2, 3 }, ("score", "float32")); // the recorded call
-        var (synthesizedStatus, synthesized) = Fetch(replay, new long[] { 3, 2, 1 }, ("score", "float32")); // other keys: by value
+        var (exactStatus, exact) = Fetch(replay, new long[] { 1, 2, 3 }, ("score", "float32"));
+        var (synthesizedStatus, synthesized) = Fetch(replay, new long[] { 3, 2, 1 }, ("score", "float32"));
 
         Assert.Equal((FetchOutcome.Ok, FetchOutcome.Ok), (exactStatus.Outcome, synthesizedStatus.Outcome));
         Assert.Equal(new double?[] { null, 0.5, double.PositiveInfinity }, Values(exact, 0, 3));
@@ -45,7 +39,6 @@ public sealed class RunReplayTests
     [Fact]
     public void RecordedLists_AreWrittenIntoListFieldsOfEveryElementType_AndAFloat32ListThatWouldOverflow_IsATypeChangedGap()
     {
-        // Each element follows the scalar rule: int64 into int32 when it fits, numbers into float32 unless they overflow.
         var run = Run();
         run.FeatureCalls.Add(Feature(0, "[1, 2]",
             ("b", "list<bool>", "[[true, false], []]"),
@@ -61,8 +54,8 @@ public sealed class RunReplayTests
         Assert.Equal(new[] { true, false }, staging.Get(0, 0).AsBoolList().ToArray());
         Assert.True(staging.Get(0, 1).AsBoolList().IsEmpty);
         Assert.Equal(new long[] { 1, -2 }, staging.Get(1, 0).AsInt64List().ToArray());
-        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.5, double.NaN }), staging.Get(2, 0)); // NaN stays NaN
-        Assert.True(staging.Get(2, 1).IsMissing); // 1e100 would become +∞ in float32
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.5, double.NaN }), staging.Get(2, 0));
+        Assert.True(staging.Get(2, 1).IsMissing);
         Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.25 }), staging.Get(3, 0));
         var gap = Assert.Single(replay.Gaps);
         Assert.Equal(("f", "type_changed", 1), (gap.Field, gap.Reason, gap.Count));
@@ -71,15 +64,13 @@ public sealed class RunReplayTests
     [Fact]
     public void FieldsFetchedInSeparateCalls_AreSynthesizedTogether_WhenTheConfigurationRequestsThemInOneCall()
     {
-        // The recording fetched a and b of key 1 in two calls; the replayed plan groups them into one. Neither recorded
-        // call is this call, so both values come from the value index, and neither recorded call is consumed.
         var run = Run();
         run.FeatureCalls.Add(Feature(0, "[1]", ("a", "int64", "[10]")));
         run.FeatureCalls.Add(Feature(1, "[1]", ("b", "int64", "[20]")));
         var replay = RunReplay.Create(run, "/runs/0");
 
         var (merged, staging) = Fetch(replay, new long[] { 1 }, ("a", "int64"), ("b", "int64"));
-        var (alone, single) = Fetch(replay, new long[] { 1 }, ("a", "int64")); // the first recorded call, exactly
+        var (alone, single) = Fetch(replay, new long[] { 1 }, ("a", "int64"));
 
         Assert.Equal(FetchOutcome.Ok, merged.Outcome);
         Assert.Equal((10L, 20L), (staging.Get(0, 0).AsInt64(), staging.Get(1, 0).AsInt64()));
@@ -106,11 +97,6 @@ public sealed class RunReplayTests
         Assert.Equal((5L, 7L), (staging.Get(0, 0).AsInt64(), staging.Get(0, 1).AsInt64()));
     }
 
-    /// <summary>
-    /// Two nodes call one model with the same rows and inputs, each reading its own output. Swapped in the replay, the one
-    /// that asks first took the other's recording (matched by items and inputs alone) and lacked its own output:
-    /// a node's own recorded call answers it, another node's only when it has what the call reads.
-    /// </summary>
     [Fact]
     public void TwoNodesCallingOneModelWithTheSameRows_EachGetTheirOwnOutputs_InEitherOrder()
     {
@@ -131,7 +117,7 @@ public sealed class RunReplayTests
         var extraStatus = replay.InvokeModel(call.Reading("p_extra"), extraOut, keys, "extra");
         var clickStatus = replay.InvokeModel(call, clickOut, keys, "click");
         var addedOut = new ArrayOutputWriter();
-        var added = replay.InvokeModel(call.Reading("p_extra"), addedOut, keys, "added"); // borrows the call that has it
+        var added = replay.InvokeModel(call.Reading("p_extra"), addedOut, keys, "added");
 
         Assert.True(extraStatus.Succeeded && clickStatus.Succeeded && added.Succeeded);
         Assert.Equal(new float[] { 5, 6 }, extraOut.Floats["p_extra"]);
@@ -142,8 +128,7 @@ public sealed class RunReplayTests
 
     /// <summary>
     /// A recorded call of the same items and inputs answers as recorded when it lacks an output the call reads now: its
-    /// text and the order of repeated items stay, and only the new output is a gap. It was synthesized item by item, which
-    /// lost the text (a gap, and a failed call) and took the first row for each repeat.
+    /// text and the order of repeated items stay, and only the new output is a gap.
     /// </summary>
     [Fact]
     public void AnExactRecording_ThatLacksAnOutputReadNow_AnswersAsRecorded_WithAGapOfThatOutputOnly()
@@ -166,10 +151,6 @@ public sealed class RunReplayTests
         Assert.Equal(new[] { ("new", "not_recorded"), ("new_score", "not_recorded") }, replay.Gaps.Select(g => (g.Field!, g.Reason)).OrderBy(g => g.Item1, StringComparer.Ordinal).ToArray());
     }
 
-    /// <summary>
-    /// A call about items that reads only its status (a check of each candidate) has no answer when none of its items is
-    /// recorded with these inputs: it was synthesized as a success, so the caller kept candidates no recording vouched for.
-    /// </summary>
     [Fact]
     public void ACallAboutItemsReadingOnlyItsStatus_FailsWhenNoItemIsRecorded()
     {
@@ -182,11 +163,6 @@ public sealed class RunReplayTests
         Assert.Equal("not_recorded", Assert.Single(replay.Gaps).Reason);
     }
 
-    /// <summary>
-    /// A row's digest covers its own values: built from a longer (pooled) buffer, an input is its shape's elements, so the
-    /// slack does not shift the rows (a buffer of 4 for a shape of [2] made each row two values wide: row 41's digest covered
-    /// both rows' values and row 42's the slack).
-    /// </summary>
     [Fact]
     public void ARowsDigest_IsOfItsOwnValues_WhateverTheBufferHoldsBeyondTheShape()
     {
@@ -203,10 +179,6 @@ public sealed class RunReplayTests
         Assert.Equal(("inputs_changed", "42"), (gap.Reason, Assert.Single(gap.Examples)));
     }
 
-    /// <summary>
-    /// An output a recorded call has, not of whole rows, exempts from its gap only the rows of that call: the node failed on
-    /// it when recorded. A row of another call that has no such output is a gap of it (it was exempt by the name alone).
-    /// </summary>
     [Fact]
     public void AMalformedRecordedOutput_ExemptsOnlyItsOwnRows_FromTheOutputsGap()
     {
@@ -228,10 +200,6 @@ public sealed class RunReplayTests
         Assert.Equal(("extra", "not_recorded", "3"), (gap.Field, gap.Reason, Assert.Single(gap.Examples)));
     }
 
-    /// <summary>
-    /// A rebatched call of an item the recording has, reading only an output no recorded call has: a gap of that output,
-    /// not of the item (it was reported without its output's name).
-    /// </summary>
     [Fact]
     public void ARebatchedCallReadingOnlyAnUnrecordedOutput_IsAGapOfThatOutput()
     {
@@ -249,7 +217,6 @@ public sealed class RunReplayTests
     [Fact]
     public void AnOutputTheRecordedCallDidNotAskFor_IsAGapOfThatOutput()
     {
-        // Only the outputs a call asks for are recorded: a configuration that reads another one finds none in the bundle.
         var run = Run();
         var recorded = Call(2, NamedInput.FromFloat32("x", new[] { 2 }, new float[] { 1, 2 }));
         run.ServiceCalls.Add(ModelCallOf(0, recorded, new long[] { 1, 2 }, 10, 20));
@@ -293,7 +260,6 @@ public sealed class RunReplayTests
         Assert.NotEqual(RowDigests(Call(1, NamedInput.FromFloat32("x", new[] { 1, 1 }, new float[] { 7 }))),
             RowDigests(Call(1, NamedInput.FromInt64("x", new[] { 1, 1 }, new long[] { 7 }))));
 
-        // Rows of a [batch, 2] tensor keep their digests in another batch: row 1 of a batch of 3 is row 0 of a batch of 1.
         var batchOfThree = RowDigests(Call(3, NamedInput.FromFloat32("x", new[] { 3, 2 }, new float[] { 1, 2, 3, 4, 5, 6 }), NamedInput.FromText("prompt", "p")));
         var batchOfOne = RowDigests(Call(1, NamedInput.FromFloat32("x", new[] { 1, 2 }, new float[] { 3, 4 }), NamedInput.FromText("prompt", "p")));
         Assert.Equal(batchOfThree[1], batchOfOne[0]);
@@ -303,7 +269,6 @@ public sealed class RunReplayTests
     [Fact]
     public void ARebatchedModelCall_TakesEachRowFromTheRecordingWithTheSameEntityAndInputs()
     {
-        // Entity 1 was scored twice with different inputs; the later recording is the one with the inputs the replay has.
         var run = Run();
         run.ServiceCalls.Add(ModelCallOf(0, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 10 })), new long[] { 1 }, 100));
         run.ServiceCalls.Add(ModelCallOf(1, Call(1, NamedInput.FromFloat32("x", new[] { 1 }, new float[] { 20 })), new long[] { 1 }, 200));
@@ -319,11 +284,6 @@ public sealed class RunReplayTests
         Assert.Equal(new[] { ("inputs_changed", "1"), ("not_recorded", "3") }, replay.Gaps.Select(g => (g.Reason, Assert.Single(g.Examples))));
     }
 
-    /// <summary>
-    /// Outputs of every element type replay as recorded, at their type (an int64 beyond 2^53 exactly, a float64 unrounded),
-    /// in the recorded call and split by row into another batch; a row the recording lacks gets NaN in a float output and
-    /// the type's zero in another, and is a gap.
-    /// </summary>
     [Fact]
     public void TypedOutputs_ReplayAsRecorded_ExactlyAndRebatched_AndARowTheRecordingLacks_GetsTheGapValue()
     {
@@ -362,15 +322,11 @@ public sealed class RunReplayTests
         Assert.Equal(0.1, ((double[])rebatched.Arrays["d"])[2]);
         Assert.Equal(new[] { "b", string.Empty, "a" }, (string[])rebatched.Arrays["label"]);
         Assert.Equal(new[] { true, false, true }, (bool[])rebatched.Arrays["ok"]);
-        Assert.Equal(new[] { 3, 4, 0, 0, 1, 2 }, (int[])rebatched.Arrays["v"]); // two per row, as recorded
+        Assert.Equal(new[] { 3, 4, 0, 0, 1, 2 }, (int[])rebatched.Arrays["v"]);
         var gap = Assert.Single(replay.Gaps);
         Assert.Equal(("model", "not_recorded", "7"), (gap.Kind, gap.Reason, Assert.Single(gap.Examples)));
     }
 
-    /// <summary>
-    /// Two nodes call one model, writing its output <c>v</c> to a list&lt;int32,2&gt; and a list&lt;int32,3&gt; column. A
-    /// rebatched call of the second takes the width of the rows it matches, not of the first node's call.
-    /// </summary>
     [Fact]
     public void ARebatchedCall_TakesItsOutputsWidth_FromTheRowsItMatches_NotFromAnotherNodesCall()
     {
@@ -397,10 +353,6 @@ public sealed class RunReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// The same two nodes; the second's rebatched call matches no recorded row (its inputs changed). Its output takes the
-    /// width of that node's recorded calls, not of the first node's, so the row is a gap, not a call of the wrong width.
-    /// </summary>
     [Fact]
     public void ARebatchedCall_WhoseRowsAllChanged_TakesItsOutputsWidth_FromItsOwnNodesCalls()
     {
@@ -428,9 +380,9 @@ public sealed class RunReplayTests
     }
 
     /// <summary>
-    /// A call whose client wrote more values of an output than its rows hold succeeded, and its node failed on them. Its
-    /// rows are not split out of that output: a rebatched call that took them would succeed, where the recording failed.
-    /// Its other outputs are: one of whole rows, and one the operator does not read (a call-level loss) is left out.
+    /// A call whose client wrote more values of an output than its rows hold succeeded, and its node failed on them.
+    /// Its rows are not split out of that output: a rebatched call that took them would succeed, where the recording
+    /// failed.
     /// </summary>
     [Fact]
     public void ARebatchedCall_DoesNotSplitRows_OutOfAnOutputLongerThanItsShape()
@@ -458,7 +410,6 @@ public sealed class RunReplayTests
         Assert.Empty(replay.Gaps); // v was recorded, malformed: not a gap
     }
 
-    /// <summary>A float64 input is in the digest as itself: 0.1 and the float nearest it are other inputs.</summary>
     [Fact]
     public void AFloat64InputThatChangedBeyondFloatPrecision_IsAnInputsChangedGap()
     {
@@ -476,11 +427,6 @@ public sealed class RunReplayTests
         Assert.Equal(("inputs_changed", "1"), (Assert.Single(replay.Gaps).Reason, Assert.Single(Assert.Single(replay.Gaps).Examples)));
     }
 
-    /// <summary>
-    /// Entity 1 was annotated alone twice, with two prompts. The replay's call with the second prompt first takes the call
-    /// recorded with the first (same entity, other inputs) and is answered from the one recorded with its own inputs, as
-    /// that call was: its text and its generation details.
-    /// </summary>
     [Fact]
     public void ASingleRowTextCall_IsAnsweredAsTheRecordedCallOfThatEntityAloneWithTheSameInputs()
     {
@@ -498,11 +444,6 @@ public sealed class RunReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// Two annotators share a model; the first one's call for entity 50 failed, the second one's succeeded. When
-    /// the first no longer calls 50 in the replay, the second's call must get its own recorded answer, not the failure left
-    /// by the other prompt. A recorded failure still answers the call it was (same entity, same inputs).
-    /// </summary>
     [Fact]
     public void ARecordedFailure_AnswersOnlyTheCallWithItsInputs_NotAnotherCallOfTheSameEntity()
     {
@@ -523,7 +464,6 @@ public sealed class RunReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>A recorded failure whose inputs changed in the replay is reported as a gap of the entity, not replayed.</summary>
     [Fact]
     public void ARecordedFailure_WhoseInputsChanged_IsAGap_NotTheRecordedFailure()
     {
@@ -538,10 +478,6 @@ public sealed class RunReplayTests
         Assert.Equal(("not_recorded", "50"), (Assert.Single(replay.Gaps).Reason, Assert.Single(Assert.Single(replay.Gaps).Examples)));
     }
 
-    /// <summary>
-    /// A text belongs to its whole call: a two-row call's text is not served to one of its rows, even with the same row
-    /// inputs (not recorded); an entity answered alone only with other inputs has changed inputs.
-    /// </summary>
     [Fact]
     public void AMultiRowCallsText_IsNotSplitByRow_AndAnEntityAnsweredOnlyWithOtherInputs_HasChangedInputs()
     {
@@ -562,11 +498,6 @@ public sealed class RunReplayTests
         Assert.Equal(new[] { ("inputs_changed", "3"), ("not_recorded", "1") }, replay.Gaps.Select(g => (g.Reason, Assert.Single(g.Examples))));
     }
 
-    /// <summary>
-    /// A client's own failure, thrown or returned, is a failed status, live and on replay; only a call the node's budget or
-    /// the caller cut off throws, as cancellation, so a replay never has to recreate an exception type (it used to, by
-    /// reflection over the loaded assemblies, falling back to a stand-in type).
-    /// </summary>
     [Theory]
     [InlineData("error", false, "threw InvalidOperationException: backend said no")]
     [InlineData("timeout", false, "threw TimeoutException: backend said no")]
@@ -595,11 +526,6 @@ public sealed class RunReplayTests
         }
     }
 
-    /// <summary>
-    /// A rebatched call of rows whose recorded call, asking for the same outputs, the service left an output unwritten
-    /// in: the output is left unwritten, as recorded, not a gap nor a failure with no recorded output; an output no call
-    /// asked for is still a gap.
-    /// </summary>
     [Fact]
     public void ARebatchedCall_LeavesUnwrittenAnOutputItsRowsRecordedCallLeftUnwritten_AndAnOutputNeverAskedForIsAGap()
     {
@@ -621,10 +547,6 @@ public sealed class RunReplayTests
         Assert.Equal(("new", "not_recorded", 2), (gap.Field, gap.Reason, gap.Count));
     }
 
-    /// <summary>
-    /// An output a recorded call of other outputs left unwritten does not answer a call of this output that another
-    /// recorded call wrote (a node added by a reload read it as missing).
-    /// </summary>
     [Fact]
     public void AnOmissionOfAKeyedCallOfOtherOutputs_DoesNotAnswerOverARecordingThatWroteTheOutput()
     {
@@ -641,11 +563,6 @@ public sealed class RunReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// An item is answered by what it saw of each input, however it is batched: a shared <c>[1, d]</c> input, all of it,
-    /// in a batch of two and in a batch of the item alone (in a batch of one the shared input
-    /// was per item by its shape, the item's digest changed, and its score was the gap value).
-    /// </summary>
     /// <remarks>A view of a few values enters a digest inline, one of more as its own digest (<paramref name="width"/> 64): both alike in a batch of one and of two, for a shared input and for an item's own.</remarks>
     [Theory]
     [InlineData(new long[] { 1, 2 }, new long[] { 1 }, 2)]
@@ -669,15 +586,9 @@ public sealed class RunReplayTests
 
         Assert.True(status.Succeeded, status.Error);
         Assert.Equal(1f, writer.Floats["score"][Array.IndexOf(replayed, 1L)]);
-        Assert.All(replay.Gaps, gap => Assert.Equal("2", Assert.Single(gap.Examples))); // only the item never recorded
+        Assert.All(replay.Gaps, gap => Assert.Equal("2", Assert.Single(gap.Examples)));
     }
 
-    /// <summary>
-    /// The digests of a call's items read each shared input once for the call, not once an item, whatever its size: what
-    /// every item sees alike is encoded once (a recording of 2,048 items hashed a shared
-    /// vector 2,048 times, and one item's long string, counted as one value, was encoded again for every item). An item's
-    /// digest is still its own.
-    /// </summary>
     [Fact]
     public void ACallsItemDigests_ReadEachSharedInputOnce()
     {
@@ -695,12 +606,6 @@ public sealed class RunReplayTests
         Assert.Equal(count, digests.Distinct().Count());
     }
 
-    /// <summary>
-    /// A call made while another is being answered (an operator's code calls again, here from the getter of the outputs it
-    /// hands over) does not change what the first is answered with: each has its own epoch, and the first's is active again
-    /// after (one counter, the first went on with the second's, took its comparison of another output
-    /// list for its own, and missed its recording).
-    /// </summary>
     [Fact]
     public void ACallMadeWhileAnotherIsAnswered_LeavesItsAnswer()
     {
@@ -735,7 +640,6 @@ public sealed class RunReplayTests
         }
     }
 
-    /// <summary>Output names whose first read makes another call.</summary>
     private sealed class ReadingCalls(string[] names, Action call) : System.Buffers.MemoryManager<string>
     {
         private bool _called;
@@ -780,7 +684,6 @@ public sealed class RunReplayTests
         Outputs = scores is null ? [] : new Dictionary<string, ReplayOutput> { ["score"] = new() { Type = "float32", Values = JsonSerializer.SerializeToElement(scores) } },
     };
 
-    /// <summary>A call of model <c>m</c> that reads its output <c>score</c>, as a model operator names what it reads.</summary>
     internal static ServiceCall Call(int batch, params NamedInput[] inputs) => new() { Service = "m", Inputs = inputs, BatchSize = batch, Outputs = Score };
 
     private static readonly string[] Score = ["score"];
@@ -797,7 +700,6 @@ public sealed class RunReplayTests
         return rows.Select(ReplayJson.Hex).ToArray();
     }
 
-    /// <summary>A successful recorded call of model <c>m</c> scoring <paramref name="keys"/>, one <c>score</c> per row.</summary>
     internal static ReplayServiceCall ModelCallOf(int seq, ServiceCall call, long[] keys, params float[] scores) => new()
     {
         Seq = seq,
@@ -812,14 +714,12 @@ public sealed class RunReplayTests
         Outputs = new Dictionary<string, ReplayOutput> { ["score"] = new() { Type = "float32", Values = JsonSerializer.SerializeToElement(scores) } },
     };
 
-    /// <summary>A generative call of model <c>m</c>: one prompt, <c>user</c>, and a token limit.</summary>
     internal static ServiceCall TextCall(string prompt, int batch = 1) => new()
     {
         Service = "m", Inputs = new[] { NamedInput.FromText("user", prompt) }, BatchSize = batch, Options = new ServiceCallOptions(MaxOutputTokens: 64),
         Outputs = Answer,
     };
 
-    /// <summary>A successful recorded generative call of model <c>m</c> for <paramref name="keys"/>, answering <paramref name="text"/>.</summary>
     internal static ReplayServiceCall TextCallOf(int seq, ServiceCall call, long[] keys, string text, int? outputTokens = null, bool? truncated = null) => new()
     {
         Seq = seq,
@@ -836,7 +736,6 @@ public sealed class RunReplayTests
         Truncated = truncated,
     };
 
-    /// <summary>A recorded generative call of model <c>m</c> for <paramref name="keys"/> that failed with <paramref name="error"/>.</summary>
     internal static ReplayServiceCall FailedTextCallOf(int seq, ServiceCall call, long[] keys, string error) => new()
     {
         Seq = seq,
@@ -868,7 +767,6 @@ public sealed class RunReplayTests
 
         public Dictionary<string, string> Texts { get; } = new();
 
-        /// <summary>Every tensor output as written, of any element type.</summary>
         public Dictionary<string, Array> Arrays { get; } = new();
 
         public Memory<T> GetValues<T>(string name, int elementCount)
@@ -897,7 +795,6 @@ public sealed class RunReplayTests
 
     internal static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
-    /// <summary>A successful many-shape call of source <c>s</c> for entity <c>item</c>.</summary>
     internal static ReplayFeatureCall Feature(int seq, string keys, params (string Name, string Type, string Values)[] fields)
     {
         var values = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
@@ -914,7 +811,6 @@ public sealed class RunReplayTests
         };
     }
 
-    /// <summary>Asks the replay for <paramref name="fields"/> of <paramref name="keys"/> from source <c>s</c>.</summary>
     internal static (FetchStatus Status, StagingBuffer Staging) Fetch(RunReplay replay, long[] keys, params (string Name, string Type)[] fields)
     {
         var bindings = new CompiledFieldBinding[fields.Length];
@@ -942,7 +838,6 @@ public sealed class RunReplayTests
         Enumerable.Range(0, keys).Select(k => staging.Get(field, k) is { IsMissing: false } v ? v.AsFloat64() : (double?)null).ToArray();
 }
 
-/// <summary>A model call answered by a replay as an operator would send it: its rows' entities as its items, read back into a writer.</summary>
 internal static class ReplayModelCalls
 {
     public static ServiceStatus InvokeModel(this RunReplay replay, ServiceCall call, RunReplayTests.ArrayOutputWriter writer, EntityKey[]? keys, string node = "ranker")
@@ -981,7 +876,6 @@ internal static class ReplayModelCalls
     }
 }
 
-/// <summary>The same call, reading other outputs.</summary>
 internal static class ServiceCallReading
 {
     public static ServiceCall Reading(this ServiceCall call, params string[] outputs) => new()

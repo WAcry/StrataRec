@@ -8,11 +8,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Models;
 
-/// <summary>
-/// <c>random@1</c>, the stand-in a dev or test environment binds a real model's name to: it declares the signature its
-/// settings give, and scores each row from its own inputs and the seed alone, so batching, order and replay cannot change
-/// a score while a new request seed does.
-/// </summary>
 public sealed class RandomModelClientTests
 {
     private const string SampleSettings = """{ "inputs": ["smoothed_ctr", "log_followers"], "outputs": ["p_click"] }""";
@@ -31,7 +26,6 @@ public sealed class RandomModelClientTests
         Assert.All(signature.Inputs.Concat(signature.Outputs), s => Assert.True(ModelTensorRule.AcceptsScore(TensorLayout.Rows, s), s.ToString()));
         Assert.Equal(signature, await client.DescribeAsync("ctr_model", null, CancellationToken.None));
 
-        // What ModelScorer@1 checks at load for the sample's ctr_ranker node: the stand-in passes as the real model would.
         var inputs = new ModelTensorRule.MappedInput[]
         {
             new("smoothed_ctr", "col.item.smoothed_ctr", ColumnType.Float32), new("log_followers", "col.author.log_followers", ColumnType.Float32),
@@ -66,7 +60,6 @@ public sealed class RandomModelClientTests
         var rows = Rows(500);
         var whole = Invoke(client, rows, seed: 11)["p_click"];
 
-        // Reversed, and split into batches of 7 like ModelScorer@1's batch_size would.
         var reversed = rows.Reverse().ToArray();
         var reversedScores = Invoke(client, reversed, seed: 11)["p_click"];
         var batched = rows.Chunk(7).SelectMany(batch => Invoke(client, batch, seed: 11)["p_click"]).ToArray();
@@ -77,7 +70,6 @@ public sealed class RandomModelClientTests
         Assert.Equal(whole, swapped);
         Assert.Equal(whole, Invoke(Create("""{ "inputs": ["log_followers", "smoothed_ctr"], "outputs": ["p_click"] }"""), rows, seed: 11)["p_click"]);
 
-        // Equal inputs, equal scores: the score is a function of the row, as from a real model.
         var duplicated = Invoke(client, new[] { rows[3], rows[9], rows[3] }, seed: 11)["p_click"];
         Assert.Equal((whole[3], whole[9], whole[3]), (duplicated[0], duplicated[1], duplicated[2]));
     }
@@ -145,7 +137,7 @@ public sealed class RandomModelClientTests
             Inputs = new[] { NamedInput.FromFloat32("smoothed_ctr", new[] { 1 }, new float[1]), NamedInput.FromInt64("log_followers", new[] { 1 }, new long[1]) },
             Options = new ServiceCallOptions(Seed: 1),
         };
-        var vectorInput = new ServiceCall // what ModelScorer@1 sends for a list<float32,2> column: enough floats, but two per row
+        var vectorInput = new ServiceCall
         {
             Service = "ctr_model",
             BatchSize = 1,
@@ -158,7 +150,6 @@ public sealed class RandomModelClientTests
         Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.CallAsync(int64Input, new Outputs(), CancellationToken.None));
         Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (1)."), await client.CallAsync(vectorInput, new Outputs(), CancellationToken.None));
 
-        // A missing value of the declared type and shape fails for being missing, which the message says.
         var missingValue = new ServiceCall
         {
             Service = "ctr_model",
@@ -184,22 +175,17 @@ public sealed class RandomModelClientTests
         };
 
         Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (2)."),
-            await client.CallAsync(Call(batch: 2, rows: 3, floats: 3), new Outputs(), CancellationToken.None)); // enough data, but three rows
+            await client.CallAsync(Call(batch: 2, rows: 3, floats: 3), new Outputs(), CancellationToken.None));
         Assert.Equal(ServiceStatus.Failed("Input 'log_followers' must be float32 with one value per row (2)."),
             await client.CallAsync(Call(batch: 2, rows: 1, floats: 2), new Outputs(), CancellationToken.None));
         Assert.Equal(ServiceStatus.Failed("The call's batch size is -1; it must not be negative."),
             await client.CallAsync(Call(batch: -1, rows: 1, floats: 1), new Outputs(), CancellationToken.None));
-        Assert.Throws<ArgumentException>(() => Call(batch: 2, rows: -1, floats: 1)); // not a tensor: rejected where it is built
+        Assert.Throws<ArgumentException>(() => Call(batch: 2, rows: -1, floats: 1));
         var outputs = new Outputs();
         Assert.Equal(ServiceStatus.Ok, await client.CallAsync(Call(batch: 2, rows: 2, floats: 5), outputs, CancellationToken.None));
         Assert.Equal(2, outputs.Values["p_click"].Length);
     }
 
-    /// <summary>
-    /// The definition, so a score can be recomputed anywhere the canonical encoding can (any language): the top 24 bits of
-    /// the stable hash of (hash of model and output name, seed, inputs in ordinal name order as float64). Changing it
-    /// changes every stand-in's scores, which this pins.
-    /// </summary>
     [Fact]
     public void AScore_IsTheStableHashOfSaltSeedAndInputs_InCanonicalEncoding()
     {
@@ -249,20 +235,16 @@ public sealed class RandomModelClientTests
         Assert.False(string.IsNullOrEmpty(error.Hint));
     }
 
-    // The full form: each tensor as a real model's signature declares it, so a pairwise or listwise model can be mimicked.
-
     private const string PointSettings = """
         { "inputs": { "item_id": { "type": "int64", "shape": [-1] }, "emb": { "type": "float32", "shape": [-1, 3] }, "ctr": { "type": "float32", "shape": [-1] } },
           "outputs": ["p_click"] }
         """;
 
-    /// <summary>As <c>PairwiseRanker@1</c> calls it: columns as <c>[pairs, 2]</c>, a context value as <c>[pairs]</c>.</summary>
     private const string PairSettings = """
         { "inputs": { "final": { "type": "float32", "shape": [-1, 2] }, "item_id": { "type": "int64", "shape": [-1, 2] }, "quality": { "type": "float32", "shape": [-1] } },
           "outputs": { "p_first": { "shape": [-1] } } }
         """;
 
-    /// <summary>As <c>ListwiseReranker@1</c> calls it: columns as <c>[1, n]</c> / <c>[1, n, N]</c>, context values as <c>[1]</c> / <c>[1, N]</c>.</summary>
     private const string ListSettings = """
         { "inputs": { "final": { "type": "float32", "shape": [1, -1] }, "emb": { "type": "float32", "shape": [1, -1, 2] },
                       "seed": { "type": "int64", "shape": [1] }, "user": { "type": "float32", "shape": [1, 3] } },
@@ -336,7 +318,6 @@ public sealed class RandomModelClientTests
         Assert.Equal(N, scores.Length);
         for (var i = 0; i < N; i++)
         {
-            // ctr, emb, item_id: ordinal name order; each row's vector whole, its int64 exactly.
             Assert.Equal(Expected("p_click", 9, ctr[i], emb[3 * i], emb[(3 * i) + 1], emb[(3 * i) + 2], ids[i]), scores[i]);
         }
 
@@ -348,10 +329,6 @@ public sealed class RandomModelClientTests
         Assert.Equal(scores.Where((_, i) => i != 5), next.Where((_, i) => i != 5));
     }
 
-    /// <summary>
-    /// Every element type a column can have is an input, hashed by value: an integer as int64 (a bool as 0 or 1), a float
-    /// as float64, a string as itself. So the same values at another width score the same, as the remarks promise.
-    /// </summary>
     [Fact]
     public void EveryElementType_IsAnInput_AndTheSameValuesAtAnotherWidth_ScoreTheSame()
     {
@@ -370,7 +347,6 @@ public sealed class RandomModelClientTests
         Assert.Equal(Call(Of("float32"), 3, 3, NamedInput.FromFloat32("x", new[] { 3 }, floats))["p"],
             Call(Of("float64"), 3, 3, NamedInput.FromFloat64("x", new[] { 3 }, floats.Select(f => (double)f).ToArray()))["p"]);
 
-        // A float64 is hashed as itself: 0.1 and the float nearest it are two values.
         var precise = Call(Of("float64"), 2, 3, NamedInput.FromFloat64("x", new[] { 2 }, new[] { 0.1, (double)0.1f }))["p"];
         Assert.NotEqual(precise[0], precise[1]);
 
@@ -401,7 +377,7 @@ public sealed class RandomModelClientTests
         var random = new Random(3);
         var final = Enumerable.Range(0, 8).Select(_ => (float)random.NextDouble()).ToArray();
         var ids = Enumerable.Range(0, 8).Select(i => 100L + i).ToArray();
-        var pairs = (from i in Enumerable.Range(0, 8) from j in Enumerable.Range(i + 1, 7 - i) select (A: i, B: j)).ToArray(); // as PairwiseRanker@1 sends them
+        var pairs = (from i in Enumerable.Range(0, 8) from j in Enumerable.Range(i + 1, 7 - i) select (A: i, B: j)).ToArray();
 
         float[] Score(IReadOnlyList<(int A, int B)> batch, long seed = 5, float quality = 0.3f) => Call(client, batch.Count, seed,
             F("final", new[] { batch.Count, 2 }, batch.SelectMany(p => new[] { final[p.A], final[p.B] }).ToArray()),
@@ -417,14 +393,13 @@ public sealed class RandomModelClientTests
             Assert.Equal(Expected("p_first", 5, final[a], final[b], ids[a], ids[b], 0.3f), scores[k]);
         }
 
-        Assert.All(scores, s => Assert.InRange(s, 0f, MathF.BitDecrement(1f))); // a preference PairwiseRanker@1 accepts
+        Assert.All(scores, s => Assert.InRange(s, 0f, MathF.BitDecrement(1f)));
         Assert.Equal(scores, pairs.Chunk(4).SelectMany(batch => Score(batch)).ToArray());
         Assert.Equal(scores.Reverse(), Score(pairs.Reverse().ToArray()));
-        Assert.Equal(28, Differing(scores, Score(pairs.Select(p => (p.B, p.A)).ToArray()))); // the order within a pair counts
+        Assert.Equal(28, Differing(scores, Score(pairs.Select(p => (p.B, p.A)).ToArray())));
         Assert.Equal(28, Differing(scores, Score(pairs, seed: 6)));
         Assert.Equal(28, Differing(scores, Score(pairs, quality: 0.4f)));
 
-        // A pair's score depends on both of its rows and on nothing else.
         final[7] += 0.5f;
         var changed = Score(pairs);
         Assert.All(Enumerable.Range(0, 28), k => Assert.Equal(pairs[k].B == 7, changed[k] != scores[k]));
@@ -450,7 +425,6 @@ public sealed class RandomModelClientTests
         Assert.Equal(6, scores.Length);
         for (var r = 0; r < 6; r++)
         {
-            // emb, final, seed, user: a row's slices, then the shared inputs whole.
             Assert.Equal(Expected("scores", 3, emb[2 * r], emb[(2 * r) + 1], final[r], 77L, 0.1f, 0.2f, 0.3f), scores[r]);
         }
 
@@ -473,7 +447,7 @@ public sealed class RandomModelClientTests
         ServiceStatus Pair(int batch, params NamedInput[] inputs) => TryCall(pair, batch, 1, inputs).Status;
 
         Assert.True(Pair(3, Final(new[] { 3, 2 }, 6), Ids(3), Quality(3)).Succeeded);
-        Assert.True(Pair(3, Final(new[] { 3, 2 }, 7), Ids(3), Quality(3)).Succeeded); // a longer backing buffer
+        Assert.True(Pair(3, Final(new[] { 3, 2 }, 7), Ids(3), Quality(3)).Succeeded);
         Assert.Empty(TryCall(pair, 0, 1, Final(new[] { 0, 2 }, 0), Ids(0), Quality(0)).Outputs["p_first"]);
         Assert.Equal(ServiceStatus.Failed("Missing input 'item_id'."), Pair(3, Final(new[] { 3, 2 }, 6), Quality(3)));
         Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends int64 [3, 2]."),
@@ -484,12 +458,10 @@ public sealed class RandomModelClientTests
             Pair(3, Final(new[] { 3, 3 }, 9), Ids(3), Quality(3)));
         Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends float32 [2, 2]."),
             Pair(3, Final(new[] { 2, 2 }, 4), Ids(3), Quality(3)));
-        // Fewer values than the shape holds, or a negative dimension, is not a tensor: rejected where it is built, so no
-        // client reads beyond its data.
         Assert.Throws<ArgumentException>(() => Final(new[] { 3, 2 }, 5));
         Assert.Throws<ArgumentException>(() => Final(new[] { 3, -2 }, 6));
         Assert.Equal(ServiceStatus.Failed("Input 'final' must be float32 [-1, 2] with the call's batch size (3) as its first dimension; the call sends a missing float32 [3, 2]."),
-            Pair(3, NamedInput.FromMissing("final", TensorElementType.Float32, [3, 2]), Ids(3), Quality(3))); // no data to read
+            Pair(3, NamedInput.FromMissing("final", TensorElementType.Float32, [3, 2]), Ids(3), Quality(3)));
         Assert.Equal(ServiceStatus.Failed("Input 'quality' must be float32 with one value per row (3)."), Pair(3, Final(new[] { 3, 2 }, 6), Ids(3), Quality(2)));
 
         var list = Create(ListSettings);
@@ -503,7 +475,7 @@ public sealed class RandomModelClientTests
         Assert.Equal(ServiceStatus.Failed("Input 'emb' must be float32 [1, -1, 2] with the call's batch size (2) as its first dimension; the call sends float32 [1, 4, 2]."),
             List(2, 4, 4));
         Assert.Equal(ServiceStatus.Failed("Input 'user' must be float32 [1, 3]; the call sends float32 [1, 2]."), List(1, 4, 4, user: new[] { 1, 2 }));
-        Assert.Throws<ArgumentException>(() => List(1, 4, 4, userValues: 2)); // fewer values than its shape: not a tensor
+        Assert.Throws<ArgumentException>(() => List(1, 4, 4, userValues: 2));
         Assert.Equal(ServiceStatus.Failed("Input 'id' must be int64 with one value per row (2)."),
             TryCall(Create("""{ "inputs": { "id": { "type": "int64", "shape": [-1] } }, "outputs": ["p"] }"""), 2, 1, L("id", new[] { 1 }, new long[1])).Status);
     }
@@ -514,7 +486,7 @@ public sealed class RandomModelClientTests
     [InlineData("""{ "inputs": ["x"], "outputs": {} }""", "/outputs", "'outputs' is empty")]
     [InlineData("""{ "inputs": ["x"], "outputs": "p" }""", "/outputs", "must be an array of names or an object")]
     [InlineData("""{ "inputs": { "": { "type": "float32", "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/", "'inputs' maps an empty name")]
-    [InlineData("""{ "inputs": { "x": { "type": "float32", "shape": [-1] }, "x": { "type": "int64", "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/x", "Duplicate key 'x'")] // settings built in code
+    [InlineData("""{ "inputs": { "x": { "type": "float32", "shape": [-1] }, "x": { "type": "int64", "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/x", "Duplicate key 'x'")]
     [InlineData("""{ "inputs": { "a/b": 3 }, "outputs": ["p"] }""", "/inputs/a~1b", "Entry 'a/b' of 'inputs' of random@1 must be an object, got the number 3.")]
     [InlineData("""{ "inputs": { "x": { "shape": [-1] } }, "outputs": ["p"] }""", "/inputs/x/type", "Input 'x' needs a 'type'")]
     [InlineData("""{ "inputs": { "x": { "type": "float32" } }, "outputs": ["p"] }""", "/inputs/x", "'shape' is required in entry 'x' of 'inputs' of random@1.")]
@@ -580,10 +552,6 @@ public sealed class RandomModelClientTests
 
     private static NamedInput L(string name, int[] shape, long[] data) => NamedInput.FromInt64(name, shape, data);
 
-    /// <summary>
-    /// The definition, as in <see cref="AScore_IsTheStableHashOfSaltSeedAndInputs_InCanonicalEncoding"/>: the top 24 bits of
-    /// the stable hash of (hash of model and output name, seed, values), float32 values as float64 and int64 values as int64.
-    /// </summary>
     private static float Expected(string output, long seed, params object[] values)
     {
         var salt = new StableHash.Builder();
@@ -667,7 +635,6 @@ public sealed class RandomModelClientTests
 
         public Dictionary<string, float[]> Values { get; } = new();
 
-        /// <summary>Every output as written, of any element type.</summary>
         public Dictionary<string, Array> Arrays { get; } = new();
 
         public Memory<T> GetValues<T>(string name, int elementCount)
@@ -686,7 +653,6 @@ public sealed class RandomModelClientTests
     }
 }
 
-/// <summary>What a call of <c>random@1</c> allocates: nothing, per call or per row, and so never more than <c>linear@1</c>.</summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class RandomModelClientAllocationTests
 {
@@ -707,10 +673,6 @@ public sealed class RandomModelClientAllocationTests
         Assert.True(randomBytes <= linearBytes, $"random@1 {randomBytes} B per call, linear@1 {linearBytes} B");
     }
 
-    /// <summary>
-    /// Pairs and lists of vectors and int64 values, and a model with more inputs than the stack holds (their bookkeeping
-    /// is rented from the pool): no call allocates either.
-    /// </summary>
     [Fact]
     public void APairwiseOrListwiseCall_AndOneWithManyInputs_AllocatesNothing()
     {
@@ -761,7 +723,6 @@ public sealed class RandomModelClientAllocationTests
         Assert.Equal(0, BytesPerCall(wide, wideCall, new PreallocatedOutputs(64, "p_click"), calls: 100));
     }
 
-    /// <summary>The average bytes one call allocates on this thread, after warming up; the call and its buffers are reused.</summary>
     private static double BytesPerCall(IServiceClient client, int rows, int calls)
     {
         var data = RandomModelClientTests.Rows(rows);

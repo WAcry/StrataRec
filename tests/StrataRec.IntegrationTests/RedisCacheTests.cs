@@ -15,9 +15,7 @@ using StrataRec.Redis;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>redis@1</c> against a real Redis: the store's records, keys and times to live, and
-/// two engines sharing it. The server is <c>STRATAREC_REDIS</c> (<c>host:port</c>; CI runs a Redis service) or, without
-/// it, a <c>redis:7</c> container the fixture starts and removes; with neither, the tests are skipped and say why.
+/// <c>redis@1</c> against a real Redis: the store's records, keys and times to live, and two engines sharing it.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisServer>
@@ -28,7 +26,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         var prefix = RedisServer.UniquePrefix();
         await using var store = Create(server.Endpoint, prefix);
         await store.LoadAsync(CancellationToken.None);
-        var items = new CacheKeyspace("item:store", "item", EntityKeyType.Int64); // ':' in a source name is escaped
+        var items = new CacheKeyspace("item:store", "item", EntityKeyType.Int64);
         var users = new CacheKeyspace("users", "user", EntityKeyType.String);
 
         await store.SetAsync(items, new[]
@@ -41,7 +39,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         var records = new ReadOnlyMemory<byte>[3];
         await store.GetAsync(items, new[] { "2", "3", "1" }, records, CancellationToken.None);
         Assert.Equal(new byte[] { 4 }, records[0].ToArray());
-        Assert.True(records[1].IsEmpty); // never written
+        Assert.True(records[1].IsEmpty);
         Assert.Equal(new byte[] { 1, 2, 3 }, records[2].ToArray());
         var user = new ReadOnlyMemory<byte>[1];
         await store.GetAsync(users, new[] { "u:7" }, user, CancellationToken.None);
@@ -52,7 +50,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         Assert.InRange((await redis.KeyTimeToLiveAsync(prefix + "item%3Astore:item:2"))!.Value, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
         Assert.Equal(new byte[] { 5, 6 }, (byte[])(await redis.StringGetAsync(prefix + "users:user:u:7"))!);
 
-        // A key of several parts: its text, the parts joined by ':' with a string part's ':' and '%' escaped.
         var byCountry = new CacheKeyspace("item_country_store", "item_country", EntityKeyLayout.OfTypes(EntityKeyType.Int64, EntityKeyType.String));
         var text = CacheKeyspace.KeyText([EntityKey.FromInt64(10042), EntityKey.FromString("U:S%")]);
         Assert.Equal("10042:U%3AS%25", text);
@@ -97,9 +94,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
     }
 
     /// <summary>
-    /// Credentials the server refuses are a wrong setting, unlike a server that is down. A dedicated ACL user on
-    /// the test's Redis (so that a shared server needs no restart): its wrong password fails the load at the setting,
-    /// never quoting the secret; its right one loads and serves.
+    /// A dedicated ACL user on the test's Redis (so that a shared server needs no restart).
     /// </summary>
     [RedisFact]
     public async Task CredentialsTheServerRefuses_FailTheLoadAtThePassword_AndTheRightOnesLoad()
@@ -135,11 +130,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         }
     }
 
-    /// <summary>
-    /// A server whose default user needs a password refuses the connection itself. A wrong password fails the
-    /// load at the setting, none at all fails it at the binding (the hint says to add one), the right one loads. A server
-    /// that is down still loads (<see cref="RedisDownTests"/>).
-    /// </summary>
     [DockerRedisFact]
     public async Task AServerThatRequiresAPassword_RefusesAWrongOneOrNone_AtLoad()
     {
@@ -167,12 +157,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         Assert.True(record[0].IsEmpty);
     }
 
-    /// <summary>
-    /// The CI flake's first cause: StackExchange.Redis tells the connect that its
-    /// connection ended before it publishes the refusal that ended it. Holding that publication (the client logs it as
-    /// event 89 just before) until the load has decided made a refused load succeed, every time. The first connect must
-    /// succeed now: when it gives up, it reads the refusal the client recorded, not the published one.
-    /// </summary>
     [DockerRedisFact]
     public async Task ARefusalTheClientHasNotPublishedYet_StillFailsTheLoad()
     {
@@ -183,12 +167,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         Assert.Contains("\"password\"", error.Hint);
     }
 
-    /// <summary>
-    /// The connection that saw the refusal had not published it, and the next connection
-    /// failed before it saw one of its own (here a proxy resets it; in CI a timeout). With the store's connection made
-    /// first and a probe after it, both said nothing and the load succeeded. The connection that sees the refusal now
-    /// reports it itself, whatever the connections after it do.
-    /// </summary>
     [DockerRedisFact]
     public async Task ARefusalTheClientHasNotPublishedYet_FailsTheLoad_WhateverTheConnectionsAfterItDo()
     {
@@ -201,10 +179,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         Assert.Contains("\"password\"", error.Hint);
     }
 
-    /// <summary>
-    /// The load's refusal, with the client's publication of the first connect's refusals held (<see cref="HoldRefusalLog"/>)
-    /// until the load has decided; then it checks that a publication was held, and released by the test.
-    /// </summary>
     private static async Task<BindingException> RefusedWhileThePublicationIsHeldAsync(string endpoint)
     {
         using var publish = new ManualResetEventSlim();
@@ -231,9 +205,7 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         {
             error = await RefusedAsync(store, () => $"held {log.Held}, timed out {log.TimedOut}");
 
-            // The race was set up: the publication was held while the load decided, and never released by the hold's
-            // bound (a client that renumbers the event, or stops logging it, would otherwise turn this into a plain
-            // refusal test). The client logs the event after it has ended the connect, so it may come after the load.
+            // The client logs the event after it has ended the connect, so it may come after the load.
             Assert.True(SpinWait.SpinUntil(() => log.Held > 0, TimeSpan.FromSeconds(30)), "the client never logged a refused handshake as event 89");
         }
         finally
@@ -246,12 +218,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         return error;
     }
 
-    /// <summary>
-    /// The CI flake's second cause: the client keeps a connection's first failure, so when its first connections are
-    /// dropped, the refusal a later one gets never reaches a command's failure. A proxy in front of the server that
-    /// requires a password resets the first two connections (the first connect's interactive and subscription ones): the
-    /// second connect that must succeed reads the refusal.
-    /// </summary>
     [DockerRedisFact]
     public async Task ARefusalHiddenByAnEarlierDroppedConnection_StillFailsTheLoad()
     {
@@ -265,11 +231,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         Assert.True(proxy.Dropped == 2, $"the proxy dropped {proxy.Dropped} connections");
     }
 
-    /// <summary>
-    /// The load's refusal. A load that succeeded instead failed once in CI and never locally: the failure then says what
-    /// the server answers a read, which tells a refusal the load missed from a server it took for down, and the test's
-    /// own <paramref name="state"/>, which its assertions after this one would have said.
-    /// </summary>
     private static async Task<BindingException> RefusedAsync(RedisCacheStore store, Func<string>? state = null)
     {
         try
@@ -297,7 +258,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
             + (state is null ? string.Empty : "; " + state()));
     }
 
-    /// <summary>through the engine, refused credentials reject the plan at the binding's password setting.</summary>
     [RedisFact]
     public async Task AnEngineWhoseRedisRefusesItsCredentials_RejectsThePlanAtThePassword()
     {
@@ -344,7 +304,6 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
         return (RedisCacheStore)new RedisCacheStoreFactory().Create(new BindingContext("item_store", settings, Path.GetTempPath(), secrets));
     }
 
-    /// <summary>A secret store in memory.</summary>
     private sealed class Secrets : Dictionary<string, string>, ISecretResolver
     {
         public ValueTask<string?> ResolveAsync(string name, CancellationToken cancellationToken) =>
@@ -354,17 +313,15 @@ public sealed class RedisCacheTests(RedisServer server) : IClassFixture<RedisSer
 
 /// <summary>
 /// A logger that holds the client's thread where it is about to publish a refused handshake (event 89 with an
-/// authentication failure), until released: a deterministic reproduction of the publication race.
+/// authentication failure), until released.
 /// </summary>
 internal sealed class HoldRefusalLog(ManualResetEventSlim release) : Microsoft.Extensions.Logging.ILoggerFactory
 {
     private int _held;
     private int _timedOut;
 
-    /// <summary>Publications held so far.</summary>
     public int Held => Volatile.Read(ref _held);
 
-    /// <summary>Holds that ended at their 30 s bound rather than by the release.</summary>
     public int TimedOut => Volatile.Read(ref _timedOut);
 
     public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => new Hold(this, release);
@@ -413,7 +370,6 @@ internal sealed class DroppingProxy : IAsyncDisposable
     private int _accepted;
     private int _dropped;
 
-    /// <summary>Resets the first <paramref name="drop"/> connections.</summary>
     public DroppingProxy(string target, int drop)
         : this(target, accepted => accepted <= drop)
     {
@@ -480,16 +436,11 @@ internal sealed class DroppingProxy : IAsyncDisposable
             }
             catch (Exception)
             {
-                // A closed side or the proxy stopping ends the forwarding.
             }
         }
     }
 }
 
-/// <summary>
-/// <c>redis@1</c> when Redis is down: nothing to start, so these run everywhere. The store connects at load without failing
-/// it, and every read fails over to the connector.
-/// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class RedisDownTests
 {
@@ -614,7 +565,6 @@ public sealed class RedisServer : IAsyncLifetime
         }
     }
 
-    /// <summary>Starts a <c>redis:7</c> container on a free loopback port: its endpoint.</summary>
     private string Start(params string[] command)
     {
         var run = Docker(["run", "-d", "--rm", "-p", "127.0.0.1::6379", "redis:7", .. command]);
@@ -668,14 +618,13 @@ public sealed class RedisServer : IAsyncLifetime
         }
         catch (Win32Exception ex)
         {
-            return (-1, string.Empty, ex.Message); // no docker
+            return (-1, string.Empty, ex.Message);
         }
     }
 }
 
 /// <summary>
-/// Wraps a store factory so that a test knows when the stores hold every key they were asked for: what the first engine
-/// missed has been written back. Keys are recorded as written once the inner store's write completed.
+/// Keys are recorded as written once the inner store's write completed.
 /// </summary>
 internal sealed class RecordedStores(IBindingFactory<ICacheStore> inner) : IBindingFactory<ICacheStore>
 {
@@ -687,7 +636,6 @@ internal sealed class RecordedStores(IBindingFactory<ICacheStore> inner) : IBind
 
     public Type SettingsType => inner.SettingsType;
 
-    /// <summary>The full keys written (with the binding's <c>key_prefix</c>).</summary>
     public IEnumerable<string> Written => _written.Keys.Select(k => _prefix + k);
 
     public bool HoldsEveryKeyRead() => !_read.IsEmpty && _read.Keys.All(_written.ContainsKey);

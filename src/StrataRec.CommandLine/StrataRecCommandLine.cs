@@ -27,18 +27,16 @@ namespace StrataRec.CommandLine;
 public static class StrataRecCommandLine
 {
     /// <summary>
-    /// Runs one command, as the <c>stratarec</c> tool would with <paramref name="args"/>; returns its exit code. A command
-    /// line that does not parse (an unknown option, an option without its value) prints the errors and the command's help
-    /// and exits with 2, the code of a usage error: 1 means the configuration has errors, or for <c>diff</c> that something
-    /// differs, which a script must not read into a typo.
+    /// Runs one command, as the <c>stratarec</c> tool would with <paramref name="args"/>; returns its exit code. A
+    /// command line that does not parse (an unknown option, an option without its value) prints the errors and the
+    /// command's help and exits with 2, the code of a usage error: 1 means the configuration has errors, or for
+    /// <c>diff</c> that something differs.
     /// </summary>
     /// <param name="args">The command line after the program's name, e.g. <c>["validate", "-c", "config"]</c>.</param>
-    /// <param name="environment">
-    /// What the calling binary provides to plans: its operators, connectors, service clients, update sources and
-    /// cache stores. Each command places it in the workspace it reads (<c>environment with { BaseDirectory = … }</c>: the
-    /// <c>-c</c> directory, or none for a release manifest, whose relative paths resolve against the current directory),
-    /// so the environment's own <see cref="PlanEnvironment.BaseDirectory"/> is not used.
-    /// </param>
+    /// <param name="environment">What the calling binary provides to plans: its operators, connectors, service clients,
+    /// update sources and cache stores. Each command places it in the workspace it reads (the <c>-c</c> directory, or
+    /// none for a release manifest, whose relative paths resolve against the current directory), so the environment's
+    /// own <see cref="PlanEnvironment.BaseDirectory"/> is not used.</param>
     /// <param name="output">Where results go; standard output by default.</param>
     /// <param name="error">Where diagnostics, usage errors and progress go; standard error by default.</param>
     /// <param name="cancellationToken">Cancels the command (as Ctrl-C does).</param>
@@ -63,8 +61,7 @@ public static class StrataRecCommandLine
 
     private static async Task<int> Invoke(ParseResult parse, InvocationConfiguration configuration, CancellationToken cancellationToken)
     {
-        // A command's errors and their typo suggestions, then one line on where its usage is: the whole help (25 lines for
-        // run) printed after them buried the error. Without a command, the help is the list of commands, which is the answer.
+        // Without a command, the help is the list of commands, which is the answer.
         var command = parse.CommandResult.Command;
         var errors = command is RootCommand ? null : parse.Action as ParseErrorAction;
         if (errors is not null)

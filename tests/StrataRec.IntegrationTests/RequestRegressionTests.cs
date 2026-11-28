@@ -7,7 +7,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Defects that were fixed, each as the request a host would send.</summary>
 public sealed class RequestRegressionTests
 {
     private sealed class SlowProvider : IAssignmentProvider
@@ -22,11 +21,6 @@ public sealed class RequestRegressionTests
         }
     }
 
-    /// <summary>
-    /// A request's time is the time it arrived, whether or not it is recorded: taken after the assignment, a request that
-    /// waited for the platform ran at a later time than the same request recorded, and a filter on the time could serve
-    /// the two different items.
-    /// </summary>
     [Fact]
     public async Task ARequestsTime_IsWhenItArrived_NotWhenItsAssignmentCameBack()
     {
@@ -46,7 +40,6 @@ public sealed class RequestRegressionTests
         Assert.All(result.LogBatches!, batch => Assert.InRange(batch.TimeMs, provider.EnteredAtMs - 5_000, provider.EnteredAtMs));
     }
 
-    /// <summary><c>cancelling_memory@1</c>: <c>memory@1</c>, cancelling the caller when asked for <paramref name="field"/>.</summary>
     private sealed class CancellingConnectors(CancellationTokenSource caller, string field) : StrataRec.Core.Bindings.IBindingFactory<StrataRec.Features.Connectors.IFeatureSourceConnector>
     {
         public const string TypeName = "cancelling_memory@1";
@@ -75,7 +68,7 @@ public sealed class RequestRegressionTests
                 {
                     if (binding.Field == field)
                     {
-                        caller.Cancel(); // answered, and the caller is gone
+                        caller.Cancel();
                     }
                 }
 
@@ -84,11 +77,6 @@ public sealed class RequestRegressionTests
         }
     }
 
-    /// <summary>
-    /// A caller that cancels while the result is built (here while the output's own feature is fetched) gets no result,
-    /// and its rows are not logged as returned (the last check was before the
-    /// result was built, and the output's tap went to the log).
-    /// </summary>
     [Fact]
     public async Task ACallerThatCancelsWhileTheResultIsBuilt_GetsNoResult_AndNoRowIsLoggedAsReturned()
     {
@@ -116,7 +104,6 @@ public sealed class RequestRegressionTests
 
     private sealed class CancelHereConfig;
 
-    /// <summary><c>CancelHere@1</c>: a node that computes without I/O, during which the caller cancels.</summary>
     private sealed class CancelHereFactory(CancellationTokenSource caller) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("CancelHere", 1, Effects.None, typeof(CancelHereConfig), "Cancels the caller's token and returns.");
@@ -133,11 +120,6 @@ public sealed class RequestRegressionTests
         }
     }
 
-    /// <summary>
-    /// A caller that cancelled gets its cancellation, not a result: a request whose remaining nodes compute without I/O
-    /// never looked at the token, returned a result and logged its rows as served. Nor is a request served that arrives
-    /// cancelled.
-    /// </summary>
     [Fact]
     public async Task ACallerThatCancelled_GetsNoResult_ThoughTheRemainingNodesDoNoIo()
     {
@@ -155,14 +137,9 @@ public sealed class RequestRegressionTests
         var thrown = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.ExecuteAsync(request, caller.Token).AsTask());
         Assert.Equal(caller.Token, thrown.CancellationToken);
 
-        // Cancelled before it arrives: nothing runs.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.ExecuteAsync(request, caller.Token).AsTask());
     }
 
-    /// <summary>
-    /// A configuration as deep as a file may be loads: the engine keeps a copy of what a plan was compiled from, which
-    /// nests each artifact a few levels deeper, and a workspace that validated and built failed there with a JsonException.
-    /// </summary>
     [Fact]
     public void AConfigurationAsDeepAsAFileMayBe_Loads()
     {
@@ -184,10 +161,6 @@ public sealed class RequestRegressionTests
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
     }
 
-    /// <summary>
-    /// An output column that reads a node's version of a column (<c>col.x@node</c>) has that node as its producer in the
-    /// result's lineage, as a tap's has: only the columns reading the current version were listed.
-    /// </summary>
     [Fact]
     public async Task AnOutputColumnReadingANodesVersion_HasThatNodeAsItsProducer()
     {
@@ -207,7 +180,6 @@ public sealed class RequestRegressionTests
         Assert.Equal(("fusion", "engagement_boost"), (result.ColumnProducers["scaled"], result.ColumnProducers["weighted"])); // a parameter beside the column is no second producer
     }
 
-    /// <summary>A pipeline whose output returns a column <paramref name="times"/> times, under as many names.</summary>
     internal static string ColumnOutputOf(string id, int times, string column = "col.clicks") => $$"""
         {
           "pipeline_id": "{{id}}",
@@ -229,11 +201,6 @@ public sealed class RequestRegressionTests
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class OutputMemoryTests
 {
-    /// <summary>
-    /// An output column that is a column is read from the column's storage, for the rows returned: evaluating it rented a
-    /// buffer of the table's size for each (2 MB for a 128-float embedding over 4,096 rows). Returning a column under
-    /// five names rents what returning it once does.
-    /// </summary>
     [Theory]
     [InlineData("col.clicks")]
     [InlineData("col.clicks@copy")] // a node's version of the column: nullable where the column is not, the same storage

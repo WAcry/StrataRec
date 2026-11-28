@@ -9,34 +9,15 @@ using StrataRec.Hosting.Workspace;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>What a <see cref="ConfigRef"/> names.</summary>
 internal enum ConfigRefKind
 {
-    /// <summary>A workspace directory; <c>-e</c> and <c>-p</c> select the release and pipeline in it.</summary>
     Workspace = 1,
 
-    /// <summary>A release manifest's content id, <c>sha256:&lt;hex&gt;</c>, read from the artifact store.</summary>
     ManifestId,
 
-    /// <summary>A release manifest file; its artifacts are read from the artifact store.</summary>
     ManifestFile,
 }
 
-/// <summary>
-/// A configuration named on the command line: a workspace directory, the content id of a release manifest in an artifact
-/// store, or a manifest file whose artifacts are in the store. <c>run</c>, <c>explain-plan</c>,
-/// <c>diff</c>, <c>replay</c> and <c>compare</c> resolve every configuration here, so a ref means the same to each of
-/// them, and a manifest compiles to the plan a node loading it would serve, under the manifest's content id.
-/// </summary>
-/// <remarks>
-/// <para>Only <c>run</c> loads bindings (local tables, model files, snapshots), as a node does; the others need little on
-/// disk but the store: only the fixtures that read their data file when created (<c>memory@1</c>, <c>memory_list@1</c>).
-/// A manifest's relative paths resolve against the current directory (<see cref="PlanEnvironment"/>), a workspace's
-/// against its root.</para>
-/// <para>Problems with the command line itself (two configurations, a manifest without a store, a ref that names
-/// nothing) are usage errors, reported by <see cref="Parse"/> and <see cref="Select"/>; problems with what a ref names (an
-/// id the store lacks, a damaged blob, a manifest that does not compile) are reported when it loads.</para>
-/// </remarks>
 internal sealed class ConfigRef
 {
     private const string StoreHint = "pass --store <dir>, the artifact store 'stratarec build --store' uploaded the manifest and its artifacts to";
@@ -53,29 +34,17 @@ internal sealed class ConfigRef
 
     public ConfigRefKind Kind { get; }
 
-    /// <summary>The ref as given: a directory, a content id or a file path.</summary>
     public string Text { get; }
 
-    /// <summary>The artifact store directory a manifest's artifacts are read from; null for a workspace.</summary>
     public string? Store { get; }
 
     public bool IsManifest => Kind != ConfigRefKind.Workspace;
 
-    /// <summary>
-    /// Locates the diagnostics of a workspace in its files (labelled with <paramref name="prefix"/> and a space when the
-    /// command prefixes them); null for a manifest, whose artifacts are not files.
-    /// </summary>
     public DiagnosticLocator? Locator(string prefix = "") => IsManifest ? null : new DiagnosticLocator().Add(prefix, Text);
 
-    /// <summary>
-    /// The line to print after the errors of a manifest that did not load when one names a path in the current directory:
-    /// a manifest has no root, so the relative paths of its bindings resolved there, which a reader who sees only the
-    /// absolute path may not expect (decisions). Null when no error names one.
-    /// </summary>
     public static string? CurrentDirectoryNote(IReadOnlyList<ConfigDiagnostic> diagnostics) =>
         CurrentDirectoryNote(diagnostics, static d => d.IsError ? d.Message : null);
 
-    /// <summary>The same for an error's text.</summary>
     public static string? CurrentDirectoryNote(string error) => CurrentDirectoryNote([error], static text => text);
 
     private static string? CurrentDirectoryNote<T>(IReadOnlyList<T> errors, Func<T, string?> message)
@@ -95,13 +64,8 @@ internal sealed class ConfigRef
     public override string ToString() => Text;
 
     /// <summary>A workspace directory (<c>-c</c>); whether it exists is reported when it loads, as a workspace error.</summary>
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     public static ConfigRef Workspace(string directory, Pipeline.Planning.PlanEnvironment provided) => new(ConfigRefKind.Workspace, directory, null, provided);
 
-    /// <summary>
-    /// A ref of any kind (<c>diff --from/--to</c>, <c>compare --baseline</c>): a content id, an existing directory (a
-    /// workspace) or an existing file (a manifest). Returns null after reporting a usage error under <paramref name="option"/>.
-    /// </summary>
     public static ConfigRef? Parse(string text, string? store, string option, DiagnosticBag diagnostics, Pipeline.Planning.PlanEnvironment provided)
     {
         if (!text.StartsWith(ContentHash.Prefix, StringComparison.Ordinal) && Directory.Exists(text))
@@ -113,9 +77,9 @@ internal sealed class ConfigRef
     }
 
     /// <summary>
-    /// The one configuration of a command that takes <c>-c &lt;workspace&gt;</c> or <c>--manifest &lt;id|file&gt;</c>, not
-    /// both; neither is <paramref name="fallback"/> (the default workspace <c>config</c>), or null when the command has
-    /// another meaning for neither (replay on the recorded manifests). Returns null after reporting a usage error.
+    /// The one configuration of a command that takes <c>-c &lt;workspace&gt;</c> or <c>--manifest &lt;id|file&gt;</c>,
+    /// not both; neither is <paramref name="fallback"/> (the default workspace <c>config</c>), or null when the command
+    /// has another meaning for neither (replay on the recorded manifests).
     /// </summary>
     public static (ConfigRef? Ref, bool Ok) Select(
         string? config, string? manifest, string? store, string? fallback, DiagnosticBag diagnostics, Pipeline.Planning.PlanEnvironment provided)
@@ -137,10 +101,6 @@ internal sealed class ConfigRef
         return (directory is null ? null : Workspace(directory, provided), true);
     }
 
-    /// <summary>
-    /// A manifest named on its own (<c>publish</c>): its content id or its file, read with <paramref name="store"/>. Returns
-    /// null after reporting a usage error under <paramref name="option"/>.
-    /// </summary>
     public static ConfigRef? Manifest(string text, string store, string option, DiagnosticBag diagnostics, Pipeline.Planning.PlanEnvironment provided)
     {
         if (!text.StartsWith(ContentHash.Prefix, StringComparison.Ordinal) && !File.Exists(text))
@@ -208,18 +168,8 @@ internal sealed class ConfigRef
         return new ConfigRef(kind, text, store, provided);
     }
 
-    /// <summary>
-    /// The engine environment of the ref: relative paths in bindings resolve against a workspace's root. A manifest has no
-    /// root, so they resolve against the current directory, as for a host that sets no base directory; only bindings that
-    /// read a local file when created (the <c>memory@1</c> and <c>memory_list@1</c> fixtures) need one.
-    /// </summary>
     public Pipeline.Planning.PlanEnvironment PlanEnvironment() => CommonOptions.ForRoot(_provided, Kind == ConfigRefKind.Workspace ? Text : null);
 
-    /// <summary>
-    /// The compile request of one pipeline: in a workspace, the one <paramref name="pipeline"/> names (or the only one) in
-    /// the release of <paramref name="environment"/>; for a manifest, its pipeline, which <paramref name="pipeline"/> must
-    /// then match. Returns null after reporting errors.
-    /// </summary>
     public async Task<PlanCompileRequest?> CreateRequestAsync(string environment, string? pipeline, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
         if (Kind == ConfigRefKind.Workspace)
@@ -253,7 +203,6 @@ internal sealed class ConfigRef
         return await ManifestBuilder.LoadAsync(manifest, id, store, diagnostics, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Compiles the ref's pipeline without loading what it binds (as validate and build do). Null after reporting errors.</summary>
     public async Task<PlanCompilation?> CompileAsync(string environment, string? pipeline, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
         var request = await CreateRequestAsync(environment, pipeline, diagnostics, cancellationToken).ConfigureAwait(false);
@@ -267,18 +216,10 @@ internal sealed class ConfigRef
         return compilation;
     }
 
-    /// <summary>
-    /// An engine for replay, with no pipeline loaded yet (<see cref="LoadIntoAsync"/>). It loads no table and no client,
-    /// since a replay answers every external call and local read from the recording: their model files,
-    /// snapshot files and secrets are not needed, only the data files of fixtures that read them when created, at paths
-    /// that resolve as <see cref="PlanEnvironment"/> says.
-    /// </summary>
     public RecEngine CreateReplayEngine() => new(PlanEnvironment(), bindingOptions: new BindingHostOptions { Load = false });
 
     /// <summary>
-    /// Loads the ref into <paramref name="engine"/>: every pipeline of a workspace's release, or the manifest's pipeline as
-    /// a node loads it (<see cref="RecEngine.LoadManifestAsync"/>: its capabilities checked, at its sequence number). Returns
-    /// the manifest's pipeline (empty for a workspace), or null after reporting errors.
+    /// Returns the manifest's pipeline (empty for a workspace), or null after reporting errors.
     /// </summary>
     public async Task<string?> LoadIntoAsync(RecEngine engine, string environment, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
@@ -310,9 +251,9 @@ internal sealed class ConfigRef
     }
 
     /// <summary>
-    /// Reads the manifest and its content id: from the store for an id, from the file otherwise, with the id computed as
-    /// <c>stratarec build</c> computes it (the RFC 8785 hash of the manifest as the artifact model serializes it), so a
-    /// file written by build has the id build printed. Null after reporting errors.
+    /// Reads the manifest and its content id: from the store for an id, from the file otherwise, with the id computed
+    /// as <c>stratarec build</c> computes it (the RFC 8785 hash of the manifest as the artifact model serializes it),
+    /// so a file written by build has the id build printed.
     /// </summary>
     public async Task<(ReleaseManifest Manifest, string Id, IArtifactStore Store)?> ReadManifestAsync(DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
@@ -324,7 +265,6 @@ internal sealed class ConfigRef
         var store = new FileSystemArtifactStore(Store);
         if (Kind == ConfigRefKind.ManifestId)
         {
-            // As a node reads it; an id the store lacks says which store, and that a file would do.
             var read = new DiagnosticBag();
             var stored = await ManifestBuilder.ReadAsync(store, Text, read, cancellationToken).ConfigureAwait(false);
             foreach (var d in read.Items)
@@ -363,7 +303,6 @@ internal sealed class ConfigRef
         }
         catch (JsonCanonicalizationException ex)
         {
-            // Not written exactly, so no id: a sequence beyond 2^53 a tool other than build wrote.
             diagnostics.Error("MANIFEST_NOT_CANONICAL", Text, ex.Pointer.ToString(),
                 $"The manifest has no content id: its canonical JSON (RFC 8785) cannot hold it exactly ({ex.Reason}).",
                 $"write integers of at most {BuildCommand.MaxSeq} (2^53 - 1) here, as 'stratarec build' does");

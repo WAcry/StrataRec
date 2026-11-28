@@ -17,10 +17,8 @@ public sealed class ProcessWideListenersCollection
     public const string Name = "Process-wide listeners";
 }
 
-/// <summary>One logged entry, with the structured state the [LoggerMessage] generator produced.</summary>
 internal sealed record LogEntry(LogLevel Level, EventId EventId, string Message, IReadOnlyDictionary<string, object?> State, Exception? Exception = null);
 
-/// <summary>An <see cref="ILoggerFactory"/> that keeps every entry in memory.</summary>
 internal sealed class ListLoggerFactory : ILoggerFactory
 {
     public ConcurrentQueue<LogEntry> Entries { get; } = new();
@@ -58,10 +56,8 @@ internal sealed class ListLoggerFactory : ILoggerFactory
     }
 }
 
-/// <summary>One measurement of a StrataRec instrument.</summary>
 internal sealed record Measured(string Instrument, double Value, IReadOnlyDictionary<string, object?> Tags);
 
-/// <summary>Captures every measurement of the StrataRec meter while alive.</summary>
 internal sealed class MetricCapture : IDisposable
 {
     private readonly MeterListener _listener = new();
@@ -99,11 +95,9 @@ internal sealed class MetricCapture : IDisposable
 }
 
 /// <summary>
-/// Cancels <see cref="Token"/> a fixed time after an external call starts, for a test about a request the caller cuts off
-/// while that call is in flight. The call's span (<c>model ctr_model</c>, <c>recall popular</c>) is started by the
-/// framework right before it invokes the client, so this is the moment a gated client would report that it was entered,
-/// with the clients under test left as they are. A timer started with the request fires in an earlier node whenever the
-/// nodes before it are slow, as on a busy machine; this one cannot fire before the call is made.
+/// The call's span (<c>model ctr_model</c>, <c>recall popular</c>) is started by the framework right before it invokes
+/// the client, so this is the moment a gated client would report that it was entered, with the clients under test left
+/// as they are.
 /// </summary>
 internal sealed class CancelOnceCallStarts : IDisposable
 {

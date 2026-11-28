@@ -39,9 +39,7 @@ public readonly record struct AnswerCounts(int Used, int Unknown, int Repeated, 
 /// </summary>
 /// <remarks>
 /// <para>An answer is trimmed and, when it is wrapped in one Markdown code fence (<c>```json</c> or <c>```</c> on the
-/// first line, <c>```</c> at the end), the inside is taken: models add fences even when told not to. Nothing else is
-/// extracted from the text: an answer the operator cannot read as it is reveals a prompt to fix, and what a model wraps
-/// around its answer varies by model.</para>
+/// first line, <c>```</c> at the end), the inside is taken. Nothing else is extracted from the text.</para>
 /// <para>An array answer must be one JSON array (RFC 8259: no comments, no trailing commas, nothing after it). Its
 /// elements are walked once, by one strict walk; what each names is the operator's (window rows by rank or id, or new ids
 /// of the table's key type), and every element is counted by what became of it (<see cref="AnswerCounts"/>): nested
@@ -49,14 +47,11 @@ public readonly record struct AnswerCounts(int Used, int Unknown, int Repeated, 
 /// a JSON error's line and byte count within the text parsed, after the trim and the fence.</para>
 /// <para>A per-row value is the trimmed text, one of the declared categories, <c>true</c> / <c>false</c> (any case), or a
 /// number in JSON's syntax (invariant, no <c>+</c>, no leading zeros, no <c>NaN</c>) that is finite and fits the column.</para>
-/// <para>What is allocated: the UTF-8 copy of an array answer (rented from the request), the strings of new string ids, and
-/// the text of a per-row answer when trimming or the fence changed it; a category is the configured string.</para>
 /// </remarks>
 public static class LlmAnswer
 {
     private const string Fence = "```";
 
-    /// <summary>Answers of numbers no longer than this are converted to UTF-8 on the stack.</summary>
     private const int StackNumber = 128;
 
     /// <summary>
@@ -65,8 +60,7 @@ public static class LlmAnswer
     /// otherwise returns why the answer is not a JSON array.
     /// </summary>
     /// <remarks>
-    /// Entity ids are found by scanning the window, which is small (the rows a prompt shows); the first row with the id
-    /// wins, so a window that somehow holds an id twice resolves the same way every time.
+    /// Entity ids are found by scanning the window; the first row with the id wins.
     /// </remarks>
     /// <param name="window">The window's physical rows, in rank order.</param>
     /// <param name="positions">At least <paramref name="window"/>'s length.</param>
@@ -82,19 +76,10 @@ public static class LlmAnswer
     }
 
     /// <summary>
-    /// Parses an answer of new candidates: a JSON array of ids of <paramref name="table"/>'s key type. On success (null),
-    /// the first <see cref="AnswerCounts.Used"/> entries of <paramref name="int64Ids"/> or <paramref name="stringIds"/>
-    /// are the ids to append, in the answer's order, and those of <paramref name="positions"/> their 1-based positions in
-    /// the answer; otherwise returns why the answer is not a JSON array.
+    /// On success (null), the first <see cref="AnswerCounts.Used"/> entries of <paramref name="int64Ids"/> or
+    /// <paramref name="stringIds"/> are the ids to append, in the answer's order, and those of
+    /// <paramref name="positions"/> their 1-based positions in the answer.
     /// </summary>
-    /// <remarks>
-    /// An id named before is repeated; an id the table already has (live, dropped, or released by a compaction: <see cref="CandidateTableView.ContainsKey"/>) is present and skipped, since a row
-    /// source appends rows and writes only those; once <paramref name="limit"/> ids are used, every later element is over
-    /// the limit and not read, though the rest must still be valid JSON.
-    /// </remarks>
-    /// <param name="int64Ids">At least <paramref name="limit"/> long for int64 keys; empty for string keys.</param>
-    /// <param name="stringIds">At least <paramref name="limit"/> long for string keys; empty for int64 keys.</param>
-    /// <param name="positions">At least <paramref name="limit"/> long.</param>
     internal static string? ParseIds(
         string answer, CandidateTableView table, int limit, RequestMemory memory, Span<long> int64Ids, Span<string> stringIds, Span<int> positions,
         out AnswerCounts counts)
@@ -105,11 +90,6 @@ public static class LlmAnswer
         return ParseArray(answer, memory, ref elements, out counts);
     }
 
-    /// <summary>
-    /// Parses a per-row answer as a value of <paramref name="kind"/> (the column's storage): the value, or missing with
-    /// why it is not usable in <paramref name="unusable"/>.
-    /// </summary>
-    /// <param name="categories">The allowed answers of a string column, or null for any non-empty text.</param>
     internal static ScalarValue ParseValue(string answer, StorageKind kind, string[]? categories, RequestMemory memory, out string? unusable)
     {
         ArgumentNullException.ThrowIfNull(answer);
@@ -172,8 +152,6 @@ public static class LlmAnswer
             return text;
         }
 
-        // Only the outer fence: backticks inside, such as in a JSON string, are content; anything else after the
-        // array, a second code block included, fails the strict parse.
         return text[(newline + 1)..^Fence.Length].Trim();
     }
 
@@ -201,16 +179,9 @@ public static class LlmAnswer
     }
 
     /// <summary>
-    /// The answer in UTF-8 for the JSON reader, rented from the request. A client's string may hold an unpaired surrogate,
-    /// which UTF-8 cannot encode: the encoder would replace it with U+FFFD, a different character that can be another
-    /// entity's id. So each one is written as its JSON escape (<c>\uD800</c>) instead: inside a string it is the
-    /// escaped lone surrogate the walk already counts as an unknown element; outside one the answer is not valid JSON.
+    /// A client's string may hold an unpaired surrogate, which UTF-8 cannot encode: the encoder would replace it with
+    /// U+FFFD, a different character that can be another entity's id.
     /// </summary>
-    /// <remarks>
-    /// Except where the surrogate is the character of an escape (an odd run of backslashes before it): there the answer is
-    /// invalid JSON, and the six characters of an escape would make it valid, <c>\\uD800</c>, a string that can be another
-    /// entity's id. It is written as U+FFFD, which no escape takes either, so the answer stays invalid.
-    /// </remarks>
     private static int ToUtf8(ReadOnlySpan<char> text, RequestMemory memory, out byte[] bytes)
     {
         if (text.IndexOfAnyInRange('\uD800', '\uDFFF') < 0)
@@ -219,7 +190,6 @@ public static class LlmAnswer
             return Encoding.UTF8.GetBytes(text, bytes);
         }
 
-        // Rare: at most six ASCII bytes for each char, and four UTF-8 bytes for each pair.
         bytes = memory.Rent<byte>(checked(text.Length * 6));
         var length = 0;
         for (var i = 0; i < text.Length; i++)
@@ -250,7 +220,6 @@ public static class LlmAnswer
         return length;
     }
 
-    /// <summary>Whether the char at <paramref name="index"/> follows an odd run of backslashes: the character of an escape.</summary>
     private static bool EscapesIt(ReadOnlySpan<char> text, int index)
     {
         var backslashes = 0;
@@ -262,11 +231,6 @@ public static class LlmAnswer
         return backslashes % 2 == 1;
     }
 
-    /// <summary>
-    /// The strict walk every array answer takes: trim, unfence, one JSON array and nothing after it; each element is handed
-    /// to <paramref name="elements"/> on its first token (a nested array or object is skipped afterwards) and counted by
-    /// what it returns.
-    /// </summary>
     private static string? ParseArray<TElements>(string answer, RequestMemory memory, ref TElements elements, out AnswerCounts counts)
         where TElements : IAnswerElements, allows ref struct
     {
@@ -334,7 +298,6 @@ public static class LlmAnswer
         return null;
     }
 
-    /// <summary>One JSON number, nothing else, that is finite and fits <paramref name="kind"/>.</summary>
     private static ScalarValue ParseNumber(ReadOnlySpan<char> text, StorageKind kind, RequestMemory memory, out string? unusable)
     {
         // JSON's number grammar is ASCII, so each character is one byte.
@@ -359,7 +322,6 @@ public static class LlmAnswer
                 return ScalarValue.Missing;
             }
 
-            // The reader moves on to check that nothing follows; the copy stays on the number.
             var number = reader;
             if (reader.Read())
             {
@@ -376,7 +338,6 @@ public static class LlmAnswer
         }
     }
 
-    /// <summary>The number token as <paramref name="kind"/>, when it is finite and fits.</summary>
     private static ScalarValue Number(ref Utf8JsonReader number, StorageKind kind, out string? unusable)
     {
         unusable = null;
@@ -416,7 +377,6 @@ public static class LlmAnswer
         return (details < 0 ? message : message[..details]).TrimEnd('.', ' ');
     }
 
-    /// <summary>What became of one element of an array answer.</summary>
     private enum ElementOutcome : byte
     {
         Unknown,
@@ -426,14 +386,12 @@ public static class LlmAnswer
         OverLimit,
     }
 
-    /// <summary>What an operator reads from the elements of an array answer (<see cref="ParseArray"/>).</summary>
     private interface IAnswerElements
     {
         /// <summary>Reads the element the reader is on (its first token), the <paramref name="index"/>-th (0-based) of the array.</summary>
         ElementOutcome Read(ref Utf8JsonReader reader, int index);
     }
 
-    /// <summary>Window rows, by 1-based rank or by entity id; each named once.</summary>
     private ref struct WindowElements(AnswerKind kind, CandidateTableView table, ReadOnlySpan<int> window, Span<int> positions, Span<bool> listed)
         : IAnswerElements
     {
@@ -460,7 +418,6 @@ public static class LlmAnswer
             return ElementOutcome.Used;
         }
 
-        /// <summary>The window position an element names, or -1.</summary>
         private static int Position(ref Utf8JsonReader reader, AnswerKind kind, CandidateTableView table, ReadOnlySpan<int> window)
         {
             if (kind == AnswerKind.Rank)
@@ -512,7 +469,6 @@ public static class LlmAnswer
         }
     }
 
-    /// <summary>New ids of the table's key type, each named once, not in the table, up to a limit.</summary>
     private ref struct IdElements(CandidateTableView table, EntityKeyIndex seen, int limit, Span<long> int64Ids, Span<string> stringIds, Span<int> positions)
         : IAnswerElements
     {
@@ -561,7 +517,7 @@ public static class LlmAnswer
                 }
                 catch (InvalidOperationException)
                 {
-                    return ElementOutcome.Unknown; // not valid Unicode (an unpaired surrogate escape): no entity has it as its id
+                    return ElementOutcome.Unknown;
                 }
 
                 if (!seen.TryAdd(id, index))

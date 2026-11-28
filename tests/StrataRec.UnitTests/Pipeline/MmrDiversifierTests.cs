@@ -5,17 +5,11 @@ using StrataRec.Pipeline.Operators.Standard;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// <c>MmrDiversifier@1</c>'s order is the formula's: each step picks the largest λ·score − (1−λ)·max cosine(picked), the
-/// first by score alone; rows without a score last. The similarity to the rows picked was floored at 0, as if a row unlike
-/// every pick were merely unrelated to them. Compared with a direct reference on small random windows.
-/// </summary>
 public sealed class MmrDiversifierTests
 {
     [Fact]
     public void AnOppositeVector_IsANegativeSimilarity_NotZero()
     {
-        // After A, B (opposite A) scores 0.35 + 0.5 = 0.85, C (unrelated) 0.40.
         double[] scores = [1.0, 0.7, 0.8];
         float[]?[] vectors = [[1, 0], [-1, 0], [0, 1]];
 
@@ -26,8 +20,6 @@ public sealed class MmrDiversifierTests
     [Fact]
     public void RowsWithoutAScore_ComeAfterEveryRowWithOne_EvenWithoutWeightOnTheScore()
     {
-        // At λ = 0 the missing score's −∞ was weighted to 0 like every score, and the third row, opposite the
-        // first pick, went before the second.
         double[] scores = [1.0, 0.9, double.NegativeInfinity];
         float[]?[] vectors = [[1, 0], [1, 0], [-1, 0]];
 
@@ -40,8 +32,6 @@ public sealed class MmrDiversifierTests
     [InlineData(0.5)]
     public void RowsWithoutAScore_ComeLast_EvenWhenSimilaritiesAreNaN(double lambda)
     {
-        // Finite vectors whose norm overflows float give NaN similarities, and NaN compares below the −∞ that
-        // stood for a missing score, so the first row left (here without a score) won.
         double[] scores = [1.0, double.NegativeInfinity, 0.9];
         float[]?[] vectors = [[2e38f, 2e38f], [2e38f, 2e38f], [2e38f, 2e38f]];
 
@@ -51,7 +41,6 @@ public sealed class MmrDiversifierTests
     [Fact]
     public void TheFirstPick_IsTheBestScore_EvenWithoutWeightOnTheScore()
     {
-        // At λ = 0 every λ·score is 0: the first pick, which has no similarity yet, is by the score itself.
         double[] scores = [0.2, 1.0, 0.5];
         float[]?[] vectors = [[1, 0], [0, 1], [1, 1]];
 
@@ -61,7 +50,6 @@ public sealed class MmrDiversifierTests
     [Fact]
     public void WithNoWeightOnSimilarity_TheOrderIsTheScores_WhateverTheVectors()
     {
-        // Finite vectors whose norm overflows float made every cosine NaN, and 0·NaN hid the scores.
         double[] scores = [1.0, 0.7, 0.9];
         float[]?[] vectors = [[2e38f, 2e38f], [2e38f, 2e38f], [2e38f, 2e38f]];
 
@@ -83,7 +71,6 @@ public sealed class MmrDiversifierTests
             var vectors = new float[]?[n];
             for (var i = 0; i < n; i++)
             {
-                // Few distinct scores and vectors, so ties happen; some rows without a vector, some with a zero one.
                 scores[i] = random.Next(10) == 0 ? double.NegativeInfinity : random.Next(-3, 4) / 2.0;
                 vectors[i] = random.Next(6) switch
                 {
@@ -94,7 +81,7 @@ public sealed class MmrDiversifierTests
             }
 
             Assert.Equal(Reference(scores, vectors, lambda), Order(scores, vectors, lambda));
-            Assert.Equal(Reference(scores, vectors, lambda, float64: true), Order(scores, vectors, lambda, float64: true)); // ties as float64 has them
+            Assert.Equal(Reference(scores, vectors, lambda, float64: true), Order(scores, vectors, lambda, float64: true));
         }
     }
 
@@ -141,10 +128,6 @@ public sealed class MmrDiversifierTests
         }
     }
 
-    /// <summary>
-    /// The formula, directly, on the rows with a score: the first pick by score, then λ·score − (1−λ)·max cosine, the
-    /// cosine 0 where either row has no vector (or a zero one). Then the rows without a score, in their incoming order.
-    /// </summary>
     private static int[] Reference(double[] scores, float[]?[] vectors, double lambda, bool float64 = false)
     {
         var scored = Enumerable.Range(0, scores.Length).Where(i => !double.IsNegativeInfinity(scores[i])).ToList();
@@ -184,7 +167,6 @@ public sealed class MmrDiversifierTests
         return normA == 0 || normB == 0 ? 0 : dot / (normA * normB);
     }
 
-    /// <summary>The cosine in float64, as a <c>list&lt;float64,N&gt;</c> column computes it.</summary>
     private static double Cosine64(float[]? a, float[]? b)
     {
         if (a is null || b is null)

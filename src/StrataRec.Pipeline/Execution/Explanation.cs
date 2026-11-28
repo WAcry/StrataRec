@@ -123,15 +123,13 @@ public sealed class RunExplanation
 }
 
 /// <summary>
-/// The rules for the ids a request asks to explain (<c>DebugOptions.ExplainIds</c>), in one place for the engine,
-/// which rejects a request that breaks them before anything runs, and for the tools that parse ids from text.
+/// The rules for the ids a request asks to explain (<c>DebugOptions.ExplainIds</c>), for the engine, which rejects a
+/// request that breaks them before anything runs.
 /// </summary>
 public static class ExplainTargets
 {
     /// <summary>
-    /// The most ids one request explains. Explaining costs in proportion to targets × nodes, and every step is in the
-    /// result: the bound keeps an explained request a debugging tool and not a second, unbounded result. A constant, so a
-    /// caller knows it without asking a loaded plan.
+    /// The most ids one request explains.
     /// </summary>
     public const int MaxCount = 100;
 

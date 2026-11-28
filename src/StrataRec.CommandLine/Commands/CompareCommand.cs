@@ -7,12 +7,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec compare</c>: the recorded-mode comparison. Replays every bundle on a baseline and a
-/// candidate configuration (workspaces or release manifests, <see cref="ConfigRef"/>) and reports latency, error and
-/// empty rates, Top-K overlap, Kendall τ, the score distribution change and the feature-missing rate, plus every gap the
-/// candidate hit. Bundles of aborted requests are not replayed: they are counted apart, outside both sides' metrics.
-/// </summary>
 internal static class CompareCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -50,10 +44,6 @@ internal static class CompareCommand
         return command;
     }
 
-    /// <param name="baselineRef">A workspace directory, manifest id or manifest file (<see cref="ConfigRef.Parse"/>).</param>
-    /// <param name="candidateConfig">The candidate workspace (<c>-c</c>); with <paramref name="candidateManifest"/> null too, the workspace <c>config</c>.</param>
-    /// <param name="errors">Where diagnostics go; standard error by default.</param>
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string baselineRef, string? candidateConfig, string environment, IReadOnlyList<string> bundlePaths, string[] armArgs, int topK, string scoreColumn, string format,
         TextWriter output, CancellationToken cancellationToken, string? candidateManifest = null, string? store = null, TextWriter? errors = null)
@@ -74,8 +64,6 @@ internal static class CompareCommand
             return 2;
         }
 
-        // Each side resolves a bundle's pipelines as replay does: a fallback pipeline the request ran comes from the side's
-        // workspace, or from the manifest it recorded when the side is a manifest (ReplayEngines).
         await using var baseline = await ReplayEngines.CreateAsync(provided, baselineConfig, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
         await using var candidate = await ReplayEngines.CreateAsync(provided, candidateRef!, store, environment, format, errors, cancellationToken).ConfigureAwait(false);
         if (baseline is null || candidate is null)
@@ -123,7 +111,6 @@ internal static class CompareCommand
             WriteText(output, report, baselineConfig.Text, candidateRef!.Text);
         }
 
-        // Metrics over part of the batch (or none of it) must not pass for a clean comparison in CI.
         return report.Status == "ok" ? 0 : 2;
     }
 
@@ -275,7 +262,6 @@ internal static class CompareCommand
         }
 
         output.WriteLine();
-        // The baseline column is as wide as its longest value (paths and manifest ids can be long).
         var width = Math.Max(22, Math.Max(baseline.Length, report.Baseline.Manifest.Length) + 2);
         output.WriteLine($"{"",-26}{"baseline".PadRight(width)}candidate");
         Row("config", baseline, candidate);

@@ -10,12 +10,8 @@ namespace StrataRec.Hosting;
 public sealed partial class RecEngine
 {
     /// <summary>
-    /// The plan a request with a configuration override runs: the served plan's configuration with the request's arms and
-    /// then the override applied (<see cref="PlanCompiler.CompileMerged"/>), compiled within the request's budget. It has
-    /// a binding lease of its own, which takes over what the served plan has loaded (bindings are shared by identity) and
-    /// loads only what the override adds. Entered (<see cref="Bindings.BindingLease.TryEnter"/>) and never served: the
-    /// caller ends it with <see cref="EndOverride"/>. Nothing registers it with the engine, so nothing of it outlives the
-    /// request, and there is no cache of such plans to bound or evict: a debugging request pays for its compile.
+    /// Entered (<see cref="Bindings.BindingLease.TryEnter"/>) and never served: the caller ends it with
+    /// <see cref="EndOverride"/>.
     /// </summary>
     /// <returns>The plan, or why the request is rejected: the override's mistake (with its pointer when it is in the
     /// override itself), or the deadline.</returns>
@@ -29,7 +25,7 @@ public sealed partial class RecEngine
             using var deadline = new ObservedCancellationSource(CancellationSite.PlanLoad, cancellationToken);
             deadline.CancelAfterObserved(budget);
             var environment = Environment;
-            var source = served.Source.Read(); // the configuration as it was loaded, whatever the host did with its objects since
+            var source = served.Source.Read();
 
             // A compile that waited for model signatures runs again (BindingLease.CompileAsync): that one reads the
             // override as the first one checked it, not the host's tree, which writes its CLR values again and may have
@@ -87,12 +83,11 @@ public sealed partial class RecEngine
         {
             if (!handedOut)
             {
-                lease.Dispose(); // what only it loaded stops; what the served plan shares stays
+                lease.Dispose();
             }
         }
     }
 
-    /// <summary>Ends a request's override plan: its lease is retired, and lets go of its instances once its runs and their calls have ended.</summary>
     private static void EndOverride(LoadedPipeline? overridden)
     {
         if (overridden is null)
@@ -104,7 +99,6 @@ public sealed partial class RecEngine
         overridden.Bindings.RequestEnded();
     }
 
-    /// <summary>The first error of an override that failed, how many there were, and its pointer when it is the override's own.</summary>
     private static (string Error, string? Pointer) Describe(string what, IReadOnlyList<ConfigDiagnostic> diagnostics)
     {
         ConfigDiagnostic? first = null;

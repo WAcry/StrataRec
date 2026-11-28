@@ -37,7 +37,6 @@ public sealed class RowSelection
 
     public bool IsAlive(int physicalRow) => Bits.Get(_alive, physicalRow);
 
-    /// <summary>Appends newly created physical rows at the end of the ranking.</summary>
     internal void AppendRange(int firstPhysicalRow, int count)
     {
         for (var i = 0; i < count; i++)
@@ -65,7 +64,6 @@ public sealed class RowSelection
                     : $"A pure reorder must keep all {Count} live rows, got {newOrder.Length}.");
         }
 
-        // Validate: every row is live and listed once. The scratch bitmap becomes the new liveness bitmap.
         var words = Bits.WordCount(_capacity);
         var seen = _seen;
         seen.AsSpan(0, words).Clear();
@@ -152,7 +150,6 @@ public sealed class RowSelection
         }
     }
 
-    /// <summary>After Compact: live rows are physical rows 0..count-1 in rank order.</summary>
     internal void ResetIdentity(int count)
     {
         var words = Bits.WordCount(_capacity);

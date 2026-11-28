@@ -7,10 +7,6 @@ using static StrataRec.UnitTests.Features.Local.LocalTableTestSupport;
 
 namespace StrataRec.UnitTests.Features.Local;
 
-/// <summary>
-/// Local tables keyed by several parts: a key's parts are encoded canonically, hashed, stored in the record
-/// and compared on a lookup, so tuples are told apart whatever their hashes; the one-part forms stay as they were.
-/// </summary>
 public class CompositeKeyTableTests
 {
     private static readonly LocalTableField[] Fields = [new("score", ColumnType.Float64), new("tag", ColumnType.String)];
@@ -55,8 +51,8 @@ public class CompositeKeyTableTests
         Put(table.Writer, Two(7, "US"), 1, 1.5);
         Put(table.Writer, Two(7, "DE"), 1, 2.5);
         Put(table.Writer, Two(8, "US"), 1, 3.5);
-        Put(table.Writer, Two(7, "US"), 2, 4.5); // a newer version replaces
-        Put(table.Writer, Two(7, "DE"), 0, 9.9); // an older one is ignored
+        Put(table.Writer, Two(7, "US"), 2, 4.5);
+        Put(table.Writer, Two(7, "DE"), 0, 9.9);
         Assert.True(table.Writer.Delete(Two(8, "US"), 2));
 
         var version = table.Pin();
@@ -67,7 +63,6 @@ public class CompositeKeyTableTests
         Assert.Null(Score(version, Two(7, "us")));
         Assert.Equal(2, version.RecordCount);
 
-        // A key of another layout is never found: one part, the parts swapped, a part of another type.
         Assert.False(version.Find(7L).Found);
         Assert.False(version.Find("US").Found);
         Assert.False(version.Find([EntityKey.FromString("US"), EntityKey.FromInt64(7)]).Found);
@@ -125,8 +120,8 @@ public class CompositeKeyTableTests
     [Fact]
     public void BatchLookup_FindsEachKeyOnce_WithSharedParts_CollisionsAndLongParts()
     {
-        // A batch hands the shared country once for every key. Keys are taken in blocks: 150 keys are three blocks, every
-        // hash collides, and keys of 1,000-character parts overflow the block's stack arena.
+        // Keys are taken in blocks: 150 keys are three blocks, every hash collides, and keys of 1,000-character parts
+        // overflow the block's stack arena.
         var table = Table(ItemCountry, new LocalFeatureTableOptions { KeyHasher = static _ => 7 });
         var longCountry = new string('x', 1000);
         for (var id = 1; id <= 150; id++)
@@ -144,7 +139,7 @@ public class CompositeKeyTableTests
                 ids[i] = EntityKey.FromInt64(150 - i);
             }
 
-            ids[150] = EntityKey.FromInt64(1000); // no record
+            ids[150] = EntityKey.FromInt64(1000);
             var batch = EntityKeyBatch.Create(ItemCountry, 151, ids, new[] { EntityKey.FromString(country) });
             var records = new LocalRecordRef[151];
 
@@ -163,7 +158,6 @@ public class CompositeKeyTableTests
             Assert.False(records[150].Found);
         }
 
-        // A batch whose keys are of another type finds nothing (and a batch of another part count neither).
         var wrongType = EntityKeyBatch.Create(ItemCountry, 1, new[] { EntityKey.FromString("1") }, new[] { EntityKey.FromString("US") });
         Assert.Equal(0, version.Lookup(wrongType, new LocalRecordRef[1]));
         Assert.Equal(0, version.Lookup(new EntityKeyBatch(new[] { EntityKey.FromInt64(1) }), new LocalRecordRef[1]));
@@ -241,7 +235,6 @@ public class CompositeKeyTableTests
         Assert.Null(Score(version, Two(8, "US")));
         Assert.Equal(1, version.TombstoneCount);
 
-        // Loaded again from the same files (a reload builds a new version): the same records.
         new SnapshotFilesUpdateSource(Path.Combine(dir.Path, "snapshot.json")).Load(table.Writer, TestContext.Current.CancellationToken);
         Assert.NotSame(version, table.Pin());
         Assert.Equal(1.5, Score(table.Pin(), Two(7, "US")));
@@ -311,8 +304,6 @@ public class CompositeKeyTableTests
     [Fact]
     public void AOneStringKey_IsStoredAsBefore_ItsCodeUnitsHashed()
     {
-        // The canonical bytes of a one-string key are its UTF-16 code units: the hash a table of one string part computes
-        // is XXH3 of those, as before keys had parts.
         ulong seen = 0;
         var table = Table(EntityKeyLayout.Single(EntityKeyType.String), new LocalFeatureTableOptions
         {

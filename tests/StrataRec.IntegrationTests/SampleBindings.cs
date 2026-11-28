@@ -3,15 +3,8 @@ using StrataRec.Artifacts.Json;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Edits the bindings of a copied sample workspace.</summary>
 internal static class SampleBindings
 {
-    /// <summary>Replaces the binding of feature source <paramref name="source"/> in <c>bindings/local.jsonc</c>.</summary>
-    /// <remarks>
-    /// A fetched binding must say how long its calls may take: without <c>timeout_ms</c> it gets the framework's default of
-    /// 50 ms, which a slow machine can hit even with an in-memory connector (an answer after the bound is a timeout
-    /// however it arrived), and the test would race the clock (see <see cref="HomeFeedTestHost"/>).
-    /// </remarks>
     public static void Rebind(string root, string source, string binding)
     {
         var replacement = (JsonObject)JsonNode.Parse(binding)!;
@@ -20,10 +13,8 @@ internal static class SampleBindings
         Replace(root, "sources", source, replacement);
     }
 
-    /// <summary>Replaces the binding of service <paramref name="service"/> (a model, a recall source) in <c>bindings/local.jsonc</c>.</summary>
     public static void RebindService(string root, string service, string binding) => Replace(root, "services", service, JsonNode.Parse(binding)!);
 
-    /// <summary>Binds pipeline <paramref name="pipeline"/> (where the results of its cached calls are kept) in <c>bindings/local.jsonc</c>, or another bindings file.</summary>
     public static void BindPipeline(string root, string pipeline, string binding, string bindings = "local")
     {
         var path = Path.Combine(root, "bindings", bindings + ".jsonc");
@@ -37,7 +28,6 @@ internal static class SampleBindings
         File.WriteAllText(path, document.ToJsonString());
     }
 
-    /// <summary>Writes <c>bindings/local.jsonc</c> again as the bindings named <paramref name="bindings"/>, for a release to bind others.</summary>
     public static void CopyAs(string root, string bindings)
     {
         var path = Path.Combine(root, "bindings", "local.jsonc");

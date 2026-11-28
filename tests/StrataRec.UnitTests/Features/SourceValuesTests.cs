@@ -13,8 +13,7 @@ using StrataRec.UnitTests.Features.Cache;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// <c>stratarec.source.values</c> (a source's missing ratio): what a source had of the values it was asked
-/// for, per feature, in each supply mode. Each test binds sources of its own names and reads only their measurements.
+/// Each test binds sources of its own names and reads only their measurements.
 /// </summary>
 [Collection(MetricMeasurement.Name)]
 public class SourceValuesTests
@@ -24,7 +23,6 @@ public class SourceValuesTests
     [Fact]
     public async Task AFetch_CountsEachDistinctKeyOncePerFeature_PresentWhereTheConnectorWroteTheField()
     {
-        // Keys 1-5 in chunks of two. clicks: written for 1-3 (3 as NaN, which the source did return); age: for 1 only.
         var connector = ScriptedConnector.Values((key, field) => field switch
         {
             "clicks" when key <= 2 => key * 1.0,
@@ -42,18 +40,16 @@ public class SourceValuesTests
         var result = await request.EnsureAsync(clicks, age);
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal(0.0, request.Value(clicks, 4).AsFloat64()); // key 4 took the default: still missing at the source
+        Assert.Equal(0.0, request.Value(clicks, 4).AsFloat64());
         Assert.Equal((3, 2), values.Of("item.clicks"));
         Assert.Equal((1, 4), values.Of("item.age"));
-        Assert.Equal(4, values.Adds); // one add per feature and outcome for the fetch, not one per chunk
-        Assert.All(values.TagSets, tags => Assert.Equal(3, tags.Count)); // source, feature, outcome
+        Assert.Equal(4, values.Adds);
+        Assert.All(values.TagSets, tags => Assert.Equal(3, tags.Count));
     }
 
     [Fact]
     public async Task APrefetchNoReaderTook_IsCountedWhenTheRequestEnds_ItsAnsweredChunksOnly()
     {
-        // A prefetch for a node that does not run (a fallback): chunks [1, 2] and [3, 4] answer (nothing for 3),
-        // [5] is still running when the request ends. The source answered keys 1-4 whether or not anything read them.
         var held = new TaskCompletionSource<FetchStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
@@ -72,14 +68,14 @@ public class SourceValuesTests
         var request = rig.NewRequest([1, 2, 3, 4, 5]);
 
         request.Fetcher.Prefetch([clicks], CancellationToken.None);
-        Assert.Equal((0, 0), values.Of("item.clicks")); // nothing read it yet
+        Assert.Equal((0, 0), values.Of("item.clicks"));
 
         request.Fetcher.EndRequest();
         Assert.Equal((3, 1), values.Of("item.clicks"));
         request.Fetcher.EndRequest();
-        Assert.Equal((3, 1), values.Of("item.clicks")); // once
+        Assert.Equal((3, 1), values.Of("item.clicks"));
 
-        held.SetResult(FetchStatus.Ok); // answering after the request ended counts nothing
+        held.SetResult(FetchStatus.Ok);
         await request.Fetcher.WhenIoCompleteAsync();
         Assert.Equal((3, 1), values.Of("item.clicks"));
     }
@@ -87,7 +83,6 @@ public class SourceValuesTests
     [Fact]
     public async Task AFetch_DoesNotCountTheKeysOfAChunkThatFailed_AndCountsAPartialChunksKeys()
     {
-        // Chunks [1, 2], [3, 4], [5]: the first answers, the second fails, the third answers in part, with nothing for 5.
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
             switch (keys.Keys.Span[0].Int64Value)
@@ -109,7 +104,7 @@ public class SourceValuesTests
         var result = await rig.NewRequest([1, 2, 3, 4, 5]).EnsureAsync(clicks);
 
         Assert.Equal(FeatureState.Degraded, result.State);
-        Assert.Equal((2, 1), values.Of("item.clicks")); // keys 3 and 4 are an error, not missing values
+        Assert.Equal((2, 1), values.Of("item.clicks"));
     }
 
     [Fact]
@@ -129,7 +124,7 @@ public class SourceValuesTests
 
     [Theory]
     [InlineData(1001L, 1, 1)]
-    [InlineData(null, 0, 0)] // no user: the source is asked for nothing
+    [InlineData(null, 0, 0)]
     public async Task AContextFetch_CountsItsOneKey(long? userId, int ctrPresent, int tenureMissing)
     {
         var connector = ScriptedConnector.Values((_, field) => field == "ctr" ? 0.05 : null);
@@ -151,7 +146,6 @@ public class SourceValuesTests
     [Fact]
     public async Task ALocalRead_CountsAnUnknownKeyMissingForEveryFeature_ARecordWithoutAFieldMissingForIt_AndNoRowWithoutAKey()
     {
-        // Item 1 has every field and author 10; item 2 has clicks only; item 3 has no record. Only item 1 has an author key.
         var rig = new FeatureTestRig()
             .LocalSource("values_items", writer =>
             {
@@ -172,14 +166,14 @@ public class SourceValuesTests
         Assert.Equal(FeatureState.Ok, result.State);
         Assert.Equal((2, 1), items.Of("item.clicks"));
         Assert.Equal((1, 2), items.Of("item.age"));
-        Assert.Equal((1, 2), items.Of("item.author_id")); // read as the key of author.followers
-        Assert.Equal((1, 0), authors.Of("author.followers")); // items 2 and 3 have no author key: not asked
+        Assert.Equal((1, 2), items.Of("item.author_id"));
+        Assert.Equal((1, 0), authors.Of("author.followers"));
     }
 
     [Theory]
-    [InlineData(1001L, 1, 1)] // a record without tenure
-    [InlineData(9999L, 0, 2)] // no record
-    [InlineData(null, 0, 0)] // no key: not asked
+    [InlineData(1001L, 1, 1)]
+    [InlineData(9999L, 0, 2)]
+    [InlineData(null, 0, 0)]
     public async Task ALocalContextRead_CountsItsOneKey(long? userId, int present, int missing)
     {
         var rig = new FeatureTestRig().LocalSource("values_local_user", writer => Write(writer, 1001, new() { ["ctr"] = 0.05 }));
@@ -217,27 +211,23 @@ public class SourceValuesTests
         rig.Build();
         using var values = new SourceValues("values_cache");
 
-        // Two misses the connector resolves: it has nothing for 2, which is cached as absent.
         await rig.NewRequest([1, 2]).EnsureAsync(clicks);
         Assert.Equal((1, 1), values.Of("item.clicks"));
         rig.WriteBack("values_cache");
 
-        // Local hits 1 and 2 (still missing), and a miss, 3, the connector resolves.
         values.Clear();
         await rig.NewRequest([1, 2, 3]).EnsureAsync(clicks);
         Assert.Equal(new long[] { 3 }, connector.Calls.Last().Keys.Select(k => k.Int64Value));
         Assert.Equal((2, 1), values.Of("item.clicks"));
-        Assert.Equal(2, values.Adds); // one add per outcome for the read, its hits and its resolved miss together
+        Assert.Equal(2, values.Adds);
         rig.WriteBack("values_cache");
 
-        // A local hit, and a miss the connector fails with no stale record to serve: an error, not a missing value.
         fail = true;
         values.Clear();
         var result = await rig.NewRequest([1, 4]).EnsureAsync(clicks);
         Assert.Equal(FeatureState.Degraded, result.State);
         Assert.Equal((1, 0), values.Of("item.clicks"));
 
-        // Every key fresh: a local read, counted like one.
         values.Clear();
         await rig.NewRequest([3, 2, 1]).EnsureAsync(clicks);
         Assert.Equal((2, 1), values.Of("item.clicks"));
@@ -252,10 +242,10 @@ public class SourceValuesTests
         var writerClicks = writer.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "values_shared");
         writer.Build();
         await writer.NewRequest([1, 2]).EnsureAsync(writerClicks);
-        await store.WhenWrittenAsync(2); // 2 as an absent record
+        await store.WhenWrittenAsync(2);
 
         var readerConnector = Connector();
-        var reader = new FeatureTestRig().CacheSource("values_shared", readerConnector, distributed: store); // an empty table
+        var reader = new FeatureTestRig().CacheSource("values_shared", readerConnector, distributed: store);
         var readerClicks = reader.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "values_shared");
         reader.Build();
         using var values = new SourceValues("values_shared");
@@ -268,7 +258,6 @@ public class SourceValuesTests
     [Fact]
     public async Task AReplay_CountsNothing()
     {
-        // A replay is not traffic: neither its fetches nor the local groups it answers through the fetch path.
         var rig = new FeatureTestRig()
             .Source("values_replay_fetch", ScriptedConnector.Values((key, _) => key * 1.0))
             .LocalSource("values_replay_local", writer => Write(writer, 1, new() { ["age"] = 2.0 }));
@@ -282,7 +271,7 @@ public class SourceValuesTests
         var result = await request.EnsureAsync(clicks, age);
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal(20.0, request.Value(age, 1).AsFloat64()); // answered by the replaying hook
+        Assert.Equal(20.0, request.Value(age, 1).AsFloat64());
         Assert.Equal(0, fetched.Adds + local.Adds);
     }
 
@@ -320,7 +309,7 @@ public class SourceValuesTests
         Assert.False(StrataRecMetrics.SourceValues.Enabled);
         await rig.NewRequest([1, 2]).EnsureAsync(clicks, age);
 
-        Assert.True(Interlocked.Read(ref keys) >= 2); // the sources were asked: a fetch, and a local read (its hit and miss)
+        Assert.True(Interlocked.Read(ref keys) >= 2);
         Assert.Equal(0, Interlocked.Read(ref values));
         var tags = typeof(FeatureRuntimeInfo).GetField("_valueTags", BindingFlags.Instance | BindingFlags.NonPublic)!;
         Assert.Null(tags.GetValue(rig.Plan.Features[clicks]));
@@ -343,7 +332,6 @@ public class SourceValuesTests
         Assert.True(builder.Commit());
     }
 
-    /// <summary>The measurements of <c>stratarec.source.values</c> for one source, summed by feature and outcome.</summary>
     private sealed class SourceValues : IDisposable
     {
         private readonly MeterListener _listener = new();

@@ -13,18 +13,14 @@ using StrataRec.Features.Connectors;
 
 namespace StrataRec.Features.Local;
 
-/// <summary>Hashes a key's canonical bytes (<see cref="TableKeys"/>) to the 64-bit value the index stores (injectable so tests
-/// can force collisions).</summary>
 internal delegate ulong KeyHasher(ReadOnlySpan<byte> key);
 
 /// <summary>
-/// A found record of a pinned <see cref="TableVersion"/>, or none (<see cref="Found"/> false). It points straight at
-/// the record's bytes, so reading its features after the one index lookup touches nothing else.
+/// A found record of a pinned <see cref="TableVersion"/>, or none (<see cref="Found"/> false).
 /// </summary>
-/// <remarks>Only meaningful for the version whose lookup produced it: another version of the same table reads its string
-/// codes through a dictionary a compaction renumbered. It does not record its version (that would cost a compare per row
-/// and a wider struct); the reader API is internal instead, and its one caller, the feature fetcher, reads every record
-/// from the version it pinned for the request. Keep it no longer than that request (it holds the page alive).</remarks>
+/// <remarks>Only meaningful for the version whose lookup produced it: another version of the same table reads its
+/// string codes through a dictionary a compaction renumbered. Keep it no longer than that request (it holds the page
+/// alive).</remarks>
 internal readonly struct LocalRecordRef
 {
     internal readonly byte[]? Page;
@@ -51,8 +47,6 @@ internal readonly struct LocalRecordRef
     }
 }
 
-/// <summary>One field to read in a multi-field <see cref="TableVersion.Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{LocalFillCounts})"/>:
-/// the table field, the column of its storage type to write, and what absent rows get (the feature's default, or missing).</summary>
 internal readonly struct LocalFieldRead
 {
     public LocalFieldRead(int field, ColumnBuffer target, in ScalarValue absent)
@@ -69,26 +63,19 @@ internal readonly struct LocalFieldRead
     public ScalarValue Absent { get; }
 }
 
-/// <summary>What a fill replaced by the absent value, by the metric that counts it.</summary>
 /// <param name="NonFinite">NaN/±∞ values (and float lists holding one): <c>column_nonfinite_total</c>.</param>
 /// <param name="OutOfRange">Lists of another length than a <c>list&lt;E,N&gt;</c> target's: <c>column_out_of_range_total</c>.</param>
 internal readonly record struct LocalFillCounts(int NonFinite, int OutOfRange);
 
 /// <summary>
-/// One generation of a <see cref="LocalFeatureTable"/>: pages of records, the index over them and the string dictionary
-///. A request pins the table's current version once and does every lookup against it; a compaction or reload
-/// builds a new version and swaps it in, and the old one is left to the garbage collector.
+/// One generation of a <see cref="LocalFeatureTable"/>: pages of records, the index over them and the string
+/// dictionary. A request pins the table's current version once and does every lookup against it; a compaction or reload
+/// builds a new version and swaps it in.
 /// </summary>
 /// <remarks>
-/// <para><b>Reading is lock-free; see <see cref="LocalFeatureTable"/> for the whole protocol.</b> The reader side in short:
-/// load the index object once (any index object is a consistent snapshot), read a slot's position with acquire
-/// semantics, and only then read the slot's key, the page directory and the record bytes. A page directory loaded
-/// earlier is reused while the page number fits it; a position that does not fit it was published after a directory
-/// growth, so the directory is loaded again. The string dictionary is loaded after the lookups, with the same rule.</para>
-/// <para>The writer side lives here too (internal members, used only by <see cref="LocalTableWriter"/> on the table's
-/// single writer thread): page allocation, the index, the dictionary and the size accounting.</para>
-/// <para>Public members are the statistics. The reader API is internal (see <see cref="LocalRecordRef"/>): features of a
-/// local table are read through the feature catalog.</para>
+/// <para><b>Reading is lock-free.</b></para>
+/// <para>Public members are the statistics. The reader API is internal: features of a local table are read through the
+/// feature catalog.</para>
 /// </remarks>
 public sealed class TableVersion
 {
@@ -125,8 +112,6 @@ public sealed class TableVersion
     private int[] _references; // per code: references from current records, or Unreferenced; grown with _strings
     private readonly StringCodeMap _codes;
 
-    /// <summary>A code no current record references any more (its string counts in <see cref="UnreferencedStringBytes"/>);
-    /// a write that brings the value again references it anew.</summary>
     private const int Unreferenced = -1;
 
     /// <summary>Bytes a dictionary slot is charged: the string reference and its reference count.</summary>
@@ -143,7 +128,6 @@ public sealed class TableVersion
         _strings = new string[InitialStringsLength];
         _references = new int[InitialStringsLength];
         _codes = new StringCodeMap();
-        // Writes start with a small page and double from there; a compaction packs its pages instead (see Reserve).
         _nextPageSize = Math.Min(maxPageSize, MinPageSize);
         _bytes = IndexBytes(_index) + (_pages.Length * 8L) + ((long)_strings.Length * StringSlotBytes) + _codes.Bytes;
     }
@@ -169,11 +153,6 @@ public sealed class TableVersion
 
     internal RecordLayout Layout => _layout;
 
-    // ---------------------------------------------------------------------------------------------------------------
-    // Reader API
-    // ---------------------------------------------------------------------------------------------------------------
-
-    /// <summary>The record of a one-part int64 key, or none. A table of another key layout never finds one.</summary>
     internal LocalRecordRef Find(long key)
     {
         if (_layout.HashedKeys)
@@ -186,15 +165,11 @@ public sealed class TableVersion
         return position == 0 ? default : Resolve(position, ref pages);
     }
 
-    /// <summary>The record of a one-part string key, or none. A table of another key layout never finds one.</summary>
     internal LocalRecordRef Find(ReadOnlySpan<char> key) =>
         _layout.Schema.Key.PartCount == 1 && _layout.HashedKeys ? FindEncoded(MemoryMarshal.AsBytes(key)) : default;
 
-    /// <summary>The record of a one-part key, or none.</summary>
     internal LocalRecordRef Find(in EntityKey key) => key.StringValue is { } s ? Find(s.AsSpan()) : Find(key.Int64Value);
 
-    /// <summary>The record of a key given by its parts (any layout), or none; a key that is not one of the table's layout is
-    /// not found.</summary>
     internal LocalRecordRef Find(ReadOnlySpan<EntityKey> parts)
     {
         var layout = _layout.Schema.Key;
@@ -224,7 +199,6 @@ public sealed class TableVersion
         }
     }
 
-    /// <summary>The record of a hashed key given by its canonical bytes (<see cref="TableKeys"/>), or none.</summary>
     internal LocalRecordRef FindEncoded(ReadOnlySpan<byte> key)
     {
         if (!_layout.HashedKeys)
@@ -238,14 +212,12 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// Looks every key up once: <c>records[i]</c> becomes the record of <c>keys[i]</c> or none. All features of the
-    /// table are then read from these references (<see cref="Fill(ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ReadOnlySpan{LocalFieldRead}, Span{LocalFillCounts})"/>). Returns the number of keys found.
+    /// Looks every key up once: <c>records[i]</c> becomes the record of <c>keys[i]</c> or none. Returns the number of
+    /// keys found.
     /// </summary>
     /// <remarks>
     /// Keys are taken in blocks of <see cref="LookupBlock"/>, in two passes. The first reads every key's home slot and
-    /// nothing else, so no branch waits on a cache miss and the misses of the whole block overlap. The second finishes
-    /// each probe (the slots are in the cache now; a probe that goes past the home slot mispredicts a branch but no
-    /// longer stalls on memory) and resolves the record, whose header miss again overlaps with the other keys'.
+    /// nothing else, so no branch waits on a cache miss and the misses of the whole block overlap.
     /// </remarks>
     internal int Lookup(ReadOnlySpan<long> keys, Span<LocalRecordRef> records)
     {
@@ -302,9 +274,8 @@ public sealed class TableVersion
     /// independent home-slot misses to keep the core's miss buffers busy, little enough stack.</summary>
     private const int LookupBlock = 64;
 
-    /// <summary>One-string-part form of <see cref="Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/>; a null key (a row
-    /// with no key) is not found. A one-string key's canonical bytes are its UTF-16 code units, so nothing is encoded.
-    /// Blocked as the int64 form is (<see cref="ProbeBlock"/>).</summary>
+    /// <summary>One-string-part form of <see cref="Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/>; a null key (a
+    /// row with no key) is not found.</summary>
     internal int Lookup(ReadOnlySpan<string?> keys, Span<LocalRecordRef> records)
     {
         records = records[..keys.Length];
@@ -332,7 +303,6 @@ public sealed class TableVersion
         return found;
     }
 
-    /// <summary>One-part form, for keys already held as <see cref="EntityKey"/>s; a key of the other type is not found.</summary>
     internal int Lookup(ReadOnlySpan<EntityKey> keys, Span<LocalRecordRef> records)
     {
         records = records[..keys.Length];
@@ -361,9 +331,8 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// Form for keys of any layout, as a batch hands them over (a shared part once for every key): a block's keys are
-    /// encoded into one scratch buffer (on the stack while they fit, else rented), hashed, then probed together
-    /// (<see cref="ProbeBlock"/>); a key not of the table's layout is not found.
+    /// Form for keys of any layout, as a batch hands them over (a shared part once for every key); a key not of the
+    /// table's layout is not found.
     /// </summary>
     internal int Lookup(in EntityKeyBatch keys, Span<LocalRecordRef> records)
     {
@@ -391,8 +360,7 @@ public sealed class TableVersion
             return found;
         }
 
-        // Where each part of key 0 is in the batch's buffer, and the distance between keys (0 for a shared part): one
-        // index computation per part and key, instead of a slice of the batch.
+        // Where each part of key 0 is in the batch's buffer, and the distance between keys (0 for a shared part).
         var partCount = layout.PartCount;
         var buffer = keys.Buffer;
         Span<int> at = stackalloc int[partCount];
@@ -433,7 +401,6 @@ public sealed class TableVersion
                     var length = TableKeys.Length(parts);
                     if (used + length > arena.Length)
                     {
-                        // Long string parts: a larger arena, with the block's keys so far.
                         var larger = ArrayPool<byte>.Shared.Rent(Math.Max(2 * arena.Length, used + length));
                         arena[..used].CopyTo(larger);
                         if (rented is not null)
@@ -463,11 +430,6 @@ public sealed class TableVersion
         return found;
     }
 
-    /// <summary>
-    /// Finishes a block of hashed-key lookups (at most <see cref="LookupBlock"/> keys, each hashed by the caller) in the
-    /// int64 form's two passes: every key's home slot first, so the block's index misses overlap, then each probe and
-    /// its record. Returns the number of keys found.
-    /// </summary>
     private int ProbeBlock<TKeys>(IndexTable index, ref byte[][] pages, in TKeys keys, ReadOnlySpan<ulong> hashes, Span<LocalRecordRef> records)
         where TKeys : IKeyBlock, allows ref struct
     {
@@ -494,7 +456,7 @@ public sealed class TableVersion
             var position = homePositions[i];
             if (position != 0 && (homeHashes[i] != (long)hashes[i] || !KeyOf(PageOf(position, ref pages), (int)position).SequenceEqual(key)))
             {
-                position = ProbeHashed(index, hashes[i], key, ref pages, out _); // past the home slot (read again: cached now)
+                position = ProbeHashed(index, hashes[i], key, ref pages, out _);
             }
 
             records[i] = position == 0 ? default : Resolve(position, ref pages);
@@ -504,7 +466,6 @@ public sealed class TableVersion
         return found;
     }
 
-    /// <summary>The canonical bytes of the keys of one block of a hashed lookup (<see cref="ProbeBlock"/>).</summary>
     private interface IKeyBlock
     {
         /// <summary>Key <paramref name="i"/>'s bytes; false when it has none (no key, or not of the table's layout), which
@@ -512,7 +473,6 @@ public sealed class TableVersion
         bool TryGet(int i, out ReadOnlySpan<byte> key);
     }
 
-    /// <summary>One-string keys: each its own UTF-16 code units.</summary>
     private readonly ref struct StringKeyBlock(ReadOnlySpan<string?> keys) : IKeyBlock
     {
         private readonly ReadOnlySpan<string?> _keys = keys;
@@ -524,7 +484,6 @@ public sealed class TableVersion
         }
     }
 
-    /// <summary>Keys encoded into one arena: key i at <c>starts[i]</c> (-1 for none), <c>lengths[i]</c> bytes long.</summary>
     private readonly ref struct EncodedKeyBlock(ReadOnlySpan<byte> arena, ReadOnlySpan<int> starts, ReadOnlySpan<int> lengths) : IKeyBlock
     {
         private readonly ReadOnlySpan<byte> _arena = arena;
@@ -539,30 +498,6 @@ public sealed class TableVersion
         }
     }
 
-    /// <summary>
-    /// Writes field <paramref name="field"/> of each record into row <c>rows[i]</c> of <paramref name="target"/>, a
-    /// column of the field's storage type (the slot buffer of a candidate table).
-    /// </summary>
-    /// <param name="records">References from <see cref="Lookup(ReadOnlySpan{long}, Span{LocalRecordRef})"/> on this version, one per row.</param>
-    /// <param name="rows">Physical rows of <paramref name="target"/>, one per record.</param>
-    /// <param name="absent">
-    /// What a row gets when its key has no record or the record has no value for the field: the feature's default, or
-    /// <see cref="ScalarValue.Missing"/> (validity bit cleared). Never a zero.
-    /// </param>
-    /// <param name="filled">The slot's fill bitmap; when not empty, every row in <paramref name="rows"/> is marked filled.</param>
-    /// <returns>
-    /// The values replaced by <paramref name="absent"/>. Like backfill, stored <c>float32</c>/<c>float64</c>
-    /// values that are not finite are not served (a float list with such an element as a whole), nor are lists of another
-    /// length than a <c>list&lt;E,N&gt;</c> target's: the table stores what its writer wrote, and a read applies the type.
-    /// </returns>
-    /// <remarks>
-    /// <para>Allocates nothing: a string (a scalar or a list's element) is the dictionary's instance, whatever its length, and a
-    /// list is copied into its column's rented arena. When <paramref name="absent"/> is missing, the target gets a validity
-    /// bitmap (rented from its request memory) before the first row, even if every row turns out present: the loop then
-    /// never calls out, which keeps its state in registers.</para>
-    /// <para>The per-row loops are unchecked; see <see cref="FillCore"/> for what makes that safe whatever the caller's
-    /// spans point at.</para>
-    /// </remarks>
     internal LocalFillCounts Fill(
         int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ColumnBuffer target, in ScalarValue absent, Span<ulong> filled = default)
     {
@@ -572,14 +507,6 @@ public sealed class TableVersion
         return counts[0];
     }
 
-    /// <summary>
-    /// Fills several fields of the same records: what a request does for all features of a table after one lookup. Same
-    /// semantics as <see cref="Fill(int, ReadOnlySpan{LocalRecordRef}, ReadOnlySpan{int}, ColumnBuffer, in ScalarValue, Span{ulong})"/>
-    /// per field, but the rows are taken in blocks of <see cref="FillBlock"/> and every field is filled for a block before
-    /// the next, so the block's records are read from the L1 cache by every field instead of from memory once per field.
-    /// </summary>
-    /// <param name="counts">When not empty, <c>counts[r]</c> receives the values of <c>reads[r]</c> that were replaced by its
-    /// absent value.</param>
     /// <remarks>Fill bits are left to the caller: every row in <paramref name="rows"/> is filled for every field, so one
     /// bitmap of the rows can be OR-ed into each slot's fill bitmap.</remarks>
     internal void Fill(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<LocalFillCounts> counts = default)
@@ -593,12 +520,9 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// Both Fills, and the one place that keeps their unchecked loops safe. The caller's spans can change under the
-    /// loops: <paramref name="rows"/> may be a view of a target column's own array (the first value written changes a row
-    /// not yet consumed), may overlap <paramref name="counts"/>, or may be changed by another thread between the check
-    /// and the loop. So rows, records and reads are first copied into scratch arrays the table rents, the copies are
-    /// checked, and the loops read only the copies (and the column arrays, which each loop checks against the largest
-    /// row). The copies cost up to a microsecond per call for 500 rows, 3% of filling 30 fields of them from the cache.
+    /// The caller's spans can change under the loops: <paramref name="rows"/> may be a view of a target column's own
+    /// array, may overlap <paramref name="counts"/>, or may be changed by another thread between the check and the
+    /// loop.
     /// </summary>
     private void FillCore(
         ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<LocalFillCounts> counts, Span<ulong> filled)
@@ -637,7 +561,6 @@ public sealed class TableVersion
         }
     }
 
-    /// <summary>The fill itself, on <see cref="FillCore"/>'s private copies, which nothing else can change.</summary>
     private void FillChecked(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ReadOnlySpan<LocalFieldRead> reads, Span<LocalFillCounts> counts)
     {
         var maxRow = CheckRows(records, rows);
@@ -646,7 +569,6 @@ public sealed class TableVersion
             counts[..reads.Length].Clear();
         }
 
-        // The part of a record the reads touch: the header (validity bits) up to the end of the last field read.
         var readEnd = RecordLayout.ValidityOffset + _layout.ValidityBytes;
         foreach (var read in reads)
         {
@@ -678,10 +600,7 @@ public sealed class TableVersion
     internal const int FillBlock = 128;
 
     /// <summary>
-    /// Reads one byte of every cache line of <c>[0, end)</c> of each record, and nothing depends on the bytes but the
-    /// returned sum: the misses of all records of a block are then in flight at once, where the field loops, whose branches
-    /// wait on the loaded validity bits, would overlap only a few. The sum is returned, and the method not inlined, so the
-    /// loads are not removed as dead code; callers ignore it.
+    /// The sum is returned, and the method not inlined, so the loads are not removed as dead code; callers ignore it.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int Touch(ReadOnlySpan<LocalRecordRef> records, int end)
@@ -735,8 +654,8 @@ public sealed class TableVersion
 
     /// <summary>
     /// Everything the unchecked fill loops rely on, checked once per call on <see cref="FillCore"/>'s copies: rows not
-    /// negative, and every record's fixed part inside its page (a reference from another table's version could otherwise
-    /// point past the end). Returns the largest row, or -1 when there are none; each target is checked against it.
+    /// negative, and every record's fixed part inside its page. Returns the largest row, or -1 when there are none;
+    /// each target is checked against it.
     /// </summary>
     private int CheckRows(ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows)
     {
@@ -791,17 +710,12 @@ public sealed class TableVersion
         }
     }
 
-    /// <summary>True when the record exists and has a value for the field.</summary>
     internal bool HasValue(int field, in LocalRecordRef record)
     {
         CheckField(field);
         return record.Page is { } page && IsValid(page, record.Offset, field);
     }
 
-    /// <summary>
-    /// How many of <paramref name="records"/> exist and have a value for the field: what a read of their keys got from the
-    /// table (a source's missing ratio). Reads the validity bits only.
-    /// </summary>
     internal int CountValues(int field, ReadOnlySpan<LocalRecordRef> records)
     {
         CheckField(field);
@@ -817,15 +731,13 @@ public sealed class TableVersion
         return count;
     }
 
-    /// <summary>The record's version: the event version (<c>local</c>) or the write time (<c>cache</c>).</summary>
     internal long VersionOf(in LocalRecordRef record) => record.Page is { } page
         ? BinaryPrimitives.ReadInt64LittleEndian(page.AsSpan(record.Offset + RecordLayout.VersionOffset))
         : throw new ArgumentException("The record was not found.", nameof(record));
 
     /// <summary>
-    /// The field's stored value as a promoted scalar (int32 → int64, float32 → float64, list&lt;int32&gt; → list&lt;int64&gt;),
-    /// or missing. For cold paths (context features, replay recording, tests): lists are copied. Values
-    /// are as stored: NaN and ±∞ are not replaced, and a list's length is not checked (the reader applies the type).
+    /// For cold paths (context features, replay recording, tests): lists are copied. Values are as stored: NaN and ±∞
+    /// are not replaced, and a list's length is not checked (the reader applies the type).
     /// </summary>
     internal ScalarValue Read(int field, in LocalRecordRef record)
     {
@@ -868,15 +780,10 @@ public sealed class TableVersion
         }
     }
 
-    // ---------------------------------------------------------------------------------------------------------------
-    // Reader internals
-    // ---------------------------------------------------------------------------------------------------------------
-
     /// <summary>Position of an int64 key (0 = none). Terminates because an index is never more than half full.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long ProbeInt64(IndexTable index, long key) => ProbeInt64(index.Entries, index.Mask, index.Home((ulong)key), key);
 
-    /// <summary>Position of an int64 key, probing from <paramref name="slot"/> on.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long ProbeInt64(long[] entries, int mask, int slot, long key)
     {
@@ -892,9 +799,8 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// Position of a hashed key (0 = none) given by its canonical bytes, and the slot it was found in, or the empty slot that
-    /// ends its probe sequence. The index holds the key's 64-bit hash; a hash match is confirmed against the bytes stored in
-    /// the record, so two keys with the same hash are told apart.
+    /// Position of a hashed key (0 = none) given by its canonical bytes, and the slot it was found in, or the empty
+    /// slot that ends its probe sequence.
     /// </summary>
     internal long ProbeHashed(IndexTable index, ulong hash, ReadOnlySpan<byte> key, ref byte[][] pages, out int slot)
     {
@@ -915,7 +821,6 @@ public sealed class TableVersion
         }
     }
 
-    /// <summary>The record at a published position, or none for a tombstone.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private LocalRecordRef Resolve(long position, ref byte[][] pages)
     {
@@ -952,7 +857,6 @@ public sealed class TableVersion
         return pages[pageIndex];
     }
 
-    /// <summary>The canonical key bytes stored in a hashed-key table's record or tombstone (<see cref="TableKeys"/>).</summary>
     internal ReadOnlySpan<byte> KeyOf(byte[] page, int offset)
     {
         var refAt = offset + _layout.KeyRefOffset;
@@ -965,7 +869,6 @@ public sealed class TableVersion
     private static bool IsValid(byte[] page, int offset, int field) =>
         (page[offset + RecordLayout.ValidityOffset + (field >> 3)] & (1 << (field & 7))) != 0;
 
-    /// <summary>Bounds-checked bytes of a variable-length field.</summary>
     private ReadOnlySpan<byte> VarBytes(byte[] page, int offset, int field, int elementSize)
     {
         var at = offset + _layout.Offsets[field];
@@ -975,8 +878,8 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// The elements of a list field of fixed-size elements (bool, int32, int64, float32 or float64, as stored), or none when
-    /// the record has no value: the record's own bytes, valid while the version is pinned.
+    /// The elements of a list field of fixed-size elements, or none when the record has no value: the record's own
+    /// bytes, valid while the version is pinned.
     /// </summary>
     internal ReadOnlySpan<T> List<T>(int field, LocalRecordRef record)
         where T : unmanaged
@@ -994,7 +897,6 @@ public sealed class TableVersion
         return MemoryMarshal.Cast<byte, T>(VarBytes(record.Page!, record.Offset, field, Unsafe.SizeOf<T>()));
     }
 
-    /// <summary>The string codes of a <c>list&lt;string&gt;</c> field (<see cref="StringOf"/>), or none when the record has no value.</summary>
     internal ReadOnlySpan<int> StringCodes(int field, LocalRecordRef record)
     {
         if (!HasValue(field, record))
@@ -1010,7 +912,7 @@ public sealed class TableVersion
         return MemoryMarshal.Cast<byte, int>(VarBytes(record.Page!, record.Offset, field, 4));
     }
 
-    /// <summary>A string by code. Codes in published records are always in the dictionary a later load returns.</summary>
+    /// <summary>Codes in published records are always in the dictionary a later load returns.</summary>
     internal string StringOf(int code)
     {
         var strings = Volatile.Read(ref _strings);
@@ -1024,11 +926,6 @@ public sealed class TableVersion
             throw new ArgumentOutOfRangeException(nameof(field), field, $"The table has {_layout.FieldCount} fields.");
         }
     }
-
-    // The typed loops below index records, rows and column arrays without bounds checks. The records and rows they get
-    // are FillCore's private copies, which CheckRows checked (rows not negative, fixed parts inside their pages) and which
-    // nothing else can change; each loop checks the column array it writes against the largest row (RequireLength).
-    // Variable-length data is still read through bounds-checked spans.
 
     private void FillScalar<T>(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, ScalarColumn<T> column, in ScalarValue absent)
         where T : unmanaged
@@ -1169,11 +1066,6 @@ public sealed class TableVersion
         return replaced;
     }
 
-    /// <summary>
-    /// A string field: each row gets the dictionary's instance of its code, so a fill allocates nothing however long the
-    /// strings are, and every request shares the table's strings (a category, a title, a description alike). An absent row
-    /// gets the absent value's instance, the plan's.
-    /// </summary>
     private void FillString(
         int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, int maxRow, StringColumn column, in ScalarValue absent)
     {
@@ -1222,10 +1114,9 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// A target column's validity bitmap for an unchecked fill loop, its length checked once against the largest row.
-    /// When absent rows are missing the bitmap is made up front, so the loop never calls out to allocate it (a call in the
-    /// loop makes the JIT keep the loop's state on the stack); such a column has a bitmap even if no row turns out
-    /// missing. Otherwise it is the column's bitmap, or null while every row is valid.
+    /// When absent rows are missing the bitmap is made up front, so the loop never calls out to allocate it (a call in
+    /// the loop makes the JIT keep the loop's state on the stack); such a column has a bitmap even if no row turns out
+    /// missing.
     /// </summary>
     private static ulong[]? TargetValidity(ColumnBuffer column, bool absentMissing, int maxRow)
     {
@@ -1251,9 +1142,6 @@ public sealed class TableVersion
     private static void MarkMissing(ulong[] words, int row) =>
         Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(words), row >> 6) &= ~(1UL << row);
 
-    /// <summary>A list of fixed-size elements. A float list holding NaN or ±∞ takes the absent value, as a float does, and
-    /// is counted as non-finite; a list of another length than a <c>list&lt;E,N&gt;</c> target's takes it too, counted as
-    /// out of range.</summary>
     private LocalFillCounts FillList<T>(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<T> column, in ScalarValue absent)
         where T : unmanaged
     {
@@ -1287,14 +1175,11 @@ public sealed class TableVersion
         return new LocalFillCounts(nonFinite, outOfRange);
     }
 
-    /// <summary>True unless a float element is NaN or ±∞; always true for other elements (a constant test per T).</summary>
     private static bool AllFinite<T>(ReadOnlySpan<T> values)
         where T : unmanaged =>
         typeof(T) == typeof(float) ? ColumnValues.AllFinite(MemoryMarshal.Cast<T, float>(values))
         : typeof(T) != typeof(double) || ColumnValues.AllFinite(MemoryMarshal.Cast<T, double>(values));
 
-    /// <summary>A <c>list&lt;string&gt;</c>; returns the lists of another length than a <c>list&lt;string,N&gt;</c> target's,
-    /// which take the absent value.</summary>
     private int FillStringList(int field, ReadOnlySpan<LocalRecordRef> records, ReadOnlySpan<int> rows, ListColumn<string> column, in ScalarValue absent)
     {
         var strings = Volatile.Read(ref _strings);
@@ -1368,9 +1253,7 @@ public sealed class TableVersion
         throw new NotSupportedException($"No scalar default for {typeof(T).Name}.");
     }
 
-    // ---------------------------------------------------------------------------------------------------------------
     // Writer side (single writer thread; see LocalTableWriter)
-    // ---------------------------------------------------------------------------------------------------------------
 
     // Writer-only position of the next SIEVE candidate in this version. Zero starts at the oldest insertion.
     internal long CacheHand { get; set; }
@@ -1383,13 +1266,11 @@ public sealed class TableVersion
 
     internal int StringCount => _stringCount;
 
-    /// <summary>What the dictionary's strings are charged (<see cref="StringObjectBytes"/> each), referenced or not.</summary>
     internal long StringBytes => _stringBytes;
 
     /// <summary>
-    /// What the dictionary's strings that no current record references are charged: values only superseded records held,
-    /// which a compaction drops with those records. A string costs a record only its 4-byte code, so a field rewritten with
-    /// long new values (a description) leaves most of what it superseded here, not in <see cref="SupersededBytes"/>.
+    /// What the dictionary's strings that no current record references are charged: values only superseded records
+    /// held, which a compaction drops with those records.
     /// </summary>
     internal long UnreferencedStringBytes => _unreferencedStringBytes;
 
@@ -1425,11 +1306,9 @@ public sealed class TableVersion
 
     internal byte[] PageOf(long position) => _pages[(int)(position >> 32) - 1];
 
-    /// <summary>Bytes the index would add by growing for one more key, or 0 when it has room.</summary>
     internal long IndexGrowthBytes(bool newKey) =>
         newKey && _index.Count + 1 > _index.MaxCount ? IndexBytes(_index) : 0;
 
-    /// <summary>Bytes a new page for a record of <paramref name="recordBytes"/> would add, or 0 when it fits the current page.</summary>
     internal long PageGrowthBytes(int recordBytes)
     {
         if (_currentPage is not null && _pageUsed + recordBytes <= _currentPage.Length)
@@ -1442,8 +1321,7 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// Makes room for one more key: when the index would pass half full, builds a twice larger index and publishes it
-    /// whole. Readers holding the old index keep a consistent (if no longer updated) snapshot.
+    /// Readers holding the old index keep a consistent (if no longer updated) snapshot.
     /// </summary>
     internal void EnsureIndexRoom()
     {
@@ -1464,7 +1342,6 @@ public sealed class TableVersion
             }
         }
 
-        // Release: the new index's entries are complete before any reader can load it.
         Volatile.Write(ref _index, next);
         AddBytes(IndexBytes(next) - IndexBytes(old));
     }
@@ -1487,14 +1364,11 @@ public sealed class TableVersion
     }
 
     /// <summary>
-    /// Space for a record of <paramref name="bytes"/> (a multiple of 8) at the end of the current page, or of a new page.
-    /// A new page is added to the directory before any record in it is published: in place when the directory has room
-    /// (a reader that later sees a position in it reads the element after the position's acquire), otherwise in a grown
-    /// copy of the directory that is published whole.
+    /// Space for a record of <paramref name="bytes"/> (a multiple of 8) at the end of the current page, or of a new
+    /// page. A new page is added to the directory before any record in it is published.
     /// </summary>
-    /// <param name="packFor">Set by a compaction: the bytes of this record and of every record it will still copy. A new
-    /// page is then just large enough for them (up to the largest page size), and the usual doubling of page sizes does
-    /// not advance, so writes after the compaction start again with a small page.</param>
+    /// <param name="packFor">Set by a compaction: the bytes of this record and of every record it will still
+    /// copy.</param>
     internal long Reserve(int bytes, out byte[] page, long packFor = 0)
     {
         if (_currentPage is null || _pageUsed + bytes > _currentPage.Length)
@@ -1534,9 +1408,9 @@ public sealed class TableVersion
 
     /// <summary>
     /// Bytes that adding <paramref name="count"/> new strings, whose <see cref="StringObjectBytes"/> sum to
-    /// <paramref name="objectBytes"/>, costs: the strings, plus every growth of the dictionary array and of its code map
-    /// that the additions pass (several, when one record brings many new strings). <see cref="AddString"/> adds exactly
-    /// this when called <paramref name="count"/> times.
+    /// <paramref name="objectBytes"/>, costs: the strings, plus every growth of the dictionary array and of its code
+    /// map that the additions pass. <see cref="AddString"/> adds exactly this when called <paramref name="count"/>
+    /// times.
     /// </summary>
     internal long StringAdditionBytes(int count, long objectBytes)
     {
@@ -1548,16 +1422,15 @@ public sealed class TableVersion
         var bytes = objectBytes;
         for (long capacity = _strings.Length; _stringCount + (long)count > capacity; capacity *= 2)
         {
-            bytes += capacity * StringSlotBytes; // AddString: full arrays are copied into ones twice as long
+            bytes += capacity * StringSlotBytes;
         }
 
         return bytes + _codes.GrowthBytes(count);
     }
 
     /// <summary>
-    /// Adds a string to the dictionary and returns its code; the record that brings it references it next
-    /// (<see cref="Reference"/>). The element is stored before any record using the code is published; a full dictionary is
-    /// copied into a grown array that is published whole.
+    /// Adds a string to the dictionary; the record that brings it references it next (<see cref="Reference"/>). The
+    /// element is stored before any record using the code is published.
     /// </summary>
     internal int AddString(string value)
     {
@@ -1587,9 +1460,8 @@ public sealed class TableVersion
 
     /// <summary>
     /// Counts the string references of a record: <paramref name="delta"/> +1 when it becomes its key's current record
-    /// (after its codes are written), −1 when a newer record or a tombstone supersedes it. Records share strings (a category
-    /// many keys hold), so a string is unreferenced only when its count reaches 0, and referenced again when a later record
-    /// brings the value back. Only the writer calls it; readers never see the counts.
+    /// (after its codes are written), −1 when a newer record or a tombstone supersedes it. Only the writer calls it;
+    /// readers never see the counts.
     /// </summary>
     internal void Reference(byte[] page, int offset, int delta)
     {
@@ -1624,10 +1496,7 @@ public sealed class TableVersion
     /// <summary>
     /// What dropping the record at <paramref name="offset"/> (a current record of this version) frees after the records
     /// already dropped: its bytes, and each dictionary string whose last reference it holds. <paramref name="dropped"/>
-    /// counts, per code, the references of the records dropped so far, and this record's are added. A string another
-    /// record still references frees nothing (compaction keeps it whole), so the sum never counts what compaction cannot
-    /// free (a share per reference counted part of a long shared string as freed, and a write-back the
-    /// eviction was for still did not fit). Writer side, for choosing what to evict.
+    /// counts, per code, the references of the records dropped so far, and this record's are added.
     /// </summary>
     internal long Drop(byte[] page, int offset, int[] dropped)
     {
@@ -1676,7 +1545,6 @@ public sealed class TableVersion
         AddBytes(page.Length);
     }
 
-    /// <summary>The next page's size; a record larger than the largest page gets a page of its own.</summary>
     private int NewPageSize(int recordBytes) => Math.Max(_nextPageSize, recordBytes);
 
     private void AddBytes(long delta) => Volatile.Write(ref _bytes, _bytes + delta);
@@ -1689,9 +1557,9 @@ public sealed class TableVersion
 
 /// <summary>
 /// The open-addressing index of a <see cref="TableVersion"/>: slot <c>s</c> is <c>Entries[2s]</c> (the int64 key, or
-/// the 64-bit hash of a string key) and <c>Entries[2s + 1]</c> (the record's position, 0 = empty). Key and position share
-/// a cache line, so a lookup costs one miss in the index. Entries are never removed (deletes are tombstone records), and
-/// the table is kept at most half full, so every probe sequence ends at an empty slot.
+/// the 64-bit hash of a string key) and <c>Entries[2s + 1]</c> (the record's position, 0 = empty). Entries are never
+/// removed (deletes are tombstone records), and the table is kept at most half full, so every probe sequence ends at an
+/// empty slot.
 /// </summary>
 internal sealed class IndexTable
 {
@@ -1746,8 +1614,7 @@ internal sealed class IndexTable
 }
 
 /// <summary>
-/// The writer's string → code map over a version's dictionary (readers only ever go from code to string). Keyed by
-/// chars, so a source decoding a value that is already in the dictionary needs no string.
+/// The writer's string → code map over a version's dictionary (readers only ever go from code to string).
 /// </summary>
 internal sealed class StringCodeMap
 {
@@ -1756,13 +1623,12 @@ internal sealed class StringCodeMap
 
     public long Bytes => _slots.Length * 4L;
 
-    /// <summary>Bytes the map grows by while <paramref name="additions"/> codes are added: each growth doubles it.</summary>
     public long GrowthBytes(int additions)
     {
         long bytes = 0;
         for (long slots = _slots.Length; _count + (long)additions > slots / 2; slots *= 2)
         {
-            bytes += slots * 4; // Add: a map past half full is rebuilt twice as large
+            bytes += slots * 4;
         }
 
         return bytes;
@@ -1821,7 +1687,6 @@ internal sealed class StringCodeMap
         (int)(((ulong)(uint)string.GetHashCode(value) * TableVersion.Fibonacci) >> 32) & mask;
 }
 
-/// <summary>The default string-key hash: XXH3-64 of the key's UTF-16 code units.</summary>
 internal static class KeyHashes
 {
     public static readonly KeyHasher Default = static key => XxHash3.HashToUInt64(key);

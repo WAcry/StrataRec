@@ -24,14 +24,6 @@ public enum FeatureSupply
     Local,
 }
 
-/// <summary>
-/// The home_feed sample copied to a temp directory with its fixtures regenerated for a candidate count, compiled with
-/// its local tables loaded as the engine loads them before serving a plan.
-/// </summary>
-/// <remarks>
-/// The copy is untimed (<see cref="SampleBudgets.Relax"/>): a benchmark measures the pipeline's work, and a budget hit by
-/// a cold first request on a busy runner would measure a fallback instead (or fail the setup check).
-/// </remarks>
 internal static class HomeFeedBenchWorkspace
 {
     public const int Authors = 300;
@@ -46,7 +38,6 @@ internal static class HomeFeedBenchWorkspace
         return root;
     }
 
-    /// <summary>Compiles home_feed with <paramref name="tables"/> holding its local tables, and waits for their loads.</summary>
     public static ExecutionPlan Compile(string root, BindingHost tables)
     {
         var diagnostics = new DiagnosticBag();
@@ -125,7 +116,6 @@ internal static class HomeFeedBenchWorkspace
         File.WriteAllText(pipeline, text);
     }
 
-    /// <summary>A <c>memory@1</c> data file: one object per key.</summary>
     private static void WriteMemory(string path, int firstKey, string[] records)
     {
         var text = new StringBuilder("{");
@@ -137,7 +127,6 @@ internal static class HomeFeedBenchWorkspace
         File.WriteAllText(path, text.Append("\n}").ToString());
     }
 
-    /// <summary>A <c>snapshot_files@1</c> directory: a manifest and one JSONL part.</summary>
     private static void WriteSnapshot(string directory, int firstKey, string[] records)
     {
         Directory.CreateDirectory(directory);

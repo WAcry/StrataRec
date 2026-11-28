@@ -17,8 +17,7 @@ public enum SignatureStatus : byte
     Failed,
 
     /// <summary>
-    /// The engine is still loading the client or asking it: skip the check. The engine compiles the plan again once the
-    /// answers are in, and only that compile counts.
+    /// The engine is still loading the client or asking it: skip the check.
     /// </summary>
     Pending,
 
@@ -64,7 +63,7 @@ public interface IPlanBindings : ILocalTableProvider, IBindingInstances
 {
     /// <summary>
     /// The signature of one version of a model, for the compile to check a node against. Only an engine's provider
-    /// answers <see cref="SignatureStatus.Pending"/>: it then compiles the plan again once the answers are in.
+    /// answers <see cref="SignatureStatus.Pending"/>.
     /// </summary>
     /// <param name="client">An instance this provider handed out.</param>
     SignatureLookup Signature(IServiceClient client, string model, string? version);
@@ -101,7 +100,7 @@ public sealed class UnloadedBindings : IPlanBindings
         ArgumentNullException.ThrowIfNull(spec);
         if (!_instances.TryGetValue(spec.Key, out var instance))
         {
-            instance = create(spec.Context(null)); // never loaded, so it never resolves a secret
+            instance = create(spec.Context(null));
             _instances[spec.Key] = instance;
         }
 
@@ -112,7 +111,7 @@ public sealed class UnloadedBindings : IPlanBindings
     {
         if (client is ILoadable)
         {
-            return SignatureLookup.Unchecked; // it could only answer after its load, which needs what validate does not have
+            return SignatureLookup.Unchecked;
         }
 
         ValueTask<ServiceSignature> answer;
@@ -130,8 +129,7 @@ public sealed class UnloadedBindings : IPlanBindings
             return SignatureLookup.Of(answer.AsTask());
         }
 
-        // Nothing here may wait for I/O: the engine checks it at load. The answer is observed, so a late failure is not an
-        // unobserved task exception.
+        // The answer is observed, so a late failure is not an unobserved task exception.
         _ = answer.AsTask().ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         return SignatureLookup.Unchecked;

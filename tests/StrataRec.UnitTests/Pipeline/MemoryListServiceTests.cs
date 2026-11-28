@@ -48,7 +48,6 @@ public sealed class MemoryListServiceTests
     [Fact]
     public async Task BindingSettingsOverrideTheDataFile()
     {
-        // Fault injection must work for fixture-backed sources too.
         var dir = Directory.CreateTempSubdirectory("stratarec-list-").FullName;
         File.WriteAllText(Path.Combine(dir, "list.json"), """{ "items": [7, 8, 9], "fail": false }""");
 
@@ -59,10 +58,6 @@ public sealed class MemoryListServiceTests
         Assert.Empty(ids);
     }
 
-    /// <summary>
-    /// The list is picked by an input of the call, which the recall node's queries send: a service sees only what its call
-    /// sends, so the digest a replay matches by covers it (it read the request's inputs, which a replay could drop unseen).
-    /// </summary>
     [Fact]
     public async Task ByInput_PicksTheListByTheCallsInput_AMissingValueGetsTheFallback_AndAnAbsentInputFails()
     {
@@ -73,7 +68,7 @@ public sealed class MemoryListServiceTests
 
         Assert.Equal([7L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String, ScalarValue.FromString("x")))).Ids);
         Assert.Equal([8L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.Int64, ScalarValue.FromInt64(42)))).Ids);
-        Assert.Equal([6L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.Float64, ScalarValue.FromFloat64(1.25)))).Ids); // as the value prints
+        Assert.Equal([6L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.Float64, ScalarValue.FromFloat64(1.25)))).Ids);
         Assert.Equal([9L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String.AsNullable(), ScalarValue.Missing))).Ids);
         Assert.Equal([9L], (await RetrieveAsync(source, Segment(StrataRec.Core.Types.ColumnType.String, ScalarValue.FromString("other")))).Ids);
 
@@ -86,10 +81,6 @@ public sealed class MemoryListServiceTests
         Assert.Equal("The input 'segment' must be a single value; it has shape [2].", list.Error);
     }
 
-    /// <summary>
-    /// −0 picks the list of 0, as a call's digest has them equal: it picked the list of "-0", and a replay of a call with
-    /// −0 borrowed the answer to 0 and called it identical.
-    /// </summary>
     [Fact]
     public async Task ByInput_NegativeZero_PicksTheListOfZero()
     {

@@ -5,11 +5,6 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>on_failure</c> is one of three words and the fallback node is its own field: each setting is
-/// checked where it is written, a fallback setting on a node that does not fall back is an error, and the time a node
-/// leaves to its fallback defaults to the fallback's <c>timeout_ms</c>.
-/// </summary>
 public sealed class NodeFallbackConfigTests
 {
     private const string Sources = """ "r": { "client": "memory_list@1", "items": [1, 2] } """;
@@ -33,11 +28,6 @@ public sealed class NodeFallbackConfigTests
         }
     }
 
-    /// <summary>
-    /// A fallback runs whenever the node that names it fails: what decides whether a node on the timeline runs was
-    /// accepted on a fallback and never looked at, so a fallback whose <c>when</c> was false served all the same. The
-    /// member is the one error, whatever its value: correcting the value would not make it apply.
-    /// </summary>
     [Theory]
     [InlineData("\"when\": \"ctx.request.n == 1\"", "/nodes/backup/when")]
     [InlineData("\"when\": \"ctx.request.missing ==\"", "/nodes/backup/when")]
@@ -58,7 +48,7 @@ public sealed class NodeFallbackConfigTests
     }
 
     [Theory]
-    [InlineData("", 3000)] // the fallback's timeout_ms
+    [InlineData("", 3000)]
     [InlineData(", \"fallback_reserve_ms\": 0", 0)]
     [InlineData(", \"fallback_reserve_ms\": 1000", 1000)]
     public async Task ANodeLeavesItsFallback_TheFallbacksTimeout_UnlessItSaysOtherwise(string reserve, int expectedMs)
@@ -101,7 +91,6 @@ public sealed class NodeFallbackConfigTests
         public required string OutputCol { get; init; }
     }
 
-    /// <summary><c>Budget@1</c>: notes the time budget it was given, then fails, so the fallback serves.</summary>
     private sealed class BudgetFactory(Budgets budgets) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("Budget", 1, Effects.ColumnWriter, typeof(BudgetConfig), "Notes its budget, then fails.");

@@ -8,11 +8,6 @@ using StrataRec.Testing;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The timing policy of the sample tests (<see cref="HomeFeedTestHost"/>): the untimed copy raises every budget and changes
-/// nothing else, the relaxation refuses to guess at a budget it does not know, and a comparison of two live runs that
-/// decided differently names the node.
-/// </summary>
 public sealed class SampleTimingTests
 {
     [Fact]
@@ -30,7 +25,6 @@ public sealed class SampleTimingTests
             Assert.True(expected == File.ReadAllText(Path.Combine(untimed, file)), $"{file} differs from the sample by more than its budgets");
         }
 
-        // The sample demonstrates a real budget and its fallback; the untimed copy keeps the fallback.
         Assert.Equal((50, "ctr_backup"), Ranker(HomeFeedTestHost.Load(SampleTiming.AsWritten).Plan()));
         var plan = HomeFeedTestHost.Load().Plan();
         Assert.Equal((HomeFeedTestHost.UntimedMs, "ctr_backup"), Ranker(plan));
@@ -71,7 +65,7 @@ public sealed class SampleTimingTests
         var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => LiveRunAssert.SameNodeOutcomes(served, fellBack));
 
         Assert.Contains("\n  ctr_ranker: succeeded → fallback by ctr_backup (", error.Message);
-        Assert.Single(error.Message.Split('\n'), line => line.StartsWith("  ", StringComparison.Ordinal)); // only that node differs
+        Assert.Single(error.Message.Split('\n'), line => line.StartsWith("  ", StringComparison.Ordinal));
         LiveRunAssert.SameNodeOutcomes(served, fellBack, except: "ctr_ranker");
     }
 
@@ -116,8 +110,7 @@ public sealed class SampleTimingTests
     [Fact]
     public async Task ATracedAndARecordedRun_ServedByTheFallbackPipeline_CompareByTheServedRun()
     {
-        // A trace has only the run that served; a recording has the primary's too. Both compare by the served pipeline and
-        // its run, and a request the primary served differs in which pipeline served.
+        // A trace has only the run that served; a recording has the primary's too.
         var failing = Engine(ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0));
         var healthyRoot = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         ReplayTests.Edit(healthyRoot, "bindings/local.jsonc", "\"fail\": true", "\"fail\": false");

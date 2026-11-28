@@ -13,10 +13,8 @@ public sealed record RankedItem(EntityKey Id, int Rank, IReadOnlyDictionary<stri
 /// per item, made the first time they are read.
 /// </summary>
 /// <remarks>
-/// <para>Most callers read <c>Items</c>: a result returns far fewer rows than were recalled, and a dictionary per row is the
-/// easy way to read them. A caller that returns many rows and processes them further reads these columns instead, and no
-/// row dictionary is made: a value per item and column, in one array per column (5,000 items of 8 columns: about 1 MB,
-/// where the rows are 3.4 MB). <c>RecResultJson</c> writes from the columns too.</para>
+/// <para>A caller that returns many rows and processes them further reads these columns instead, and no row dictionary
+/// is made.</para>
 /// <para>Values are held promoted, as every <see cref="ScalarValue"/> is; <see cref="Types"/> says what each column is
 /// declared as, so a host whose own types are narrow reads an <c>int32</c> column with <see cref="ScalarValue.AsInt32"/>
 /// and a <c>float32</c> one with <see cref="ScalarValue.AsFloat32"/>, exactly. An output column that is nothing but a
@@ -191,7 +189,7 @@ public sealed class ResultColumns
     /// </summary>
     public IReadOnlyList<RankedItem> Rows =>
         // Built under a lock the first time only, so threads reading first together do not each build a dictionary per
-        // row (a publish race built them all, kept one); later reads take the published rows without it.
+        // row; later reads take the published rows without it.
         Volatile.Read(ref _rows) ?? LazyInitializer.EnsureInitialized(ref _rows, ref _rowsLock, BuildRows);
 
     private IReadOnlyList<RankedItem> BuildRows()

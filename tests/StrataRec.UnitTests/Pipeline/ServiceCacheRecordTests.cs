@@ -17,19 +17,10 @@ using static StrataRec.UnitTests.Pipeline.ServiceCacheRig;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// A service's cache: what a record must be to be read, when the cache may answer at all, when
-/// it judges a record, what it keeps of an answer, and which answers one key may share.
-/// </summary>
 public sealed class ServiceCacheRecordTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
-    /// <summary>
-    /// A record whose envelope is valid but whose layout this code never writes (a type code out of range, a width its
-    /// lists do not hold) is never read: the service answers, and nothing of the record reaches the local tier. It threw
-    /// while the answer was put together, and the write-back copied it into the local tier, where every later call threw.
-    /// </summary>
     [Theory]
     [InlineData("type", 3, 123)]
     [InlineData("width", 4, 2)]
@@ -56,14 +47,10 @@ public sealed class ServiceCacheRecordTests
 
         Assert.True(status.Succeeded && again.Succeeded, status.Error ?? again.Error);
         Assert.Equal([81f], Floats(response, "p"));
-        Assert.Equal([81f], Floats(answered, "p")); // the service's answer, kept by the local tier
+        Assert.Equal([81f], Floats(answered, "p"));
         Assert.Single(reader.Service.Calls);
     }
 
-    /// <summary>
-    /// A call its node could no longer send (the budget ran out, the caller cancelled) is not answered from the cache
-    /// either: it throws as the call without a cache does. A local hit answered it.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -86,14 +73,10 @@ public sealed class ServiceCacheRecordTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => plain.CallAsync(rig.Unbound, call, new ServiceResponse(memory)));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cached.CallAsync(rig.Bound, call, new ServiceResponse(memory)));
-        Assert.Single(rig.Service.Calls); // the first call's
+        Assert.Single(rig.Service.Calls);
         memory.Release();
     }
 
-    /// <summary>
-    /// A distributed read that takes all of the service's <c>timeout_ms</c> leaves no time to call the service: the call
-    /// times out, and the service is not called. It was called with a fresh millisecond of its own.
-    /// </summary>
     [Fact]
     public async Task ADistributedReadThatTakesTheServicesTime_LeavesNoCallOfTheService()
     {
@@ -108,11 +91,6 @@ public sealed class ServiceCacheRecordTests
         Assert.Equal(ServiceStatus.Failed("timed out after 40 ms"), status);
     }
 
-    /// <summary>
-    /// An item is cached by what it saw of each input: a shared <c>[1, d]</c> input is all of it, in a call of two items
-    /// and in a call of the item alone, whose record the other answers (in a batch of one the
-    /// shared input was per item by its shape, and the item's key changed with the batch).
-    /// </summary>
     /// <remarks>A view of a few values enters a key inline, one of more as its own digest (<paramref name="width"/> 64): both alike in a batch of one and of two, for a shared input and for an item's own.</remarks>
     [Theory]
     [InlineData(2)]
@@ -146,15 +124,9 @@ public sealed class ServiceCacheRecordTests
         Assert.True(status.Succeeded && both.Succeeded, status.Error ?? both.Error);
         Assert.Equal([1f], Floats(response, "p"));
         Assert.Equal([3f, 2f], Floats(again, "p"));
-        Assert.Equal(2, rig.Service.Calls.Count); // [1, 2] and [3]
+        Assert.Equal(2, rig.Service.Calls.Count);
     }
 
-    /// <summary>
-    /// A call whose items share an input (a user vector, <c>[1, d]</c>) reads it once for their keys, not once for every
-    /// item (a full hit of 2,048 items hashed a vector of 4,096 values 2,048 times, which used up its
-    /// node's budget). The per-item input is still read per item, and every item still hits.
-    /// </summary>
-    /// <remarks>A shared string is one value, of any size (one was encoded again for every item); a few shared values are encoded once too.</remarks>
     [Fact]
     public async Task ASharedInput_IsHashedOnceForTheItemsKeys_NotOnceAnItem()
     {
@@ -184,16 +156,11 @@ public sealed class ServiceCacheRecordTests
         var (status, response) = await rig.CallAsync(WithShared());
 
         Assert.True(status.Succeeded, status.Error);
-        Assert.Equal(x.Select(v => v * 10), Floats(response, "p")); // as the service answered them
-        Assert.Single(rig.Service.Calls); // the second call is a full hit
-        Assert.All(new[] { wide.Reads - before.Item1, small.Reads - before.Item2, text.Reads - before.Item3 }, reads => Assert.InRange(reads, 1, 4)); // a few, not one an item
+        Assert.Equal(x.Select(v => v * 10), Floats(response, "p"));
+        Assert.Single(rig.Service.Calls);
+        Assert.All(new[] { wide.Reads - before.Item1, small.Reads - before.Item2, text.Reads - before.Item3 }, reads => Assert.InRange(reads, 1, 4));
     }
 
-    /// <summary>
-    /// A store that cancels its own read, with the service's time left, leaves its rows to the service: only the service's
-    /// deadline uses up its time (the store's own cancellation was taken for that deadline, and
-    /// a healthy service was not called).
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -218,10 +185,6 @@ public sealed class ServiceCacheRecordTests
         Assert.Equal([1L, 2L], Ids(response));
     }
 
-    /// <summary>
-    /// A store's read that completed at once is consumed once, as one that completed later: a store may pool what backs
-    /// it and take it back only then (a service's cache read only its status).
-    /// </summary>
     [Fact]
     public async Task AStoreReadThatCompletedAtOnce_IsConsumed()
     {
@@ -262,10 +225,6 @@ public sealed class ServiceCacheRecordTests
             continuation(state);
     }
 
-    /// <summary>
-    /// A distributed record is judged when the read answers: one fresh when the call started that expired while the read
-    /// took its time is not a hit, and the service answers. It was judged by the time the call started.
-    /// </summary>
     [Fact]
     public async Task ADistributedRecord_IsJudgedWhenTheReadAnswers()
     {
@@ -289,10 +248,6 @@ public sealed class ServiceCacheRecordTests
         Assert.Equal("a100", text);
     }
 
-    /// <summary>
-    /// A stale record answers a failure of the service only while it is within <c>stale_if_error_ms</c> when the service
-    /// failed: one that passed it while the call took its time does not, and the call fails as the service did.
-    /// </summary>
     [Fact]
     public async Task AStaleRecordPastItsWindowWhenTheServiceFails_DoesNotAnswer()
     {
@@ -301,10 +256,10 @@ public sealed class ServiceCacheRecordTests
         var query = Query(1, limit: 1);
         Assert.True((await rig.CallAsync(query)).Status.Succeeded);
         Assert.Equal(1, rig.Apply());
-        rig.Clock.AdvanceMs(2000); // stale, within its window
+        rig.Clock.AdvanceMs(2000);
         store.BeforeGet = _ =>
         {
-            rig.Clock.AdvanceMs(5000); // past it by the time the service fails
+            rig.Clock.AdvanceMs(5000);
             return ValueTask.CompletedTask;
         };
         rig.Service.Fail = true;
@@ -317,7 +272,6 @@ public sealed class ServiceCacheRecordTests
 
     /// <summary>
     /// A string slot the service left unwritten (null) is served as it is and not cached: a record has no null string.
-    /// Encoding it threw, and a call that had answered failed.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -327,7 +281,7 @@ public sealed class ServiceCacheRecordTests
         var rig = new ServiceCacheRig();
         var client = new Client((_, response) =>
         {
-            response.GetValues<string>("s", 1).Span[0] = null!; // allocated, never written
+            response.GetValues<string>("s", 1).Span[0] = null!;
             response.GetValues<string>("t", 2).Span[0] = "written";
             return ServiceStatus.Ok;
         });
@@ -346,8 +300,7 @@ public sealed class ServiceCacheRecordTests
 
     /// <summary>
     /// A call about items whose generation was cut short is served and not cached: the truncation is the whole call's,
-    /// not any item's, so a later call of the items (alone or with others) asks the service again. Its items were cached,
-    /// and a hit said it was not truncated.
+    /// not any item's, so a later call of the items (alone or with others) asks the service again.
     /// </summary>
     [Fact]
     public async Task ATruncatedAnswerAboutItems_IsServed_AndNotCached()
@@ -365,9 +318,9 @@ public sealed class ServiceCacheRecordTests
     }
 
     /// <summary>
-    /// The items a service added past the limit are counted on a cached call as on the service's own answer, cold and from
-    /// the record. A record answering a smaller limit answers as a service keeping to that limit would: the start of its
-    /// list, none dropped (its items past the smaller limit were counted as dropped, 2 here).
+    /// The items a service added past the limit are counted on a cached call as on the service's own answer, cold and
+    /// from the record. A record answering a smaller limit answers as a service keeping to that limit would: the start
+    /// of its list, none dropped.
     /// </summary>
     [Fact]
     public async Task TheItemsAServiceAddsPastTheLimit_AreCountedOnACachedCall()
@@ -399,9 +352,9 @@ public sealed class ServiceCacheRecordTests
     }
 
     /// <summary>
-    /// A call about no items that reads named outputs is answered only by an answer to its own limit: an output or a text
-    /// may say how many items it was asked for. A call that reads only its items still takes a longer list's start, or an
-    /// exhausted one. A record of another limit answered with its outputs.
+    /// A call about no items that reads named outputs is answered only by an answer to its own limit: an output or a
+    /// text may say how many items it was asked for. A call that reads only its items still takes a longer list's
+    /// start, or an exhausted one.
     /// </summary>
     [Theory]
     [InlineData(3, 1)]
@@ -432,16 +385,11 @@ public sealed class ServiceCacheRecordTests
 
         Assert.True(reading.TryGetText("summary", out var summary));
         Assert.Equal("asked " + next, summary);
-        Assert.Equal(Enumerable.Range(1, Math.Min(3, next)).Select(i => (long)i), Ids(listing)); // from the record
+        Assert.Equal(Enumerable.Range(1, Math.Min(3, next)).Select(i => (long)i), Ids(listing));
         Assert.Equal(3, client.Calls);
         memory.Release();
     }
 
-    /// <summary>
-    /// A missing input of a call about items whose shape is per item (its leading dimension the batch size) is missing on
-    /// every row: the call of the items the cache missed sends it at their batch size, as a present one is cut to their
-    /// rows. It was sent at the whole call's, and the service rejected the shape.
-    /// </summary>
     [Fact]
     public async Task AMissingPerItemInput_IsSentAtTheBatchOfTheItemsTheCacheMissed()
     {
@@ -473,11 +421,10 @@ public sealed class ServiceCacheRecordTests
         var status = await context.CallAsync(rig.With(client), Of(41, 43), new ServiceResponse(memory));
 
         Assert.True(status.Succeeded, status.Error);
-        Assert.Equal(2, client.Calls); // the second for item 43 alone
+        Assert.Equal(2, client.Calls);
         memory.Release();
     }
 
-    /// <summary>A missing input of a call about items has the shape of an input too: per item, or shared with leading dimension 1.</summary>
     [Fact]
     public async Task AMissingInputOfACallAboutItems_IsPerItemOrShared()
     {
@@ -497,10 +444,6 @@ public sealed class ServiceCacheRecordTests
         memory.Release();
     }
 
-    /// <summary>
-    /// Bindings that share a distributed store share answers only when they answer with the same client and settings: a
-    /// binding whose settings changed (a hot reload, another deployment) does not read the answers the earlier one left.
-    /// </summary>
     [Fact]
     public async Task BindingsSharingAStore_ShareAnswersOnlyWithTheSameIdentity()
     {
@@ -523,11 +466,6 @@ public sealed class ServiceCacheRecordTests
         Assert.Empty(same.Service.Calls);
     }
 
-    /// <summary>
-    /// A stale distributed record newer than the stale local one is kept for a failure of the service: when the service
-    /// fails after the local record has left <c>stale_if_error_ms</c>, the newer one still answers, as it does for a
-    /// reader with no local record. The local record hid it, and the call failed.
-    /// </summary>
     [Fact]
     public async Task ANewerDistributedStaleRecord_AnswersWhenTheOlderLocalOneHasExpired()
     {
@@ -548,10 +486,10 @@ public sealed class ServiceCacheRecordTests
         Assert.Equal([22L], Ids(newer.Response));
         await store.WhenWrittenAsync(2).WaitAsync(Patience, token);
 
-        reader.Clock.AdvanceMs(5000); // the local record is stale, still within its window
+        reader.Clock.AdvanceMs(5000);
         store.BeforeGet = _ =>
         {
-            reader.Clock.AdvanceMs(2000); // past it by the time the read answers, the newer one is not
+            reader.Clock.AdvanceMs(2000);
             return ValueTask.CompletedTask;
         };
         reader.Service.Fail = true;
@@ -562,10 +500,6 @@ public sealed class ServiceCacheRecordTests
         Assert.NotNull(reader.Last!.DegradedReason);
     }
 
-    /// <summary>
-    /// A record whose header says what no response holds (more items than the limit it was asked, items dropped past a
-    /// list that was not full) is never read: the service answers. It was read.
-    /// </summary>
     [Theory]
     [InlineData("items past the limit asked", 0, 0)]
     [InlineData("dropped past a list not full", 3, 1)]
@@ -598,9 +532,9 @@ public sealed class ServiceCacheRecordTests
     }
 
     /// <summary>
-    /// A call whose caller cancels while the cache reads it (a host's listener on the cache's metrics, here) is not answered
-    /// from the cache: an answer is taken only if the node could still send the call when it is observed, as a service's
-    /// answer is. It was answered.
+    /// A call whose caller cancels while the cache reads it (a host's listener on the cache's metrics, here) is not
+    /// answered from the cache: an answer is taken only if the node could still send the call when it is observed, as a
+    /// service's answer is.
     /// </summary>
     [Fact]
     public async Task ACallCancelledWhileTheCacheReadsIt_IsNotAnsweredFromIt()
@@ -637,15 +571,10 @@ public sealed class ServiceCacheRecordTests
 
         Assert.True(cancellation.IsCancellationRequested);
         Assert.IsAssignableFrom<OperationCanceledException>(thrown);
-        Assert.Single(rig.Service.Calls); // the first call's
+        Assert.Single(rig.Service.Calls);
         memory.Release();
     }
 
-    /// <summary>
-    /// Stale values answer a call only if the node could still send it then, as an answer of the tiers alone is: a caller
-    /// that cancelled while the distributed tier used up the service's time got them, and the node succeeded Degraded
-    ///.
-    /// </summary>
     [Fact]
     public async Task ACallCancelledWhileTheDistributedTierUsesUpTheServicesTime_IsNotAnsweredWithStaleValues()
     {
@@ -656,8 +585,8 @@ public sealed class ServiceCacheRecordTests
         Assert.True((await rig.CallAsync(call)).Status.Succeeded);
         Assert.Equal(1, rig.Apply());
         await store.WhenWrittenAsync(1).WaitAsync(Patience, token);
-        rig.Clock.AdvanceMs(2000); // stale locally, within stale_if_error_ms
-        store.BeforeGet = async _ => await Task.Delay(500, token); // past the service's 100 ms
+        rig.Clock.AdvanceMs(2000);
+        store.BeforeGet = async _ => await Task.Delay(500, token);
 
         using var cancellation = new CancellationTokenSource();
         var armed = 0;
@@ -695,15 +624,10 @@ public sealed class ServiceCacheRecordTests
         Assert.True(cancellation.IsCancellationRequested);
         Assert.IsAssignableFrom<OperationCanceledException>(thrown);
         Assert.Null(context.DegradedReason);
-        Assert.Single(rig.Service.Calls); // the first call's
+        Assert.Single(rig.Service.Calls);
         memory.Release();
     }
 
-    /// <summary>
-    /// A call about items through a cache that keeps nothing is the call without the cache: nothing would keep, and no
-    /// other call would take, what a cache builds for each item, so it takes from the request's memory what the plain
-    /// call takes and no more.
-    /// </summary>
     [Fact]
     public async Task ACallAboutItems_ThroughACacheThatKeepsNothing_TakesWhatACallWithoutACacheTakes()
     {
@@ -735,7 +659,6 @@ public sealed class ServiceCacheRecordTests
         Assert.Equal(rented[0], rented[1]);
     }
 
-    /// <summary>Counts the elements rented from it.</summary>
     private sealed class CountingPool : IBufferPool
     {
         private long _rented;
@@ -751,12 +674,6 @@ public sealed class ServiceCacheRecordTests
         public void Return<T>(T[] array, bool clearArray) => SharedArrayBufferPool.Instance.Return(array, clearArray);
     }
 
-    /// <summary>
-    /// A call its operator did not wait for ends after its request has returned. It still reads what it rented (its
-    /// keys, the service's answer) when the service answers, so it holds the request's memory until it has ended: its
-    /// record is written under the key it was read by, and the next call for it is answered from the cache. (The call
-    /// held the memory only while the client ran: the record went under whatever the returned buffer then held.)
-    /// </summary>
     [Fact]
     public async Task ACallThatOutlivesItsRequest_WritesItsRecordUnderTheKeyItReadBy()
     {
@@ -778,7 +695,6 @@ public sealed class ServiceCacheRecordTests
         Assert.Single(rig.Service.Calls);
     }
 
-    /// <summary>Answers as <paramref name="inner"/> does, once it is let go.</summary>
     private sealed class HeldClient(IServiceClient inner) : IServiceClient
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -812,7 +728,6 @@ public sealed class ServiceCacheRecordTests
         Variants = [],
     }, "n", Effects.ColumnWriter, new AttemptBudget(token, deadline));
 
-    /// <summary>A service whose answer is a delegate, answering at once; counts its calls.</summary>
     private sealed class Client(Func<ServiceCall, IServiceResponse, ServiceStatus> answer) : IServiceClient
     {
         private int _calls;

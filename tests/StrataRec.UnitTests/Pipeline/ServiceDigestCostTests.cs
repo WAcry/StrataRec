@@ -6,14 +6,9 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>What laying out a call's digests and checking its inputs cost. With the allocation measurements, which run alone.</summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class ServiceDigestCostTests
 {
-    /// <summary>
-    /// The items' digests and keys of a call of up to 64 inputs allocate nothing once the pools are warm
-    /// (a call of exactly 32 took its layout from the heap).
-    /// </summary>
     [Theory]
     [InlineData(31)]
     [InlineData(32)]
@@ -38,11 +33,6 @@ public sealed class ServiceDigestCostTests
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
 
-    /// <summary>
-    /// Two different input names of one hash are compared with each other only: a call of many inputs is checked as fast
-    /// as one without (one collision compared every pair, and 16,384 inputs took 381 ms), and a real
-    /// duplicate elsewhere is still found.
-    /// </summary>
     [Fact]
     public void InputNamesOfOneHash_AreComparedWithEachOtherOnly()
     {

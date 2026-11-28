@@ -22,8 +22,7 @@ namespace StrataRec.Pipeline.Sources;
 /// not a list of float32s or float64s (the declared type of the expression it is, e.g. <c>list&lt;float32,64&gt;</c>), a
 /// vector of another length than the items', or a score that is not finite (vectors too large for a float64 dot product)
 /// is a failed call, naming them. A float32 vector is scored in float64, as a float64 one.</para>
-/// <para>An exhaustive scan, for the few thousand items of a fixture: its scratch is rented from the shared pool, so a
-/// request allocates nothing for it.</para>
+/// <para>An exhaustive scan, for the few thousand items of a fixture.</para>
 /// </remarks>
 public sealed class MemoryVectorsService : IServiceClient
 {
@@ -76,7 +75,7 @@ public sealed class MemoryVectorsService : IServiceClient
 
         if (input.IsMissing || _dimensions == 0)
         {
-            return ServiceStatus.Ok; // nothing to search with, or nothing to find: the node's other sources answer
+            return ServiceStatus.Ok;
         }
 
         // The shape says how many elements the vector has; its data may be a longer buffer.
@@ -126,7 +125,6 @@ public sealed class MemoryVectorsService : IServiceClient
 
                 if (!double.IsFinite(score))
                 {
-                    // A product overflowed: the order (and min_score) would be decided by NaN or infinity.
                     return ServiceStatus.Failed(
                         $"The dot product of item {(_stringIds[i] ?? _int64Ids[i].ToString(System.Globalization.CultureInfo.InvariantCulture))} with the query vector " +
                         $"'{_query}' is not finite; scale the vectors so it fits a float64.");
@@ -170,7 +168,6 @@ public sealed class MemoryVectorsService : IServiceClient
         long[] int64Ids, string?[] stringIds, double[] vectors, int dimensions, string query, double? minScore, int latencyMs, bool fail) =>
         new(int64Ids, stringIds, vectors, dimensions, query, minScore, latencyMs, fail);
 
-    /// <summary>Best score first; ties by id, int64 ids (ascending) before string ids (ordinal).</summary>
     private readonly struct Ranking(double[] scores, long[] int64Ids, string?[] stringIds) : IComparer<int>
     {
         public int Compare(int a, int b)
@@ -263,7 +260,6 @@ public sealed class MemoryVectorsServiceFactory : BindingFactory<IServiceClient,
             throw new BindingException("/min_score", $"'min_score' must be a finite number, got {min}.", "remove it to return every item");
         }
 
-        // Items in the binding are the binding's; else the file's, whose errors are reported at data_file.
         if (settings.Items is { } own)
         {
             return Index(settings, own);
@@ -281,7 +277,7 @@ public sealed class MemoryVectorsServiceFactory : BindingFactory<IServiceClient,
     private static MemoryVectorsService Index(MemoryVectorsSettings settings, List<MemoryVectorsItem> items)
     {
         const string pointer = "/items";
-        var dimensions = items.Count == 0 ? 0 : items[0].Vector.Count; // no items: every query finds nothing
+        var dimensions = items.Count == 0 ? 0 : items[0].Vector.Count;
         var int64Ids = new long[items.Count];
         var stringIds = new string?[items.Count];
         var vectors = new double[items.Count * dimensions];
@@ -323,7 +319,6 @@ public sealed class MemoryVectorsServiceFactory : BindingFactory<IServiceClient,
             int64Ids, stringIds, vectors, dimensions, settings.Query, settings.MinScore, settings.LatencyMs ?? 0, settings.Fail ?? false);
     }
 
-    /// <summary>What <paramref name="read"/> finds wrong in the data file, reported at its setting, naming the place in the file.</summary>
     private static T Read<T>(LocalFile file, Func<T> read)
     {
         try

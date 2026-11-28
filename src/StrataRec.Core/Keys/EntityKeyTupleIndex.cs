@@ -13,10 +13,8 @@ namespace StrataRec.Core.Keys;
 /// <para>For the parts that vary per key only: the shared parts of a batch (a request input) are the same for every key,
 /// so a caller leaves them out and indexes the rest. A key whose only varying part is one column is an
 /// <see cref="EntityKeyIndex"/>, which compares and hashes one <c>long</c> or string; this index is for two or more.</para>
-/// <para>Open addressing with linear probing over a power-of-two slot table kept at most half full, as
-/// <see cref="EntityKeyIndex"/>. Each entry stores its tuple's hash, so a probe compares parts only when the hashes match
-/// and growing never rehashes a string. Parts are stored part-major (<see cref="PartKeys"/>): part p of every entry is one
-/// contiguous run, in insertion order, which is how a batch of keys lays them out.</para>
+/// <para>Parts are stored part-major (<see cref="PartKeys"/>): part p of every entry is one contiguous run, in
+/// insertion order, which is how a batch of keys lays them out.</para>
 /// <para>Not thread-safe; used on the request's logical thread. Nothing may use it after its memory is released.</para>
 /// </remarks>
 public sealed class EntityKeyTupleIndex
@@ -27,10 +25,10 @@ public sealed class EntityKeyTupleIndex
     private readonly RequestMemory _memory;
     private int _partCount;
     private int[] _slots = Array.Empty<int>();
-    private int _slotMask = -1; // no slots until the first Reset allocates them
+    private int _slotMask = -1;
     private int _shift;
     private int _maxCount;
-    private EntityKey[] _parts = Array.Empty<EntityKey>(); // part p of entry e at p * _maxCount + e
+    private EntityKey[] _parts = Array.Empty<EntityKey>();
     private int[] _hashes = Array.Empty<int>();
     private int[] _values = Array.Empty<int>();
     private int _count;
@@ -72,8 +70,8 @@ public sealed class EntityKeyTupleIndex
     }
 
     /// <summary>
-    /// Empties the index and readies it for <paramref name="capacity"/> tuples of <paramref name="partCount"/> parts without
-    /// growing: a caller that indexes one batch after another keeps one index and costs no object per batch.
+    /// Empties the index and readies it for <paramref name="capacity"/> tuples of <paramref name="partCount"/> parts
+    /// without growing.
     /// </summary>
     public void Reset(int partCount, int capacity)
     {
@@ -125,8 +123,7 @@ public sealed class EntityKeyTupleIndex
     }
 
     /// <summary>
-    /// Returns the value of <paramref name="tuple"/>, adding it with <paramref name="value"/> first when it is absent — one
-    /// probe sequence for both.
+    /// Returns the value of <paramref name="tuple"/>, adding it with <paramref name="value"/> first when it is absent.
     /// </summary>
     public int GetOrAdd(ReadOnlySpan<EntityKey> tuple, int value, out bool added)
     {
@@ -167,7 +164,6 @@ public sealed class EntityKeyTupleIndex
         return value;
     }
 
-    /// <summary>The tuple's hash: each part's (a string's ordinal hash, an int64's), mixed in order.</summary>
     private static int Hash(ReadOnlySpan<EntityKey> tuple)
     {
         var hash = default(HashCode);

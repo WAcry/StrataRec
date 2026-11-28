@@ -11,10 +11,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// Lists of every element type through the feature layer: connector staging, the memory connector,
-/// backfill and the non-finite rule for float lists, context values, configuration values and type spellings.
-/// </summary>
 public class ListElementFeatureTests
 {
     private static readonly long[] ThreeItems = { 1, 2, 3 };
@@ -59,7 +55,7 @@ public class ListElementFeatureTests
         Assert.Contains("SetFloat32List", Assert.Throws<InvalidOperationException>(() => staging.SetFloat64List(0, 0, new[] { 1.0 })).Message);
         Assert.Contains("SetFloat64List", Assert.Throws<InvalidOperationException>(() => staging.SetFloat32List(1, 0, new[] { 1f })).Message);
         Assert.Contains("SetBoolList", Assert.Throws<InvalidOperationException>(() => staging.SetInt32List(2, 0, new[] { 1 })).Message);
-        Assert.Throws<InvalidOperationException>(() => staging.SetBoolList(4, 0, new[] { true })); // not a list at all
+        Assert.Throws<InvalidOperationException>(() => staging.SetBoolList(4, 0, new[] { true }));
         Assert.Throws<ArgumentNullException>(() => staging.SetStringList(3, 0, new[] { "a", null! }));
         Assert.False(staging.HasValue(3, 0));
 
@@ -136,7 +132,7 @@ public class ListElementFeatureTests
         Assert.Equal((double)0.1f, request.ContextValue(scalar).AsFloat64());
         Assert.True(request.ContextValue(scalar).IsFloat32);
         Assert.Equal(5, request.ContextValue(scalarOverflow).AsFloat64());
-        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.1, 1e300 }), request.ContextValue(wide)); // float64 keeps it
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { 0.1, 1e300 }), request.ContextValue(wide));
         Assert.Equal(2, request.Fetcher.NonFiniteReplaced);
 
         static int Derived(FeatureTestRig rig, string name, string type, ScalarValue value, ScalarValue? defaultValue = null) =>
@@ -147,8 +143,6 @@ public class ListElementFeatureTests
     [Fact]
     public async Task ContextFloatFeatures_PublishTheirDefaultAndIntegerResults_AsStorageHoldsThem()
     {
-        // The default replacing a missing or non-finite value, and an integer result of a float32 feature,
-        // were published as given (0.1 as the double, 16777217 exactly), not as the float32 a candidate column holds.
         var rig = new FeatureTestRig();
         var missing = Derived(rig, "user.m", "list<float32>", ScalarValue.Missing, ScalarValue.FromFloat64List(new[] { 0.1 }));
         var nonFinite = Derived(rig, "user.n", "float32", ScalarValue.FromFloat64(double.NaN), ScalarValue.FromFloat64(0.1));
@@ -162,8 +156,8 @@ public class ListElementFeatureTests
 
         Assert.Equal(ScalarValue.FromFloat32List(new[] { 0.1f }), request.ContextValue(missing));
         Assert.Equal((double)0.1f, request.ContextValue(nonFinite).AsFloat64());
-        Assert.Equal(16_777_216, request.ContextValue(integer).AsFloat64()); // what a float32 column holds
-        Assert.Equal(ScalarValue.FromFloat64(3), request.ContextValue(wide)); // a float64 feature holds a float
+        Assert.Equal(16_777_216, request.ContextValue(integer).AsFloat64());
+        Assert.Equal(ScalarValue.FromFloat64(3), request.ContextValue(wide));
 
         static int Derived(FeatureTestRig rig, string name, string type, ScalarValue value, ScalarValue? defaultValue = null) =>
             rig.Derived(name, FeatureTestRig.User, ColumnType.Parse(type), new TestExpression("v", ColumnType.Parse(type).Promoted(), scalar: _ => value),
@@ -173,8 +167,6 @@ public class ListElementFeatureTests
     [Fact]
     public async Task FixedLengthContextFeatures_OfAnotherLength_TakeTheDefault_OrAreMissing_OrFail_AndAreCounted()
     {
-        // As a candidate column's writers do: a list of another length than list<E,N> is out of range, whatever
-        // its elements, even a non-finite one.
         var rig = new FeatureTestRig();
         var fits = Derived(rig, "user.fits", "list<float32,2>", ScalarValue.FromFloat64List(new[] { 0.5, 1 }));
         var defaulted = Derived(rig, "user.d", "list<float32,2>", ScalarValue.FromFloat64List(new[] { 1.0, 2, 3 }), ScalarValue.FromFloat64List(new[] { 0.0, 0.0 }));
@@ -245,7 +237,6 @@ public class ListElementFeatureTests
     [InlineData("-1e39", "float32", "must be within the float32 range [-3.4028235E+38, 3.4028235E+38], got the number -1e39; declare the type as float64")]
     public void ConfigValuesBeyondFloat32_AreRejected_WithAFix(string json, string type, string error)
     {
-        // A default (or input) a float32 column would hold as an infinity is not a value anyone meant.
         Assert.False(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type), out _, out var message));
         Assert.Contains(error, message, StringComparison.Ordinal);
         Assert.True(ConfigValues.TryToScalar(JsonNode.Parse(json), ColumnType.Parse(type).Promoted(), out _, out _));
@@ -259,7 +250,7 @@ public class ListElementFeatureTests
         Assert.Contains("float32 range", scalar, StringComparison.Ordinal);
         Assert.False(ConfigValues.TryConvert(ScalarValue.FromFloat64List(new[] { 0.5, -1e300 }), ColumnType.Parse("list<float32>"), out _, out var list));
         Assert.Contains("element 1 is the number -1E+300", list, StringComparison.Ordinal);
-        Assert.True(ConfigValues.TryConvert(ScalarValue.FromFloat64(double.NaN), ColumnType.Float32.AsNullable(), out _, out _)); // NaN is NaN in either width
+        Assert.True(ConfigValues.TryConvert(ScalarValue.FromFloat64(double.NaN), ColumnType.Float32.AsNullable(), out _, out _));
     }
 
     [Fact]
@@ -270,7 +261,6 @@ public class ListElementFeatureTests
         Assert.Equal(ScalarValue.FromFloat64List(new double[] { 1, 2 }), ConfigValues.ToScalar(JsonNode.Parse("[1, 2]"), ColumnType.Parse("list<float64>")));
         Assert.Equal(ScalarValue.FromStringList(Array.Empty<string>()), ConfigValues.ToScalar(JsonNode.Parse("[]"), ColumnType.Parse("list<string>")));
 
-        // A host's typed value converts as JSON does: integers into a float list.
         Assert.True(ConfigValues.TryConvert(ScalarValue.FromInt64List(new long[] { 1, 2 }), ColumnType.Parse("list<float32>"), out var converted, out _));
         Assert.Equal(ScalarValue.FromFloat64List(new double[] { 1, 2 }), converted);
     }
@@ -303,7 +293,6 @@ public class ListElementFeatureTests
     [Fact]
     public void ANullableElement_InAFeatureType_SuggestsThePlainList()
     {
-        // A feature is never written with '?'; a feature that may be missing is the one without a default.
         Assert.False(ConfigTypes.TryParse("list<int32?>", TypeSite.Feature, out _, out _, out var message, out var hint));
         Assert.Contains("did you mean 'list<int32>'?", hint, StringComparison.Ordinal);
         Assert.Contains("a feature without 'default' is the one that may be missing", message, StringComparison.Ordinal);

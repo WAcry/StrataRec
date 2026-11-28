@@ -15,10 +15,8 @@ internal sealed class PlanTelemetry
         Nodes = nodes;
     }
 
-    /// <summary><c>stratarec.pipeline</c>.</summary>
     public KeyValuePair<string, object?>[] Pipeline { get; }
 
-    /// <summary>Per node variant, indexed by <see cref="CompiledNode.Index"/>.</summary>
     public NodeTelemetry[] Nodes { get; }
 
     public static PlanTelemetry Create(ExecutionPlan plan)
@@ -28,7 +26,6 @@ internal sealed class PlanTelemetry
         var byId = new Dictionary<string, NodeTelemetry>(StringComparer.Ordinal);
         foreach (var node in plan.Nodes)
         {
-            // Variants of one node share its tags; only the output columns may differ.
             nodes[node.Index] = byId.TryGetValue(node.NodeId, out var shared)
                 ? shared.WithOutputs(node)
                 : byId[node.NodeId] = NodeTelemetry.Create(pipeline, node);
@@ -56,16 +53,12 @@ internal sealed class PlanTelemetry
         /// <summary><c>pipeline/node</c>, the subject of windowed failure summaries.</summary>
         public string Subject { get; }
 
-        /// <summary><c>stratarec.pipeline</c>, <c>stratarec.node</c>.</summary>
         public KeyValuePair<string, object?>[] Tags { get; }
 
-        /// <summary>Indexed by <see cref="NodeOutcomeKind"/> (slot 0 unused): the node tags plus <c>stratarec.outcome</c>.</summary>
         public KeyValuePair<string, object?>[][] Outcomes { get; }
 
-        /// <summary>Per entry of <see cref="CompiledNode.Outputs"/>: the node tags plus <c>stratarec.column</c>.</summary>
         public KeyValuePair<string, object?>[][] Outputs { get; }
 
-        /// <summary>Per entry of <see cref="CompiledNode.RequestOutputs"/>: the node tags plus <c>stratarec.column</c>, <c>req.&lt;name&gt;</c>.</summary>
         public KeyValuePair<string, object?>[][] RequestOutputs { get; }
 
         public static NodeTelemetry Create(string pipeline, CompiledNode node)

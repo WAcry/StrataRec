@@ -11,7 +11,6 @@ using StrataRec.Expressions.Vectorized;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>
-/// Builds a scope, a candidate table with bound columns, and request values for expression tests.
 /// Columns are read through <see cref="OutputBindings"/> unless declared as a fixed-slot version (<c>@node</c>).
 /// </summary>
 internal sealed class ExprFixture
@@ -25,7 +24,6 @@ internal sealed class ExprFixture
 
     private readonly IBufferPool? _pool;
 
-    /// <param name="capacity">Physical rows of the table.</param>
     /// <param name="pool">Where the table's arrays come from; one full of old data shows rows read before anything wrote them.</param>
     public ExprFixture(int capacity = 64, IBufferPool? pool = null)
     {
@@ -49,7 +47,6 @@ internal sealed class ExprFixture
 
     public EvalContext Context => new(Table, Bindings, _contextValues, _paramValues, Counters);
 
-    /// <summary>Request-level context without a table.</summary>
     public EvalContext RequestContext => new(null, null, _contextValues, _paramValues, Counters);
 
     public ExprFixture Col(string name, string type)
@@ -91,7 +88,6 @@ internal sealed class ExprFixture
 
     public void SetParam(string name, ScalarValue value) => _paramValues[_params.FindIndex(c => c.Name == name)] = value;
 
-    /// <summary>Creates the table with <paramref name="rows"/> rows (entity ids 1000, 1001, ...) and binds every column.</summary>
     public ExprFixture Build(int rows)
     {
         var slotTypes = new List<ColumnType> { ColumnType.Int64 };
@@ -145,7 +141,6 @@ internal sealed class ExprFixture
     public ScalarColumn<T> Scalar<T>(string name)
         where T : unmanaged => Buffer<ScalarColumn<T>>(name);
 
-    /// <summary>Fills a scalar column with one value per row (null = missing).</summary>
     public void Fill<T>(string name, params T?[] values)
         where T : unmanaged
     {
@@ -185,7 +180,6 @@ internal sealed class ExprFixture
         return diagnostics;
     }
 
-    /// <summary>Evaluates over every live row into a fresh column of the given type; returns that column.</summary>
     public ColumnBuffer EvaluateAll(CompiledExpression expression, string destinationType, ReadOnlySpan<int> rows = default)
     {
         var destination = ColumnBuffer.Create(ColumnType.Parse(destinationType), Capacity, Memory);
@@ -193,7 +187,6 @@ internal sealed class ExprFixture
         return destination;
     }
 
-    /// <summary>Evaluates a row-level expression and returns the per-row results as scalar values (missing → Missing).</summary>
     public ScalarValue[] Rows(string source, params int[] rows)
     {
         var expression = Compile(source);
@@ -210,13 +203,10 @@ internal sealed class ExprFixture
         return result;
     }
 
-    /// <summary>Evaluates an expression for one row through the vectorized backend.</summary>
     public ScalarValue Row(string source, int row) => Rows(source, row)[0];
 
-    /// <summary>Evaluates a request-level expression.</summary>
     public ScalarValue Scalar(string source) => Compile(source).EvaluateScalar(Context);
 
-    /// <summary>Reference-interpreter result for one row (unoptimized IR).</summary>
     public ScalarValue Reference(CompiledExpression expression, int row) =>
         ReferenceInterpreter.Evaluate(((VectorizedExpression)expression).Bound, Context, row);
 
@@ -257,7 +247,6 @@ internal sealed class ExprFixture
     }
 }
 
-/// <summary>A dictionary-backed lookup table for tests.</summary>
 internal sealed class TestLookupTable(string name, ColumnType keyType, ColumnType valueType, Dictionary<ScalarValue, ScalarValue> entries) : ILookupTable
 {
     public string Name { get; } = name;

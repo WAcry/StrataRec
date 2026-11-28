@@ -8,21 +8,17 @@ using System.Xml;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// What a configuration member means, for the hint of an error about it: its <see cref="DescriptionAttribute"/>, else the
-/// summary of its XML documentation when the assembly's documentation file is deployed next to it (the build writes one
-/// for every project). The types that bind configuration are documented for their readers already, so errors reuse that
-/// text instead of a second copy that would drift.
+/// What a configuration member means, for the hint of an error about it: its <see cref="DescriptionAttribute"/>, else
+/// the summary of its XML documentation when the assembly's documentation file is deployed next to it.
 /// </summary>
 /// <remarks>
-/// Error path only: a documentation file is read once, on the first error that needs it. A summary that refers to a type
-/// or method (<c>&lt;see cref="T:…"/&gt;</c>) is not used, since it would show a .NET name to someone writing JSON; a
-/// property reference becomes the member's JSON name.
+/// A summary that refers to a type or method (<c>&lt;see cref="T:…"/&gt;</c>) is not used, since it would show a.NET
+/// name to someone writing JSON; a property reference becomes the member's JSON name.
 /// </remarks>
 internal static class MemberDocs
 {
     private static readonly ConcurrentDictionary<Assembly, Dictionary<string, string>> Summaries = new();
 
-    /// <summary>The member's description as one line, or null when it has none that can be shown.</summary>
     /// <param name="naming">The naming policy of the serializer that binds the member, for property references.</param>
     public static string? Describe(MemberInfo member, JsonNamingPolicy? naming)
     {
@@ -95,7 +91,6 @@ internal static class MemberDocs
         }
         catch (Exception ex) when (ex is XmlException or IOException or UnauthorizedAccessException)
         {
-            // A damaged or unreadable documentation file only costs the hint.
         }
 
         return summaries;
@@ -123,7 +118,7 @@ internal static class MemberDocs
 
                         break;
                     case XmlNodeType.Element when reader.LocalName is "see" or "seealso" && reader.GetAttribute("cref") is { } cref && !IsMember(cref):
-                        return null; // <see cref="T:X">text</see> still names a type
+                        return null;
                 }
             }
         }
@@ -185,10 +180,9 @@ internal static class MemberDocs
                 text.Append(reader.GetAttribute("name"));
                 return true;
             default:
-                return true; // <para/>, <br/>: nothing to show
+                return true;
         }
     }
 
-    /// <summary>A property or field reference, which reads as the member's JSON name.</summary>
     private static bool IsMember(string cref) => cref.StartsWith("P:", StringComparison.Ordinal) || cref.StartsWith("F:", StringComparison.Ordinal);
 }

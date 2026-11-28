@@ -8,11 +8,6 @@ using static StrataRec.UnitTests.Features.Local.LocalTableTestSupport;
 
 namespace StrataRec.UnitTests.Features.Local;
 
-/// <summary>
-/// Reading a local table on the request path allocates nothing: the lookup writes into the caller's
-/// span, and filling writes into column buffers whose arrays come from the request memory. Strings included, whatever
-/// their length: a row gets the table's dictionary instance.
-/// </summary>
 [Collection(AllocationMeasurement.Name)]
 public class LocalFeatureTableAllocationTests
 {
@@ -32,7 +27,6 @@ public class LocalFeatureTableAllocationTests
             Write(table.Writer, Key(keyType, id), 1, Values(id));
         }
 
-        // Every tenth key is absent; every field is read, with a default for half of them.
         var int64Keys = new long[keyCount];
         var stringKeys = new string?[keyCount];
         var random = new Random(7);
@@ -99,10 +93,6 @@ public class LocalFeatureTableAllocationTests
         Assert.Equal(0, best);
     }
 
-    /// <summary>
-    /// A long string field, distinct per record (a description, what was <c>text</c>): a fill allocates nothing however
-    /// many rows it fills, and each row holds the table's own instance, the same in every request, so no request copies it.
-    /// </summary>
     [Fact]
     public void ALongStringField_FillsTheTablesInstances_WithoutAllocatingPerRow()
     {
@@ -130,7 +120,7 @@ public class LocalFeatureTableAllocationTests
             version.Lookup(keys, records);
             var memory = new RequestMemory();
             column = (StringColumn)ColumnBuffer.Create(ColumnType.String.AsNullable(), keyCount, memory);
-            version.Fill(0, records, rows, column, ScalarValue.Missing); // warm
+            version.Fill(0, records, rows, column, ScalarValue.Missing);
             var best = long.MaxValue;
             for (var round = 0; round < 3; round++)
             {
@@ -141,7 +131,7 @@ public class LocalFeatureTableAllocationTests
 
             for (var i = 0; i < keyCount; i++)
             {
-                Assert.Same(version.Read(0, records[i]).AsString(), column.Get(i)); // the dictionary's instance
+                Assert.Same(version.Read(0, records[i]).AsString(), column.Get(i));
             }
 
             return best;
@@ -149,7 +139,7 @@ public class LocalFeatureTableAllocationTests
 
         Assert.Equal(0, Filled(10_000, out var first));
         Assert.Equal(0, Filled(500, out var second));
-        Assert.Same(first.Get(0), second.Get(0)); // another request, the same instance
+        Assert.Same(first.Get(0), second.Get(0));
         Assert.StartsWith("item 1: ", first.Get(0), StringComparison.Ordinal);
     }
 }

@@ -17,23 +17,13 @@ public sealed record JsonBindingError(string Pointer, string Message, string? Hi
 
 /// <summary>
 /// Turns a <see cref="JsonException"/> of System.Text.Json into a <see cref="JsonBindingError"/>: an unknown key with a
-/// "did you mean", a value of the wrong kind (<c>must be an integer, got the string "350"</c>), a missing required key with
-/// what it means, an integer out of range. One translator for every artifact and operator config, so they all report a
-/// mistake alike.
+/// "did you mean", a value of the wrong kind (<c>must be an integer, got the string "350"</c>), a missing required key
+/// with what it means, an integer out of range.
 /// </summary>
 /// <remarks>
-/// <para>The serializer's own messages name .NET types (<c>System.Nullable`1[System.Int32]</c>) and positions in a
-/// re-serialized copy of the document. Instead of parsing them, the translator walks the error's path through the
-/// contract the serializer used (<see cref="JsonTypeInfo"/> from the options; for a polymorphic type, the derived type its
-/// discriminator selects) and through the document, and describes what it finds at the end: the expected kind comes from
-/// the contract, the actual value from the document.</para>
-/// <para>A converter decides what JSON it takes. The kind is inferred from the .NET type only where the serializer's own
-/// converter for that type reads it; a converter of our own words its message for the reader; a string enum converter
-/// is asked for its names; any other converter gets a message that does not guess its shape.</para>
 /// <para>What the translator cannot be sure of it does not claim: a path that two readings of the document fit is
 /// reported at the place both share. Describing never throws for a bad document: an error about a value is told even
 /// when the value cannot be read (a string that is not valid Unicode).</para>
-/// <para>Error path only: nothing here runs while a valid document binds.</para>
 /// </remarks>
 public static class JsonBindingErrors
 {
@@ -54,7 +44,7 @@ public static class JsonBindingErrors
 
         if (Unreadable(document, subject) is { } unreadable)
         {
-            return unreadable; // walking it would fail on the same thing
+            return unreadable;
         }
 
         var at = new Location(TypeInfo(options, type), document, null, Capitalize(subject), subject);
@@ -94,8 +84,6 @@ public static class JsonBindingErrors
                         $"Element {segment.Token} of {at.Where}", $"element {segment.Token} of {at.Where}");
                     break;
                 default:
-                    // Into a value the type does not describe (a JsonObject member, an extension member): only the
-                    // document is left to walk.
                     at = new Location(null, child, null, $"'{segment.Token}'", $"'{segment.Token}'");
                     break;
             }
@@ -103,7 +91,6 @@ public static class JsonBindingErrors
 
         if (!certain)
         {
-            // The error's path fits the document in more than one way (keys that contain "']"): say only what is sure.
             return new JsonBindingError(pointer.ToString(),
                 $"A value inside {at.Where} is not valid; a key there contains \"']\", so the error cannot say which value.", null);
         }
@@ -120,7 +107,6 @@ public static class JsonBindingErrors
         return new JsonBindingError(string.Empty, $"{Capitalize(subject)} must be {Phrase(Expect(Unwrap(options, TypeInfo(options, type))))}, got null.", null);
     }
 
-    /// <summary>The problem at the end of the path: a value of the wrong kind, a required key missing, a number out of range.</summary>
     private static JsonBindingError Explain(Location at, string pointer, JsonException exception, JsonSerializerOptions options, bool ownKey)
     {
         if (at.Info is null)
@@ -152,7 +138,6 @@ public static class JsonBindingErrors
                 return new JsonBindingError(pointer, $"{at.Name} must not be null.", null);
             }
 
-            // A converter of our own words its message for the reader; one we did not write gets no guess at its shape.
             return IsOwn(at.Property, converter) && !string.IsNullOrEmpty(exception.Message)
                 ? new JsonBindingError(pointer, $"{at.Name}: {exception.Message}", null)
                 : new JsonBindingError(pointer, $"{at.Name} has an invalid value: {JsonWords.Value(at.Node)}.", null);
@@ -229,7 +214,6 @@ public static class JsonBindingErrors
         return new JsonBindingError(pointer, $"Unknown key '{key}' in {where}.", hint);
     }
 
-    /// <summary>What a required member means, from its description or documentation, as a hint.</summary>
     private static string? Meaning(JsonPropertyInfo property, JsonSerializerOptions options) =>
         property.AttributeProvider is MemberInfo member && MemberDocs.Describe(member, options.PropertyNamingPolicy) is { } text
             ? $"'{property.Name}': {text}"
@@ -273,18 +257,11 @@ public static class JsonBindingErrors
 
     private static JsonTypeInfo TypeInfo(JsonSerializerOptions options, Type type) => options.GetTypeInfo(type);
 
-    /// <summary>What a value of <paramref name="type"/> is in JSON words: <c>a string</c>, <c>an object</c>.</summary>
     internal static string Phrase(JsonSerializerOptions options, Type type) => Phrase(Expect(Unwrap(options, TypeInfo(options, type))));
 
     private static JsonTypeInfo Unwrap(JsonSerializerOptions options, JsonTypeInfo info) =>
         Nullable.GetUnderlyingType(info.Type) is { } underlying ? options.GetTypeInfo(underlying) : info;
 
-    // ------------------------------------------------------------------ the contract the serializer used
-
-    /// <summary>
-    /// The contract that read <paramref name="node"/>: the type's own, or for a polymorphic type the derived type its
-    /// discriminator selects (the base's when the discriminator is absent or unknown).
-    /// </summary>
     private static JsonTypeInfo Contract(JsonSerializerOptions options, JsonTypeInfo info, JsonNode? node)
     {
         info = Unwrap(options, info);
@@ -305,7 +282,6 @@ public static class JsonBindingErrors
         return info;
     }
 
-    /// <summary>The error for a polymorphic object whose discriminator names no derived type; null otherwise.</summary>
     private static JsonBindingError? Discriminator(JsonTypeInfo info, Location at, string pointer)
     {
         if (info.PolymorphismOptions is not { DerivedTypes.Count: > 0 } polymorphism || at.Node is not JsonObject obj
@@ -328,8 +304,8 @@ public static class JsonBindingErrors
 
     /// <summary>
     /// For a <see cref="NotSupportedException"/> of the serializer: the first object of an abstract polymorphic type
-    /// (one it cannot create) whose discriminator is missing, found by walking the document through the contract. Null
-    /// when there is none: the exception is then not about the document.
+    /// (one it cannot create) whose discriminator is missing. Null when there is none: the exception is then not about
+    /// the document.
     /// </summary>
     public static JsonBindingError? MissingDiscriminator(JsonNode? document, Type type, JsonSerializerOptions options, string subject)
     {
@@ -389,7 +365,6 @@ public static class JsonBindingErrors
         }
     }
 
-    /// <summary>The discriminators of a polymorphic type as JSON writes them: <c>"circle", "square"</c>.</summary>
     private static string Discriminators(JsonPolymorphismOptions polymorphism)
     {
         var ids = new List<string>(polymorphism.DerivedTypes.Count);
@@ -416,10 +391,6 @@ public static class JsonBindingErrors
         _ => false,
     };
 
-    /// <summary>
-    /// The converter that read the value: the member's own, else the one of its (non-nullable) type, from the options, an
-    /// attribute on the type, or built in.
-    /// </summary>
     private static JsonConverter? Converter(JsonPropertyInfo? property, JsonTypeInfo info, JsonSerializerOptions options)
     {
         var converter = property?.CustomConverter ?? info.Converter;
@@ -446,7 +417,6 @@ public static class JsonBindingErrors
         return converter is not null && IsOwn(converter);
     }
 
-    /// <summary>True when the serializer was told to read <paramref name="type"/> with a converter: on the member, on the type, or in the options.</summary>
     private static bool HasConfiguredConverter(JsonPropertyInfo? property, Type type, JsonSerializerOptions options)
     {
         if (property?.CustomConverter is not null || type.IsDefined(typeof(JsonConverterAttribute), inherit: false))
@@ -498,11 +468,10 @@ public static class JsonBindingErrors
         }
         catch (Exception ex) when (ex is TargetInvocationException or InvalidOperationException or ArgumentException or NotSupportedException or InvalidCastException)
         {
-            return null; // a converter that cannot write a value alone: no names to offer
+            return null;
         }
     }
 
-    /// <summary>What <paramref name="converter"/> writes for <paramref name="value"/> when that is a string; null otherwise.</summary>
     private static string? WriteString<T>(JsonConverter converter, object value, JsonSerializerOptions options)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -514,8 +483,6 @@ public static class JsonBindingErrors
         var reader = new Utf8JsonReader(buffer.WrittenSpan);
         return reader.Read() && reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
     }
-
-    // ------------------------------------------------------------------ kinds
 
     private enum Kind
     {
@@ -633,13 +600,10 @@ public static class JsonBindingErrors
         };
     }
 
-    // ------------------------------------------------------------------ the document
-
     /// <summary>
-    /// The first part of a document that cannot be read as written: an object with a key written twice, or a key or string
-    /// that is not valid Unicode (an unpaired surrogate escape). A document parsed leniently holds such parts unread until
-    /// something reads them, and then the serializer or the translator would fail on them with an exception of its own;
-    /// this finds them first and says what and where they are. Null for a document every part of which can be read.
+    /// The first part of a document that cannot be read as written: an object with a key written twice, or a key or
+    /// string that is not valid Unicode (an unpaired surrogate escape). Null for a document every part of which can be
+    /// read.
     /// </summary>
     /// <param name="subject">The document as a sentence names it, e.g. <c>the pipeline</c>.</param>
     public static JsonBindingError? Unreadable(JsonNode? document, string subject)
@@ -707,7 +671,6 @@ public static class JsonBindingErrors
         _ => null,
     };
 
-    /// <summary>True when the document has the segment: a key of an object, or an index within an array.</summary>
     private static bool Has(JsonNode? node, Segment segment) => node switch
     {
         JsonObject obj => !segment.IsIndex && obj.ContainsKey(segment.Token),
@@ -720,20 +683,16 @@ public static class JsonBindingErrors
 
     private static string Capitalize(string text) => text.Length == 0 || !char.IsLower(text[0]) ? text : char.ToUpperInvariant(text[0]) + text[1..];
 
-    /// <summary>Where the walk is: the type and value there, the member that holds it, and how a sentence names it.</summary>
     /// <param name="Name">The value as the subject of a sentence: <c>'order'</c>, <c>Element 1 of 'key'</c>, <c>The pipeline</c>.</param>
     /// <param name="Where">The value as a place, after "in": <c>'coarse_top_k'</c>, <c>the config of TopK@1</c>.</param>
     private readonly record struct Location(JsonTypeInfo? Info, JsonNode? Node, JsonPropertyInfo? Property, string Name, string Where);
 
     internal readonly record struct Segment(string Token, bool IsIndex);
 
-    // ------------------------------------------------------------------ the error's path
-
     /// <summary>
-    /// The segments of a System.Text.Json error path (<c>$.nodes['a.b'].order</c>, <c>$.key[1]</c>). A name in brackets is
-    /// written without escaping, so one holding <c>']</c> can end in more than one place. The document decides: of the
-    /// readings, the one whose every segment exists in it. When none or more than one does, <paramref name="certain"/> is
-    /// false and the segments are those before the first name that cannot be told apart.
+    /// A name in brackets is written without escaping, so one holding <c>']</c> can end in more than one place. The
+    /// document decides: of the readings, the one whose every segment exists in it. When none or more than one does,
+    /// <paramref name="certain"/> is false and the segments are those before the first name that cannot be told apart.
     /// </summary>
     internal static List<Segment> PathSegments(string? path, JsonNode? document, out bool certain)
     {
@@ -747,7 +706,7 @@ public static class JsonBindingErrors
         var prefix = new List<Segment>();
         if (!Lexical(path, start, prefix))
         {
-            return prefix; // no name is ambiguous: the path reads one way
+            return prefix;
         }
 
         var readings = new List<List<Segment>>(2);
@@ -796,7 +755,6 @@ public static class JsonBindingErrors
         return false;
     }
 
-    /// <summary>Collects (at most two) readings of the path from <paramref name="i"/> whose every segment exists in the document.</summary>
     private static void Readings(string path, int i, JsonNode? node, List<Segment> current, List<List<Segment>> readings)
     {
         if (readings.Count > 1)
@@ -835,7 +793,6 @@ public static class JsonBindingErrors
         }
     }
 
-    /// <summary>Where a bracketed name starting at <paramref name="start"/> may end: each <c>']</c> followed by the end, '.' or '['.</summary>
     private static List<int> NameEnds(string path, int start)
     {
         var ends = new List<int>();
@@ -851,7 +808,6 @@ public static class JsonBindingErrors
         return ends;
     }
 
-    /// <summary>A segment that reads one way: <c>.name</c> (no '.', '[' or quote in it) or <c>[index]</c>.</summary>
     private static bool Plain(string path, int i, out Segment segment, out int next)
     {
         segment = default;

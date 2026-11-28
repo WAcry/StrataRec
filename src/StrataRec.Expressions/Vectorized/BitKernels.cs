@@ -6,12 +6,10 @@ using StrataRec.Expressions.Ir;
 namespace StrataRec.Expressions.Vectorized;
 
 /// <summary>
-/// SIMD kernels producing or consuming packed bitmaps (bool values and validity): comparisons, selection by mask,
-/// packing of byte booleans. Lanes at and beyond <c>n</c> in the last word are zero on output.
+/// Lanes at and beyond <c>n</c> in the last word are zero on output.
 /// </summary>
 internal static class BitKernels
 {
-    /// <summary>For each 4-bit pattern, a 4×64-bit lane mask (bit j set → lane j all ones).</summary>
     private static readonly Vector256<ulong>[] Masks4 = BuildMasks();
 
     private static Vector256<ulong>[] BuildMasks()
@@ -143,7 +141,6 @@ internal static class BitKernels
         }
     }
 
-    /// <summary><c>dst[i] = mask[i] ? a[i] : b[i]</c> where either side may be a broadcast scalar.</summary>
     public static void Select(WordView mask, ReadOnlySpan<double> a, double aS, bool aScalar, ReadOnlySpan<double> b, double bS, bool bScalar, Span<double> dst, int n)
     {
         ref var ra = ref MemoryMarshal.GetReference(a);
@@ -233,7 +230,6 @@ internal static class BitKernels
         }
     }
 
-    /// <summary>Builds a bitmap from a per-lane predicate result array.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void SetBit(Span<ulong> dst, int lane, bool value)
     {

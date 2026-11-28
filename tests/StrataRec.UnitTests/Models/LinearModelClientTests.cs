@@ -5,11 +5,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Models;
 
-/// <summary>
-/// <c>linear@1</c> takes float32 inputs with one value per row, as its signature declares: <c>ModelScorer@1</c> reports an
-/// bool, int or list column mapped to it at load time, and a call that sends another tensor anyway fails instead of reading
-/// past or beside its data.
-/// </summary>
 public sealed class LinearModelClientTests
 {
     private const string Settings = """{ "outputs": { "p": { "bias": 1.0, "weights": { "x": 2.0 } } } }""";
@@ -35,8 +30,8 @@ public sealed class LinearModelClientTests
     }
 
     /// <summary>
-    /// A call of no batch is one row of float32 scalars (shape <c>[]</c>), one value per output: what a feature source in
-    /// mode <c>service</c> sends for an entity with args. A list in such a call fails.
+    /// A call of no batch is one row of float32 scalars (shape <c>[]</c>), one value per output: what a feature source
+    /// in mode <c>service</c> sends for an entity with args.
     /// </summary>
     [Fact]
     public async Task ACallOfNoBatch_OfScalars_IsComputedOnce()
@@ -56,7 +51,7 @@ public sealed class LinearModelClientTests
     /// <summary>
     /// The weights are added in the order of their inputs' names, not in the order the settings spell them: a float32
     /// sum depends on its order, and two bindings that differ only in the order of a JSON object's members are the same
-    /// content (they scored 0 and 1).
+    /// content.
     /// </summary>
     [Fact]
     public async Task TheScore_DoesNotDependOnTheOrderTheWeightsAreWrittenIn()
@@ -83,7 +78,7 @@ public sealed class LinearModelClientTests
     {
         var client = Create();
         var int64 = Call(2, NamedInput.FromInt64("x", new[] { 2 }, new long[] { 1, 2 }));
-        var vector = Call(2, NamedInput.FromFloat32("x", new[] { 2, 2 }, new float[4])); // enough floats, two per row
+        var vector = Call(2, NamedInput.FromFloat32("x", new[] { 2, 2 }, new float[4]));
         var shortInput = Call(3, NamedInput.FromFloat32("x", new[] { 2 }, new float[2]));
 
         Assert.Equal(ServiceStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.CallAsync(int64, new Outputs(), CancellationToken.None));
@@ -95,7 +90,7 @@ public sealed class LinearModelClientTests
     public async Task AnInputWhoseShapeIsNotTheBatch_FailsTheCall_EvenWithEnoughData()
     {
         var client = Create();
-        var longer = Call(2, NamedInput.FromFloat32("x", new[] { 3 }, new float[3])); // three rows' worth for a batch of two
+        var longer = Call(2, NamedInput.FromFloat32("x", new[] { 3 }, new float[3]));
         var shorter = Call(2, NamedInput.FromFloat32("x", new[] { 1 }, new float[2]));
 
         Assert.Equal(ServiceStatus.Failed("Input 'x' must be float32 with one value per row (2)."), await client.CallAsync(longer, new Outputs(), CancellationToken.None));
@@ -116,7 +111,6 @@ public sealed class LinearModelClientTests
     [Fact]
     public async Task AMissingInput_FailsTheCall_NamingIt()
     {
-        // It read the missing value's empty buffer and threw.
         var status = await Create().CallAsync(Call(2, NamedInput.FromMissing("x", TensorElementType.Float32, [2])), new Outputs(), CancellationToken.None);
 
         Assert.Equal(ServiceStatus.Failed("Input 'x' is missing; linear@1 needs a value per row."), status);

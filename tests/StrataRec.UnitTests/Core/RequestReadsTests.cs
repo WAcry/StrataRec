@@ -2,10 +2,6 @@ using StrataRec.Core.Threading;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// What the reads of one request share of one record: the first to join asks the origin, the others wait for what it
-/// gets within their own bound, and take its record or ask the origin themselves.
-/// </summary>
 public class RequestReadsTests
 {
     private static readonly object Table = new();
@@ -27,11 +23,11 @@ public class RequestReadsTests
         read.Complete("record");
 
         Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await answer);
-        var later = reads.Join(Table, 7, 0, out var third); // kept for the request
+        var later = reads.Join(Table, 7, 0, out var third);
         Assert.False(third);
         Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await later.WaitAsync(bound, CallDeadline.After(60_000)));
 
-        reads.End(); // a read that outlives its request reads for itself, of a request on its own too
+        reads.End();
         Assert.NotSame(read, reads.Join(Table, 7, 0, out var outlived));
         Assert.True(outlived);
     }
@@ -47,8 +43,8 @@ public class RequestReadsTests
         reads.Join(Table, 8, 0, out var otherKey);
         reads.Join(new object(), 7, 0, out var otherTable);
         reads.Join(Table, ((UInt128)1 << 64) + 7, 0, out var otherHalf);
-        reads.Join(Table, 7, 20, out var otherLimit); // one record, asked for to another limit
-        reads.Join(Table, 9, 0, out var otherPlan, new object()); // a plan published since
+        reads.Join(Table, 7, 20, out var otherLimit);
+        reads.Join(Table, 9, 0, out var otherPlan, new object());
         reads.Join(new object(), 9, 0, out var planElsewhere, plan); // the plan's results as another caller keeps them
         reads.Join(Table, 9, 0, out var noPlan);
         reads.Join(Table, 9, 0, out var samePlan, plan);
@@ -57,10 +53,6 @@ public class RequestReadsTests
         Assert.False(samePlan);
     }
 
-    /// <summary>
-    /// A reader that got no record withdraws: those waiting are told to ask the origin themselves, and the next read is
-    /// a reader again. A reader that withdraws after it ended its read changes nothing, so it can on every way out.
-    /// </summary>
     [Fact]
     public async Task AWithdrawal_IsNotKept()
     {
@@ -71,20 +63,18 @@ public class RequestReadsTests
 
         read.Withdraw();
         read.Withdraw();
-        read.Complete("late"); // ended once
+        read.Complete("late");
 
         Assert.Equal(new SharedAnswer(SharedEnd.Withdrawn, null), await answer);
         var next = reads.Join(Table, 7, 0, out var reader);
         Assert.True(reader);
         Assert.NotSame(read, next);
 
-        // The first read's late end does not take the next one's place.
         read.Withdraw();
         Assert.Same(next, reads.Join(Table, 7, 0, out var again));
         Assert.False(again);
     }
 
-    /// <summary>A reader that withdraws after its record was given leaves the record where it is.</summary>
     [Fact]
     public async Task ARecord_StaysWhenItsReaderWithdrawsAfterwards()
     {
@@ -100,12 +90,6 @@ public class RequestReadsTests
         Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await later.WaitAsync(bound, CallDeadline.None));
     }
 
-    /// <summary>
-    /// The requests of one group share a read as the runs of one request do, while the request that made it is under
-    /// way. The read leaves with that request, however many others took its record: a record lives no longer than the
-    /// request that read it, so requests that overlap one after another do not hand it on, and the group holds nothing
-    /// of a request that ended.
-    /// </summary>
     [Fact]
     public async Task RequestsOfOneGroup_ShareARead_WhileTheRequestThatMadeItIsUnderWay()
     {
@@ -115,10 +99,10 @@ public class RequestReadsTests
         using var bound = Bound();
 
         var read = first.Join(Table, 7, 0, out var reader);
-        first.Join(Table, 7, 0, out _); // another run of the same request
+        first.Join(Table, 7, 0, out _);
         var joined = second.Join(Table, 7, 0, out var other);
         read.Complete("record");
-        var third = new RequestReads(group); // begun while the first, which read the record, is under way
+        var third = new RequestReads(group);
         var kept = third.Join(Table, 7, 0, out var taken);
 
         Assert.True(reader);
@@ -128,22 +112,17 @@ public class RequestReadsTests
         Assert.Equal(1, group.Count);
 
         first.End();
-        first.End(); // ended once: again changes nothing
+        first.End();
         Assert.Equal(0, group.Count);
-        Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await joined.WaitAsync(bound, CallDeadline.None)); // what it took, it has
+        Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await joined.WaitAsync(bound, CallDeadline.None));
 
-        var next = new RequestReads(group).Join(Table, 7, 0, out var after); // while the second and third, which took the record, are under way
+        var next = new RequestReads(group).Join(Table, 7, 0, out var after);
         Assert.True(after);
         Assert.NotSame(read, next);
-        Assert.Same(next, second.Join(Table, 7, 0, out var again)); // the second's next read is of the record being read now
+        Assert.Same(next, second.Join(Table, 7, 0, out var again));
         Assert.False(again);
     }
 
-    /// <summary>
-    /// A read still under way when its request ends (of a call its operator did not wait for) goes on as that call
-    /// does: its reader ends it, and those already waiting for it get what it gets. No later read finds it, and its end
-    /// leaves the read that took its place alone: the group keeps nothing of a request that ended.
-    /// </summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -160,7 +139,7 @@ public class RequestReadsTests
 
         Assert.Equal(0, group.Count);
         Assert.False(waiting.IsCompleted);
-        var own = second.Join(Table, 7, 0, out var reader); // a later read of the record
+        var own = second.Join(Table, 7, 0, out var reader);
         Assert.True(reader);
         Assert.NotSame(read, own);
 
@@ -174,7 +153,7 @@ public class RequestReadsTests
         }
 
         Assert.Equal(getsARecord ? new SharedAnswer(SharedEnd.Record, "late") : new SharedAnswer(SharedEnd.Withdrawn, null), await waiting);
-        Assert.Same(own, second.Join(Table, 7, 0, out var again)); // the place is the later read's still
+        Assert.Same(own, second.Join(Table, 7, 0, out var again));
         Assert.False(again);
     }
 
@@ -201,7 +180,7 @@ public class RequestReadsTests
         GC.KeepAlive(group);
     }
 
-    /// <summary>Reads a record as <paramref name="reads"/>' request; a weak reference to it. Not inlined, so no local here keeps it alive.</summary>
+    /// <summary>Not inlined, so no local here keeps it alive.</summary>
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static WeakReference ReadARecord(RequestReads reads)
     {
@@ -210,11 +189,6 @@ public class RequestReadsTests
         return new WeakReference(record);
     }
 
-    /// <summary>
-    /// What a request does with the group once it has ended changes nothing for the others: a read of it that is still
-    /// under way reads for itself, and the end of a request whose read withdrew does not take the place of the read
-    /// another request has made of the record since.
-    /// </summary>
     [Fact]
     public void ARequestThatEnded_LeavesTheGroupAsItIs()
     {
@@ -233,14 +207,10 @@ public class RequestReadsTests
         Assert.True(reader && alone);
         Assert.Same(current, new RequestReads(group).Join(Table, 7, 0, out var joined));
         Assert.False(joined);
-        new RequestReads(group).Join(Table, 8, 0, out var unseen); // the late read was the ended request's alone
+        new RequestReads(group).Join(Table, 8, 0, out var unseen);
         Assert.True(unseen);
     }
 
-    /// <summary>
-    /// A wait ends with its own bound, whatever the reader does: when its caller cancels, when its bound runs out, and at
-    /// its own deadline; the read goes on for the others.
-    /// </summary>
     [Theory]
     [InlineData("cancelled")]
     [InlineData("bound")]
@@ -267,10 +237,6 @@ public class RequestReadsTests
         Assert.Equal(SharedEnd.Record, (await reads.Join(Table, 7, 0, out _).WaitAsync(fresh, CallDeadline.None)).End);
     }
 
-    /// <summary>
-    /// The wait has its own timer and listens to the caller, as a call's wait does: a callback on the bound's token that
-    /// does not return (the token is one an operator can register on) does not keep it from ending.
-    /// </summary>
     [Fact]
     public async Task AWaitEndsAtItsBound_WhateverTheBoundsTokenCalls()
     {
@@ -283,8 +249,6 @@ public class RequestReadsTests
         var waiting = reads.Join(Table, 7, 0, out _).WaitAsync(bound, CallDeadline.None);
 
         // Registered after the wait began and before the bound's time is up: the token calls it first, and it stays.
-        // Were the time up already, the token would call it here, where it is registered: it then returns, and the
-        // test fails below for want of the call it is about.
         var blocking = bound.Token.Register(() =>
         {
             if (registered.IsSet)
@@ -299,7 +263,7 @@ public class RequestReadsTests
             var answer = await waiting.AsTask().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
             Assert.Equal(SharedEnd.CutOff, answer.End);
-            await called.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); // the token did call it, and it is held there
+            await called.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             Assert.False(release.IsSet);
         }
         finally
@@ -309,15 +273,11 @@ public class RequestReadsTests
         }
     }
 
-    /// <summary>
-    /// A read whose time is up takes nothing, a record that is already there no more than one it would wait for: the
-    /// call it stands for would not be sent.
-    /// </summary>
     [Theory]
     [InlineData("cancelled")]
-    [InlineData("cancelled and own time")] // the read's own time comes first of the two times, and the caller's end is still the one said
+    [InlineData("cancelled and own time")]
     [InlineData("bound")]
-    [InlineData("bound and own time")] // the bound's end is the node's: it is said first
+    [InlineData("bound and own time")]
     [InlineData("own time")]
     public async Task ARecordAlreadyThere_IsNotTakenByAReadWhoseTimeIsUp(string how)
     {
@@ -338,6 +298,5 @@ public class RequestReadsTests
 
     private static CallBound Bound() => Under(TestContext.Current.CancellationToken);
 
-    /// <summary>An untimed bound under <paramref name="caller"/>.</summary>
     private static CallBound Under(CancellationToken caller) => new(CancellationSite.Call, caller, long.MaxValue);
 }

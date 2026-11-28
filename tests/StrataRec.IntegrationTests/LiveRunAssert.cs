@@ -4,19 +4,14 @@ using StrataRec.Pipeline.Execution;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Asserts that two live runs, whose results a test compares, took the same decisions at every node. Call it before
-/// comparing the results: when one run fell back, skipped or failed where the other did not (a budget hit on a slow
-/// machine, say), the failure names the node and why, e.g. <c>ctr_ranker: succeeded → fallback by ctr_backup (timed out
-/// after 50 ms; ...)</c>, instead of showing a truncated diff of scores.
+/// Call it before comparing the results: when one run fell back, skipped or failed where the other did not, the failure
+/// names the node and why, instead of showing a truncated diff of scores.
 /// </summary>
 internal static class LiveRunAssert
 {
-    /// <param name="except">Nodes where the runs differ by design.</param>
     public static void SameNodeOutcomes(PipelineResult expected, PipelineResult actual, params string[] except) =>
         Same(Describe(expected.Outcomes), Describe(actual.Outcomes), except);
 
-    /// <summary>The same for engine results, from their trace or, for a recorded request, from the recording.</summary>
-    /// <inheritdoc cref="SameNodeOutcomes(PipelineResult, PipelineResult, string[])"/>
     public static void SameNodeOutcomes(RecResult expected, RecResult actual, params string[] except) =>
         Same(Describe(expected), Describe(actual), except);
 
@@ -24,9 +19,7 @@ internal static class LiveRunAssert
         outcomes.Select(o => (o.NodeId, Outcome(NodeOutcomeNames.Name(o.Kind), o.NodeId, o.ProducedBy, o.Detail))).ToList();
 
     /// <summary>
-    /// The decisions of an engine result: which pipeline served it, and the outcome of every node of that pipeline's run.
-    /// A trace carries only the served run, so a recording is compared by its served run too; a request whose primary
-    /// pipeline failed differs from one it served in the first entry.
+    /// A trace carries only the served run, so a recording is compared by its served run too.
     /// </summary>
     private static List<(string Node, string Outcome)> Describe(RecResult result)
     {
@@ -43,7 +36,6 @@ internal static class LiveRunAssert
         return served;
     }
 
-    /// <summary>A recording spells the outcome as a trace does; a name the engine does not know fails the comparison.</summary>
     private static string Known(string outcome)
     {
         Assert.True(NodeOutcomeNames.TryParse(outcome, out _), $"unknown node outcome '{outcome}' in the recording");

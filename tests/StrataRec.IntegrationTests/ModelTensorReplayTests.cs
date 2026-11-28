@@ -6,13 +6,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The sample's <c>ctr_model</c> also fed an int64 column (<c>col.entity_id</c>) and an embedding (<c>item.embedding</c>, a
-/// <c>list&lt;float32,4&gt;</c>, with a default): <c>ModelScorer@1</c> sends them as int64 <c>[rows]</c> and float32
-/// <c>[rows, 4]</c>, the
-/// recording digests each row's slice of them, and a replay on the same configuration computes the same digests, so every
-/// call is served from the recording without a gap.
-/// </summary>
 public sealed class ModelTensorReplayTests
 {
     [Fact]
@@ -35,12 +28,11 @@ public sealed class ModelTensorReplayTests
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var run = Assert.Single(recorded.Recording!.Runs);
-        Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "ctr_ranker").Outcome); // the model answered: no fallback
+        Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "ctr_ranker").Outcome);
         var call = Assert.Single(run.ServiceCalls, c => c.Role == "model");
         Assert.Equal(("ctr_model", "ok", 30), (call.Service, call.Status, call.Keys!.Value.GetArrayLength()));
         Assert.Equal(new[] { "item_emb float32 [30, 4]", "item_id int64 [30]", "log_followers float32 [30]", "smoothed_ctr float32 [30]" }, recording.Seen);
 
-        // Through JSON, on a fresh engine whose model would answer differently: every output must come from the recording.
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
         var replaying = new TensorModels(bias: 1.0f);
         var outcome = await Load(host, replaying).ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
@@ -56,7 +48,6 @@ public sealed class ModelTensorReplayTests
     [Fact]
     public async Task OnlyTheOutputsTheNodeReads_AreRecorded_AndTheReplayIsIdentical()
     {
-        // ctr_model computes a second output no node maps: the call asks for p_click only, and only it is recorded.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "bindings/local.jsonc",
             "\"outputs\": { \"p_click\": {", "\"outputs\": { \"p_extra\": { \"bias\": 0.5 }, \"p_click\": {"));
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root });
@@ -84,7 +75,7 @@ public sealed class ModelTensorReplayTests
 
     /// <summary>
     /// A model taking the sample's two float32 inputs, an int64 id and a 4-vector, scoring each row from all four (so a
-    /// replay that served another row's output would differ), and noting the tensors it was sent.
+    /// replay that served another row's output would differ).
     /// </summary>
     private sealed class TensorModels(float bias = 0f) : IBindingFactory<IServiceClient>, IServiceClient
     {

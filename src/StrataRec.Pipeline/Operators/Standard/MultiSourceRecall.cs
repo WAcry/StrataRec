@@ -46,12 +46,13 @@ public sealed class MultiSourceRecallConfig
 /// experiment's arm gives a quota has none without that arm, and takes no bit there, as in a compile without it.
 /// </summary>
 /// <remarks>
-/// A source sees only what its call sends: when the node gives it a query (<see cref="MultiSourceRecallConfig.Queries"/>),
-/// the query's values, evaluated from the request's context (a two-tower service the user's embedding or features, a
-/// request field such as <c>ctx.request.region</c>); without one, no inputs. The features a query reads are not filled before the node runs, as a node's reads are: each source with
-/// a query is sent once its own features are stored (they were prefetched when the request started), so the sources
-/// without one start at once and a slow user feature delays only the sources that read it. A source whose query reads a
-/// feature that failed is not sent, and counts as a failed source.
+/// A source sees only what its call sends: when the node gives it a query
+/// (<see cref="MultiSourceRecallConfig.Queries"/>), the query's values, evaluated from the request's context (a
+/// two-tower service the user's embedding or features, a request field such as <c>ctx.request.region</c>); without one,
+/// no inputs. The features a query reads are not filled before the node runs, as a node's reads are: each source with a
+/// query is sent once its own features are stored, so the sources without one start at once and a slow user feature
+/// delays only the sources that read it. A source whose query reads a feature that failed is not sent, and counts as a
+/// failed source.
 /// </remarks>
 public sealed class MultiSourceRecallFactory : IOperatorFactory
 {
@@ -85,9 +86,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             byName[leaf.Name[prefix..]] = leaf;
         }
 
-        // The listed sources, then the others by name. Every source is one some arm combination has, so a list required
-        // to name them all would refuse the baseline wherever an arm adds a source with its quota alone. A listed source
-        // is bound by name: an arm listing one only another layer's arm adds has none without it.
         var names = new List<string>();
         if (config.SourceOrder is not null)
         {
@@ -136,7 +134,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             return null;
         }
 
-        // Every source is bound before giving up on one that is not: each unbound source is reported.
         var sources = new SourceEntry[names.Count];
         var unbound = false;
         for (var i = 0; i < names.Count; i++)
@@ -159,10 +156,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         return new MultiSourceRecall(sources, mask, bestRank, bestScore, primary);
     }
 
-    /// <summary>
-    /// Compiles each source's query (<see cref="MultiSourceRecallConfig.Queries"/>) into its entry: every value's
-    /// expression as awaited, so a source waits for the features its own query reads. Every error is reported.
-    /// </summary>
     private static bool CompileQueries(
         OperatorCompileContext context, MultiSourceRecallConfig config, Dictionary<string, ParamRef> quotas, SourceEntry[] sources)
     {
@@ -215,7 +208,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 if (context.CompileAwaitedExpression(values[names[v]], at + "/" + JsonPointer.Escape(names[v])) is { } expression)
                 {
                     expressions[v] = expression;
-                    types[v] = context.Schema.DeclaredType(expression); // a reference sends its declared type (float32 stays float32)
+                    types[v] = context.Schema.DeclaredType(expression);
                 }
                 else
                 {
@@ -235,7 +228,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         return ok;
     }
 
-    /// <summary>A recall column: undeclared, it is declared as <paramref name="type"/>; declared, it must be of that kind.</summary>
     private static bool TryWrite(OperatorCompileContext context, string name, ColumnType type, out OutputColumn column)
     {
         if (!context.TryWriteColumn(name, string.Empty, type, out column))
@@ -255,18 +247,15 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
 
     private sealed record SourceEntry(string Name, BoundService Service, ParamRef Quota)
     {
-        /// <summary>The source's query, null for a source that gets the request's inputs alone.</summary>
         public SourceQuery? Query { get; init; }
     }
 
-    /// <summary>A source's compiled query: its values' names (ascending), types and expressions, and what they wait for.</summary>
     private sealed class SourceQuery(string[] names, ColumnType[] types, CompiledExpression[] expressions, AwaitedReads reads)
     {
         public AwaitedReads Reads { get; } = reads;
 
         /// <summary>
-        /// The inputs of one call: its values, evaluated once their features are stored, on the operator's flow; a missing
-        /// one is sent as missing (<see cref="ServiceInputs.Create"/>).
+        /// The inputs of one call: its values, evaluated once their features are stored, on the operator's flow.
         /// </summary>
         public NamedInput[] Evaluate(OperatorContext context)
         {
@@ -309,7 +298,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 for (var i = 0; i < sources.Length; i++)
                 {
                     var quotaValue = context.Param(sources[i].Quota);
-                    bits[i] = quotaValue.IsMissing ? -1 : bit++; // a source without a quota here has no bit (see the type's remarks)
+                    bits[i] = quotaValue.IsMissing ? -1 : bit++;
                     var quota = quotaValue.IsMissing ? 0 : (int)Math.Clamp(quotaValue.AsInt64(), 0, int.MaxValue);
                     if (quota == 0)
                     {
@@ -319,17 +308,13 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     buffers[i] = new ServiceResponse(context.Memory, quota);
                     if (sources[i].Query is { Reads.IsEmpty: false })
                     {
-                        (waiting ??= new List<int>()).Add(i); // sent once the features its query reads are stored
+                        (waiting ??= new List<int>()).Add(i);
                         continue;
                     }
 
                     calls[i] = Send(context, sources[i], buffers[i]!);
                 }
 
-                // The sources whose queries read context features, each sent as soon as its own are stored, while
-                // the calls above run: a source reading the user's embedding does not hold back one that needs nothing.
-                // Each round sends, in source order, every source its observation settles, so sources whose features are
-                // stored together are sent in that order; a source whose query reads a failed feature is refused at once.
                 if (waiting is not null)
                 {
                     List<int> order = waiting;
@@ -385,7 +370,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 }
                 catch (Exception ex)
                 {
-                    // A defect at the call site: the other calls are still awaited, for the same reason.
                     stopped ??= ExceptionDispatchInfo.Capture(ex);
                     buffers[i] = null;
                     continue;
@@ -423,10 +407,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             Merge(context, buffers, bits);
         }
 
-        /// <summary>
-        /// Sends source <paramref name="i"/> with its query evaluated now, its features settled as <paramref name="fill"/>
-        /// says, or refuses it (<paramref name="refused"/> says why) when one of them failed.
-        /// </summary>
         private void SendWith(
             OperatorContext context, int i, FeatureFillResult fill, Task<ServiceStatus>?[] calls, ServiceResponse?[] buffers,
             string?[] refused, string?[] degraded)
@@ -446,7 +426,6 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
             calls[i] = Send(context, sources[i], buffers[i]!);
         }
 
-        /// <summary>One source's call: its quota and, when it has a query, the query's values now.</summary>
         private static Task<ServiceStatus> Send(OperatorContext context, SourceEntry source, ServiceResponse response)
         {
             var call = new ServiceCall
@@ -474,10 +453,9 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
         }
 
         /// <summary>
-        /// Merges the buffers in source order: the first occurrence of a key fixes its position and primary source; later
-        /// ones add their source bit, the best (lowest) rank and the best score. A source stops contributing at its
-        /// first new key that no longer fits in the table. The index and the merged columns are rented from the request
-        /// memory, sized to the most keys that can be added, so nothing here allocates per key.
+        /// Merges the buffers in source order: the first occurrence of a key fixes its position and primary source;
+        /// later ones add their source bit, the best (lowest) rank and the best score. A source stops contributing at
+        /// its first new key that no longer fits in the table.
         /// </summary>
         private void Merge(OperatorContext context, ServiceResponse?[] sinks, int[] bits)
         {
@@ -521,7 +499,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                         var key = sinkKeys[r];
                         if (key.IsString != stringKeys || table.ContainsKey(key))
                         {
-                            continue; // wrong key type, or already in the table from an earlier row source
+                            continue;
                         }
 
                         int at;
@@ -529,7 +507,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                         {
                             if (!index.TryGetValue(key, out at))
                             {
-                                break; // no room for a new key: the rest of this source is dropped
+                                break;
                             }
                         }
                         else
@@ -562,11 +540,11 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                 {
                     ids = memory.RentScratch<string>(count);
                     index.StringKeys.CopyTo(ids);
-                    first = context.AppendRows(new ArraySegment<string>(ids, 0, count)); // copied
+                    first = context.AppendRows(new ArraySegment<string>(ids, 0, count));
                 }
                 else
                 {
-                    first = context.AppendRows(index.Int64Keys); // copied
+                    first = context.AppendRows(index.Int64Keys);
                 }
 
                 // The appended rows are consecutive: values are written row by row, their validity once for the whole range
@@ -585,7 +563,7 @@ public sealed class MultiSourceRecallFactory : IOperatorFactory
                     maskValues[row] = masks[i];
                     rankValues[row] = ranks[i];
                     scoreValues[row] = scores[i];
-                    primaryValues[row] = sources[primaries[i]].Name; // the plan's instance: every row shares it
+                    primaryValues[row] = sources[primaries[i]].Name;
                 }
 
                 maskColumn.SetValid(first, count);

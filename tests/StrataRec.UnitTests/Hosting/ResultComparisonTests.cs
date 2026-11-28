@@ -6,7 +6,6 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>Ranking metrics of the recorded-mode comparison and the result diff of a replay.</summary>
 public sealed class ResultComparisonTests
 {
     [Fact]
@@ -14,7 +13,7 @@ public sealed class ResultComparisonTests
     {
         Assert.Equal(1.0, ResultComparison.Overlap(Ids(1, 2, 3), Ids(3, 2, 1), 3));
         Assert.Equal(0.5, ResultComparison.Overlap(Ids(1, 2, 3, 4), Ids(1, 9, 2, 3), 2));
-        Assert.Equal(0.5, ResultComparison.Overlap(Ids(1, 2), Ids(1), 10)); // a shorter list does not inflate the overlap
+        Assert.Equal(0.5, ResultComparison.Overlap(Ids(1, 2), Ids(1), 10));
         Assert.Equal(0.0, ResultComparison.Overlap(Ids(1), Ids(), 10));
         Assert.Equal(1.0, ResultComparison.Overlap(Ids(), Ids(), 10));
     }
@@ -25,7 +24,7 @@ public sealed class ResultComparisonTests
         Assert.Equal(1.0, ResultComparison.KendallTau(Ids(1, 2, 3, 4), Ids(1, 2, 3, 4)));
         Assert.Equal(-1.0, ResultComparison.KendallTau(Ids(1, 2, 3, 4), Ids(4, 3, 2, 1)));
         Assert.Equal(4.0 / 6.0, ResultComparison.KendallTau(Ids(1, 2, 3, 4), Ids(2, 1, 3, 4))!.Value, 12); // 5 concordant, 1 discordant
-        Assert.Equal(1.0, ResultComparison.KendallTau(Ids(1, 7, 2, 3), Ids(1, 2, 8, 3))); // unshared items are ignored
+        Assert.Equal(1.0, ResultComparison.KendallTau(Ids(1, 7, 2, 3), Ids(1, 2, 8, 3)));
         Assert.Null(ResultComparison.KendallTau(Ids(1, 2), Ids(2, 9)));
     }
 
@@ -42,7 +41,6 @@ public sealed class ResultComparisonTests
     [Fact]
     public void KolmogorovSmirnov_LeavesOutNonFiniteValues_AndEndsForAnyInput()
     {
-        // NaN compares false with everything: an index walk keyed on comparisons never advanced past one and looped forever.
         var results = Bounded(() => new[]
         {
             ResultComparison.KolmogorovSmirnov(new[] { double.NaN }, new[] { 1.0 }),
@@ -51,9 +49,9 @@ public sealed class ResultComparisonTests
             ResultComparison.KolmogorovSmirnov(new[] { 1.0, 2.0, double.NaN, 3.0, 4.0 }, new[] { 3.0, double.NaN, 4.0, 5.0, 6.0 }),
         });
 
-        Assert.Equal(1.0, results[0]); // only one side has finite values
+        Assert.Equal(1.0, results[0]);
         Assert.Equal(0.0, results[1]);
-        Assert.Equal(0.0, results[2]); // neither side has any
+        Assert.Equal(0.0, results[2]);
         Assert.Equal(0.5, results[3]);
     }
 
@@ -104,10 +102,6 @@ public sealed class ResultComparisonTests
         Assert.Equal(new RetypedColumn("score", ColumnType.Float32, ColumnType.Float64), Assert.Single(retyped.RetypedColumns));
     }
 
-    /// <summary>
-    /// The request-level values are part of the result: one that differs, by value or by declared type, or that only one
-    /// side returns, is a change, reported by name; equal values of the same types leave the results identical.
-    /// </summary>
     [Fact]
     public void Diff_ComparesTheRequestLevelValues_ByValueAndType()
     {
@@ -137,7 +131,6 @@ public sealed class ResultComparisonTests
         Assert.Empty(diff.Changes);
     }
 
-    /// <summary>A result of no rows still has its output's columns: a column renamed between them is a change.</summary>
     [Fact]
     public void Diff_ReportsColumnsAddedAndRemoved_InResultsOfNoRows()
     {
@@ -187,7 +180,6 @@ public sealed class ResultComparisonTests
         var diff = ResultComparison.Diff(recorded, replayed);
 
         Assert.False(diff.Identical);
-        // Per item: 2 and 3 swapped (2 with its own new score), 4 only replayed.
         Assert.Equal(new[] { EntityKey.FromInt64(2), EntityKey.FromInt64(3), EntityKey.FromInt64(4) }, diff.Changes.Select(c => c.Id));
         Assert.Equal(new int?[] { 2, 3, null }, diff.Changes.Select(c => c.RecordedRank));
         Assert.Equal(new int?[] { 3, 2, 4 }, diff.Changes.Select(c => c.ReplayedRank));

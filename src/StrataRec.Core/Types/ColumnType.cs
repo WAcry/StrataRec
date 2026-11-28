@@ -12,18 +12,15 @@ public enum StorageKind : byte
     Float32,
     Float64,
     /// <summary>
-    /// A string of any length: a category, an id, a title, a prompt or a generated reason. One type, stored as one
-    /// reference per row: how many distinct instances a column holds depends on where its values come from (a local
-    /// table's dictionary, a connector's deduplication), not on the type.
+    /// A string of any length: a category, an id, a title, a prompt or a generated reason.
     /// </summary>
     String,
 
     /// <summary>
-    /// <c>list&lt;E&gt;</c> of one element kind (<see cref="ColumnType.Element"/>): <c>bool</c>, <c>int32</c>, <c>int64</c>,
-    /// <c>float32</c>, <c>float64</c> or <c>string</c>, of any length or of a fixed one (<c>list&lt;E,N&gt;</c>,
-    /// <see cref="ColumnType.FixedLength"/>). A constructor rather than a kind per element type, so every layer handles lists
-    /// once and an element type works everywhere a scalar of it does. A vector (an embedding) is a fixed-length float list:
-    /// its rows are contiguous spans like every list's, so the same SIMD kernels apply, and no layer needs a path of its own.
+    /// <c>list&lt;E&gt;</c> of one element kind (<see cref="ColumnType.Element"/>): <c>bool</c>, <c>int32</c>,
+    /// <c>int64</c>, <c>float32</c>, <c>float64</c> or <c>string</c>, of any length or of a fixed one
+    /// (<c>list&lt;E,N&gt;</c>, <see cref="ColumnType.FixedLength"/>). A vector (an embedding) is a fixed-length float
+    /// list.
     /// </summary>
     List,
 }
@@ -37,10 +34,9 @@ public enum StorageKind : byte
 /// <para>A list is never missing element by element: the list as a whole is present or missing (<c>list&lt;E&gt;?</c>),
 /// and every element it holds is a value. A sequence with gaps is a list of values plus a list of flags, or a default
 /// element written by whoever builds it.</para>
-/// <para>A list may declare its length (<c>list&lt;float32,64&gt;</c>, <see cref="FixedLength"/>): every value of the type
-/// then holds exactly that many elements, which is what a model input's tensor shape, <c>dot</c> between two embeddings and
-/// an MMR similarity need to know before a request runs. The storage is the same as a list of any length's; writers check
-/// the length instead, and a value of another length is replaced as a whole, like a list with an element outside int32
+/// <para>A list may declare its length (<c>list&lt;float32,64&gt;</c>, <see cref="FixedLength"/>): every value of the
+/// type then holds exactly that many elements. The storage is the same as a list of any length's; writers check the
+/// length instead, and a value of another length is replaced as a whole, like a list with an element outside int32
 /// storage.</para>
 /// </remarks>
 public readonly struct ColumnType : IEquatable<ColumnType>
@@ -98,8 +94,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     /// <summary>The type of one element of a list (never nullable); throws for other kinds.</summary>
     public ColumnType ElementType => IsList ? new ColumnType(Element) : throw new InvalidOperationException($"{this} is not a list.");
 
-    /// <summary>The kind values are stored as: a list's element kind, otherwise the kind itself. Rules about how a
-    /// value is stored (int32 narrowing, float checks) read this, so they hold for a list's elements as for a scalar.</summary>
+    /// <summary>The kind values are stored as: a list's element kind, otherwise the kind itself.</summary>
     public StorageKind ValueKind => IsList ? Element : Kind;
 
     /// <summary>True for storage that holds int32 values (<c>int32</c>, <c>list&lt;int32&gt;</c>): writing an int64 into it
@@ -110,8 +105,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     /// whose non-finite values a writer replaces.</summary>
     public bool IsFloatStorage => ValueKind is StorageKind.Float32 or StorageKind.Float64;
 
-    /// <summary>The kinds a list may hold: the fixed-size scalars and <c>string</c>. Not lists, which would make every layer
-    /// handle nested variable-length data.</summary>
+    /// <summary>The kinds a list may hold: the fixed-size scalars and <c>string</c>.</summary>
     public static bool IsListElement(StorageKind kind) =>
         kind is StorageKind.Bool or StorageKind.Int32 or StorageKind.Int64 or StorageKind.Float32 or StorageKind.Float64 or StorageKind.String;
 
@@ -234,10 +228,9 @@ public readonly struct ColumnType : IEquatable<ColumnType>
     }
 
     /// <summary>
-    /// The list spelling of a vector type written in another syntax (<c>vec&lt;float32,64&gt;</c>, <c>vector</c>): a list of
-    /// the same element (float32 when the element written is not one a list holds) and the same length, or <c>N</c> where
-    /// none was written. Null when <paramref name="written"/> is not a vector spelling. For the errors and hints of every
-    /// place a type is written, so they agree.
+    /// The list spelling of a vector type written in another syntax (<c>vec&lt;float32,64&gt;</c>, <c>vector</c>): a
+    /// list of the same element (float32 when the element written is not one a list holds) and the same length, or
+    /// <c>N</c> where none was written. Null when <paramref name="written"/> is not a vector spelling.
     /// </summary>
     public static string? VectorAsList(string written)
     {
@@ -276,9 +269,7 @@ public readonly struct ColumnType : IEquatable<ColumnType>
 
     /// <summary>
     /// The spelling meant by a type written with <c>text</c> (<c>text</c>, <c>text?</c>, <c>list&lt;text&gt;</c>,
-    /// <c>list&lt;text,4&gt;?</c>): the same with <c>string</c>; null when <paramref name="written"/> does not use it. There is
-    /// one string type: a separate long-text type differed only in how a request stored it, and nothing it stored differently
-    /// was worth a second type.
+    /// <c>list&lt;text,4&gt;?</c>): the same with <c>string</c>; null when <paramref name="written"/> does not use it.
     /// </summary>
     public static string? TextAsString(string written)
     {
@@ -302,7 +293,6 @@ public readonly struct ColumnType : IEquatable<ColumnType>
             var element = (comma < 0 ? inner : inner[..comma]).Trim();
             if (element is "text" or "text?")
             {
-                // A nullable element means a list that may be missing, as for every element type (ListElementError).
                 meant = "list<string" + (comma < 0 ? string.Empty : "," + inner[(comma + 1)..].Trim()) + ">";
                 nullable |= element == "text?";
             }
@@ -311,7 +301,6 @@ public readonly struct ColumnType : IEquatable<ColumnType>
         return meant is null ? null : nullable ? meant + "?" : meant;
     }
 
-    /// <summary>Why <paramref name="element"/> is not a list's element type, and what to write instead.</summary>
     private static string ListElementError(string element)
     {
         if (element.EndsWith('?'))

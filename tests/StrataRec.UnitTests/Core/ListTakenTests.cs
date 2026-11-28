@@ -4,10 +4,8 @@ using StrataRec.Core.Types;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary><see cref="ListColumn.SetTaken"/>: a row's list made of another's elements at given positions.</summary>
 public class ListTakenTests
 {
-    /// <summary>Lists of different element types that take the same positions stay aligned, through the base type.</summary>
     [Fact]
     public void ListsThatTakeTheSamePositions_StayAligned_WhateverTheirElements()
     {
@@ -21,7 +19,7 @@ public class ListTakenTests
 
         for (var c = 0; c < from.Length; c++)
         {
-            into[c].SetTaken(2, from[c], 1, [3, 0, 2]); // reordered and cut, into another row
+            into[c].SetTaken(2, from[c], 1, [3, 0, 2]);
         }
 
         Assert.Equal(new long[] { 40, 10, 30 }, ((ListColumn<long>)into[0]).Get(2).ToArray());
@@ -29,10 +27,6 @@ public class ListTakenTests
         Assert.True(into[0].IsValid(2) && into[1].IsValid(2));
     }
 
-    /// <summary>
-    /// The source may be the column itself, and the row: the elements are read before the new extent is made, also when
-    /// making it grows the arena.
-    /// </summary>
     [Fact]
     public void ARowTakenFromItself_ReadsWhatItHeldBefore_AlsoWhenTheArenaGrows()
     {
@@ -43,7 +37,7 @@ public class ListTakenTests
         for (var i = 0; i < values.Length; i++)
         {
             values[i] = i;
-            positions[2 * i] = positions[(2 * i) + 1] = values.Length - 1 - i; // each twice, reversed
+            positions[2 * i] = positions[(2 * i) + 1] = values.Length - 1 - i;
         }
 
         column.Set(0, values);
@@ -70,10 +64,6 @@ public class ListTakenTests
         Assert.Throws<IndexOutOfRangeException>(() => ids.SetTaken(1, ids, 0, [2]));
     }
 
-    /// <summary>
-    /// A position outside the list leaves the row as it was: an operator that catches it and goes on serves what the row
-    /// held (the new length was published first, with whatever the arena held behind it).
-    /// </summary>
     [Fact]
     public void APositionOutsideTheList_LeavesTheRowAsItWas()
     {

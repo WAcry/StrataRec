@@ -3,10 +3,6 @@ using StrataRec.Artifacts.Json;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary>
-/// <see cref="JsoncLocator"/>: a pointer becomes the line and column an editor opens, through comments, escapes and
-/// nested arrays; a pointer the text does not have falls back to its nearest ancestor and says so.
-/// </summary>
 public class JsoncLocatorTests
 {
     private const string Pipeline = """
@@ -50,12 +46,12 @@ public class JsoncLocatorTests
     }
 
     [Theory]
-    [InlineData("/nodes/zzz/order", "\"nodes\": {\n")] // a node the file does not have (an arm adds it)
-    [InlineData("/nodes/a/config/x", "\"a\": { \"op\"")] // a member the object does not have
-    [InlineData("/nodes/a/op/x", "\"op\"")] // into a string
-    [InlineData("/list/7", "\"list\"")] // past the end of an array
-    [InlineData("/list/x", "\"list\"")] // not an index
-    [InlineData("/list/01", "\"list\"")] // not an index either (RFC 6901 has no leading zeros)
+    [InlineData("/nodes/zzz/order", "\"nodes\": {\n")]
+    [InlineData("/nodes/a/config/x", "\"a\": { \"op\"")]
+    [InlineData("/nodes/a/op/x", "\"op\"")]
+    [InlineData("/list/7", "\"list\"")]
+    [InlineData("/list/x", "\"list\"")]
+    [InlineData("/list/01", "\"list\"")]
     public void APointerTheTextDoesNotHave_IsAtItsNearestAncestor_NotExact(string pointer, string ancestor)
     {
         var expected = At(Pipeline, ancestor);
@@ -87,11 +83,11 @@ public class JsoncLocatorTests
     }
 
     [Theory]
-    [InlineData("""{ "expr": "a \"b\" + c" }""", "a \"b\" + c", "c")] // \" is two columns, one character
+    [InlineData("""{ "expr": "a \"b\" + c" }""", "a \"b\" + c", "c")]
     [InlineData("""{ "expr": "\u00e9t\u00e9 + y" }""", "été + y", "y")] // \u00e9 is six columns, one character
     [InlineData("""{ "expr": "été + y" }""", "été + y", "y")] // two UTF-8 bytes, one character
     [InlineData("""{ "expr": "😀 + y" }""", "😀 + y", "y")] // four UTF-8 bytes, two UTF-16 units
-    [InlineData("""{ "expr": "\ud83d\ude00 + y" }""", "😀 + y", "y")] // a surrogate pair written as two escapes
+    [InlineData("""{ "expr": "\ud83d\ude00 + y" }""", "😀 + y", "y")]
     [InlineData("""{ "expr": "a\n\tb" }""", "a\n\tb", "b")]
     public void AnOffsetIntoAString_IsTheColumnOfThatCharacterAsWritten(string text, string value, string character)
     {
@@ -103,7 +99,7 @@ public class JsoncLocatorTests
 
     [Theory]
     [InlineData(0)]
-    [InlineData(1)] // the low surrogate: it returned the column of the next character
+    [InlineData(1)]
     [InlineData(2)]
     public void AnOffsetInARawNonBmpCharacter_IsTheColumnOfThatUtf16Unit(int offset)
     {
@@ -115,7 +111,7 @@ public class JsoncLocatorTests
 
     [Theory]
     [InlineData(0, 0)]
-    [InlineData(1, 6)] // the second escape of the pair
+    [InlineData(1, 6)]
     [InlineData(2, 12)]
     public void AnOffsetInAnEscapedSurrogatePair_IsTheColumnOfThatEscape(int offset, int columns)
     {
@@ -176,7 +172,6 @@ public class JsoncLocatorTests
     private static JsoncLocation? Locate(string text, string pointer, int? offset = null) =>
         JsoncLocator.Locate(Encoding.UTF8.GetBytes(text), pointer, offset);
 
-    /// <summary>The position of the first occurrence of <paramref name="marker"/>, counted independently of the locator.</summary>
     private static JsoncLocation At(string text, string marker)
     {
         var index = text.IndexOf(marker, StringComparison.Ordinal);

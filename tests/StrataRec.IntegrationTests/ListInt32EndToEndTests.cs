@@ -9,10 +9,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>int32</c> and <c>list&lt;int32&gt;</c> node outputs end to end: a value that does not fit int32
-/// storage takes the column's declared default, or becomes missing, and is counted in
-/// <see cref="PipelineResult.OutOfRangeValues"/>; it is never wrapped. In the listener collection: one test reads the
-/// out-of-range metric.
+/// In the listener collection: one test reads the out-of-range metric.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public class ListInt32EndToEndTests
@@ -32,7 +29,6 @@ public class ListInt32EndToEndTests
         var byId = result.Items.ToDictionary(i => i.Id.Int64Value, i => i.Columns);
         Assert.Equal(new long[] { 1, 2, 3 }, byId.Keys.Order());
 
-        // 1 × 1.5e9 fits; 3e9 and 4.5e9 do not (an unchecked narrowing would store -1294967296 and 205032704).
         Assert.Equal(1_500_000_000, byId[1]["id32"].AsInt64());
         Assert.Equal(-1, byId[2]["id32"].AsInt64());
         Assert.Equal(-1, byId[3]["id32"].AsInt64());
@@ -40,7 +36,6 @@ public class ListInt32EndToEndTests
         Assert.True(byId[2]["id32n"].IsMissing);
         Assert.True(byId[3]["id32n"].IsMissing);
 
-        // A list with one element outside the int32 range is replaced as a whole.
         Assert.Equal(new long[] { 1, 2 }, byId[1]["tags"].AsInt64List());
         Assert.Equal(new long[] { 0 }, byId[2]["tags"].AsInt64List());
         Assert.Equal(new long[] { 0 }, byId[3]["tags"].AsInt64List());
@@ -60,8 +55,6 @@ public class ListInt32EndToEndTests
     [InlineData("list<int32>", "col.entity_id > 1 ? [3000000000] : [7]")]
     public async Task OutputReadingAFailedDerivedFeature_FailsTheRequest(string type, string expr)
     {
-        // A non-nullable derived feature whose value did not fit fails; an output expression
-        // reading it directly must not serve the invalid storage as a present value.
         var root = Workspace();
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), $$"""
             { "catalog_id": "c",
@@ -86,7 +79,6 @@ public class ListInt32EndToEndTests
     [Fact]
     public async Task TapReadingAFailedDerivedFeature_LogsItMissing_AndAFilterOnItKeepsNothing()
     {
-        // A tap never fails the request; it must not log invalid storage as values either.
         var root = Workspace();
         File.WriteAllText(Path.Combine(root, "catalog", "c.jsonc"), """
             { "catalog_id": "c",
@@ -118,7 +110,7 @@ public class ListInt32EndToEndTests
         var values = Assert.Single(result.LogBatches, b => b.TapId == "values");
         Assert.Equal(3, values.RowCount);
         Assert.All(Assert.Single(values.Columns, c => c.Name == "narrow").Rows(), v => Assert.True(v.IsMissing, v.ToString()));
-        Assert.Contains(Assert.Single(values.Columns, c => c.Name == "id32").Rows(), v => !v.IsMissing); // other columns unaffected
+        Assert.Contains(Assert.Single(values.Columns, c => c.Name == "id32").Rows(), v => !v.IsMissing);
         Assert.DoesNotContain(result.LogBatches, b => b.TapId == "filtered" && b.RowCount > 0);
     }
 
@@ -145,7 +137,7 @@ public class ListInt32EndToEndTests
         Assert.Contains(scalar is null
             ? $"Input '{input}' must be an array of integers within the int32 range [-2147483648, 2147483647]; element 1 is the number 3000000000"
             : $"Input '{input}' must be within the int32 range [-2147483648, 2147483647], got the number 3000000000", rejected.Error);
-        Assert.Contains(scalar is null ? "declare the type as list<int64>?" : "declare the type as int64?", rejected.Error); // nullable kept
+        Assert.Contains(scalar is null ? "declare the type as list<int64>?" : "declare the type as int64?", rejected.Error);
         Assert.True(accepted.Succeeded, accepted.Error);
     }
 

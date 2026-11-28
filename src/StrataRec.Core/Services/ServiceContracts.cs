@@ -58,8 +58,6 @@ public sealed record ServiceSignature(IReadOnlyList<TensorSpec> Inputs, IReadOnl
 /// </remarks>
 public readonly struct TensorValues
 {
-    // The source of a ReadOnlyMemory<T> (an array or a MemoryManager<T>) and its window, so one struct holds any element
-    // type without a field per type.
     private readonly object? _source;
     private readonly int _start;
 
@@ -206,9 +204,9 @@ public readonly struct NamedInput
     /// <c>list&lt;E,N&gt;</c>, <c>[-1]</c> for a list of any length. Read-only to the service: the input is the caller's,
     /// as its <see cref="Values"/> are, and other calls may share it.
     /// </summary>
-    /// <remarks>Neither the shape array nor the data a factory is given is copied: the caller does not change them from the
-    /// moment it creates the input for as long as the input is used (the factory's checks hold for what it was given, and a
-    /// cache or a recording reads the input after the call too).</remarks>
+    /// <remarks>Neither the shape array nor the data a factory is given is copied: the caller does not change them from
+    /// the moment it creates the input for as long as the input is used (a cache or a recording reads the input after
+    /// the call too).</remarks>
     public ReadOnlySpan<int> Shape => _shape;
 
     /// <summary>
@@ -267,7 +265,6 @@ public readonly struct NamedInput
             throw new ArgumentException($"Input '{name}' has shape [{string.Join(", ", shape)}] and {data.Length} value(s), fewer than the shape holds.", nameof(data));
         }
 
-        // The value is the shape's elements: a longer (pooled) buffer's slack is no part of it, for a client or a digest.
         return new(name, shape, TensorValues.Of(data[..(int)elements]), null);
     }
 
@@ -318,16 +315,14 @@ public readonly record struct ServiceCallOptions(long? Seed = null, int? MaxOutp
 /// <see cref="Items"/> and reads a flag per item.
 /// </summary>
 /// <remarks>
-/// <para>A call with <see cref="Items"/> is about those items: every tensor output is per item, <c>BatchSize ×
-/// k</c> elements, the <c>k</c> of item <c>i</c> at <c>i × k</c>, and it adds no items (its <see cref="Limit"/> is 0).
-/// Each input is per item (its leading dimension the batch size) or shared by them (leading dimension 1, a scalar, a
-/// text), and a service answers an item from its slice of each per-item input and all of each shared one: a shared
-/// <c>[1, d]</c> vector is that vector sent with every item, and in a batch of one the two are the same. That is what
-/// lets a replay answer an item from any recorded call that had it with the same inputs, however the items were batched
-///, and a cache answer it from another call's record. A call without items is answered as a whole.</para>
+/// <para>A call with <see cref="Items"/> is about those items: every tensor output is per item, <c>BatchSize × k</c>
+/// elements, the <c>k</c> of item <c>i</c> at <c>i × k</c>, and it adds no items (its <see cref="Limit"/> is 0). Each
+/// input is per item (its leading dimension the batch size) or shared by them (leading dimension 1, a scalar, a text),
+/// and a service answers an item from its slice of each per-item input and all of each shared one: a shared <c>[1,
+/// d]</c> vector is that vector sent with every item, and in a batch of one the two are the same. A call without items
+/// is answered as a whole.</para>
 /// <para>A service sees only what the call sends: its inputs, not the request's. A value of the request it needs is an
-/// input the operator sends (a recall node's <c>queries</c>, e.g. <c>ctx.request.region</c>), so the digest a replay
-/// matches by covers everything the service saw.</para>
+/// input the operator sends (a recall node's <c>queries</c>, e.g. <c>ctx.request.region</c>).</para>
 /// <para>The instance and everything it holds are the caller's, valid only during the call.</para>
 /// </remarks>
 public sealed class ServiceCall
@@ -349,10 +344,9 @@ public sealed class ServiceCall
     /// scoring them, a service filtering them); empty for a call about no rows.
     /// </summary>
     /// <remarks>
-    /// One per row (<see cref="BatchSize"/> of them). In such a call an input whose leading dimension is the batch size is
-    /// per item, row <c>i</c> its slice <c>i</c>; every other input is shared by the items, and its leading dimension is 1
-    /// (<c>[1, d]</c>, as the model operators send a broadcast value), or it is a scalar or a text. The engine splits
-    /// inputs by row on this rule: a replay's digest of each item, a cache's call of the items it misses.
+    /// One per row (<see cref="BatchSize"/> of them). In such a call an input whose leading dimension is the batch size
+    /// is per item, row <c>i</c> its slice <c>i</c>; every other input is shared by the items, and its leading
+    /// dimension is 1 (<c>[1, d]</c>, as the model operators send a broadcast value), or it is a scalar or a text.
     /// </remarks>
     public ReadOnlyMemory<Keys.EntityKey> Items { get; init; }
 
@@ -367,12 +361,10 @@ public sealed class ServiceCall
     /// as every call with <see cref="Items"/> does.
     /// </summary>
     /// <remarks>
-    /// A service's items for a smaller limit are the start of its items for a larger one, as a ranked list's are: a cache
-    /// and a replay answer a call that reads no named <see cref="Outputs"/> with the start of a longer list recorded for the
-    /// same inputs, or with a list the service could not fill. A call that reads named outputs is answered only by an
-    /// answer to its own limit: an output or a text may say how many items it was asked for. The items a service adds past
-    /// a limit (<c>ServiceResponse.Dropped</c>) count only for that limit: a longer list's start answers as a service
-    /// keeping to the smaller limit would, with none dropped.
+    /// A service's items for a smaller limit are the start of its items for a larger one, as a ranked list's are. A
+    /// call that reads named outputs is answered only by an answer to its own limit: an output or a text may say how
+    /// many items it was asked for. The items a service adds past a limit (<c>ServiceResponse.Dropped</c>) count only
+    /// for that limit.
     /// </remarks>
     public int Limit { get; init; }
 
@@ -452,13 +444,8 @@ public readonly record struct ServiceStatus(bool Succeeded, string? Error = null
 /// one instance concurrently (the lifetime contract is on <see cref="Bindings.BindingContext"/>).
 /// </summary>
 /// <remarks>
-/// A call only reads: it must not change what a later call, request or anyone else sees (no write, no counter,
-/// no message), because the engine decides whether a call is made and whether its answer is used. A cache hit or a replay
-/// makes no call; a call past its deadline is no longer waited for, and the service may still carry it out; a failed node's
-/// fallback may call again; a preview, a replay comparison, a debug request with forced arms, a node whose output nothing
-/// reads and a primary pipeline that fails over to its fallback make calls whose answers serve no end user. A write would be
-/// missed, repeated or made for a response nobody saw. What a request writes goes through the log pipeline (a durable
-/// tap, consumed downstream and read back as features), or the host writes it after the response.
+/// A call only reads: it must not change what a later call, request or anyone else sees (no write, no counter, no
+/// message), because the engine decides whether a call is made and whether its answer is used.
 /// </remarks>
 public interface IServiceClient
 {

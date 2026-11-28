@@ -20,10 +20,8 @@ public enum ListenerStage
 }
 
 /// <summary>
-/// A traced request in the test's flow: a recorded StrataRec span made current (<see cref="Request"/>), and a host's
-/// <see cref="ActivityListener"/> that keeps every span of its trace and throws at <see cref="ListenerStage"/> for the
-/// first span named <c>failing</c>. It samples nothing but its own trace and throws nowhere else, so tests running
-/// beside it neither see its spans nor its exceptions. Disposing it gives the flow back the activity it had.
+/// It samples nothing but its own trace and throws nowhere else, so tests running beside it neither see its spans nor
+/// its exceptions. Disposing it gives the flow back the activity it had.
 /// </summary>
 internal sealed class TracedFlow : IDisposable
 {
@@ -88,7 +86,6 @@ internal sealed class TracedFlow : IDisposable
     /// <summary>How many times the listener threw: once at most.</summary>
     public int Thrown => Volatile.Read(ref _thrown);
 
-    /// <summary>The spans named <paramref name="name"/>, in the order they started.</summary>
     public Activity[] Named(string name) => Spans.Where(s => s.OperationName == name).ToArray();
 
     public void Dispose()

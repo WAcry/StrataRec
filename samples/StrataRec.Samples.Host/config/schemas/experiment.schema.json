@@ -687,6 +687,7 @@
                             ]
                           },
                           "inputs": {
+                            "description": "Model input name → column or context reference (col.* / ctx.*) of a non-nullable type, a list only of a fixed length (list<E,N>); its declared type is the tensor's.",
                             "type": [
                               "object",
                               "null"
@@ -831,6 +832,7 @@
                             ]
                           },
                           "inputs": {
+                            "description": "Model input name → column or context reference (col.* / ctx.*) of a non-nullable type, a list only of a fixed length (list<E,N>); its declared type is the tensor's.",
                             "type": [
                               "object",
                               "null"
@@ -976,6 +978,7 @@
                             ]
                           },
                           "inputs": {
+                            "description": "Model input name → column or context reference (col.* / ctx.*) of a non-nullable type, a list only of a fixed length (list<E,N>); its declared type is the tensor's.",
                             "type": [
                               "object",
                               "null"
@@ -2013,7 +2016,7 @@
       }
     },
     "reviewed_interactions": {
-      "description": "Interactions with experiments of other layers that were reviewed and may happen together: experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }, a request column written as req.<name>. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive the interaction it was for. It lives with the experiment, not the release file, because the manifest carries it.",
+      "description": "Interactions with experiments of other layers that were reviewed and may happen together: experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }, a request column written as req.<name>. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive the interaction it was for.",
       "type": [
         "object",
         "null"

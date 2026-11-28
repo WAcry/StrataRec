@@ -20,14 +20,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The lifetime of a plan's clients through the engine: a client created for one plan is disposed only
-/// once no served plan uses it and nothing of a replaced plan's requests can still call it; a plan is served only after its
-/// clients loaded; and secrets are resolved at load without their values reaching a diagnostic, a log or a recording.
-/// The sample's <c>ctr_model</c> is bound to <see cref="ScriptedModels"/>, whose calls, loads and disposals the tests drive;
-/// its connectors and recall services to counting doubles of the in-memory ones where a test covers all three kinds; and
-/// <see cref="RemoteSignatureModels"/> stands in for a client that has to ask a model server for its signatures.
-/// </summary>
 public sealed class BindingLifetimeTests
 {
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
@@ -40,24 +32,24 @@ public sealed class BindingLifetimeTests
         await using var engine = new RecEngine(Environment(root, models));
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var old = Assert.Single(models.Created);
-        var instances = engine.Bindings.InstanceCount; // the model, and the sample's connectors and recall services
+        var instances = engine.Bindings.InstanceCount;
 
         models.HoldCalls();
         var running = engine.ExecuteAsync(Request("req-in-flight"), TestContext.Current.CancellationToken).AsTask();
         await models.CallStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-        Rebind(root, generation: 2); // another identity: a new client
+        Rebind(root, generation: 2);
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var current = Assert.Single(models.Created, c => c != old);
         await Task.Delay(50, TestContext.Current.CancellationToken);
-        Assert.False(old.Disposed.Task.IsCompleted); // its request is still running on it
+        Assert.False(old.Disposed.Task.IsCompleted);
 
         models.ReleaseCalls();
         Assert.True((await running.WaitAsync(Wait, TestContext.Current.CancellationToken)).Succeeded);
         await old.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.False(current.Disposed.Task.IsCompleted);
         Assert.True((await engine.ExecuteAsync(Request("req-after"), TestContext.Current.CancellationToken)).Succeeded);
-        Assert.Equal(instances, engine.Bindings.InstanceCount); // the other instances were taken over, the old model went
+        Assert.Equal(instances, engine.Bindings.InstanceCount);
     }
 
     [Fact]
@@ -71,13 +63,13 @@ public sealed class BindingLifetimeTests
         models.HoldCalls();
 
         var result = await engine.ExecuteAsync(Request("req-abandoning"), TestContext.Current.CancellationToken).AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
-        Assert.True(result.Succeeded); // served by ctr_backup; the model call runs on, abandoned
+        Assert.True(result.Succeeded);
         Assert.Contains(result.Trace!, o => o is { NodeId: "ctr_ranker", Kind: NodeOutcomeKind.Fallback, ProducedBy: "ctr_backup" });
 
         Rebind(root, generation: 2);
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         await Task.Delay(50, TestContext.Current.CancellationToken);
-        Assert.False(old.Disposed.Task.IsCompleted); // the request returned, its call did not
+        Assert.False(old.Disposed.Task.IsCompleted);
 
         models.ReleaseCalls();
         await old.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -103,9 +95,9 @@ public sealed class BindingLifetimeTests
         Assert.Equal(("BINDING_LOAD_FAILED", "bindings:local", "/services/ctr_model/model_file", "check the path"),
             (error.Code, error.Artifact, error.Pointer, error.Hint));
         var failed = Assert.Single(models.Created, c => c != served);
-        await failed.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the rejected plan's lease is returned
-        Assert.False(served.Disposed.Task.IsCompleted); // the served plan keeps serving
-        Assert.Equal(instances, engine.Bindings.InstanceCount); // the rejected plan held nothing more
+        await failed.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+        Assert.False(served.Disposed.Task.IsCompleted);
+        Assert.Equal(instances, engine.Bindings.InstanceCount);
         Assert.True((await engine.ExecuteAsync(Request("req-still-served"), TestContext.Current.CancellationToken)).Succeeded);
     }
 
@@ -125,7 +117,7 @@ public sealed class BindingLifetimeTests
         Assert.False((await engine.ExecuteAsync(Request("req-never-served"), TestContext.Current.CancellationToken)).Succeeded);
         var client = Assert.Single(models.Created);
         Assert.Equal(0, client.Calls);
-        await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the rejected plan returned its lease
+        await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -137,19 +129,19 @@ public sealed class BindingLifetimeTests
         models.Load = async (_, token) =>
         {
             loading.SetResult(token);
-            await finish.Task; // ignores the token until the test lets it return
+            await finish.Task;
         };
         var root = Workspace(generation: 1);
         var engine = new RecEngine(Environment(root, models), bindingOptions: new BindingHostOptions { ShutdownTimeout = TimeSpan.FromMilliseconds(100) });
         var load = engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken);
         var token = await loading.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-        await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken); // bounded, although the load has not returned
+        await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<ObjectDisposedException>(() => load.WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.True(token.IsCancellationRequested);
         var client = Assert.Single(models.Created);
-        Assert.False(client.Disposed.Task.IsCompleted); // never disposed under its load
+        Assert.False(client.Disposed.Task.IsCompleted);
 
         finish.SetResult();
         await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -173,7 +165,7 @@ public sealed class BindingLifetimeTests
         Assert.False(client.Disposed.Task.IsCompleted);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.ExecuteAsync(Request("req-after-shutdown"), TestContext.Current.CancellationToken).AsTask());
         models.ReleaseCalls();
-        Assert.True((await running.WaitAsync(Wait, TestContext.Current.CancellationToken)).Succeeded); // the request in flight completes on its plan
+        Assert.True((await running.WaitAsync(Wait, TestContext.Current.CancellationToken)).Succeeded);
         await client.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
     }
 
@@ -199,7 +191,6 @@ public sealed class BindingLifetimeTests
         Assert.Contains("has no input 'log_followers'", error.Message, StringComparison.Ordinal);
         Assert.Equal(1, Assert.Single(models.Created).Loads);
 
-        // Static validation never loads a client: the signature is left to the engine, and nothing is created twice.
         var validated = PlanCompiler.Compile(Compile(root), Environment(root, models));
         Assert.True(validated.Succeeded, string.Join("\n", validated.Diagnostics));
     }
@@ -241,7 +232,7 @@ public sealed class BindingLifetimeTests
                    + string.Join("\n", result.Trace!.Select(o => o.ToString())) + ReplayBundleFile.Serialize(bundle!);
         Assert.DoesNotContain(Value, seen, StringComparison.Ordinal);
         Assert.Contains("secret://ctr-token", ReplayBundleFile.Serialize(bundle!) + File.ReadAllText(Path.Combine(root, "bindings", "local.jsonc")),
-            StringComparison.Ordinal); // the reference is configuration and may be shown
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -278,15 +269,13 @@ public sealed class BindingLifetimeTests
         var items = connectors.Last("item_store");
         var popular = sources.Last("popular");
 
-        // A swap during a request: the connector and the source whose settings changed are replaced, the others are
-        // taken over loaded, and the replaced ones live until the request that runs on them ends.
         models.HoldCalls();
         var running = engine.ExecuteAsync(Request("req-across-the-swap"), TestContext.Current.CancellationToken).AsTask();
         await models.CallStarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         BindCounting(root, latencyMs: 0);
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         Assert.Equal((1, 3, 3), (models.Created.Count, connectors.Created.Count, sources.Created.Count));
-        Assert.Single(connectors.Created, c => c.Name == "user_store"); // unchanged, taken over
+        Assert.Single(connectors.Created, c => c.Name == "user_store");
         Assert.Single(sources.Created, s => s.Name == "two_tower");
         await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(items.Disposed.Task.IsCompleted || popular.Disposed.Task.IsCompleted);
@@ -294,16 +283,14 @@ public sealed class BindingLifetimeTests
         models.ReleaseCalls();
         Assert.True((await running.WaitAsync(Wait, TestContext.Current.CancellationToken)).Succeeded);
         await Task.WhenAll(items.Disposed.Task, popular.Disposed.Task).WaitAsync(Wait, TestContext.Current.CancellationToken);
-        Assert.False(model.Disposed.Task.IsCompleted || users.Disposed.Task.IsCompleted); // shared with the current plan
+        Assert.False(model.Disposed.Task.IsCompleted || users.Disposed.Task.IsCompleted);
         Assert.True((await engine.ExecuteAsync(Request("req-on-the-new-plan"), TestContext.Current.CancellationToken)).Succeeded);
 
-        // A new model: the old one goes as soon as no request runs on it.
         Rebind(root, generation: 2);
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         await model.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.True((await engine.ExecuteAsync(Request("req-on-the-new-model"), TestContext.Current.CancellationToken)).Succeeded);
 
-        // The engine's disposal takes the rest: every instance was disposed exactly once, and none was called after.
         await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
         var all = models.Created.Cast<Counted>().Concat(connectors.Created).Concat(sources.Created).ToList();
         Assert.Equal(8, all.Count); // two models, three connectors (item_store replaced), three sources (popular replaced)
@@ -313,10 +300,6 @@ public sealed class BindingLifetimeTests
         Assert.Equal(1, models.Created[0].Loads);
     }
 
-    /// <summary>
-    /// A metric listener that throws right after the swap loses its record, and nothing else: the load is applied (it used
-    /// to throw, the plan served already), and the replaced plan's lease is retired.
-    /// </summary>
     [Fact]
     public async Task AMetricCallbackThatThrowsAfterTheSwap_LosesItsRecord_AndTheLoadIsApplied_AndRetiresTheReplacedPlansLease()
     {
@@ -354,7 +337,6 @@ public sealed class BindingLifetimeTests
         Assert.True((await engine.LoadAsync(Compile(root), sequence: Throwing, cancellationToken: TestContext.Current.CancellationToken)).Applied);
         Assert.Equal(1, Volatile.Read(ref thrown));
 
-        // The new plan serves, and the replaced plan's lease is retired.
         await old.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.True((await engine.ExecuteAsync(Request("req-after-the-metric-failure"), TestContext.Current.CancellationToken)).Succeeded);
         await engine.DisposeAsync().AsTask().WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -385,7 +367,6 @@ public sealed class BindingLifetimeTests
             Assert.True((await engine.ExecuteAsync(Request("req-remote-signature"), TestContext.Current.CancellationToken)).Succeeded);
         }
 
-        // The server's model has no input the node maps: the plan is rejected at the node, before it is served...
         var renamed = new RemoteSignatureModels
         {
             Answer = new ServiceSignature(
@@ -398,7 +379,6 @@ public sealed class BindingLifetimeTests
         var error = Assert.Single(rejected.Diagnostics, d => d.Code == "SERVICE_SIGNATURE");
         Assert.Equal(("pipeline:home_feed", "/nodes/ctr_ranker/config/inputs/log_followers"), (error.Artifact, error.Pointer));
 
-        // ...while static validation does not wait for a model server: the check is the engine's.
         var validated = PlanCompiler.Compile(Compile(root), Environment(root, renamed));
         Assert.True(validated.Succeeded, string.Join("\n", validated.Diagnostics));
     }
@@ -418,11 +398,6 @@ public sealed class BindingLifetimeTests
             }
         }).Root;
 
-    /// <summary>
-    /// A compile that waited for a model's signature runs again, and that one read the host's override again:
-    /// a wrapped CLR value was written once more (and ran as it wrote then), and a plain tree the host changed meanwhile
-    /// was compiled as changed. Both compiles read the override as the first one checked it.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -463,7 +438,7 @@ public sealed class BindingLifetimeTests
         }, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.True(remote.Lookups > lookups); // the compile waited, and ran again
+        Assert.True(remote.Lookups > lookups);
         var recorded = result.Recording!.Request.ConfigOverride!["params"]!;
         if (wrapped)
         {
@@ -478,7 +453,7 @@ public sealed class BindingLifetimeTests
         }
     }
 
-    /// <summary>Binds <c>ctr_model</c> to <see cref="ScriptedModels"/> with the sample's linear weights; the generation makes the identity.</summary>
+    /// <summary>Binds <c>ctr_model</c> to <see cref="ScriptedModels"/>; the generation makes the identity.</summary>
     private static void Rebind(string root, int generation, string? credentials = null) =>
         SampleBindings.RebindService(root, "ctr_model", $$"""
             {
@@ -550,9 +525,8 @@ public sealed class BindingLifetimeTests
     }
 
     /// <summary>
-    /// <c>scripted@1</c>: linear@1 models the test drives. Each client loads with <see cref="Load"/> (and resolves its
-    /// <c>credentials</c> reference), answers <see cref="Signature"/> when set, and holds its calls while
-    /// <see cref="HoldCalls"/> is in effect, ignoring their cancellation like a client stuck in I/O.
+    /// Each client holds its calls while <see cref="HoldCalls"/> is in effect, ignoring their cancellation like a
+    /// client stuck in I/O.
     /// </summary>
     private sealed class ScriptedModels : IBindingFactory<IServiceClient>
     {
@@ -620,7 +594,7 @@ public sealed class BindingLifetimeTests
                     if (owner._gate is { } gate)
                     {
                         owner.CallStarted.TrySetResult();
-                        await gate.Task.ConfigureAwait(false); // ignores cancellation
+                        await gate.Task.ConfigureAwait(false);
                     }
 
                     return await inner.CallAsync(call, response, CancellationToken.None).ConfigureAwait(false);
@@ -633,16 +607,11 @@ public sealed class BindingLifetimeTests
         }
     }
 
-    /// <summary>A client's exception whose message cannot be read: describing it throws.</summary>
     private sealed class UnreadableException : Exception
     {
         public override string Message => throw new InvalidOperationException("the message failed");
     }
 
-    /// <summary>
-    /// What the engine did with one instance: its request calls, its disposals, and the calls that were running when a
-    /// disposal began or started after one, which the lifetime contract says never happen.
-    /// </summary>
     private abstract class Counted : IDisposable
     {
         private int _calls;
@@ -682,7 +651,6 @@ public sealed class BindingLifetimeTests
         protected void EndCall() => Interlocked.Decrement(ref _inFlight);
     }
 
-    /// <summary><c>counting_memory@1</c>: <c>memory@1</c> connectors that count what the engine does with them.</summary>
     private sealed class CountingConnectors : IBindingFactory<IFeatureSourceConnector>
     {
         public const string TypeName = "counting_memory@1";
@@ -729,7 +697,6 @@ public sealed class BindingLifetimeTests
         }
     }
 
-    /// <summary><c>counting_list@1</c>: <c>memory_list@1</c> recall services that count what the engine does with them.</summary>
     private sealed class CountingSources : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "counting_list@1";
@@ -771,10 +738,6 @@ public sealed class BindingLifetimeTests
         }
     }
 
-    /// <summary>
-    /// <c>remote_signature@1</c>: linear@1 models whose signature only a model server knows. The client needs no load, and
-    /// every answer takes a round trip; <see cref="Answer"/> stands in for a server whose model differs from the binding.
-    /// </summary>
     private sealed class RemoteSignatureModels : IBindingFactory<IServiceClient>
     {
         public const string TypeName = "remote_signature@1";
@@ -800,7 +763,7 @@ public sealed class BindingLifetimeTests
             public async ValueTask<ServiceSignature> DescribeAsync(string model, string? version, CancellationToken cancellationToken)
             {
                 Interlocked.Increment(ref owner._lookups);
-                await Task.Delay(20, cancellationToken).ConfigureAwait(false); // the round trip
+                await Task.Delay(20, cancellationToken).ConfigureAwait(false);
                 owner.OnLookup?.Invoke();
                 return owner.Answer ?? await inner.DescribeAsync(model, version, cancellationToken).ConfigureAwait(false);
             }

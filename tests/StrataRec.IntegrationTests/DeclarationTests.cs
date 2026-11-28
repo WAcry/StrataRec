@@ -9,18 +9,8 @@ using static StrataRec.IntegrationTests.CombinationLimitTests;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Every name a node binds must be declared in each arm combination before the node compiles, as a compile of that
-/// combination alone requires: by the baseline, by an arm assigned with it, or, for a column
-/// without a declaration, by a node compiled before it that writes it. The unified plan compiles each node once on a
-/// schema holding what any arm declares, so each case here was accepted while the combination's merged config is refused:
-/// a writer another layer's arm takes away (found by <see cref="GeneratedExperimentTests"/>), a node reading its own output
-/// before writing it, a declaration by an arm not assigned with the reader, a name in a dead branch, a write
-/// that needs a declaration, a parameter another arm adds.
-/// </summary>
 public sealed class DeclarationTests
 {
-    /// <summary>Arm b/t takes the sample's author rank away from where a/t reads it, each valid alone.</summary>
     [Theory]
     [InlineData("""{ "author_rank": null, "author_cap": null }""", "here no node writes it")]
     [InlineData("""{ "author_rank": { "order": 530 }, "author_cap": { "order": 535 } }""", "here 'author_rank' (order 530) writes it after")]
@@ -52,8 +42,7 @@ public sealed class DeclarationTests
     public void ANodeReadingItsOwnOutputBeforeWritingIt_IsRejected_ThoughAnotherVariantDeclaredIt()
     {
         // GroupAggregate@1 reads its value columns before it writes its outputs, so a value column naming its own
-        // output is unknown when the arm's config is compiled alone; the baseline's variant had declared it in the unified
-        // schema, and a read of a column the node writes was let through. Each arm alone is not compiled here (With).
+        // output is unknown when the arm's config is compiled alone. Each arm alone is not compiled here (With).
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Nodes["selfagg"] = new NodeSpec
         {
@@ -70,10 +59,6 @@ public sealed class DeclarationTests
         Assert.Equal(("NAME_NOT_DECLARED", "experiment:a", "/arms/t/nodes/selfagg"), (error.Code, error.Artifact, error.Pointer));
     }
 
-    /// <summary>
-    /// A node's own write is not what it reads: it reads what was committed before it ran. 'b_self' summing 'a_self',
-    /// which only this node writes, compiled, and was missing on every row. In two nodes the second reads the first's.
-    /// </summary>
     [Fact]
     public void ANodeReadingAColumnOnlyItWrites_IsRefused_AndInTwoNodesItCompiles()
     {
@@ -101,11 +86,6 @@ public sealed class DeclarationTests
         Assert.True(both.Succeeded, string.Join("\n", both.Diagnostics));
     }
 
-    /// <summary>
-    /// The same read where the unified plan's one schema has the column: the baseline's 'count' declares 'x', and the arm
-    /// replaces it with a node that writes 'x' and sums it. In the arm's combination only that node writes 'x', its own
-    /// compile refuses the read, and so does the plan.
-    /// </summary>
     [Fact]
     public void ANodeReadingAColumnOnlyItWrites_WhereAnotherCombinationDeclaresIt_IsRefusedInItsOwn()
     {
@@ -130,7 +110,6 @@ public sealed class DeclarationTests
     [Fact]
     public void ADeclaredColumn_ExistsInEveryCombination()
     {
-        // The hint's fix: declared under /columns, the column exists wherever the reader does, missing where nothing writes it.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Columns["group.author_rank"] = new ColumnSpec { Type = "int64?" };
         var request = With(host.Request,
@@ -152,8 +131,8 @@ public sealed class DeclarationTests
     [InlineData("true ? 7 : (col.group.author_rank ?? 0)")]
     public void TheOutputReadingAColumnAnArmTakesAway_IsRejected_EvenWithoutCheckingArmsAlone(string expression)
     {
-        // The output compiles after every node, so any writer declares what it reads; an arm without one leaves it unknown.
-        // Each arm alone would show it too, but that check can be turned off (a thousand arms): the combinations do not.
+        // The output compiles after every node, so any writer declares what it reads; an arm without one leaves it
+        // unknown.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Output.Columns["author_rank"] = expression;
         var request = With(host.Request, [Treatment("b", """{ "nodes": { "author_rank": null, "author_cap": null } }""")]);
@@ -170,8 +149,6 @@ public sealed class DeclarationTests
     [Fact]
     public void ADiagnosticAtATapOrAnOutputColumn_EscapesItsNameInThePointer()
     {
-        // The names went into the pointer as they are, so '/' and '~' made it point elsewhere, and the tap's
-        // error was not attributed to the arm that adds it.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Output.Columns["rank/of~author"] = "col.group.author_rank";
         var request = With(host.Request,
@@ -194,8 +171,6 @@ public sealed class DeclarationTests
     [Fact]
     public void AnErrorInATapsContextOrAMapKey_IsAtItsEscapedPointer()
     {
-        // A context name went into the pointer as it is, so the error an arm's tap made was placed in the
-        // baseline's file; a map parameter's keys and names likewise.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Params["recall_quotas"]!["a/b~c"] = "many";
         var request = With(host.Request, [Treatment("a", """
@@ -212,7 +187,6 @@ public sealed class DeclarationTests
     [Fact]
     public void AnErrorInAColumnOrAFusionTerm_IsAtItsEscapedPointer()
     {
-        // A declared column's name and a multiplier's or addend's name went into the pointer as they are.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Columns["col/of~x"] = new ColumnSpec { Type = "int46" };
         var request = With(host.Request, [Treatment("a", """
@@ -230,10 +204,8 @@ public sealed class DeclarationTests
     [Fact]
     public void AColumnDeclaredOnlyByAnArmNotAssignedWithItsReader_IsNotDeclaredThere()
     {
-        // A declares the column the baseline's writer declares too, b reads it, c deletes the writer; each arm
-        // is valid alone and checked so. With b and c but not a, the name is unknown. The unified schema held a's
-        // declaration for every combination, so the column did not count as one needing a writer: the plan was accepted,
-        // and revoking a published a build no host could load.
+        // A declares the column the baseline's writer declares too, b reads it, c deletes the writer; each arm is valid
+        // alone and checked so. With b and c but not a, the name is unknown.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Nodes["expwriter"] = new NodeSpec
         {
@@ -304,9 +276,8 @@ public sealed class DeclarationTests
     [Fact]
     public void AWriteThatNeedsADeclaration_DoesNotDeclareTheColumnItWrites()
     {
-        // An extension writes its column with a type of its own unless both options are on; then it writes it
-        // as declared (TryWriteColumn without an implicit type). Each arm alone declares it; a and b together have no
-        // declaration, though the unified schema had one from the other variants.
+        // An extension writes its column with a type of its own unless both options are on; then it writes it as
+        // declared (TryWriteColumn without an implicit type).
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Nodes["selfdecl"] = new NodeSpec { Order = 600, Op = "SelfDeclaring@1", Config = new JsonObject() };
         var request = With(host.Request,
@@ -348,9 +319,8 @@ public sealed class DeclarationTests
     [Fact]
     public void PastTheLimit_ANameOnlyThreeLayersTogetherLeaveUndeclared_IsFoundInItsScope()
     {
-        // Joint reads y only when a and b both switch it on; c deletes y's writer. Every arm and every pair is legal; four
-        // more layers make 128 combinations, past the limit of 8, which the three deciding layers fit (the
-        // generated space never checked a scope it could enumerate).
+        // Joint reads y only when a and b both switch it on; c deletes y's writer. Every arm and every pair is legal;
+        // four more layers make 128 combinations, past the limit of 8, which the three deciding layers fit.
         var host = HomeFeedTestHost.Load();
         var pipeline = host.Request.Pipeline;
         pipeline.Columns["z"] = new ColumnSpec { Type = "float64?" };
@@ -391,9 +361,6 @@ public sealed class DeclarationTests
     [Fact]
     public void AWriteDeclaringAColumnAnotherArmDeclaresOtherwise_IsATypeMismatch_WhereThatArmIsNotAssigned()
     {
-        // Generated (seed 113): t0 declares stat.b as int64?; t1, exclusive with it, writes it with a count of its own
-        // (int64) and reads it without a default. t1's own compile has an int64 column, the unified plan's schema t0's
-        // declaration: the reader was refused for a missing value t1 never has, with no word of why.
         var host = HomeFeedTestHost.Load();
         var arms = new JsonObject
         {
@@ -420,7 +387,6 @@ public sealed class DeclarationTests
     [Fact]
     public void ABaselineWriteDeclaringAColumnAnArmDeclaresOtherwise_IsATypeMismatch()
     {
-        // The bare baseline has no declaration: its column is the write's int64, the unified plan's the arm's int64?.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Nodes["count_b"] = new NodeSpec
         {
@@ -438,7 +404,6 @@ public sealed class DeclarationTests
     [Fact]
     public void AnArmDeclaringAColumnItWritesWithAnotherType_IsAccepted()
     {
-        // The declaration holds wherever the arm's write does: a nullable int64 holds the count.
         var host = HomeFeedTestHost.Load();
         var request = With(host.Request, [Treatment("a", """
             { "columns": { "stat.b": { "type": "int64?" } }, "nodes": {
@@ -459,7 +424,6 @@ public sealed class DeclarationTests
         public bool Right { get; init; }
     }
 
-    /// <summary>Writes <c>needs_decl</c> with a type of its own, or, with both options on, as a declared column.</summary>
     private sealed class SelfDeclaringFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("SelfDeclaring", 1, Effects.ColumnWriter, typeof(SelfDeclaringConfig), "Declares its output unless both options are on.");

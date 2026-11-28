@@ -62,9 +62,7 @@ public sealed class PipelineSourceConfig
 /// without them.
 /// </summary>
 /// <remarks>
-/// It uses only what any operator may (<see cref="OperatorCompileContext.TryCallPipeline"/>,
-/// <see cref="OperatorContext.CallPipelineAsync"/>): what to do with a called pipeline's rows beyond appending them,
-/// such as placing them at given ranks, is an operator of one's own. <c>PipelineColumns@1</c> keeps them as a row's lists.
+/// <c>PipelineColumns@1</c> keeps them as a row's lists.
 /// </remarks>
 public sealed class PipelineSourceFactory : IOperatorFactory
 {
@@ -91,8 +89,6 @@ public sealed class PipelineSourceFactory : IOperatorFactory
                 continue;
             }
 
-            // The declared type of what it reads, not the type its arithmetic is done in: an int32 input passed on as it is
-            // is an int32, though an expression computes with int64.
             ok &= context.TryCallInput(call, name, key, context.Schema.DeclaredType(expression));
             inputs.Add((name, expression));
         }
@@ -156,7 +152,6 @@ public sealed class PipelineSourceFactory : IOperatorFactory
     {
         public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => Limit(parameters[limit.Id]);
 
-        /// <summary>The most rows to append; none for a parameter without a value (a map's key set to null).</summary>
         private static int Limit(in ScalarValue value) => value.IsMissing ? 0 : (int)Math.Clamp(value.AsInt64(), 0, int.MaxValue);
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
@@ -182,9 +177,8 @@ public sealed class PipelineSourceFactory : IOperatorFactory
         }
 
         /// <summary>
-        /// Appends the result's first rows the request has not seen, as many as the limit and the table allow, and writes
-        /// their columns. A column the result lacks, or a value its column cannot hold, fails the node: the call was
-        /// checked against the pipeline's interface, so either is a defect, not data.
+        /// A column the result lacks, or a value its column cannot hold, fails the node: the call was checked against
+        /// the pipeline's interface, so either is a defect, not data.
         /// </summary>
         private void Append(OperatorContext context, PipelineCallResult result)
         {
@@ -248,7 +242,6 @@ public sealed class PipelineSourceFactory : IOperatorFactory
                 var values = rows.Column(from[c]);
                 for (var i = 0; i < taken.Count; i++)
                 {
-                    // Converted as the check allows (an integer list read into a float one), then stored.
                     if (!values[taken[i]].TryConvert(into.Type, out var value) || !ColumnValues.TrySet(into, first + i, value))
                     {
                         context.Fail($"column '{columns[c].From}' of pipeline '{call.PipelineId}' returned {values[taken[i]]}, which '{columns[c].Into.Name}' ({into.Type}) cannot hold");

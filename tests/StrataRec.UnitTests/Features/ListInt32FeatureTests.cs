@@ -13,15 +13,9 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// <c>list&lt;int32&gt;</c> features: connector staging, the memory connector's decoding, backfill,
-/// configuration values, and the out-of-range rule for derived and context values of int32 types.
-/// </summary>
 public class ListInt32FeatureTests
 {
     private static readonly long[] ThreeItems = { 1, 2, 3 };
-
-    // ---- Staging and the memory connector -------------------------------------------------------------------------------
 
     [Fact]
     public void MemoryConnector_DecodesInt32ListsStraightIntoInt32Staging()
@@ -40,8 +34,8 @@ public class ListInt32FeatureTests
         Assert.Equal(new[] { 1, -2, int.MaxValue, int.MinValue }, tags.Get(0).ToArray());
         Assert.True(staging.HasValue(0, 1));
         Assert.Empty(tags.Get(1).ToArray());
-        Assert.False(staging.HasValue(0, 2)); // null: missing
-        Assert.False(staging.HasValue(0, 3)); // absent key
+        Assert.False(staging.HasValue(0, 2));
+        Assert.False(staging.HasValue(0, 3));
         Assert.Equal(5, ((ScalarColumn<int>)staging.Field(1))[0]);
         Assert.Equal(int.MinValue, ((ScalarColumn<int>)staging.Field(1))[2]);
     }
@@ -59,7 +53,7 @@ public class ListInt32FeatureTests
 
         Assert.Contains(value, error.Message);
         Assert.Contains("int32", error.Message);
-        Assert.Contains("int64", error.Message); // the fix: declare a wider type
+        Assert.Contains("int64", error.Message);
     }
 
     [Fact]
@@ -119,8 +113,6 @@ public class ListInt32FeatureTests
         Assert.Contains("'tags'", result.Error);
     }
 
-    // ---- Derived and context values: the out-of-range rule --------------------------------------------------------------
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -137,7 +129,7 @@ public class ListInt32FeatureTests
 
         Assert.Equal(FeatureState.Ok, result.State);
         Assert.Equal(1_500_000_000, request.Value(scaled, 0).AsInt64());
-        foreach (var row in new[] { 1, 2 }) // 3e9 and 4.5e9: an unchecked narrowing would store garbage
+        foreach (var row in new[] { 1, 2 })
         {
             var value = request.Value(scaled, row);
             Assert.True(withDefault ? value.AsInt64() == 0 : value.IsMissing, $"row {row}: {value}");
@@ -231,8 +223,6 @@ public class ListInt32FeatureTests
         Assert.Equal(2, counters.OutOfRange);
     }
 
-    // ---- Configuration values -------------------------------------------------------------------------------------------
-
     [Fact]
     public void ConfigValues_ParseListInt32_HeldAsInt64Lists()
     {
@@ -270,7 +260,6 @@ public class ListInt32FeatureTests
         return staging;
     }
 
-    /// <summary>Compiles a candidate-level derived feature over <c>col.entity_id</c> (the table's key slot).</summary>
     private static CompiledExpression Compile(string source)
     {
         var scope = new DictionaryScope();

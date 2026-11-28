@@ -7,7 +7,6 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary><c>list&lt;int32&gt;</c> storage: the type, the column, and the int32 range rule.</summary>
 public class ListInt32Tests
 {
     [Theory]
@@ -55,7 +54,7 @@ public class ListInt32Tests
 
         Assert.Equal(new[] { 1, -2, int.MaxValue, int.MinValue }, lists.Get(0).ToArray());
         var first = ColumnValues.Get(column, 0);
-        Assert.Equal(StorageKind.Int64, first.ListElement); // ScalarValue holds int lists promoted, like int32 values
+        Assert.Equal(StorageKind.Int64, first.ListElement);
         Assert.Equal(new long[] { 1, -2, int.MaxValue, int.MinValue }, first.AsInt64List());
         Assert.True(ColumnValues.Get(column, 1).AsInt64List().IsEmpty);
         Assert.True(ColumnValues.Get(column, 2).IsMissing);
@@ -68,7 +67,7 @@ public class ListInt32Tests
         Assert.Equal(new[] { 1, -2, int.MaxValue, int.MinValue }, copy.Get(5).ToArray());
         Assert.False(copy.IsValid(6));
 
-        column.Gather(new[] { 3, 0, 2 }, 4); // Compact
+        column.Gather(new[] { 3, 0, 2 }, 4);
         Assert.Equal(new long[] { 7, 7 }, ColumnValues.Get(column, 0).AsInt64List());
         Assert.Equal(new long[] { 1, -2, int.MaxValue, int.MinValue }, ColumnValues.Get(column, 1).AsInt64List());
         Assert.True(ColumnValues.Get(column, 2).IsMissing);
@@ -136,7 +135,6 @@ public class ListInt32Tests
         Assert.False(ColumnValues.FitsStorage(ScalarValue.FromInt64(-2147483649), ColumnType.Int32));
         Assert.True(ColumnValues.FitsStorage(ScalarValue.Missing, ColumnType.Int32));
 
-        // Request inputs and parameters are validated with TryConvert: a list<int32> input must fit.
         Assert.False(wide.TryConvert(ColumnType.List(StorageKind.Int32), out _));
         Assert.True(narrow.TryConvert(ColumnType.List(StorageKind.Int32), out var converted));
         Assert.Equal(StorageKind.Int64, converted.ListElement);

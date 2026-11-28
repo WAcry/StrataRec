@@ -26,11 +26,8 @@ public sealed class ModelScorerConfig : ModelCallConfig
 /// column, not the model's: an input of an int32 column is an int32 <c>[rows]</c> tensor, an embedding
 /// <c>list&lt;float32,N&gt;</c> a float32 <c>[rows, N]</c> one, and an output written to a float64 column a float64
 /// <c>[rows]</c> tensor; a context value is broadcast to every row. Nullable inputs and lists of any length are compile
-/// errors at the input. Every model version the node may use must declare those tensors; this is checked at load time.
-/// <see cref="ModelTensorRule"/> holds the rule, and why the column decides.</para>
-/// <para>Inputs are plain references, so each is gathered straight from its column's storage (or its request-level value)
-/// into one dense buffer per call, rented from the request and ordered like the live rows; batches are slices of it
-/// (<see cref="ModelInput"/>, shared with the other model operators).</para>
+/// errors at the input. Every model version the node may use must declare those tensors; this is checked at load
+/// time.</para>
 /// </remarks>
 public sealed class ModelScorerFactory : IOperatorFactory
 {
@@ -85,7 +82,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
             return null;
         }
 
-        // In the config's order, as the signature check has always reported them.
+        // In the config's order: the signature check reports mismatches in it.
         var read = new List<ModelTensorRule.MappedOutput>(config.Outputs.Count);
         foreach (var (name, _) in config.Outputs)
         {
@@ -112,7 +109,7 @@ public sealed class ModelScorerFactory : IOperatorFactory
             var memory = context.Memory;
             var rows = memory.Rent<int>(n);
             context.LiveRows.CopyTo(rows);
-            var stride = Batching.Size(n, batchSize); // the fewest batches, even
+            var stride = Batching.Size(n, batchSize);
             var inputs = call.Inputs;
             var values = new GatheredInput[inputs.Length];
             for (var i = 0; i < inputs.Length; i++)

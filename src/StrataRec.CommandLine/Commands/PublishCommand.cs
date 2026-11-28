@@ -5,20 +5,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec publish</c>: the smallest release controller, without staged rollout (its emergency
-/// stop is <see cref="RevokeCommand"/>). It points the manifest's (pipeline, environment) at the manifest, in the pointer
-/// files of the store's directory (<see cref="FileSystemManifestSource"/>), which nodes serving releases poll.
-/// </summary>
-/// <remarks>
-/// <para>A pointer only moves forward and only to something a node can read: every artifact of the manifest must be in the
-/// store and read as a node reads it, and its <c>seq</c> must be greater than that of the manifest the pointer names now (a
-/// rollback is a new manifest with a greater <c>seq</c>). A manifest file is stored first, under the id
-/// <c>build</c> gives it. Capabilities are not checked: the binary that publishes need not be the one that serves, and a
-/// node that lacks one reports the manifest <c>incompatible</c> and keeps its plan.</para>
-/// <para>Two publishes of one pointer on one machine take turns (a lock file next to the pointer); the pointer itself is
-/// replaced atomically, so a node reads the old pointer or the new one.</para>
-/// </remarks>
 internal static class PublishCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -43,8 +29,6 @@ internal static class PublishCommand
         return command;
     }
 
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
-    /// <param name="errors">Where diagnostics go; standard error by default.</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string manifestRef, string storeRoot, string format, TextWriter output, CancellationToken cancellationToken,
         TextWriter? errors = null)
@@ -162,7 +146,6 @@ internal static class PublishCommand
             previous = (current, published.Seq);
             if (current == id)
             {
-                // Published already: nothing to do, so a pipeline step that publishes can run again.
                 return new Published(manifest, id, path, previous, Unchanged: true);
             }
 
@@ -194,9 +177,9 @@ internal static class PublishCommand
     }
 
     /// <summary>
-    /// The lock of one pointer: a file next to it, held open exclusively (an advisory lock on Unix, which the system releases
-    /// with the process), so two publishes of one pointer on this machine cannot both compare with the same old pointer.
-    /// Null after reporting that another publish holds it.
+    /// The lock of one pointer: a file next to it, held open exclusively (an advisory lock on Unix, which the system
+    /// releases with the process), so two publishes of one pointer on this machine cannot both compare with the same
+    /// old pointer.
     /// </summary>
     internal static FileStream? TakeTurn(string pointer, string artifact, DiagnosticBag diagnostics)
     {
@@ -215,6 +198,5 @@ internal static class PublishCommand
 
     private static string Label(string id) => "manifest:" + id;
 
-    /// <param name="Unchanged">The pointer named this manifest already, and was not written.</param>
     private sealed record Published(ReleaseManifest Manifest, string Id, string Pointer, (string Id, long Seq)? Previous, bool Unchanged = false);
 }

@@ -7,12 +7,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// A plan holds the catalog features it reads, with what they are computed from and keyed by, and nothing else of the
-/// catalog: a catalog is shared by many pipelines, and what a request sizes by feature grew with all of it.
-/// The catalog's content is still checked whole (an error or a cycle in a derived feature nothing reads), a source is
-/// bound only when a feature the plan reads needs it, and a table keeps the layout of the catalog.
-/// </summary>
 public sealed class CatalogFeatureRegistrationTests
 {
     [Fact]
@@ -23,8 +17,8 @@ public sealed class CatalogFeatureRegistrationTests
 
         Assert.Equal(["item.boost", "item.score"], Names(lean));
         Assert.Equal(["item.boost", "item.score"], Names(wide));
-        Assert.Equal(Layout(lean), Layout(wide)); // slots, context values, columns, fetch groups: what a request sizes by
-        Assert.Equal("item_store", Assert.Single(wide.Features.Groups).SourceName); // ghost_store, user_store, author_store: not bound
+        Assert.Equal(Layout(lean), Layout(wide));
+        Assert.Equal("item_store", Assert.Single(wide.Features.Groups).SourceName);
     }
 
     [Fact]
@@ -47,7 +41,7 @@ public sealed class CatalogFeatureRegistrationTests
         var unread = TryCompile(derived: Broken);
         var error = Assert.Single(unread.Diagnostics, d => d.IsError);
         Assert.Equal(("EXPR_UNKNOWN_NAME", "/derived_features/item.broken/expr"), (error.Code, error.Pointer));
-        Assert.Contains("col.item.score", error.Hint); // a feature the plan does not hold is still suggested
+        Assert.Contains("col.item.score", error.Hint);
 
         var read = TryCompile(derived: Broken, expr: "col.item.broken ?? 0.0");
         Assert.Equal([("EXPR_UNKNOWN_NAME", "/derived_features/item.broken/expr")], Errors(read));
@@ -75,8 +69,6 @@ public sealed class CatalogFeatureRegistrationTests
     [Fact]
     public void ADerivedForeignKeyComputedFromItsOwnEntity_IsAKeyCycle_AtTheKey()
     {
-        // owner is keyed by item.owner_id, computed from a feature of owner: the key would be needed to fetch itself. A cycle
-        // through a key is a key cycle, at the key part, whether a derived feature is on it or not.
         var compilation = TryCompile(
             entities: """, "owner": { "key": "col.item.owner_id" }""",
             features: """, "owner.rank": { "type": "float32", "source": "item_store", "field": "o_rank" }""",
@@ -89,10 +81,6 @@ public sealed class CatalogFeatureRegistrationTests
         Assert.NotNull(error.Hint);
     }
 
-    /// <summary>
-    /// The same for context keys: an account keyed by a derived user feature computed from the account's own
-    /// feature, directly or through an entity keyed by it, never has a key. Reported once at the key, whatever reads it.
-    /// </summary>
     [Theory]
     [InlineData("col.item.boost")]
     [InlineData("col.item.boost * (ctx.account.tier ?? 1.0)")]
@@ -112,13 +100,9 @@ public sealed class CatalogFeatureRegistrationTests
         Assert.Equal("ENTITY_KEY_CYCLE", error.Code);
         Assert.StartsWith("/entities/", error.Pointer, StringComparison.Ordinal);
         Assert.Contains("through derived feature 'user.account_id'", error.Message);
-        Assert.Contains("account.household_id", error.Message); // the path goes through the household's key
+        Assert.Contains("account.household_id", error.Message);
     }
 
-    /// <summary>
-    /// A feature of an entity keyed by a context feature brings the key into the plan, and into the context
-    /// prefetch with it: the chain is fetched at request start, each group once what its key reads is stored.
-    /// </summary>
     [Fact]
     public void AFeatureOfAnEntityKeyedByAContextFeature_BringsInItsKey_AndIsPrefetched()
     {
@@ -137,7 +121,7 @@ public sealed class CatalogFeatureRegistrationTests
         Assert.Equal([key], account.KeyFeatures);
         Assert.Equal([key], account.ContextKeyFeatures);
         Assert.Equal([key], plan.Features.Features[tier].Dependencies);
-        Assert.Equal([key, tier], plan.ContextFeatures.Order()); // prefetched with the request, the key with it
+        Assert.Equal([key, tier], plan.ContextFeatures.Order());
         Assert.True(account.KeyLayout[0].IsShared);
     }
 
@@ -171,8 +155,6 @@ public sealed class CatalogFeatureRegistrationTests
     [Fact]
     public void AContextFeatureNamedLikeARequestInput_IsADuplicate_AndTheInputKeepsItsName()
     {
-        // An entity named 'request' makes ctx.request.<feature> collide with ctx.request.<input>; this threw while the plan
-        // registered every feature.
         var compilation = TryCompile(
             entities: """, "request": { "key": "ctx.request.user_id" }""",
             features: """, "request.user_id": { "type": "int64", "source": "user_store", "field": "u_id" }""",
@@ -216,13 +198,13 @@ public sealed class CatalogFeatureRegistrationTests
     {
         const string Extra = """, "author.extra": { "type": "float32", "source": "author_store", "field": "a_extra" }""";
         const string Local = """{ "mode": "local", "max_bytes": "1MiB", "bootstrap": { "source": "snapshot_files@1", "uri": "fixtures/author_snapshot" } }""";
-        var root = Directory.CreateTempSubdirectory("stratarec-catalog-features-").FullName; // the identity names the directory
+        var root = Directory.CreateTempSubdirectory("stratarec-catalog-features-").FullName;
         var one = Plan(features: Extra, expr: "col.author.followers", authorStore: Local, root: root);
         var both = Plan(features: Extra, expr: "col.author.followers + (col.author.extra ?? 0.0)", authorStore: Local, root: root);
 
         var table = Assert.Single(one.Features.Groups, g => g.SourceName == "author_store");
-        Assert.Single(table.FeatureIndices); // the plan holds the feature it reads...
-        Assert.Equal(["a_extra", "a_followers"], table.Supply.Table!.Spec.Schema.Fields.Select(f => f.Name)); // ...its table, the catalog's
+        Assert.Single(table.FeatureIndices);
+        Assert.Equal(["a_extra", "a_followers"], table.Supply.Table!.Spec.Schema.Fields.Select(f => f.Name));
         Assert.Equal(table.Supply.Table.Spec.Identity, both.Features.Groups.Single(g => g.SourceName == "author_store").Supply.Table!.Spec.Identity);
     }
 
@@ -234,7 +216,6 @@ public sealed class CatalogFeatureRegistrationTests
     private static List<(string, string)> Errors(PlanCompilation compilation) =>
         compilation.Diagnostics.Where(d => d.IsError).Select(d => (d.Code, d.Pointer)).ToList();
 
-    /// <summary>Physical features nobody reads, of every kind of entity, and one of a source the bindings do not bind.</summary>
     private static string Unused(int count)
     {
         var text = new StringBuilder();
@@ -250,7 +231,6 @@ public sealed class CatalogFeatureRegistrationTests
         return text.Append(""", "item.ghost": { "type": "float32", "source": "ghost_store", "field": "g" }""").ToString();
     }
 
-    /// <summary>Derived features nobody reads, candidate and context, over the unused physical ones.</summary>
     private static string UnusedDerived(int count)
     {
         var text = new StringBuilder();
@@ -274,10 +254,6 @@ public sealed class CatalogFeatureRegistrationTests
         return compilation.Plan!;
     }
 
-    /// <summary>
-    /// A plan that reads a deprecated feature warns once, at the feature's declaration, however many reads
-    /// there are and whether they are direct or through a derived feature. The flag was accepted and never read.
-    /// </summary>
     [Fact]
     public void ReadingADeprecatedFeature_WarnsOnce_AtItsDeclaration()
     {
@@ -294,10 +270,6 @@ public sealed class CatalogFeatureRegistrationTests
         Assert.Contains("pipeline 'p' reads it", warning.Message);
     }
 
-    /// <summary>
-    /// A feature keyed by a deprecated key reads the key (it is fetched first), so the key warns though no
-    /// expression names it.
-    /// </summary>
     [Fact]
     public void ADeprecatedForeignKey_WarnsWhenItsEntitysFeatureIsRead()
     {
@@ -312,10 +284,6 @@ public sealed class CatalogFeatureRegistrationTests
         Assert.Equal(("FEATURE_DEPRECATED", "/features/item.editor_id"), (warning.Code, warning.Pointer));
     }
 
-    /// <summary>
-    /// A deprecated feature nothing reads does not warn, even when a cache table's whole record registers it with the
-    /// sibling a node reads: registered is not read.
-    /// </summary>
     [Fact]
     public void ADeprecatedFeatureNothingReads_DoesNotWarn_EvenWhenItsCacheTableIsRegistered()
     {
@@ -325,13 +293,12 @@ public sealed class CatalogFeatureRegistrationTests
 
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
         Assert.Empty(compilation.Diagnostics);
-        Assert.Contains(compilation.GetPlanOrThrow().Features.Features, f => f.Definition.Name == "item.old"); // the table's member
+        Assert.Contains(compilation.GetPlanOrThrow().Features.Features, f => f.Definition.Name == "item.old");
     }
 
     /// <summary>
-    /// Reading one feature of a cache source registers its whole table once. Each member used to expand the
-    /// table again, so a table of N features took N² registrations: 40,000 features compiled in 40 s, where the whole
-    /// catalog used to take 1 s. The bound is far above the linear time and far below the quadratic one.
+    /// Reading one feature of a cache source registers its whole table once. The bound is far above the linear time and
+    /// far below the quadratic one.
     /// </summary>
     [Fact]
     public void AWideCacheTable_IsRegisteredInLinearTime()
@@ -353,12 +320,6 @@ public sealed class CatalogFeatureRegistrationTests
         Assert.True(elapsed < TimeSpan.FromSeconds(15), $"compiled in {elapsed.TotalSeconds:0.0} s");
     }
 
-    /// <summary>
-    /// A workspace of one pipeline: recall of items 1–3, then a scorer of <paramref name="expr"/>. The catalog has a context
-    /// entity (user), a candidate entity (item) and a foreign-key entity (author, keyed by <c>item.author_id</c>), each
-    /// with its source; the arguments add JSON members to its sections. Written to <paramref name="root"/> (over what is
-    /// there), or a new directory.
-    /// </summary>
     private static PlanCompilation TryCompile(
         string entities = "", string features = "", string derived = "", string expr = "col.item.boost", string nodes = "", string? itemStore = null,
         string? authorStore = null, string? root = null)

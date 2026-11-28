@@ -8,10 +8,8 @@ namespace StrataRec.Core.Tables;
 /// </summary>
 /// <remarks>
 /// <para>An operator changes the table only through its context, which checks each change against the effects the node
-/// declared: the ranking (<c>Retain</c>, <c>Truncate</c>, <c>SetOrder</c>), new rows (<c>AppendRows</c>)
-/// and the node's own output columns (<c>Output</c>). Those effects are what the planner, the experiment footprints and
-/// replay rely on; a table reachable for writing would let a node do what it never declared. Compaction, checkpoints and
-/// rollback belong to the executor.</para>
+/// declared: the ranking (<c>Retain</c>, <c>Truncate</c>, <c>SetOrder</c>), new rows (<c>AppendRows</c>) and the node's
+/// own output columns (<c>Output</c>). Compaction, checkpoints and rollback belong to the executor.</para>
 /// <para>A struct over the table: taking it costs nothing, and every member reads the table as it is now.</para>
 /// </remarks>
 public readonly struct CandidateTableView

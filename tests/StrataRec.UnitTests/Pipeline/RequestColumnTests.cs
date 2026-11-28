@@ -9,14 +9,8 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// Request columns (<c>request_columns</c>, read as <c>req.*</c>): written by a node, staged while it runs and published
-/// when it commits with the rules of a column; read by later nodes and their <c>when</c>, a tap's context and the output's
-/// values; checked on every path as columns are.
-/// </summary>
 public sealed class RequestColumnTests
 {
-    /// <summary>id → tag, score (null: none). Scores 0.9, 0.5, 0.3, 0.2, 0.1; item 6 has none.</summary>
     private static readonly (long Id, string Tag, double? Score)[] Items =
     [
         (1, "a", 0.9),
@@ -60,14 +54,14 @@ public sealed class RequestColumnTests
         var values = Values(result);
         Assert.Equal(6, values["n"].AsInt64());
         Assert.Equal(2, values["a"].AsInt64());
-        Assert.Equal(5, values["scored"].AsInt64()); // count of an expression: the rows where it has a value
+        Assert.Equal(5, values["scored"].AsInt64());
         Assert.Equal(2.0, values["sum"].AsFloat64(), 12);
         Assert.Equal(0.4, values["mean"].AsFloat64(), 12);
         Assert.Equal(0.1, values["min"].AsFloat64());
         Assert.Equal(0.9, values["max"].AsFloat64());
-        Assert.Equal(0.3f, values["max_b"].AsFloat32()); // stored as its float32 declaration holds it
-        Assert.Equal(21, values["weights"].AsInt64()); // an integer expression sums as an integer
-        Assert.Equal(ColumnType.Parse("int32"), Type(result, "a")); // a plain reference: the declared type
+        Assert.Equal(0.3f, values["max_b"].AsFloat32());
+        Assert.Equal(21, values["weights"].AsInt64());
+        Assert.Equal(ColumnType.Parse("int32"), Type(result, "a"));
         Assert.Equal(ColumnType.Parse("float32?"), Type(result, "max_b"));
     }
 
@@ -85,7 +79,6 @@ public sealed class RequestColumnTests
         Assert.True(values["mean"].IsMissing);
     }
 
-    /// <summary>A later node reads a request column per row, as it reads a request input: a threshold relative to the best score.</summary>
     [Fact]
     public async Task ALaterNode_ReadsARequestColumn_InItsExpressions()
     {
@@ -96,13 +89,9 @@ public sealed class RequestColumnTests
         var result = await Run(plan);
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal([1L, 2], Ids(result)); // 0.9 and 0.5 are at least half the best score
+        Assert.Equal([1L, 2], Ids(result));
     }
 
-    /// <summary>
-    /// A <c>when</c> reading a request column is evaluated at its node, not ahead with its segment's: the recall's fetch
-    /// barrier prefetched for the segment, where the count was not written yet, and the cached decision skipped the node.
-    /// </summary>
     [Fact]
     public async Task AWhenReadingARequestColumn_IsEvaluatedAtItsNode_AfterTheWriteBeforeIt()
     {
@@ -114,11 +103,10 @@ public sealed class RequestColumnTests
         var result = await Run(plan);
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal([6L, 5], Ids(result)); // six candidates: only_many ran, only_few did not
+        Assert.Equal([6L, 5], Ids(result));
         Assert.Equal(NodeOutcomeKind.SkippedWhen, Outcome(result, "only_few"));
     }
 
-    /// <summary>A failed node's staged values are dropped with its writes: on_failure skip, then a fallback writing its own.</summary>
     [Fact]
     public async Task AFailedNode_WritesNothing_ItsFallbackWritesItsOwn()
     {
@@ -141,10 +129,6 @@ public sealed class RequestColumnTests
         Assert.Equal(NodeOutcomeKind.Failed, Outcome(result, "failing"));
     }
 
-    /// <summary>
-    /// A node's write is the new value: a nullable flow column it wrote nothing to is missing after it, as a column whose
-    /// slot a node never asked for is.
-    /// </summary>
     [Fact]
     public async Task ANodeThatWritesNothing_LeavesItsNullableColumnMissing()
     {
@@ -173,10 +157,6 @@ public sealed class RequestColumnTests
         Assert.Contains("left non-nullable request column 'decision' without a value", result.Error);
     }
 
-    /// <summary>
-    /// An output column may read a request column, per item (here the count beside each item); a non-nullable one needs a
-    /// producer, as the output's values do (a plan was accepted and threw building the result).
-    /// </summary>
     [Fact]
     public async Task AnOutputColumn_ReadsARequestColumn_AndANonNullableOneNeedsAProducer()
     {
@@ -196,16 +176,15 @@ public sealed class RequestColumnTests
     }
 
     /// <summary>
-    /// Integer sums and means are exact until the end: a sum whose running total leaves int64 on the way
-    /// is the sum, the mean of the extremes is -0.5, and only a sum outside int64 fails the node. Rows 1, 2, 3 in order.
+    /// Rows 1, 2, 3 in order.
     /// </summary>
     [Theory]
     [InlineData("sum", "col.entity_id == 1 ? 9223372036854775807 : (col.entity_id == 2 ? 1 : -1)", "9223372036854775807")]
     [InlineData("sum", "col.entity_id == 1 ? -9223372036854775807 - 1 : (col.entity_id == 2 ? -1 : 1)", "-9223372036854775808")]
     [InlineData("mean", "col.entity_id == 1 ? 9223372036854775807 : (col.entity_id == 2 ? -9223372036854775807 - 1 : 0)", "-0.3333333333333333")]
     [InlineData("sum", "col.entity_id == 3 ? 0 : 9223372036854775807", null)]
-    [InlineData("mean", "3002399751580331", "3002399751580331")] // the sum is past 2^53: as a double, the mean was off by 0.5
-    [InlineData("mean", "col.entity_id == 1 ? 1 : 2", "1.6666666666666667")] // 1 + 2/3 rounded twice was 1.6666666666666665
+    [InlineData("mean", "3002399751580331", "3002399751580331")]
+    [InlineData("mean", "col.entity_id == 1 ? 1 : 2", "1.6666666666666667")]
     [InlineData("mean", "col.entity_id == 1 ? -1 : -2", "-1.6666666666666667")]
     public async Task IntegerSumsAndMeans_AreExact_UntilTheEnd(string fn, string of, string? expected)
     {
@@ -248,9 +227,8 @@ public sealed class RequestColumnTests
     }
 
     /// <summary>
-    /// A defective operator's value fails its own node, which its <c>on_failure</c> handles: one set
-    /// through a handle it changed is checked against what the node resolved, and a list with a null element is refused.
-    /// Committed, either broke a later reader instead: the output threw, the replay refused the recording.
+    /// A defective operator's value fails its own node, which its <c>on_failure</c> handles: one set through a handle
+    /// it changed is checked against what the node resolved, and a list with a null element is refused.
     /// </summary>
     [Theory]
     [InlineData("\"forge\": true", "\"n\": { \"type\": \"int64?\" }", "is int64?, and node 'w' set it to a string value")]
@@ -270,10 +248,6 @@ public sealed class RequestColumnTests
         Assert.Contains(message, outcome.Detail);
     }
 
-    /// <summary>
-    /// The aggregate's values share its buffers (each value rented its own, held to the request's
-    /// end): twenty values with a <c>where</c> and an <c>of</c> rent no more of the request's memory than one.
-    /// </summary>
     [Fact]
     public async Task TheAggregatesValues_ShareItsBuffers()
     {
@@ -293,7 +267,6 @@ public sealed class RequestColumnTests
         Assert.Equal(await Rented(1), await Rented(20));
     }
 
-    /// <summary>The commit stores a value as the declared type holds it, replacing what it cannot hold with the default or missing.</summary>
     [Fact]
     public async Task TheCommit_ReplacesWhatTheTypeCannotHold_AndRoundsFloat32()
     {
@@ -319,7 +292,6 @@ public sealed class RequestColumnTests
         Assert.Equal(0, values["big"].AsInt64());
         Assert.Equal(0.1f, values["single"].AsFloat32());
         Assert.True(values["single"].IsFloat32);
-        // The default replacing a float32 value is a float32 too: a later reader sees what a written 0.1 would be.
         Assert.Equal((double)0.1f, values["single_widened"].AsFloat64());
         Assert.Equal((double)0.1f, values["default_widened"].AsFloat64());
         Assert.Equal(3, result.NonFiniteValues);
@@ -341,7 +313,6 @@ public sealed class RequestColumnTests
         Assert.Contains("Request column 'n' is int64?, and node 'writer' set it to a string value", result.Error);
     }
 
-    /// <summary>A tap's context reads a request column as of its point; one whose producer was skipped is logged missing.</summary>
     [Fact]
     public async Task ATap_LogsARequestColumn_AsOfItsPoint()
     {
@@ -361,12 +332,11 @@ public sealed class RequestColumnTests
         var stats = Assert.Single(result.LogBatches, b => b.TapId == "after_stats");
         Assert.Equal(6, Context(stats, "n").AsInt64());
         var later = Assert.Single(result.LogBatches, b => b.TapId == "after_maybe");
-        Assert.True(Context(later, "decision").IsMissing); // non-nullable, but its producer was skipped: no value to log
+        Assert.True(Context(later, "decision").IsMissing);
         Assert.Equal(6, Context(later, "n").AsInt64());
     }
 
     [Theory]
-    // A non-nullable request column read with no producer that cannot be skipped before it.
     [InlineData("""
         "w": { "order": 200, "op": "SetRequest@1", "when": "ctx.request.id == 'x'", "config": { "column": "decision", "text": "a" } },
         "r": { "order": 300, "op": "ExpressionFilter@1", "config": { "predicate": "req.decision == 'a'" } }
@@ -378,22 +348,18 @@ public sealed class RequestColumnTests
     [InlineData("""
         "r": { "order": 200, "op": "ExpressionFilter@1", "config": { "predicate": "req.decision == 'a'" } }
         """, "COLUMN_NO_PRODUCER", "/nodes/r", "no node writes it")]
-    // One producer per path, unless it is a flow column.
     [InlineData("""
         "w1": { "order": 200, "op": "SetRequest@1", "config": { "column": "decision", "text": "a" } },
         "w2": { "order": 300, "op": "SetRequest@1", "config": { "column": "decision", "text": "b" } }
         """, "COLUMN_MULTIPLE_PRODUCERS", "/nodes/w2", "written by both 'w1' and 'w2'")]
-    // Nodes of one order do not depend on each other.
     [InlineData("""
         "w": { "order": 200, "op": "SetRequest@1", "config": { "column": "other", "text": "a" } },
         "r": { "order": 200, "op": "SetRequest@1", "when": "(req.other ?? '') == 'a'", "config": { "column": "decision", "text": "b" } }
         """, "ORDER_DEPENDENCY", "/nodes/w/order", null)]
-    // A fallback writes the request columns of its node.
     [InlineData("""
         "w": { "order": 200, "op": "SetRequest@1", "on_failure": "fallback", "fallback": "f", "config": { "column": "decision", "text": "a" } },
         "f": { "role": "fallback", "op": "SetRequest@1", "config": { "column": "other", "text": "b" } }
         """, "FALLBACK_OUTPUTS", "/nodes/f", "columns and request columns of 'w'")]
-    // A write needs a declaration.
     [InlineData("""
         "w": { "order": 200, "op": "SetRequest@1", "config": { "column": "decison", "text": "a" } }
         """, "REQUEST_COLUMN_UNDECLARED", "/nodes/w/config/column", null)]
@@ -477,7 +443,6 @@ public sealed class RequestColumnTests
         }
     }
 
-    /// <summary>An undeclared value of the aggregate is refused with the declaration to add: the type the function writes.</summary>
     [Theory]
     [InlineData("""{ "fn": "count" }""", "\"n\": { \"type\": \"int64\" }")]
     [InlineData("""{ "fn": "max", "of": "col.item.score" }""", "\"n\": { \"type\": \"float64?\" }")]
@@ -567,10 +532,6 @@ public sealed class RequestColumnTests
         return compilation.Plan!;
     }
 
-    /// <summary>
-    /// A workspace of one pipeline: recall of the six items, then <paramref name="nodes"/>, with
-    /// <paramref name="requestColumns"/> declared and <paramref name="values"/> returned; <c>SetRequest@1</c> is registered.
-    /// </summary>
     private static PlanCompilation TryCompile(
         string requestColumns, string nodes, string? values = null, string? taps = null, string? funnelKey = null, string? outputColumns = null)
     {
@@ -644,7 +605,6 @@ public sealed class RequestColumnTests
         public bool NullElement { get; init; }
     }
 
-    /// <summary><c>MemoryProbe@1</c>: records how much of the request's memory is rented when it runs.</summary>
     private sealed class MemoryProbeFactory : IOperatorFactory
     {
         public static long Last;
@@ -665,7 +625,6 @@ public sealed class RequestColumnTests
         }
     }
 
-    /// <summary><c>SetRequest@1</c>: a custom operator staging one request column's value, as a host's would.</summary>
     private sealed class SetRequestFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("SetRequest", 1, Effects.RequestWriter, typeof(SetRequestConfig), "Sets a request column.");

@@ -5,18 +5,15 @@ namespace StrataRec.Artifacts.Json;
 
 /// <summary>
 /// Exact integers from JSON numbers, including the forms JSON writes an integer in besides digits (<c>3.0</c>,
-/// <c>3e2</c>, <c>-25E-1</c>). Decided on the number's text, never through a double or a decimal: a double cannot tell
-/// <c>9007199254740993.0</c> from <c>9007199254740992</c>, and a decimal rounds a mantissa longer than 28 digits, so
-/// either would accept a number that is not the integer written, or not an integer at all.
+/// <c>3e2</c>, <c>-25E-1</c>).
 /// </summary>
 public static class JsonIntegers
 {
-    /// <summary>Longest integer part a long can hold (19 digits; its range is checked exactly after).</summary>
     private const int MaxDigits = 19;
 
     /// <summary>
-    /// The integer a JSON number value denotes, when it has no fractional part and fits a long. Plain integer text is read
-    /// without allocating; the other forms read the number's text.
+    /// The integer a JSON number value denotes, when it has no fractional part and fits a long. Plain integer text is
+    /// read without allocating.
     /// </summary>
     public static bool TryGetInt64(JsonNode? node, out long value)
     {
@@ -40,12 +37,12 @@ public static class JsonIntegers
 
         if (digits.Length == 0)
         {
-            return true; // zero, in any form
+            return true;
         }
 
         if (scale < 0 || digits.Length + scale > MaxDigits)
         {
-            return false; // a fraction, or more digits than a long holds
+            return false;
         }
 
         ulong magnitude = 0;
@@ -107,7 +104,7 @@ public static class JsonIntegers
         var integer = number[integerStart..i];
         if (integer.Length > 1 && integer[0] == '0')
         {
-            return false; // RFC 8259: no leading zeros ("01")
+            return false;
         }
 
         var fraction = ReadOnlySpan<char>.Empty;
@@ -122,7 +119,7 @@ public static class JsonIntegers
             fraction = number[fractionStart..i];
             if (fraction.Length == 0)
             {
-                return false; // a digit after the point ("1.")
+                return false;
             }
         }
 
@@ -141,10 +138,7 @@ public static class JsonIntegers
                 return false;
             }
 
-            // Saturates past what the text's own digits can offset: the scale below is the exponent less at most the
-            // text's length (fraction digits) plus at most its length (trailing zeros), so beyond length + 19 the number
-            // is out of a long's range, or not an integer, whatever the cap. A fixed cap could be offset by a long run of
-            // zeros.
+            // A fixed cap could be offset by a long run of zeros.
             var cap = number.Length + 19L;
             while (i < number.Length && char.IsAsciiDigit(number[i]))
             {
@@ -157,10 +151,9 @@ public static class JsonIntegers
 
         if (i != number.Length || integer.Length == 0)
         {
-            return false; // not JSON number text
+            return false;
         }
 
-        // The significant digits: integer and fraction digits without leading or trailing zeros.
         var all = string.Concat(integer, fraction);
         var first = 0;
         while (first < all.Length && all[first] == '0')
@@ -170,7 +163,7 @@ public static class JsonIntegers
 
         if (first == all.Length)
         {
-            return true; // zero
+            return true;
         }
 
         var last = all.Length - 1;

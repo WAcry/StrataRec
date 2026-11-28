@@ -4,16 +4,10 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
-/// <summary>
-/// <c>GenerativeRetriever@1</c>: the one call it sends, how it turns the answer into appended rows (new ids
-/// only, up to <c>max_items</c>, with their features fetched like any appended row), what fails the node, the load-time
-/// checks, and a replay by the whole call.
-/// </summary>
 public sealed class GenerativeRetrieverTests
 {
     private const string Op = "GenerativeRetriever@1";
 
-    /// <summary>The recall leaves 30, 10 and 50; the fixture also knows 20, 40, 60 and 70.</summary>
     private static readonly long[] Recalled = { 30, 10, 50 };
 
     private const string Prompt = "Items for {{ctx.request.query}} ({{param.tone}}{{#ctx.user.name}}, {{ctx.user.name}}{{/ctx.user.name}}, tier {{ctx.user.tier}})";
@@ -34,7 +28,7 @@ public sealed class GenerativeRetrieverTests
         Assert.Equal("Items for gifts for \"dad\" (friendly, Ada, tier 2)", call.Prompts["user"]);
         Assert.Equal(new long[] { 30, 10, 50, 20, 40 }, IdsOf(result));
         Assert.Equal(new Dictionary<long, object?> { [30] = "Green\nscarf", [10] = "Red \"shoes\"", [50] = "Mug", [20] = "Blue hat", [40] = "Tea" },
-            Values(result, "title")); // the appended rows' features are fetched like any appended row's
+            Values(result, "title"));
         Assert.Equal((3, 5), (Rank(result).RowsIn, Rank(result).RowsOut));
     }
 
@@ -50,10 +44,6 @@ public sealed class GenerativeRetrieverTests
         Assert.Equal(7, plan.Nodes.Single(n => n.NodeId == "rank").Operator.GetRowLimit(plan.Params.Baseline.AsSpan()));
     }
 
-    /// <summary>
-    /// Elements of the wrong type, repeats and ids the table has are skipped; after max_items new ids the rest is not read.
-    /// The rank column holds each appended row's position in the answer; the other rows have none.
-    /// </summary>
     [Fact]
     public async Task OnlyNewIdsOfTheKeyType_AreAppended_InTheAnswersOrder_UpToMaxItems_WithTheirPositionsInTheAnswer()
     {
@@ -120,7 +110,6 @@ public sealed class GenerativeRetrieverTests
         Assert.Equal($"model 'llm' did not answer a JSON array of entity ids (integers): {reason} (skipped)", Rank(result).Detail);
     }
 
-    /// <summary>The ids before the cut are not appended: the answer is not valid JSON, and a strict answer is all or nothing.</summary>
     [Fact]
     public async Task ATruncatedAnswer_FailsTheNode_SayingItWasCutAtTheLimit()
     {
@@ -201,12 +190,6 @@ public sealed class GenerativeRetrieverTests
         Assert.Equal(1L, Values(result, "rank")[20]);
     }
 
-    /// <summary>
-    /// The recall's attribution columns are non-nullable, and a row source after it appends rows without them. That is
-    /// fine while nothing reads them again: they describe what the recall found. Once something after the retriever reads
-    /// one (here the output), the rows it appended would have no value there, and the plan is refused, naming the reader
-    /// and the fix. The rule used to refuse the retriever after any recall, read or not.
-    /// </summary>
     [Fact]
     public void AfterARecall_ItsNonNullableAttributionColumns_NeedAValueOnlyWhereTheyAreReadAgain()
     {
@@ -223,7 +206,6 @@ public sealed class GenerativeRetrieverTests
         Assert.Contains("declare the column nullable", error.Hint);
     }
 
-    /// <summary>The call is recorded and replayed whole, by its digest: the same prompt replays it; another is reported as changed inputs.</summary>
     [Fact]
     public async Task AReplay_AnswersTheCallFromItsRecording_AndAnotherPromptIsNotAnswered()
     {

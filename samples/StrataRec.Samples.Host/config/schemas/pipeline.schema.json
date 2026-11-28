@@ -619,6 +619,7 @@
                       ]
                     },
                     "inputs": {
+                      "description": "Model input name → column or context reference (col.* / ctx.*) of a non-nullable type, a list only of a fixed length (list<E,N>); its declared type is the tensor's.",
                       "type": "object",
                       "additionalProperties": {
                         "type": "string"
@@ -744,6 +745,7 @@
                       ]
                     },
                     "inputs": {
+                      "description": "Model input name → column or context reference (col.* / ctx.*) of a non-nullable type, a list only of a fixed length (list<E,N>); its declared type is the tensor's.",
                       "type": "object",
                       "additionalProperties": {
                         "type": "string"
@@ -866,6 +868,7 @@
                       ]
                     },
                     "inputs": {
+                      "description": "Model input name → column or context reference (col.* / ctx.*) of a non-nullable type, a list only of a fixed length (list<E,N>); its declared type is the tensor's.",
                       "type": "object",
                       "additionalProperties": {
                         "type": "string"

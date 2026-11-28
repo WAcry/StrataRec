@@ -7,16 +7,8 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// <c>GroupAggregate@1</c>: each statistic of a row's group written back to the row, missing where the row is in no group
-/// or its group has no value; rank in the order TopK keeps; and the configurations it refuses, at their place.
-/// </summary>
 public sealed class GroupAggregateTests
 {
-    /// <summary>
-    /// id → author (null: none), tag, score (null: none), weight. Author 10 has scores 0.9, 0.5 and 0.5 (items 2 and 3
-    /// tie); author 20 has one score and one row without; item 6 has no author.
-    /// </summary>
     private static readonly (long Id, long? Author, string Tag, double? Score, double Weight)[] Items =
     [
         (1, 10, "a", 0.9, 1),
@@ -42,16 +34,16 @@ public sealed class GroupAggregateTests
 
         var rows = ById(result);
         Assert.Equal([3L, 3, 3, 2, 2], new[] { 1L, 2, 3, 4, 5 }.Select(id => rows[id]["author_count"].AsInt64()));
-        Assert.Equal([1L, 2, 3, 2, 1], new[] { 1L, 2, 3, 4, 5 }.Select(id => rows[id]["author_rank"].AsInt64())); // 2 before 3: ties by id; 4 has no score: last
+        Assert.Equal([1L, 2, 3, 2, 1], new[] { 1L, 2, 3, 4, 5 }.Select(id => rows[id]["author_rank"].AsInt64()));
         Assert.Equal(1.9, rows[1]["author_sum"].AsFloat64(), 12);
         Assert.Equal(1.9 / 3, rows[2]["author_mean"].AsFloat64(), 12);
         Assert.Equal(0.5, rows[3]["author_min"].AsFloat64());
         Assert.Equal(0.9, rows[3]["author_max"].AsFloat64());
         var mean = 1.9 / 3;
         Assert.Equal(Math.Sqrt((Math.Pow(0.9 - mean, 2) + (2 * Math.Pow(0.5 - mean, 2))) / 3), rows[1]["author_std"].AsFloat64(), 12);
-        Assert.Equal(0.1, rows[4]["author_mean"].AsFloat64()); // the row without a score is left out of its group's values
+        Assert.Equal(0.1, rows[4]["author_mean"].AsFloat64());
         Assert.Equal(0.0, rows[5]["author_std"].AsFloat64());
-        Assert.All(rows[6].Values, value => Assert.True(value.IsMissing)); // no author: in no group
+        Assert.All(rows[6].Values, value => Assert.True(value.IsMissing));
     }
 
     [Fact]
@@ -68,7 +60,7 @@ public sealed class GroupAggregateTests
         var rows = ById(await Run(plan));
 
         Assert.Equal([2L, 2, 2, 2, 2, 2], rows.Keys.Order().Select(id => rows[id]["tag_count"].AsInt64()));
-        Assert.Equal([1L, 2, 1, 2, 1, 2], rows.Keys.Order().Select(id => rows[id]["tag_rank"].AsInt64())); // lower weight first
+        Assert.Equal([1L, 2, 1, 2, 1, 2], rows.Keys.Order().Select(id => rows[id]["tag_rank"].AsInt64()));
         Assert.All(rows.Values, row => Assert.Equal(6, row["all_count"].AsInt64()));
         Assert.All(rows.Values, row => Assert.Equal(3.5, row["all_mean"].AsFloat64()));
     }
@@ -82,14 +74,9 @@ public sealed class GroupAggregateTests
 
         var result = await Run(plan);
 
-        Assert.Equal([1L, 5, 6], ById(result).Keys.Order()); // the best of author 10 and of author 20; item 6 has no author
+        Assert.Equal([1L, 5, 6], ById(result).Keys.Order());
     }
 
-    /// <summary>
-    /// A node knows the columns the nodes before it on the timeline declare, whatever their ids: compiled by id, a reader
-    /// named before its writer did not know the column ('a_filter' reading what 'z_rank' writes; 'a_boost' reading
-    /// <c>recall.*</c>).
-    /// </summary>
     [Fact]
     public async Task AReaderNamedBeforeItsWriter_KnowsTheColumnsItDeclares()
     {
@@ -97,10 +84,9 @@ public sealed class GroupAggregateTests
             ("z_rank", """{ "op": "GroupAggregate@1", "order": 200, "config": { "group_col": "item.author", "outputs": { "author.rank": { "fn": "rank", "value_col": "item.weight" } } } }"""),
             ("a_filter", """{ "op": "ExpressionFilter@1", "order": 300, "config": { "predicate": "(col.author.rank ?? 1) <= 1 && col.recall.best_rank >= 0" } }"""));
 
-        Assert.Equal([3L, 5, 6], ById(await Run(plan)).Keys.Order()); // the lowest weight of each author, and item 6
+        Assert.Equal([3L, 5, 6], ById(await Run(plan)).Keys.Order());
     }
 
-    /// <summary>A group column with an error is the only error: the outputs' readers do not report them unknown.</summary>
     [Fact]
     public void AnErrorInTheGroupColumn_IsReportedOnce()
     {
@@ -151,8 +137,8 @@ public sealed class GroupAggregateTests
     }
 
     [Theory]
-    [InlineData(10000000000000004.0, 17)] // The mean from the sum was one ulp off, and the deviations from it a std of 2
-    [InlineData(0.1, 17)]                  // the same at the scale of a score: a z-score of ±1 for equal scores
+    [InlineData(10000000000000004.0, 17)]
+    [InlineData(0.1, 17)]
     [InlineData(1e308, 2)]                 // the mean of values whose sum overflows
     public async Task EqualValues_HaveTheirValueAsMean_AndAStdOfZero(double value, int count)
     {
@@ -168,7 +154,7 @@ public sealed class GroupAggregateTests
     }
 
     [Theory]
-    [InlineData(1e308, -1e308)] // X − mean overflowed, where the mean is 0
+    [InlineData(1e308, -1e308)]
     [InlineData(-1e308, 1e308)]
     public async Task TheMeanOfLargeValuesOfOppositeSigns_IsFinite(double first, double second)
     {
@@ -199,10 +185,6 @@ public sealed class GroupAggregateTests
         Assert.Equal(Math.Sqrt(values.Sum(v => (v - mean) * (v - mean)) / values.Length), row["author_std"].AsFloat64(), 6);
     }
 
-    /// <summary>
-    /// The std is right at every scale a float64 holds. Summing squared deviations made ±1e200
-    /// infinite (the node failed) and ±1e-200 zero; a group near the largest float64 and one of subnormals are covered too.
-    /// </summary>
     [Theory]
     [InlineData(1e200, -1e200, 1e200)]
     [InlineData(1e-200, -1e-200, 1e-200)]
@@ -223,12 +205,6 @@ public sealed class GroupAggregateTests
         Assert.All(ById(result).Values, row => Assert.Equal(std, row["author_std"].AsFloat64(), 1e-12 * std));
     }
 
-    /// <summary>
-    /// The std is about the true mean, not the running mean rounded at the values' scale, and at most the
-    /// largest |x|. The deviations from the rounded mean alone made 1e16+6 and 1e16+4 alternating √2, 0 and the smallest
-    /// subnormal (alone or with a second one) that subnormal, and four −MaxValue then four +MaxValue infinite: missing in
-    /// a nullable output, and a failed node in a non-nullable one. In this input order, through both.
-    /// </summary>
     [Theory]
     [InlineData(new[] { 10000000000000006.0, 10000000000000004.0, 10000000000000006.0, 10000000000000004.0 }, 1.0)]
     [InlineData(new[] { 0.0, double.Epsilon }, 0.0)] // ε/2, rounded to even
@@ -252,10 +228,6 @@ public sealed class GroupAggregateTests
         }
     }
 
-    /// <summary>
-    /// The node's buffers are scratch, given back once its outputs are written: outputs computed one after another over
-    /// the same reused buffers each start clean (a sum, a std and a count after a rank, as when computed alone).
-    /// </summary>
     [Fact]
     public async Task OutputsComputedOverReusedBuffers_EachStartClean()
     {
@@ -285,10 +257,6 @@ public sealed class GroupAggregateTests
         }
     }
 
-    /// <summary>
-    /// Both grouping operators group by a string entity_id. A string column groups by string equality (equal
-    /// values that are other instances are one group), numbered as they first appear; a missing value is in no group.
-    /// </summary>
     [Fact]
     public void StringGroups_AreEqualStrings_InTheOrderTheyFirstAppear_AndAMissingOneIsInNone()
     {
@@ -299,7 +267,7 @@ public sealed class GroupAggregateTests
         {
             if (values[row] is { } value)
             {
-                text.Set(row, new string(value)); // equal strings, not the same instances
+                text.Set(row, new string(value));
                 text.SetValid(row);
             }
             else
@@ -370,13 +338,8 @@ public sealed class GroupAggregateTests
 
     private static PlanCompilation TryCompile(params string[] nodes) => TryCompile(Named(nodes));
 
-    /// <summary>The first node is <c>agg</c>, then <c>n1</c>, <c>n2</c>…</summary>
     private static (string, string)[] Named(string[] nodes) => nodes.Select((node, i) => (i == 0 ? "agg" : "n" + i, node)).ToArray();
 
-    /// <summary>
-    /// A workspace of one pipeline: recall of the six items, then <paramref name="nodes"/>, and every column the tests read
-    /// in the output.
-    /// </summary>
     private static PlanCompilation TryCompile(params (string Name, string Node)[] nodes) => TryCompileOver(Items, nodes);
 
     private static PlanCompilation TryCompileOver((long Id, long? Author, string Tag, double? Score, double Weight)[] items, params (string Name, string Node)[] nodes)

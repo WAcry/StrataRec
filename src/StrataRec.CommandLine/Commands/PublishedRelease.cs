@@ -4,12 +4,6 @@ using StrataRec.Hosting.Manifests;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// What a store's pointer publishes for a pipeline in an environment, as <c>build</c>, <c>publish</c> and <c>revoke</c>
-/// read it: the manifest it names, and the experiments the revocations just before it removed. The errors of
-/// a pointer that cannot be read, or that names a manifest the store cannot read or of another pipeline, are
-/// reported here, once for the three commands.
-/// </summary>
 internal static class PublishedRelease
 {
     /// <summary>
@@ -17,7 +11,6 @@ internal static class PublishedRelease
     /// after reporting, when the pointer or that manifest cannot be, or the manifest is another pipeline's or environment's:
     /// what the caller needs of it (<paramref name="unknown"/>, as "the next sequence") is then unknown.
     /// </summary>
-    /// <param name="otherwise">What else the caller can do then, appended to the hint ("or pass --seq"); null for nothing.</param>
     internal static async Task<(bool Read, (string Id, ReleaseManifest Manifest)? Published)> ReadAsync(
         FileSystemManifestSource pointers, string path, IArtifactStore store, string pipelineId, string environment, string unknown, string? otherwise,
         DiagnosticBag diagnostics, CancellationToken cancellationToken)
@@ -50,7 +43,6 @@ internal static class PublishedRelease
             return (false, null);
         }
 
-        // Its sequence, floor and experiments say nothing of this pipeline's releases when it is another's.
         if (!ManifestBuilder.CheckIdentity(published, current, pipelineId, environment, diagnostics))
         {
             diagnostics.Error("POINTER_MANIFEST_FOREIGN", path, string.Empty,
@@ -62,7 +54,6 @@ internal static class PublishedRelease
         return (true, (current, published));
     }
 
-    /// <summary>The next sequence after <paramref name="published"/>'s; null after reporting that there is none.</summary>
     internal static long? NextSeq(string id, ReleaseManifest published, DiagnosticBag diagnostics)
     {
         if (published.Seq < BuildCommand.MaxSeq)

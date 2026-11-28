@@ -9,12 +9,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>
-/// A read of the distributed tier is an optimisation: however it fails, its keys go to the
-/// connector, the request is not failed, its memory comes back and the call is completed exactly once. Each way the
-/// engine can find the read finished is covered: the store throwing before it returns, a completed task, a pending one,
-/// and one that completed between the engine's check and its wait.
-/// </summary>
 [Collection(MetricMeasurement.Name)]
 public class CacheStoreCallTests
 {
@@ -33,7 +27,6 @@ public class CacheStoreCallTests
         FailedBeforeTheWait,
     }
 
-    /// <summary>an exception whose message cannot be read must not decide what the read does.</summary>
     [Theory]
     [InlineData(Answer.Throws)]
     [InlineData(Answer.Failed)]
@@ -79,14 +72,12 @@ public class CacheStoreCallTests
         await request.Fetcher.WhenIoCompleteAsync();
         request.Memory.Release();
         Assert.True(request.Memory.IsReturned);
-        Assert.Equal((1, 1), (calls.Completed, calls.Errors)); // completed once, as an error
+        Assert.Equal((1, 1), (calls.Completed, calls.Errors));
     }
 
     /// <summary>
-    /// A store's synchronous part runs on the request's thread and the engine does not bound it; what it
-    /// answers is judged when the engine first sees it complete. Here the store blocks before returning, past the tier's
-    /// timeout (the source has time left: the connector answers) or past the source's deadline (no time left: the keys
-    /// fail). Either way its fresh records (111) are never used.
+    /// A store's synchronous part runs on the request's thread and the engine does not bound it; what it answers is
+    /// judged when the engine first sees it complete.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -106,7 +97,7 @@ public class CacheStoreCallTests
 
         if (pastTheSourceDeadline)
         {
-            Assert.Equal(FeatureState.Failed, result.State); // no key got a value: not the store's, and no time for the connector
+            Assert.Equal(FeatureState.Failed, result.State);
             Assert.Empty(connector.Calls);
         }
         else
@@ -116,18 +107,12 @@ public class CacheStoreCallTests
             Assert.Single(connector.Calls);
         }
 
-        rig.WriteBack("item_store"); // nor written back: the table has the connector's value or nothing
+        rig.WriteBack("item_store");
         var version = rig.Tables["item_store"].Pin();
         var record = version.Find(1L);
         Assert.Equal(pastTheSourceDeadline ? (double?)null : 1.0, record.Found ? version.Read(0, record).AsFloat64() : null);
     }
 
-    /// <summary>
-    /// A store that answers synchronously is seen answering before the flow gets its activity back. The host's
-    /// <see cref="System.Diagnostics.Activity.CurrentChanged"/> handlers ran first (in <see cref="IoCall.Sent"/>), and one
-    /// that took time (here it moves the cache's clock past the TTL) made a record fresh when the store answered expired,
-    /// which went to the connector (as a metric listener that throws does).
-    /// </summary>
     [Fact]
     public async Task AStoreThatAnswersAtOnce_IsSeenAnswering_BeforeTheHostsCurrentChangedHandlersRun()
     {
@@ -162,16 +147,15 @@ public class CacheStoreCallTests
         }
 
         Assert.Equal(1, changes);
-        Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64()); // the store's, fresh when it answered
+        Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64());
         Assert.Empty(connector.Calls);
         await request.Fetcher.WhenIoCompleteAsync();
         Assert.Equal(0, request.Memory.Release());
     }
 
     /// <summary>
-    /// Once the tier's time is up (here the first chunk's synchronous part took it), no further chunk is sent.
-    /// The tier's time is judged by the cache's clock, held by the test: the first chunk is sent with time
-    /// left, whatever the machine does, and its call moves the clock past the tier's time.
+    /// The tier's time is judged by the cache's clock, held by the test: the first chunk is sent with time left,
+    /// whatever the machine does, and its call moves the clock past the tier's time.
     /// </summary>
     [Fact]
     public async Task OnceTheTiersTimeIsUp_NoFurtherChunkIsSent_AndTheConnectorAnswersEveryKey()
@@ -186,18 +170,18 @@ public class CacheStoreCallTests
         store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
         rig.Clock.HoldTimestamps();
 
-        var request = rig.NewRequest([1, 2, 3, 4]); // two chunks
+        var request = rig.NewRequest([1, 2, 3, 4]);
         var result = await request.EnsureAsync(clicks);
 
-        Assert.Equal(1, store.Calls); // the first chunk, sent with time left; not the second
+        Assert.Equal(1, store.Calls);
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal(new[] { 1.0, 2, 3, 4 }, Enumerable.Range(0, 4).Select(r => request.Value(clicks, r).AsFloat64())); // not 111
+        Assert.Equal(new[] { 1.0, 2, 3, 4 }, Enumerable.Range(0, 4).Select(r => request.Value(clicks, r).AsFloat64()));
         Assert.Equal(new long[] { 1, 2, 3, 4 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value).Order());
     }
 
     /// <summary>
-    /// The tier's time is up before the first chunk is sent (the request's thread was preempted, say; here
-    /// every look at the clock moves it a second). No chunk is sent, and the connector answers every key.
+    /// The tier's time is up before the first chunk is sent (the request's thread was preempted, say; here every look
+    /// at the clock moves it a second).
     /// </summary>
     [Fact]
     public async Task TheTiersTimeUpBeforeTheFirstChunk_SendsNone_AndTheConnectorAnswersEveryKey()
@@ -219,11 +203,6 @@ public class CacheStoreCallTests
         Assert.Equal(new long[] { 1, 2, 3, 4 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value).Order());
     }
 
-    /// <summary>
-    /// Each chunk of the tier's read is judged when it answered. The first chunk answers at once
-    /// and is fresh; the second answers after the records' TTL passed (50 ms against 10 ms) and goes to the connector. The
-    /// time the first chunk was judged at made the second's record a fresh hit.
-    /// </summary>
     [Fact]
     public async Task AChunkThatAnswersAfterItsRecordsExpired_SendsItsKeysToTheConnector_WhileAnEarlierChunkStaysAHit()
     {
@@ -235,7 +214,7 @@ public class CacheStoreCallTests
         store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
         rig.Clock.HoldTimestamps(); // the tier's time never runs out
 
-        var request = rig.NewRequest([1, 2]); // two chunks
+        var request = rig.NewRequest([1, 2]);
         var fill = request.EnsureAsync(clicks).AsTask();
         await store.SecondSent.WaitAsync(TestContext.Current.CancellationToken);
         rig.Clock.AdvanceMs(50);
@@ -243,17 +222,11 @@ public class CacheStoreCallTests
         var result = await fill;
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64()); // the first chunk's hit
-        Assert.Equal(2.0, request.Value(clicks, 1).AsFloat64()); // not 111: expired when it arrived
+        Assert.Equal(111.0, request.Value(clicks, 0).AsFloat64());
+        Assert.Equal(2.0, request.Value(clicks, 1).AsFloat64());
         Assert.Equal(new long[] { 2 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value));
     }
 
-    /// <summary>
-    /// The reverse. The second chunk answers at once and is fresh; the first answers after the records' TTL
-    /// passed and goes to the connector. The chunks were judged as the read reached them, in index order, so the second,
-    /// waiting behind the first, was judged at the first's time: expired, and sent to the connector too (with a failing
-    /// connector, the feature failed though a fresh value existed).
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -269,16 +242,16 @@ public class CacheStoreCallTests
         store.Prepare(rig.Tables["item_store"].Cache!, rig.Clock.NowMs, 111.0);
         rig.Clock.HoldTimestamps(); // the tier's time never runs out
 
-        var request = rig.NewRequest([1, 2]); // two chunks
+        var request = rig.NewRequest([1, 2]);
         var fill = request.EnsureAsync(clicks).AsTask();
-        Assert.Equal(2, store.Calls); // both sent; the second answered
+        Assert.Equal(2, store.Calls);
         rig.Clock.AdvanceMs(50);
         store.Answer();
         var result = await fill;
 
         Assert.Equal(connectorFails ? FeatureState.Degraded : FeatureState.Ok, result.State);
         Assert.Equal(connectorFails ? null : 1.0, request.Value(clicks, 0).IsMissing ? (double?)null : request.Value(clicks, 0).AsFloat64());
-        Assert.Equal(111.0, request.Value(clicks, 1).AsFloat64()); // the second chunk's hit
+        Assert.Equal(111.0, request.Value(clicks, 1).AsFloat64());
         Assert.Equal(new long[] { 1 }, connector.Calls.SelectMany(c => c.Keys).Select(k => k.Int64Value));
         await request.Fetcher.WhenIoCompleteAsync();
         request.Memory.Release();
@@ -286,9 +259,7 @@ public class CacheStoreCallTests
 
     /// <summary>
     /// A chunk is judged at the cache clock's time when it was seen to answer in time, taken before the call is
-    /// completed. A host's metric listener runs at the completion; one that took time (here it moves the clock 50 ms, past
-    /// the record's 10 ms TTL) made the record, fresh when the store answered, look expired, and its key went to the
-    /// connector (the value 1, not 111). Both ways a chunk is found answered: at once, and after a wait.
+    /// completed.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -320,12 +291,6 @@ public class CacheStoreCallTests
         request.Memory.Release();
     }
 
-    /// <summary>
-    /// A host's metric listener that throws while a cache read resolves, where its store call completes or where
-    /// it counts the distributed tier's keys, loses its measurement. The read serves the store's record and is recorded as
-    /// it ended; the throw faulted the read's resolution, so the read was never recorded (outstanding in a recording) and
-    /// its fill threw the listener's exception.
-    /// </summary>
     [Theory]
     [InlineData(StrataRecMetrics.Names.IoDuration)]
     [InlineData(StrataRecMetrics.Names.CacheKeys)]
@@ -356,10 +321,6 @@ public class CacheStoreCallTests
         Assert.Equal(0, request.Memory.Release());
     }
 
-    /// <summary>
-    /// A store whose first read waits for <see cref="Answer"/> and whose later reads answer at once; each answers a record
-    /// written at the time <see cref="Prepare"/> was given.
-    /// </summary>
     private sealed class FirstChunkWaits : ICacheStore
     {
         private readonly TaskCompletionSource _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -402,10 +363,6 @@ public class CacheStoreCallTests
         }
     }
 
-    /// <summary>
-    /// A store whose first read answers at once and whose later reads wait for <see cref="Answer"/>; each answers a record
-    /// written at the time <see cref="Prepare"/> was given.
-    /// </summary>
     private sealed class SecondChunkWaits : ICacheStore
     {
         private readonly TaskCompletionSource _sent = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -450,10 +407,6 @@ public class CacheStoreCallTests
         }
     }
 
-    /// <summary>
-    /// A store that runs <paramref name="whileSending"/> in its synchronous part (where the test moves the clock), then
-    /// answers a fresh record for every key.
-    /// </summary>
     private sealed class ClockedStore(Action whileSending) : ICacheStore
     {
         private ReadOnlyMemory<byte> _record;
@@ -484,10 +437,6 @@ public class CacheStoreCallTests
             ValueTask.CompletedTask;
     }
 
-    /// <summary>
-    /// A store that blocks for <c>blockMs</c> before it returns (the synchronous part a store should not have), then answers
-    /// a fresh record for every key.
-    /// </summary>
     private sealed class SlowStore(int blockMs) : ICacheStore
     {
         private ReadOnlyMemory<byte> _record;
@@ -523,13 +472,11 @@ public class CacheStoreCallTests
             ValueTask.CompletedTask;
     }
 
-    /// <summary>An exception whose <see cref="Exception.Message"/> getter throws.</summary>
     private sealed class UnreadableException : Exception
     {
         public override string Message => throw new InvalidOperationException("reading the message failed");
     }
 
-    /// <summary>A store whose every read is <paramref name="get"/>.</summary>
     private sealed class ScriptedStore(Func<ValueTask> get) : ICacheStore
     {
         public string StoreType => TestCacheStoreFactory.TypeName;
@@ -541,7 +488,6 @@ public class CacheStoreCallTests
             ValueTask.CompletedTask;
     }
 
-    /// <summary>Pending at the first look (<see cref="ValueTask.IsCompleted"/>), failed from the second on.</summary>
     private sealed class FailsOnSecondLook : IValueTaskSource
     {
         private int _looks;
@@ -555,7 +501,6 @@ public class CacheStoreCallTests
             continuation(state);
     }
 
-    /// <summary>Completed reads of distributed tiers (<c>stratarec.io.role</c> = <c>cache</c>), and those that failed.</summary>
     private sealed class StoreCalls : IDisposable
     {
         private readonly MeterListener _listener = new();

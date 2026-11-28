@@ -9,7 +9,6 @@ using StrataRec.Redis;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>The checks of a <c>cache</c> binding: every problem at its pointer, with a hint.</summary>
 public class CacheBindingTests
 {
     [Fact]
@@ -27,18 +26,13 @@ public class CacheBindingTests
         Assert.Equal(60_000, rig.Tables["item_store"].Cache!.Options.TtlMs);
     }
 
-    /// <summary>
-    /// A cache says how long its tiers serve a value, or says nothing and keeps nothing. A tier without a time, and a
-    /// time or a version without a tier, are one error at the cache, whatever the values given: whether they apply is
-    /// what there is to decide first.
-    /// </summary>
     [Theory]
     [InlineData("""{ "memory": { "max_bytes": "64MiB" } }""", "CACHE_TTL", "\"ttl_ms\": 60000")]
     [InlineData("""{ "ttl_ms": 60000 }""", "CACHE_TIERS", "\"memory\": { \"max_bytes\": \"64MiB\" }")]
     [InlineData("""{ "ttl_ms": 60000 }""", "CACHE_TIERS", "or remove 'ttl_ms': a cache with no settings keeps nothing")]
     [InlineData("""{ "ttl_ms": -1, "version": "a b" }""", "CACHE_TIERS", "or remove 'ttl_ms' and 'version':")]
     [InlineData("""{ "stale_if_error_ms": 1000 }""", "CACHE_TIERS", "or remove 'stale_if_error_ms':")]
-    [InlineData("""{ "version": "v" }""", "CACHE_TIERS", "share (with \"ttl_ms\": 60000, how long a value is served); or remove")] // a tier needs the time too
+    [InlineData("""{ "version": "v" }""", "CACHE_TIERS", "share (with \"ttl_ms\": 60000, how long a value is served); or remove")]
     [InlineData("""{ "ttl_ms": 60000 }""", "CACHE_TIERS", "share; or remove")]
     public void ATierWithoutATime_OrATimeWithoutATier_IsOneErrorAtTheCache(string cache, string code, string hint)
     {
@@ -48,11 +42,6 @@ public class CacheBindingTests
         Assert.Contains(hint, error.Hint);
     }
 
-    /// <summary>
-    /// A cache with no settings keeps nothing: every request asks the connector. It is the cache of a context entity's
-    /// record, which the reads of one request share; for the candidates' keys, whose reads share nothing, the binding is
-    /// a fetch of the features a node reads, not of whole records nothing would keep.
-    /// </summary>
     [Fact]
     public async Task ACacheWithNoSettings_KeepsNothing_AndIsAFetchOfTheCandidatesKeys()
     {
@@ -76,14 +65,14 @@ public class CacheBindingTests
             request.Fetcher.StartContextFetch(new[] { ctr }, CancellationToken.None);
             Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(ctr, clicks)).State);
             Assert.Equal((0.05, 3.0), (request.ContextValue(ctr).AsFloat64(), request.Value(clicks, 0).AsFloat64()));
-            Assert.Equal(0, rig.WriteBack("store")); // nothing was handed to a writer
+            Assert.Equal(0, rig.WriteBack("store"));
         }
 
         Assert.Equal(0, table.Pin().RecordCount);
         Assert.Equal(2, connector.Calls.Count(c => c.Keys.Length == 0 && c.ContextKey.Int64Value == 50));
         var ofItems = connector.Calls.Where(c => c.Keys.Length == 1).ToList();
         Assert.Equal(2, ofItems.Count);
-        Assert.All(ofItems, c => Assert.Equal(["clicks"], c.Fields)); // what the node reads, as a fetch asks: a cache's miss asks for the whole record
+        Assert.All(ofItems, c => Assert.Equal(["clicks"], c.Fields));
     }
 
     [Fact]
@@ -101,8 +90,6 @@ public class CacheBindingTests
     [InlineData(false, true)]
     public async Task EitherTierAlone_OrBoth_IsACache(bool memory, bool distributed)
     {
-        // A cache with only a distributed tier keeps nothing in process: a second read goes to the store again, where
-        // one with a memory tier is answered by its table.
         var store = new FakeCacheStore();
         var connector = ScriptedConnector.Values((_, _) => 1.0);
         var rig = new FeatureTestRig().CacheSource("item_store", connector, distributed: distributed ? store : null, maxBytes: memory ? "64MiB" : null);
@@ -122,7 +109,7 @@ public class CacheBindingTests
             }
         }
 
-        Assert.Single(connector.Calls); // a tier answered the second read
+        Assert.Single(connector.Calls);
         Assert.Equal(memory ? 1 : 0, rig.Tables["item_store"].Pin().RecordCount);
         Assert.Equal(!distributed ? 0 : memory ? 1 : 2, store.Gets.Count);
     }
@@ -152,13 +139,12 @@ public class CacheBindingTests
 
         Assert.Equal((code, pointer), (error.Code, error.Pointer));
         Assert.False(string.IsNullOrEmpty(error.Hint), error.ToString());
-        Assert.DoesNotContain("hunter2", error.ToString()); // a pasted credential is never quoted
+        Assert.DoesNotContain("hunter2", error.ToString());
     }
 
     /// <summary>
     /// The distributed tier keeps a record for up to ttl_ms × 1.1 + stale_if_error_ms, given to the store as a
-    /// <see cref="TimeSpan"/>. Exactly what one holds is accepted and written back with it; a millisecond more is an error
-    /// at the setting, not an overflow on the first write-back.
+    /// <see cref="TimeSpan"/>.
     /// </summary>
     [Theory]
     [InlineData(0)]
@@ -186,9 +172,8 @@ public class CacheBindingTests
     }
 
     /// <summary>
-    /// At the longest retention the binding accepts, the clock steps back during the fetch, so the record's
-    /// write time is ahead of the clock when it is written back. It counts as written now, as when it is read: the time to
-    /// live is the retention, where it used to be a millisecond more, overflowing to a negative one the store rejects.
+    /// At the longest retention the binding accepts, the clock steps back during the fetch, so the record's write time
+    /// is ahead of the clock when it is written back.
     /// </summary>
     [Theory]
     [InlineData(0)]
@@ -229,7 +214,6 @@ public class CacheBindingTests
         var error = Assert.Single(Errors(withTier.TryBuild()));
         Assert.Equal(("CACHE_RETENTION", "/sources/item_store/cache/ttl_ms"), (error.Code, error.Pointer));
 
-        // In process only, nothing converts it: the table judges ages in milliseconds.
         var inProcess = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) => 1.0), ttlMs: Ttl);
         inProcess.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         Assert.False(inProcess.TryBuild().HasErrors);
@@ -262,7 +246,7 @@ public class CacheBindingTests
         Assert.Equal(new[] { "/sources/item_store/timeout_ms", "/sources/item_store/cache" }, local.Select(d => d.Pointer));
         Assert.Contains("mode 'fetch' and 'service'", local[0].Message);
         Assert.Contains("\"mode\": \"fetch\" or \"mode\": \"service\"", local[0].Hint);
-        Assert.Contains("a setting of mode 'fetch',", local[1].Message); // once: a fetch binding with a cache is a fetch binding
+        Assert.Contains("a setting of mode 'fetch',", local[1].Message);
     }
 
     [Fact]
@@ -293,7 +277,6 @@ public class CacheBindingTests
 
     private static List<ConfigDiagnostic> Errors(DiagnosticBag diagnostics) => diagnostics.Items.Where(d => d.IsError).ToList();
 
-    /// <summary>The longest time a cache setting may give is one a policy takes: 2^61 ms was accepted by the check and thrown by the policy.</summary>
     [Fact]
     public void TheLongestTimeTheSettingsAccept_IsOneAPolicyTakes()
     {

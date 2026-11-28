@@ -8,11 +8,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <see cref="OperatorContext.WhenEachReadyAsync"/> settles nothing once the node's budget has run out or the
-/// caller gave up, however long a settled callback ran: reads with nothing to wait for (settled at once, one after
-/// another) as well as reads judged in a round, and a prefetch fault read after the bound passed does not stand for it.
-/// </summary>
 public sealed class ReadinessCutoffTests
 {
     [Theory]
@@ -29,7 +24,7 @@ public sealed class ReadinessCutoffTests
             }
             else
             {
-                Assert.True(context.CancellationToken.WaitHandle.WaitOne(RecallQueryTests.Patience)); // the 500 ms budget
+                Assert.True(context.CancellationToken.WaitHandle.WaitOne(RecallQueryTests.Patience));
             }
         });
         await using var engine = Engine(factory);
@@ -48,11 +43,6 @@ public sealed class ReadinessCutoffTests
         Assert.False(factory.Returned);
     }
 
-    /// <summary>
-    /// The operator's list is read once per read, before any callback runs. Indexed later, between a
-    /// bound check and what it guarded, a slow list let a callback run after the bound passed, and let a faulted
-    /// prefetch be read after it, standing for the timeout or the cancellation.
-    /// </summary>
     [Fact]
     public async Task TheOperatorsList_IsReadOncePerRead_BeforeAnyCallback()
     {
@@ -66,7 +56,6 @@ public sealed class ReadinessCutoffTests
         Assert.Equal([(0, 0), (1, 0)], factory.ListReads); // (index, reads settled when it was asked for)
     }
 
-    /// <summary>A list that holds on while it is read until the budget runs out, or cancels the caller: nothing is settled.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -100,7 +89,6 @@ public sealed class ReadinessCutoffTests
         Assert.False(factory.Returned);
     }
 
-    /// <summary>A callback's own exception is still the node's failure, and the read after it is not settled.</summary>
     [Fact]
     public async Task ACallbacksException_IsTheNodesFailure_AndTheNextReadIsNotSettled()
     {
@@ -113,7 +101,6 @@ public sealed class ReadinessCutoffTests
         Assert.Equal([0], factory.Settled);
     }
 
-    /// <summary>An untimed replay settles the same reads in the same order.</summary>
     [Fact]
     public async Task AnUntimedReplay_SettlesTheSameReads()
     {
@@ -141,10 +128,6 @@ public sealed class ReadinessCutoffTests
         return engine;
     }
 
-    /// <summary>
-    /// <c>CutoffProbe@1</c>: settles two reads, noting each and running <paramref name="onSettled"/> for it: two empty
-    /// ones, the user's embedding twice, or the user's embedding and then the country's region.
-    /// </summary>
     internal sealed class CutoffProbeFactory(
         bool empty, Action<OperatorContext, int> onSettled, bool region = false, bool recordList = false,
         Action<OperatorContext>? whileReadingTheSecond = null) : IOperatorFactory
@@ -157,13 +140,10 @@ public sealed class ReadinessCutoffTests
 
         public Action<OperatorContext, int> OnSettled { get; } = onSettled;
 
-        /// <summary>Each time the operator's list was asked for a read: its index, and how many reads were settled then.</summary>
         public ConcurrentQueue<(int Index, int Settled)> ListReads { get; } = new();
 
-        /// <summary>Whether the operator passes its reads as a list that notes each read it is asked for.</summary>
         public bool RecordList { get; } = recordList;
 
-        /// <summary>Runs when that list is asked for the second read.</summary>
         public Action<OperatorContext>? WhileReadingTheSecond { get; } = whileReadingTheSecond;
 
         public Operator? Compile(OperatorCompileContext context)
@@ -203,7 +183,6 @@ public sealed class ReadinessCutoffTests
             }
         }
 
-        /// <summary>The reads, noting each time one is asked for, and running <paramref name="hold"/> when the second is.</summary>
         private sealed class RecordingReads(AwaitedReads[] reads, CutoffProbeFactory owner, OperatorContext context, Action<OperatorContext>? hold)
             : IReadOnlyList<AwaitedReads>
         {
@@ -231,10 +210,8 @@ public sealed class ReadinessCutoffTests
 }
 
 /// <summary>
-/// With a prefetch fault: both reads are stored in the same round, the second's prefetch faulted (a listener
-/// of geo_store's values throws, process-wide, hence the collection). After the first callback ran past the budget or
-/// the caller gave up, the second read's state was read first and its fault was the node's exception, recorded as having
-/// run, not as the timeout or the cancellation that came first.
+/// With a prefetch fault: both reads are stored in the same round, the second's prefetch faulted (a listener of
+/// geo_store's values throws, process-wide, hence the collection).
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class ReadinessCutoffFaultTests

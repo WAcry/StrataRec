@@ -13,10 +13,6 @@ public sealed class CurrentDirectoryCollection
     public const string Name = "Current directory";
 }
 
-/// <summary>
-/// The base directory of a local table is pinned when its spec is created: the identity names the
-/// directory the source really reads, whatever the current directory is later.
-/// </summary>
 [Collection(CurrentDirectoryCollection.Name)]
 public class LocalTableBaseDirectoryTests
 {
@@ -25,8 +21,6 @@ public class LocalTableBaseDirectoryTests
     [InlineData("dir")]
     public async Task ANullOrRelativeBaseDirectory_IsPinned_ForTheIdentityAndForTheRead(string? baseDirectory)
     {
-        // Two directories with the same layout and different data: x/dir/snap holds 10, y/dir/snap holds 99. The specs
-        // are created with the current directory in x and then in y (x/dir and y/dir for a null base directory).
         var root = Directory.CreateTempSubdirectory("stratarec-base-").FullName;
         var x = Path.Combine(root, "x");
         var y = Path.Combine(root, "y");
@@ -43,10 +37,9 @@ public class LocalTableBaseDirectoryTests
 
             Assert.Equal(Path.Combine(x, "dir"), first.BaseDirectory);
             Assert.Equal(Path.Combine(y, "dir"), second.BaseDirectory);
-            Assert.NotEqual(first.Identity, second.Identity); // so a host never serves one with the other's table
+            Assert.NotEqual(first.Identity, second.Identity);
             Assert.Contains(first.BaseDirectory, first.Identity, StringComparison.Ordinal);
 
-            // Read with the current directory in y: each source reads the directory its identity names.
             Assert.Equal(10.0, await Load(first));
             Assert.Equal(99.0, await Load(second));
         }

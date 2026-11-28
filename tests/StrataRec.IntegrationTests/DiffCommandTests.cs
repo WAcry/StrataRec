@@ -3,15 +3,10 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>stratarec diff</c> on the home_feed sample and modified copies of it: what differs per arm
-/// combination, from the compiled plans, with RFC 6901 pointers into the combination's plan.
-/// </summary>
 public sealed class DiffCommandTests
 {
     private const string Mmr = "exp_mmr_diversity/mmr";
 
-    /// <summary>The baseline and each of the sample's six arms alone.</summary>
     private static readonly string[] SampleCombinations =
     {
         "baseline", "exp_freshness_calibration/calibrated", "exp_freshness_calibration/control", "exp_mmr_diversity/control", Mmr,
@@ -85,7 +80,7 @@ public sealed class DiffCommandTests
 
         var (_, report) = await Diff(HomeFeedTestHost.SampleRoot(), after, "--arms", "exp_quality_weight/strong");
 
-        Assert.Equal(new[] { "exp_quality_weight/strong" }, Strings(report["compared"])); // --arms: exactly that combination
+        Assert.Equal(new[] { "exp_quality_weight/strong" }, Strings(report["compared"]));
         var change = Assert.Single(Assert.Single(report["combinations"]!.AsArray())!["changes"]!.AsArray())!;
         Assert.Equal(("/nodes/report_filter", "added"), (change["pointer"]!.GetValue<string>(), change["change"]!.GetValue<string>()));
         Assert.Null(change["from"]);
@@ -148,7 +143,6 @@ public sealed class DiffCommandTests
             },
             changes.Select(c => (c!["pointer"]!.GetValue<string>(), c["change"]!.GetValue<string>(), c["from"]?.ToJsonString() ?? "-", c["to"]!.ToJsonString())));
 
-        // explain-plan --arms shows the same members: a pointer of the diff reads the new value there.
         var explained = new StringWriter();
         Assert.Equal(0, await ExplainPlanCommand.RunAsync(Tool.Environment, after, "local", null, "json", new[] { "exp_freshness_calibration/calibrated" }, explained, CancellationToken.None));
         var plan = JsonNode.Parse(explained.ToString())!;
@@ -181,7 +175,6 @@ public sealed class DiffCommandTests
             Assert.Equal(("/params/final_top_k", 10, 12), (change["pointer"]!.GetValue<string>(), change["from"]!.GetValue<int>(), change["to"]!.GetValue<int>()));
         }
 
-        // A manifest without previous, and a workspace (which has none), need --from.
         var (_, withoutPrevious) = await ManifestStores.BuildAsync(ManifestStores.Workspace(), store);
         await ExpectError(withoutPrevious, store, "MANIFEST_NO_PREVIOUS", "/previous", "pass --from");
         await ExpectError(HomeFeedTestHost.SampleRoot(), null, "FROM_REQUIRED", string.Empty, "pass --from");

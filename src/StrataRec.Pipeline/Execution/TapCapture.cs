@@ -11,14 +11,11 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Pipeline.Execution;
 
 /// <summary>
-/// Hot-path capture of log taps: pick the rows (scope, filter, coordinated sampling), copy the tap's columns
-/// for those rows only into a batch the request no longer owns: a column logged as a reference to a candidate column
-/// straight from that column's storage, at its declared width; any other expression evaluated for those rows. Everything
-/// here runs only for requests whose funnel group sampled them.
+/// Hot-path capture of log taps: pick the rows (scope, filter, coordinated sampling), copy the tap's columns for those
+/// rows only into a batch the request no longer owns.
 /// </summary>
 internal static class TapCapture
 {
-    /// <summary>Selects tap variants and makes each group's request-level sampling decision once.</summary>
     public static async ValueTask SelectAsync(RequestState state, CancellationToken cancellationToken)
     {
         var log = state.Plan.Log;
@@ -79,7 +76,6 @@ internal static class TapCapture
         return false;
     }
 
-    /// <summary>True when a tap after <paramref name="nodeId"/> needs the rows that entered the node.</summary>
     public static bool NeedsEnteredRows(RequestState state, string nodeId)
     {
         foreach (var tap in state.Taps)
@@ -137,7 +133,6 @@ internal static class TapCapture
 
     private static void CaptureDropped(RequestState state, CompiledTap tap, ReadOnlySpan<int> entered)
     {
-        // Dropped rows keep their pre-node rank: entered position + 1.
         var rows = state.Memory.Rent<int>(Math.Max(1, entered.Length));
         var ranks = state.Memory.Rent<int>(Math.Max(1, entered.Length));
         var count = 0;
@@ -154,7 +149,6 @@ internal static class TapCapture
         Capture(state, tap, rows.AsSpan(0, count), ranks.AsSpan(0, count), dropped: true);
     }
 
-    /// <summary>Captures rows that are in rank order: rank = position + 1.</summary>
     private static void CaptureInOrder(RequestState state, CompiledTap tap, ReadOnlySpan<int> rows)
     {
         var ranks = state.Memory.Rent<int>(Math.Max(1, rows.Length));
@@ -174,12 +168,10 @@ internal static class TapCapture
         var eval = state.Eval;
         var group = state.Plan.Log.Groups[tap.Group];
 
-        // Positions into rows/ranks that pass the filter.
         var positions = memory.Rent<int>(Math.Max(1, rows.Length));
         var count = 0;
         if (tap.Filter is { } filter && rows.Length > 0)
         {
-            // A filter reading a failed feature is missing for every row, which a filter treats as false.
             if (!LacksData(state, filter))
             {
                 var keep = ColumnBuffer.Create(filter.ResultType, capacity, memory);
@@ -207,7 +199,7 @@ internal static class TapCapture
         if (tap.Rate < 1.0 || (tap.MaxRows is { } max && count > max))
         {
             var priorities = memory.Rent<double>(Math.Max(1, count));
-            var requestHash = state.RequestHash; // hashes the request id: once here, not once per row
+            var requestHash = state.RequestHash;
             for (var i = 0; i < count; i++)
             {
                 priorities[i] = CoordinatedSampling.RowPriority(group.Seed, requestHash, EntityHash(table, rows[positions[i]]));
@@ -247,15 +239,13 @@ internal static class TapCapture
         for (var c = 0; c < tap.Columns.Length; c++)
         {
             var (name, expression) = tap.Columns[c];
-            var type = tap.Schema.Columns[c].Type; // the declared type for a reference, else the promoted result type
+            var type = tap.Schema.Columns[c].Type;
             if (count == 0 || LacksData(state, expression))
             {
                 columns[c] = LogColumn.AllMissing(name, type, count);
             }
             else if (expression.ColumnReference is { } column)
             {
-                // A column is copied from its own storage, at its declared width: nothing to evaluate, nothing widened (a
-                // float32 embedding stays float32). A column no node produced in this request has no value to log.
                 columns[c] = state.ReadColumn(column.FixedSlot, column.Id) is { } storage
                     ? LogColumn.Capture(name, type, storage, selectedRows)
                     : LogColumn.AllMissing(name, type, count);
@@ -266,14 +256,14 @@ internal static class TapCapture
                 var buffer = ColumnBuffer.Create(type, capacity, memory);
                 expression.Evaluate(eval, selectedRows, buffer);
                 MissWhereInputsAreInvalid(state, expression, selectedRows, buffer);
-                columns[c] = LogColumn.Capture(name, type, buffer, selectedRows); // non-finite values are missing in logs
+                columns[c] = LogColumn.Capture(name, type, buffer, selectedRows);
             }
 
             if (tap.PinnedProducers[c] is { } pinned)
             {
                 if (Produced(state, pinned))
                 {
-                    producers[name] = pinned; // col.x@node always reads that node's version
+                    producers[name] = pinned;
                 }
             }
             else if (tap.ColumnSources[c] is >= 0 and var logical && state.Bindings.Producer(logical) is >= 0 and var producer)
@@ -311,7 +301,6 @@ internal static class TapCapture
         });
     }
 
-    /// <summary>True when <paramref name="nodeId"/> ran and committed its outputs in this request (lineage).</summary>
     internal static bool Produced(RequestState state, string nodeId)
     {
         foreach (var outcome in state.Outcomes)
@@ -325,21 +314,16 @@ internal static class TapCapture
         return false;
     }
 
-    /// <summary>
-    /// Non-finite values are logged as missing, never as NaN. A float list with any non-finite element
-    /// is missing as a whole: a partial embedding has no meaning to a training job.
-    /// </summary>
     private static ScalarValue Sanitize(ScalarValue value) => !value.IsMissing && ColumnValues.IsNonFinite(value) ? ScalarValue.Missing : value;
 
     private static long EntityHash(Core.Tables.CandidateTable table, int row) =>
         table.KeyType == EntityKeyType.Int64 ? table.Int64Ids![row] : Core.Hashing.StableHash.SeedFromSalt(table.StringIds!.Get(row));
 
     /// <summary>
-    /// True when the expression reads what this request has no value of: a feature whose fetch failed (its storage may hold
-    /// rows invalid under a non-nullable type, which the expression would read without checking validity), or a
+    /// True when the expression reads what this request has no value of: a feature whose fetch failed (its storage may
+    /// hold rows invalid under a non-nullable type, which the expression would read without checking validity), or a
     /// non-nullable column or request column no node produced (evaluated, the read would throw; a nullable one reads as
-    /// missing, which an expression may handle). A tap logs such a column or context field missing; it never fails the
-    /// request.
+    /// missing, which an expression may handle).
     /// </summary>
     private static bool LacksData(RequestState state, CompiledExpression expression)
     {
@@ -354,7 +338,6 @@ internal static class TapCapture
             }
         }
 
-        // A request column no node wrote before the tap's point (its producer was skipped) has no value to log.
         return PipelineExecutor.MissingRequestColumn(state, reads) is not null;
     }
 

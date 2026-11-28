@@ -25,8 +25,7 @@ public enum BindingKind : byte
 }
 
 /// <summary>
-/// Where each <see cref="BindingKind"/> is in a bindings artifact and how messages name it: the one table that knows the
-/// artifact's layout, which the schema, the identity of shared instances and every error at a binding read.
+/// Where each <see cref="BindingKind"/> is in a bindings artifact and how messages name it.
 /// </summary>
 public static class BindingKinds
 {

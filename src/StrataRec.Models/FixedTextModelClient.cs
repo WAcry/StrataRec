@@ -32,7 +32,7 @@ public sealed class FixedTextModelClient : IServiceClient
     private readonly ServiceSignature _signature;
 
     /// <param name="inputs">Distinct, non-empty names.</param>
-    /// <param name="outputs">Distinct, non-empty names, each with its fixed text.</param>
+    /// <param name="outputs">Distinct, non-empty names.</param>
     internal FixedTextModelClient(string modelName, string[] inputs, (string Name, string Text)[] outputs)
     {
         _modelName = modelName;

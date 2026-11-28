@@ -14,19 +14,10 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The waits of the standard <c>ModelScorer@1</c> and <c>MultiSourceRecall@1</c> for their clients are bounded on their
-/// own, by the call's timeout, the node's budget and the caller, whatever the client does with its token:
-/// the request falls back or fails in time, the abandoned client keeps the request memory until it answers and nothing
-/// it writes is read, the recording has the call as the request saw it, and a replay takes the same path at once. An
-/// operator that returns only after its budget timed out all the same.
-/// </summary>
 /// <remarks>
 /// The clients here ignore cancellation and answer on a dedicated thread once the test opens their gate, so whether a
 /// request waited for one is not a question of timing: it returned while the gate was closed, or the test fails after
-/// <see cref="Patience"/>. The tests of ctr_ranker's own 50 ms budget load the sample as written
-/// (<see cref="SampleTiming.AsWritten"/>); the others give the untimed sample the budget they are about. They run alone
-/// because the abandoned-I/O count is a process-wide metric.
+/// <see cref="Patience"/>. They run alone because the abandoned-I/O count is a process-wide metric.
 /// </remarks>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class BoundedWaitTests
@@ -46,33 +37,30 @@ public sealed class BoundedWaitTests
 
         var result = await engine.ExecuteAsync(Request("req-node-timeout"), TestContext.Current.CancellationToken).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        // Returned with the gate closed: the request did not wait for the model.
         Assert.True(result.Succeeded, result.Error);
         Assert.False(models.Answered.Task.IsCompleted);
         var ranker = result.Trace!.Single(n => n.NodeId == "ctr_ranker");
         Assert.Equal(("ctr_backup", "timed out after 50 ms; served by fallback 'ctr_backup'"), (ranker.ProducedBy, ranker.Detail));
-        Assert.True(pool.Outstanding > 0); // the abandoned call still holds the request memory...
-        Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value); // ...and is counted once
+        Assert.True(pool.Outstanding > 0);
+        Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value);
         Assert.Equal("timeout", Tag(Assert.Single(capture.Of(StrataRecMetrics.Names.IoErrors), m => Tag(m, StrataRecTags.IoRole) == "model"), StrataRecTags.Outcome));
         var run = result.Recording!.Runs[0];
         var call = Assert.Single(run.ServiceCalls, c => c.Role == "model");
-        Assert.Equal(("timeout", true), (call.Status, call.Threw)); // as the request saw it
+        Assert.Equal(("timeout", true), (call.Status, call.Threw));
         Assert.Empty(call.Outputs);
         Assert.Equal(ReplayTiming.TimedOut, Assert.Single(run.Nodes.Single(n => n.Node == "ctr_ranker").Attempts, a => a.Node == "ctr_ranker").Timing);
 
-        // Still held when the event log looks: one report for the request, naming the pipeline.
         events.Flush();
         var held = Assert.Single(logs.Entries, e => e.State.TryGetValue("Event", out var v) && v is RequestEvent.BuffersHeld);
         Assert.Equal(("home_feed", "req-node-timeout"), (held.State["Subject"], held.State["SampleRequestId"]));
 
-        // The model answers late, writing its outputs into buffers still rented, and only then lets go of the memory.
         models.Open();
         Assert.True((await models.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
         Assert.True(SpinWait.SpinUntil(() => pool.Outstanding == 0, Patience));
         Assert.Empty(run.ServiceCalls.FindAll(c => c.Role == "model")[0].Outputs);
 
         await AssertReplaysAtOnce(engine, result.Recording, "ctr_ranker", "fallback", ranker.Detail);
-        Assert.Equal(1, models.Calls); // the replay called nothing
+        Assert.Equal(1, models.Calls);
     }
 
     [Fact]
@@ -117,7 +105,7 @@ public sealed class BoundedWaitTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(Patience, TestContext.Current.CancellationToken));
         Assert.False(models.Answered.Task.IsCompleted);
         Assert.Equal("cancelled", Assert.Single(delivered!.Runs[0].ServiceCalls, c => c.Role == "model").Status);
-        Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoErrors), m => Tag(m, StrataRecTags.IoRole) == "model"); // the caller giving up is not the model's fault
+        Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoErrors), m => Tag(m, StrataRecTags.IoRole) == "model");
         Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model");
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.AbandonedIo)).Value);
         Assert.True(pool.Outstanding > 0);
@@ -161,7 +149,6 @@ public sealed class BoundedWaitTests
         var error = Assert.Single(capture.Of(StrataRecMetrics.Names.IoErrors));
         Assert.Equal(("recall", "popular", "timeout"), (Tag(error, StrataRecTags.IoRole), Tag(error, StrataRecTags.IoTarget), Tag(error, StrataRecTags.Outcome)));
 
-        // It answers late, adding its candidates again into the closed buffer, and then lets go of the memory.
         sources.Open();
         Assert.True((await sources.Answered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken)).Succeeded);
         Assert.True(SpinWait.SpinUntil(() => pool.Outstanding == 0, Patience));
@@ -172,8 +159,7 @@ public sealed class BoundedWaitTests
     [Fact]
     public async Task AModelAnsweringOnlyAfterTheNodeBudget_IsATimeout_AndItsScoresAreNotServed()
     {
-        // The client answers synchronously, but only once the node's budget has cancelled its token. The answer came after
-        // the call's bound (the node's deadline): it is not heard, so the call is a timeout as the request saw it.
+        // The client answers synchronously, but only once the node's budget has cancelled its token.
         var engine = Engine(HomeFeedTestHost.Load(SampleTiming.AsWritten), new CountingPool(), models: new LateModels());
 
         var result = await engine.ExecuteAsync(Request("req-late"), TestContext.Current.CancellationToken).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
@@ -187,7 +173,6 @@ public sealed class BoundedWaitTests
         Assert.Empty(call.Outputs);
         Assert.Equal(ReplayTiming.TimedOut, run.Nodes.Single(n => n.Node == "ctr_ranker").Attempts[0].Timing);
 
-        // Served exactly as when the model fails outright.
         var failed = await Engine(HomeFeedTestHost.LoadModified(MetricsTests.FailModel), new CountingPool()).ExecuteAsync(Request("req-late"), TestContext.Current.CancellationToken);
         LiveRunAssert.SameNodeOutcomes(failed, result, "ctr_ranker");
         Assert.Equal(Items(failed), Items(result));
@@ -195,7 +180,6 @@ public sealed class BoundedWaitTests
         await AssertReplaysAtOnce(engine, result.Recording, "ctr_ranker", "fallback", ranker.Detail);
     }
 
-    /// <summary>Replays a bundle on the same engine: it completes synchronously, with the same result and node decision.</summary>
     private static async Task AssertReplaysAtOnce(RecEngine engine, ReplayBundle recording, string node, string outcome, string? detail)
     {
         var pending = engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recording)));
@@ -238,10 +222,9 @@ public sealed class BoundedWaitTests
 
     private static string? Tag(Measured m, string key) => m.Tags.TryGetValue(key, out var value) ? value as string : null;
 
-    /// <summary>Counts buffers given back to it: none until the request memory's last holder lets go.</summary>
     /// <summary>
-    /// Counts the arrays out of the pool. A request gives its scratch buffers back as it goes (RequestMemory.RentScratch),
-    /// so while a call holds the memory some are out (its ledger), and none once the last holder releases it.
+    /// A request gives its scratch buffers back as it goes (RequestMemory.RentScratch), so while a call holds the
+    /// memory some are out (its ledger), and none once the last holder releases it.
     /// </summary>
     private sealed class CountingPool : IBufferPool
     {
@@ -266,14 +249,13 @@ public sealed class BoundedWaitTests
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        /// <summary>The status the gated call returned once released, or what its late work threw.</summary>
         public TaskCompletionSource<(bool Succeeded, string? Error)> Answered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int Calls => Volatile.Read(ref _calls);
 
         public void Open() => _gate.Set();
 
-        public void Dispose() => _gate.Set(); // never leave a client thread blocked
+        public void Dispose() => _gate.Set();
 
         protected ValueTask<TStatus> Later<TStatus>(Func<TStatus> work, Func<TStatus, (bool, string?)> describe)
         {
@@ -289,7 +271,7 @@ public sealed class BoundedWaitTests
                         throw new TimeoutException("the test never opened the gate");
                     }
 
-                    var status = work(); // late: writes into what the framework handed the call
+                    var status = work();
                     done.SetResult(status);
                     Answered.TrySetResult(describe(status));
                 }
@@ -305,7 +287,6 @@ public sealed class BoundedWaitTests
         }
     }
 
-    /// <summary>The CTR model (linear@1) answering only once the gate opens, writing its outputs then.</summary>
     private sealed class GatedModels : Gated, IBindingFactory<IServiceClient>
     {
         private readonly LinearModelClientFactory _inner = new();

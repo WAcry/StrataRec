@@ -2,9 +2,8 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Expressions.Syntax;
 
-/// <summary>Parse tree node with its source span. <see cref="Depth"/> is the nesting depth checked against
-/// <see cref="CompileOptions.MaxDepth"/>: leaves are 0, every operator, call, list, parenthesized group, conditional
-/// and let adds one.</summary>
+/// <summary><see cref="Depth"/> is the nesting depth checked against <see cref="CompileOptions.MaxDepth"/>: leaves are
+/// 0, every operator, call, list, parenthesized group, conditional and let adds one.</summary>
 internal abstract class AstNode(int start, int length)
 {
     public int Start { get; } = start;

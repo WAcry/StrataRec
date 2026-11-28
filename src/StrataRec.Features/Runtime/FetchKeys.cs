@@ -4,21 +4,8 @@ using StrataRec.Features.Connectors;
 
 namespace StrataRec.Features.Runtime;
 
-/// <summary>
-/// The distinct keys of one fetch or read of a candidate-scoped group: each row's key deduplicated as a
-/// tuple, in first-seen order (entry k is the k-th distinct key), and their <see cref="EntityKeyBatch"/> for a connector,
-/// a table or a recording. The one place that knows how a key's parts are deduplicated.
-/// </summary>
 /// <remarks>
-/// <para>Only the parts that vary per row are indexed. The shared parts (request inputs) have one value for the whole
-/// fetch, read once (<see cref="Reset"/>), so a row costs no hash or comparison of them, and a batch carries each once.</para>
-/// <para>One varying part (a one-part key, or one column with shared parts beside it) is an <see cref="EntityKeyIndex"/> on
-/// that part: one <c>long</c> or string hashed and compared per row, as before keys had parts. Several varying parts are an
-/// <see cref="EntityKeyTupleIndex"/>, which hashes them together and compares them part by part on a hash match. Every
-/// array is rented from the request's memory, so deduplicating thousands of rows allocates nothing per row.</para>
-/// <para>A struct, so that a fetch costs what it did with one-part keys: the one index object. A fetch holds its own (in
-/// its pending state); a request's local reads share one, reset by each read, whose indexes are made with the request
-/// (<see cref="Prepared"/>). A copy shares the indexes: take one only once the keys are added, to read them.</para>
+/// <para>A copy shares the indexes: take one only once the keys are added, to read them.</para>
 /// </remarks>
 internal struct FetchKeys
 {
@@ -27,10 +14,6 @@ internal struct FetchKeys
     private EntityKey[]? _shared; // rented: the shared parts' values in part order, for the batch
     private EntityKeyLayout? _layout;
 
-    /// <summary>
-    /// Keys whose indexes exist already, so no read costs an object: the one-part index, and a tuple index when the plan
-    /// reads a table keyed by <paramref name="tupleParts"/> (2 or more) varying parts.
-    /// </summary>
     public static FetchKeys Prepared(RequestMemory memory, int tupleParts) => new()
     {
         _single = new EntityKeyIndex(EntityKeyType.Int64, 0, memory),
@@ -42,13 +25,8 @@ internal struct FetchKeys
 
     public readonly EntityKeyLayout Layout => _layout ?? throw new InvalidOperationException("The keys were not reset for a group.");
 
-    /// <summary>Number of distinct keys.</summary>
     public readonly int Count => Layout.VaryingCount == 1 ? _single!.Count : _tuples!.Count;
 
-    /// <summary>
-    /// The one-part index when the key is exactly one part, which varies: a table looks its keys up as the index holds them
-    /// (<see cref="EntityKeyIndex.Int64Keys"/>, <see cref="EntityKeyIndex.StringKeys"/>), without a batch. Null otherwise.
-    /// </summary>
     public readonly EntityKeyIndex? Plain => Layout.PartCount == 1 ? _single : null;
 
     /// <summary>
@@ -106,20 +84,17 @@ internal struct FetchKeys
     public readonly int GetOrAdd(ReadOnlySpan<EntityKey> varying) =>
         varying.Length == 1 ? GetOrAdd(varying[0]) : _tuples!.GetOrAdd(varying, _tuples.Count, out _);
 
-    /// <summary>The entry of a key whose one varying part is <paramref name="varying"/>, adding it first when it is new.</summary>
     public readonly int GetOrAdd(in EntityKey varying) => _single!.GetOrAdd(varying, _single.Count, out _);
 
-    /// <summary>The entry of a key given by its varying parts, if it is one of the keys.</summary>
     public readonly bool TryGetValue(ReadOnlySpan<EntityKey> varying, out int entry) =>
         varying.Length == 1 ? TryGetValue(varying[0], out entry) : _tuples!.TryGetValue(varying, out entry);
 
-    /// <summary>The entry of a key whose one varying part is <paramref name="varying"/>, if it is one of the keys.</summary>
     public readonly bool TryGetValue(in EntityKey varying, out int entry)
     {
         if (varying.IsString != (_single!.KeyType == EntityKeyType.String))
         {
             entry = 0;
-            return false; // a key of the other type, which is not among them
+            return false;
         }
 
         return _single.TryGetValue(varying, out entry);
@@ -133,7 +108,6 @@ internal struct FetchKeys
 
     private readonly int BufferLength() => (Layout.VaryingCount * Count) + (Layout.PartCount - Layout.VaryingCount);
 
-    /// <summary>Lays the keys out part-major (see <see cref="EntityKeyBatch"/>): each varying part's keys, then the shared values.</summary>
     private readonly EntityKeyBatch Fill(EntityKey[] buffer)
     {
         var layout = Layout;

@@ -5,11 +5,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>MmrDiversifier@1</c>'s λ is in [0, 1] wherever it comes from: a fixed value is checked when the node compiles, a
-/// parameter must be declared within [0, 1], so every value an experiment gives it is. A λ of 2 was accepted, turning
-/// the similarity penalty into a reward.
-/// </summary>
 public sealed class MmrConfigTests
 {
     [Theory]

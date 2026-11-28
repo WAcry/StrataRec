@@ -7,17 +7,10 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// A connector's result counts only if the fetch observes it within its bound: a call that completes
-/// without an installed wait to decide it (synchronously, or before the wait is installed) is judged when the fetch sees
-/// it. Every connector here is gated on the fetch's own token, which its budget timer cancels, so nothing sleeps.
+/// Every connector here is gated on the fetch's own token, which its budget timer cancels, so nothing sleeps.
 /// </summary>
 public class FetchObservationTests
 {
-    /// <summary>
-    /// The source's timeout. Its time starts before the call is sent, and a call whose time ran out before that is not
-    /// sent at all, which is not what these tests are about: long enough that a stalled runner still sends the call
-    /// (at 20 ms one did not), and the tests that wait for it take that long.
-    /// </summary>
     private const int TimeoutMs = 250;
 
     [Fact]
@@ -25,7 +18,7 @@ public class FetchObservationTests
     {
         var connector = new ScriptedConnector((keys, fields, writer, token) =>
         {
-            token.WaitHandle.WaitOne(); // blocks the calling thread until the fetch's budget timer fires
+            token.WaitHandle.WaitOne();
             ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 2.0);
             return ValueTask.FromResult(FetchStatus.Ok);
         });
@@ -38,7 +31,7 @@ public class FetchObservationTests
         Assert.False(request.IsFilled(score, 0));
         var call = Assert.Single(hook.Recorded);
         Assert.Equal((IoOutcome.Timeout, FetchOutcome.Failed), (call.Outcome, call.Status.Outcome));
-        Assert.Null(call.Values); // the staging of a late call is never read, not even to record it
+        Assert.Null(call.Values);
     }
 
     [Fact]
@@ -47,7 +40,7 @@ public class FetchObservationTests
         using var caller = new CancellationTokenSource();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
-            caller.Cancel(); // the caller gives up while the connector is still working
+            caller.Cancel();
             ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 2.0);
             return ValueTask.FromResult(FetchStatus.Ok);
         });
@@ -108,9 +101,8 @@ public class FetchObservationTests
 
     /// <summary>
     /// A well-behaved <see cref="IValueTaskSource{TResult}"/> that is pending until a continuation is registered, which
-    /// happens while the fetch turns the call into a task; it then completes and runs the continuation inline, so the task
-    /// is complete before the fetch installs its wait. With <c>waitForTheBound</c> it first waits for the connector's
-    /// token, which the fetch's budget timer cancels.
+    /// happens while the fetch turns the call into a task; it then completes and runs the continuation inline, so the
+    /// task is complete before the fetch installs its wait.
     /// </summary>
     private sealed class CompletesWhenRegistered(bool waitForTheBound) : IValueTaskSource<FetchStatus>
     {

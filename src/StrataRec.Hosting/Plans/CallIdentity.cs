@@ -8,23 +8,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Hosting.Plans;
 
-/// <summary>
-/// What a served plan contributes to the key of a cached call of its pipeline (<see cref="PipelineCallCache"/>): what
-/// its run computes with, so a result is found again only by a request that would compute the same.
-/// </summary>
-/// <remarks>
-/// <para><see cref="Baseline"/> is the pipeline without its experiments: its pipeline artifact, the catalog's entities and
-/// the features the plan reads (not the rest of the catalog: a feature added for another pipeline changes nothing), its
-/// data tables, and what its feature sources and services give their values from
-/// (<see cref="ExecutionPlan.ValuesIdentity"/>: not their timeouts or caches). Each experiment has an identity of its
-/// own, which a key holds only for the arms the request is in: releasing an experiment leaves the results of the requests
-/// outside it where they are. The features and bindings are those of every arm, so an experiment that reads a feature or
-/// binds a service nothing read before changes the baseline once, for everyone.</para>
-/// <para>Computed from the configuration, not from the files' bytes or the loader's content ids: every instance that
-/// serves the same configuration has the same one, however it loaded it. With a digest every configuration has
-/// (<see cref="JsonDigest"/>): a plan that compiled is loaded, and a typed host's parameter of 2^53 + 1, which has no
-/// content id, threw out of the load of a pipeline that cached nothing.</para>
-/// </remarks>
 internal sealed class CallIdentity
 {
     private CallIdentity(string baseline, string[] experiments, PipelineInterface shape, long shapeHash)
@@ -44,9 +27,8 @@ internal sealed class CallIdentity
     public PipelineInterface Shape { get; }
 
     /// <summary>
-    /// A hash of what a result of the plan holds (the key type, the output's columns and values with their types): part of
-    /// every key, so a record is read only as a result of the output it was written for, also by a cache that names a
-    /// <c>version</c> and so does not follow the configuration.
+    /// A hash of what a result of the plan holds: part of every key, so a record is read only as a result of the output
+    /// it was written for, also by a cache that names a <c>version</c> and so does not follow the configuration.
     /// </summary>
     public long ShapeHash { get; }
 

@@ -44,42 +44,16 @@ public sealed class BindingHostOptions
 }
 
 /// <summary>
-/// Owns what the engine's plans bind: the local feature tables, and the instances bindings name
-/// (service clients, feature connectors). Each is created once per key and shared with every plan whose spec
-/// has the same key (<see cref="LocalTableSpec.Key"/>, <see cref="BindingSpec.Key"/>: the identity of the configuration,
-/// and the factory or connector object the data comes from, so engines with different registries never share), so a
-/// plan swap takes over what is loaded instead of loading it again; each is loaded off the request path before a plan
-/// that needs it is served, and stopped or disposed once nothing uses it. The one component with these lifecycles;
-/// plans hold what they bind through one <see cref="BindingLease"/> each.
+/// Owns what the engine's plans bind: the local feature tables, and the instances bindings name (service clients,
+/// feature connectors).
 /// </summary>
 /// <remarks>
-/// <para><b>Readiness.</b> A table is ready once its first load is complete (<see cref="LocalFeatureTable.IsLoaded"/>); an
-/// instance once its <see cref="ILoadable.LoadAsync"/> returned (at once when it has none). <see cref="BindingLease.WaitLoadedAsync"/>
-/// starts the loads of what the lease holds and waits for them; the engine serves a new plan only afterwards, so the old
-/// plan keeps serving while new tables and models load.</para>
-/// <para><b>Failures.</b> If the first load fails, the table or instance is never handed out again: the plans waiting for
-/// it get a failure naming the binding (and for a table, the bad file), and the next plan with the same identity starts
-/// a new one, so loading again really retries. A source that fails after the first load leaves the table
-/// serving what it has; the failure is logged and counted, and the source runs again from the table's
-/// <see cref="LocalFeatureTable.Position"/> after a delay that doubles with each failure in a row (reset when a run made
-/// progress), up to <see cref="BindingHostOptions.MaxRestartDelay"/>. An instance's load is bounded by
-/// <see cref="BindingHostOptions.LoadTimeout"/>.</para>
-/// <para><b>Release.</b> A table no lease holds has its source cancelled. Requests of an older plan may still read it:
-/// they pinned a version, which stays valid, so stopping a source never needs to wait for requests. An instance is
-/// different: a request of a replaced plan, or a call it abandoned at a timeout, may still be inside it, so the lease
-/// lets go of its instances only once it is retired and its last request has ended (<see cref="BindingLease"/>). An
-/// instance no lease holds then has its load cancelled and is disposed once that load returned.</para>
-/// <para><b>Stopping and disposing never run their code on the caller's thread.</b> A source, or an instance's load, is
-/// cancelled with <see cref="CancellationTokenSource.CancelAsync"/>: the callbacks it registered on its token run on the
-/// thread pool, not on the thread that releases a lease (a plan swap, or the end of a request on a client's thread) or
-/// disposes the host. Their task and the source's run make up the entry's <see cref="TableEntry.Completion"/>; an
-/// instance is disposed on the thread pool once its load and those callbacks have returned
-/// (<see cref="ClientEntry.Disposed"/>), whichever of the release and the shutdown cancelled first. Shutdown waits for both within one
-/// <see cref="BindingHostOptions.ShutdownTimeout"/>; past it, the entries stay alive until they end, and an exception
-/// of a callback or a disposal is logged, never thrown at the caller. Diagnostics never change a lifecycle: a logger
-/// that throws leaves every wait in place.</para>
-/// <para>Thread-safe. Sources run off the request path, each on its own long-running task until its first await;
-/// instance loads run on the thread pool.</para>
+/// <para>If the first load fails, the table or instance is never handed out again: the plans waiting for it get a
+/// failure naming the binding (and for a table, the bad file), and the next plan with the same identity starts a new
+/// one. A source that fails after the first load leaves the table serving what it has; the failure is logged and
+/// counted, and the source runs again from the table's <see cref="LocalFeatureTable.Position"/> after a delay that
+/// doubles with each failure in a row (reset when a run made progress), up to
+/// <see cref="BindingHostOptions.MaxRestartDelay"/>.</para>
 /// </remarks>
 public sealed partial class BindingHost : IAsyncDisposable, IDisposable
 {
@@ -173,14 +147,14 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         foreach (var entry in entries)
         {
             entry.Stop();
-            stopping.Add(entry.Completion); // never faults: see TableEntry.StoppedAsync
+            stopping.Add(entry.Completion);
         }
 
         var disposing = new List<Task>(clients.Count);
         foreach (var client in clients)
         {
             _ = client.CancelLoad(); // the disposal waits for its callbacks; Disposed below waits for the disposal
-            disposing.Add(client.Disposed); // never faults: see ClientEntry.DisposeAsync
+            disposing.Add(client.Disposed);
         }
 
         var all = new List<Task>(stopping);
@@ -207,7 +181,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
             }
             catch (Exception)
             {
-                // A failing logger cannot report itself.
             }
         }
     }
@@ -225,15 +198,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         return pending;
     }
 
-    /// <summary>The held table of the spec's key with one more reference, or a new one.</summary>
-    /// <remarks>
-    /// A cache's table is kept when only its times or <c>max_bytes</c> change (<see cref="LocalTableSpec.CreateCache"/>),
-    /// so the spec may ask for other limits than the held table has. Here they are only checked: the table takes them
-    /// when the plan that asks serves (<see cref="Serve"/>), so a plan that was compiled and never served changes
-    /// nothing of a table another plan serves from. It took them here once, and a candidate with a lower limit that was
-    /// then discarded had evicted the serving plan's records down to it.
-    /// </remarks>
-    /// <exception cref="ArgumentOutOfRangeException">The held table cannot take the spec's limits; it is not held for the caller.</exception>
     internal TableEntry Acquire(LocalTableSpec spec)
     {
         ArgumentNullException.ThrowIfNull(spec);
@@ -247,8 +211,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                 return held;
             }
 
-            // New, or the held one failed its first load: a fresh table, so another load really retries. The failed one
-            // stays with the leases that hold it until they let go.
+            // The failed one stays with the leases that hold it until they let go.
             var entry = new TableEntry(this, spec, new LocalFeatureTable(spec.Schema, spec.Options)) { References = 1 };
             _tables[spec.Key] = entry;
             _entries.Add(entry);
@@ -257,9 +220,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// The plan that holds <paramref name="entry"/> with <paramref name="options"/> now serves: the table has its limits
-    /// from here on, until another plan that holds it serves. Under the host's lock, so two plans published at once
-    /// leave the limits of one of them whole.
+    /// Under the host's lock, so two plans published at once leave the limits of one of them whole.
     /// </summary>
     internal void Serve(TableEntry entry, LocalFeatureTableOptions options)
     {
@@ -292,7 +253,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
             }
             catch (Exception)
             {
-                // A failing logger cannot report itself, and must not fail the release.
             }
         }
     }
@@ -306,7 +266,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
     }
 
 
-    /// <summary>One table, its source's run and its readiness.</summary>
     internal sealed class TableEntry
     {
         private readonly BindingHost _host;
@@ -343,7 +302,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         /// </summary>
         public Task Completion => _stopped.Task;
 
-        /// <summary>Starts the source unless it runs already (or was stopped).</summary>
         public void Start()
         {
             lock (_gate)
@@ -359,10 +317,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
             }
         }
 
-        /// <summary>
-        /// Cancels the source without running any of its code here (see the host's remarks); true when it was running.
-        /// <see cref="Completion"/> tells when it has stopped.
-        /// </summary>
         public bool Stop()
         {
             Task? run;
@@ -377,7 +331,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                 run = _run;
             }
 
-            // The token observes the cancellation now; the callbacks registered on it run on the thread pool.
             var callbacks = _stop.CancelObservedAsync();
             _ready.TrySetCanceled();
             _ = StoppedAsync(run ?? Task.CompletedTask, callbacks);
@@ -385,10 +338,9 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
         }
 
         /// <summary>
-        /// Waits for the run and the cancellation callbacks, then leaves the host's set of entries. The entry (and its
-        /// token source, never disposed) stays alive while either runs, past a shutdown that gave up waiting. A callback's
-        /// exception is logged; the run handles its own failures, so anything escaping it is only observed. Diagnostics
-        /// never change when the entry counts as stopped: a logger that throws still leaves the wait for the run in place.
+        /// The entry (and its token source, never disposed) stays alive while either runs, past a shutdown that gave up
+        /// waiting. Diagnostics never change when the entry counts as stopped: a logger that throws still leaves the
+        /// wait for the run in place.
         /// </summary>
         private async Task StoppedAsync(Task run, Task callbacks)
         {
@@ -406,7 +358,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                     }
                     catch (Exception)
                     {
-                        // A failing logger cannot report itself.
                     }
                 }
 
@@ -438,14 +389,12 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                 }
                 catch (Exception)
                 {
-                    // A failing logger cannot report itself, and must not keep the plans waiting for a table that loaded.
                 }
 
                 _ready.TrySetResult();
             }
         }
 
-        /// <summary>Runs the source until it is done or stopped, restarting it after failures once the table is loaded.</summary>
         private async Task RunAsync()
         {
             var token = _stop.Token;
@@ -463,7 +412,7 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                         .Unwrap().ConfigureAwait(false);
                     if (Table.IsLoaded)
                     {
-                        return; // the source has nothing more to do (a snapshot without reload)
+                        return;
                     }
 
                     failure = new InvalidOperationException(
@@ -490,14 +439,13 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                     }
                     catch (Exception)
                     {
-                        // A failing logger cannot report itself, and must not keep the plans waiting from the failure.
                     }
 
                     _ready.TrySetException(error);
-                    return; // never handed out again (see Acquire), so never restarted
+                    return;
                 }
 
-                failures = Table.Completions == before ? failures + 1 : 1; // a run that made progress resets the backoff
+                failures = Table.Completions == before ? failures + 1 : 1;
                 var delay = Backoff(failures);
                 try
                 {
@@ -505,7 +453,6 @@ public sealed partial class BindingHost : IAsyncDisposable, IDisposable
                 }
                 catch (Exception)
                 {
-                    // A failing logger cannot report itself, and must not end the restarts: the table would go stale unnoticed.
                 }
 
                 try

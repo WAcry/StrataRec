@@ -1,26 +1,13 @@
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>One file <c>stratarec init</c> writes.</summary>
 /// <param name="Path">Relative to the workspace root, with <c>/</c> separators.</param>
-/// <param name="Description">What the file is, for the list init prints.</param>
-/// <param name="Content">The file's text.</param>
 internal sealed record InitFile(string Path, string Description, string Content);
 
-/// <summary>
-/// The workspace <c>stratarec init</c> writes: the smallest one that shows every part a user edits and still validates
-/// without warnings and runs offline. The files are C# raw strings here rather than embedded resources, so that the one
-/// substitution (the pipeline id, in <c>{{pipeline}}</c> holes) is checked by the compiler, and the files, their
-/// descriptions and the names the printed next steps use (<see cref="ExperimentId"/>, the arms, the request) are kept
-/// together in one file.
-/// </summary>
 /// <remarks>
-/// Every file, fixtures and request too, is JSONC that starts with a comment saying what it is and what to change first
-/// (every reader of these files skips comments). Every file but the fixtures then names its JSON Schema in
-/// <c>"$schema"</c>, in the <c>schemas/</c> init writes next to them (<see cref="InitCommand.Files"/>), so an editor
-/// completes and checks it; a fixture is a connector's data, in which <c>"$schema"</c> would be an item's id. The
-/// pipeline id is checked before it is substituted
-/// (<see cref="InitCommand"/>), so it needs no JSON escaping. Adjacent braces would start a hole in a <c>$$</c> raw
-/// string, so the JSON keeps a space between nested braces.
+/// Every file but the fixtures then names its JSON Schema in <c>"$schema"</c>, in the <c>schemas/</c> init writes next
+/// to them (<see cref="InitCommand.Files"/>), so an editor completes and checks it; a fixture is a connector's data, in
+/// which <c>"$schema"</c> would be an item's id. The pipeline id is checked before it is substituted
+/// (<see cref="InitCommand"/>), so it needs no JSON escaping.
 /// </remarks>
 internal static class InitTemplates
 {
@@ -28,7 +15,6 @@ internal static class InitTemplates
 
     public const string ExperimentId = "exp_freshness";
 
-    /// <summary>The arm the request file's assignment names.</summary>
     public const string AssignedArm = "boost";
 
     public const string ControlArm = "control";

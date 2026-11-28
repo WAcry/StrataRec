@@ -11,15 +11,10 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// The request read path of local feature sources: the same values, defaults, missing values and states as
-/// a fetch of the same records, one pinned table version per request, and record/replay through the call hook.
-/// </summary>
 public class LocalFeatureReadTests
 {
     private static readonly EntityDefinition Author = FeatureTestRig.ForeignKey("author", "item.author_id");
 
-    /// <summary>Items 1–5 and 7 (6 has no record); item 2 has no age, item 4 no author, item 5's author 77 has no record.</summary>
     private static readonly Dictionary<long, Dictionary<string, object>> ItemRecords = new()
     {
         [1] = new() { ["clicks"] = 3.0, ["age"] = 1.5, ["category"] = "music", ["emb"] = new[] { 1f, 2f, 3f, 4f }, ["author_id"] = 10L },
@@ -80,8 +75,6 @@ public class LocalFeatureReadTests
             }
         }
 
-        // Spot checks of the shared semantics: default for a key without a record, missing for a nullable feature, absent
-        // for a missing foreign key or one without a record.
         Assert.Equal(0.0, localRequest.Value(localFeatures[0], 6).AsFloat64()); // item 6: clicks default
         Assert.True(localRequest.Value(localFeatures[1], 2).IsMissing); // item 2: no age
         Assert.Equal("unknown", localRequest.Value(localFeatures[2], 3).AsString()); // item 3: category default
@@ -132,7 +125,7 @@ public class LocalFeatureReadTests
         Assert.Contains("local table item_store/item (source 'item_store' in bindings:test) is not loaded", candidate.Error);
         Assert.True(context.Failed);
         Assert.Contains("user_store/user", context.Error);
-        Assert.False(request.IsFilled(clicks, 0)); // never served as missing
+        Assert.False(request.IsFilled(clicks, 0));
     }
 
     [Theory]
@@ -189,8 +182,7 @@ public class LocalFeatureReadTests
     public async Task RequestsRunningWhileReloadsSwapVersions_EachReadOneCompleteVersion()
     {
         // A dedicated thread reloads the table a fixed number of times, every record of reload r holding r in both
-        // fields; requests on this thread read the fields in two separate reads. Whatever the interleaving, a request
-        // sees one reload, whole: every row and both reads the same r.
+        // fields; requests on this thread read the fields in two separate reads.
         const int Items = 256;
         const int Reloads = 200;
         var rig = new FeatureTestRig().LocalSource("item_store", writer => LoadGeneration(writer, Items, 0));
@@ -274,8 +266,8 @@ public class LocalFeatureReadTests
         await request.EnsureAsync(followers);
 
         var call = Assert.Single(hook.Recorded, c => c.Source == "author_store");
-        Assert.Equal(new long[] { 11, 10 }, call.Keys); // live-row order, once each; item 4 has no author
-        Assert.Equal(new double?[] { 25.0, null }, call.Values); // as stored: no record is missing, not the default
+        Assert.Equal(new long[] { 11, 10 }, call.Keys);
+        Assert.Equal(new double?[] { 25.0, null }, call.Values);
         Assert.Equal((true, IoOutcome.Ok, FetchOutcome.Ok), (call.Sent, call.Outcome, call.Status.Outcome));
     }
 
@@ -292,18 +284,13 @@ public class LocalFeatureReadTests
         var candidate = await request.EnsureAsync(score);
         var context = await request.EnsureAsync(ctr);
 
-        Assert.False(candidate.Failed, candidate.Error); // the table was never loaded, and never read
+        Assert.False(candidate.Failed, candidate.Error);
         Assert.False(context.Failed, context.Error);
         Assert.Equal(40.0, request.Value(score, 0).AsFloat64());
         Assert.Equal(50.0, request.Value(score, 1).AsFloat64());
         Assert.Equal(30.0, request.ContextValue(ctr).AsFloat64());
     }
 
-    /// <summary>
-    /// Items, authors (through <c>item.author_id</c>) and users, bound either to local tables or to <c>memory@1</c> with
-    /// the same records. Features: clicks (default 0), age (nullable), category (default "unknown"), embedding (nullable),
-    /// author_id, author followers (default -1), author verified (nullable), user ctr (default 0.02).
-    /// </summary>
     private static (FeatureTestRig Rig, int[] Features) SampleRig(bool fetched)
     {
         var rig = new FeatureTestRig();

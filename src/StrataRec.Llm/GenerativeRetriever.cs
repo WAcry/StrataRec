@@ -56,21 +56,19 @@ public sealed class GenerativeRetrieverConfig
 /// not have, from prompts rendered once per request.
 /// </summary>
 /// <remarks>
-/// <para>One call: batch size 1, the request's seed, <c>max_output_tokens</c>, recorded and replayed by the digest of the
-/// whole call, since the answer belongs to the request, not to a row. The answer is parsed by <see cref="LlmAnswer"/>: a
-/// JSON array (optionally in one Markdown code fence) of ids of the table's key type. An element of another type is
-/// unknown, an id named before is repeated, an id the table already has is present; each is skipped, and after
-/// <c>max_items</c> used ids the rest is over the limit. Every element is counted
+/// <para>One call: batch size 1, the request's seed, <c>max_output_tokens</c>. The answer is parsed by
+/// <see cref="LlmAnswer"/>: a JSON array (optionally in one Markdown code fence) of ids of the table's key type. An
+/// element of another type is unknown, an id named before is repeated, an id the table already has is present; each is
+/// skipped, and after <c>max_items</c> used ids the rest is over the limit. Every element is counted
 /// (<see cref="StrataRecMetrics.ModelAnswerIds"/>). An empty array, or one with nothing new, appends nothing: a valid
 /// answer.</para>
-/// <para>An id already in the table keeps its row, its place and its values: a row source appends rows and writes only
-/// those, so the node neither moves another source's row nor marks it; the count of <c>present</c> ids shows
-/// how much the model repeats the other sources.</para>
+/// <para>An id already in the table keeps its row, its place and its values; the count of <c>present</c> ids shows how
+/// much the model repeats the other sources.</para>
 /// <para>The appended rows have no features yet: the fetch planner fills them before any later node reads one, like the
 /// rows of any row source; an id no feature source knows has its features' defaults or missing values.</para>
-/// <para>The node fails, appending nothing (<c>on_failure</c> decides), when the call fails or when the answer is not such
-/// an array. The message names the model and quotes the start of the answer; when the client said it stopped at
-/// <c>max_output_tokens</c>, it says so, since a cut-off array is the likely cause.</para>
+/// <para>The node fails, appending nothing (<c>on_failure</c> decides), when the call fails or when the answer is not
+/// such an array. The message names the model and quotes the start of the answer; when the client said it stopped at
+/// <c>max_output_tokens</c>, it says so.</para>
 /// </remarks>
 public sealed class GenerativeRetrieverFactory : IOperatorFactory
 {
@@ -119,7 +117,6 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
         return new GenerativeRetriever(model, prompts, config.Output, config.MaxItems, rank, config.MaxOutputTokens);
     }
 
-    /// <summary><c>rank_col</c>: a nullable integer column, since the rows other sources append have no position in this answer.</summary>
     private OutputColumn? CompileRank(OperatorCompileContext context, string name, ref bool ok)
     {
         if (!context.TryWriteColumn(name, "/rank_col", ColumnType.Int64.AsNullable(), out var written))
@@ -144,7 +141,7 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
         BoundModel model, (string Name, PromptTemplate Template)[] prompts, string output, int maxItems, OutputColumn? rank, int maxOutputTokens)
         : Operator
     {
-        private readonly string[] _read = [output]; // the one output it reads, recorded and replayed
+        private readonly string[] _read = [output];
 
         private readonly KeyValuePair<string, object?>[] _used = LlmNode.Tags(model, "used");
         private readonly KeyValuePair<string, object?>[] _unknown = LlmNode.Tags(model, "unknown");
@@ -180,7 +177,6 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
             Append(context, text, status);
         }
 
-        /// <summary>Parses the answer and appends its new ids; fails the node, appending nothing, when it is not a JSON array.</summary>
         private void Append(OperatorContext context, string text, in ServiceStatus status)
         {
             var table = context.Table;
@@ -220,7 +216,6 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
                 return;
             }
 
-            // The appended rows are consecutive: values row by row, their validity once for the range.
             switch (context.Output(column))
             {
                 case ScalarColumn<long> longs:
@@ -244,7 +239,6 @@ public sealed class GenerativeRetrieverFactory : IOperatorFactory
             }
         }
 
-        /// <summary>The hint for an answer the client says it cut at the limit; empty otherwise.</summary>
         private string Cut(in ServiceStatus status) => LlmNode.Cut(status, maxOutputTokens, "ask for fewer ids");
     }
 }

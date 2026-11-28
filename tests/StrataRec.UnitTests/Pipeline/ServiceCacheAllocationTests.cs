@@ -1,10 +1,5 @@
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// What a call answered from a service's in-process cache allocates: per call, never per item. At 10 and 1,000 items a
-/// keyed hit took the same 1.5 KB (with the rig's request state and response), about what one call sent to the service
-/// takes before the service's own allocations; it completes synchronously, so this thread's count is the call's.
-/// </summary>
 public sealed class ServiceCacheAllocationTests
 {
     [Fact]
@@ -25,7 +20,7 @@ public sealed class ServiceCacheAllocationTests
         rig.Apply();
         for (var i = 0; i < 50; i++)
         {
-            await rig.CallAsync(call); // warm: the pool holds the buffers a call rents
+            await rig.CallAsync(call);
         }
 
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -35,7 +30,7 @@ public sealed class ServiceCacheAllocationTests
         }
 
         var allocated = (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
-        Assert.Single(rig.Service.Calls); // every call after the first was a hit
+        Assert.Single(rig.Service.Calls);
         return allocated;
     }
 }

@@ -5,12 +5,6 @@ using StrataRec.UnitTests.Features.Cache;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// A host's activity listener that throws when a call's span is sampled, starts or stops leaves the
-/// call without a span or without its end, and leaves the flow's current activity as the call found it. The span the
-/// start callback threw on was already current, and a stopped span whose stop callback threw stayed current: either
-/// became the parent of the flow's next call.
-/// </summary>
 public sealed class IoCallSpanTests
 {
     [Theory]
@@ -33,7 +27,6 @@ public sealed class IoCallSpanTests
         Assert.Same(flow.Request, Assert.Single(flow.Named("recall next")).Parent);
         if (stage == ListenerStage.Stop)
         {
-            // Its span was current while it ran, and stopped.
             Assert.Same(Assert.Single(flow.Named("recall first")), during);
             Assert.True(during!.IsStopped);
         }
@@ -50,9 +43,7 @@ public sealed class IoCallSpanTests
     }
 
     /// <summary>
-    /// <see cref="Activity.Stop"/> makes the activity a span started over current, whatever the flow's current
-    /// one. A call sent, then completed on a flow that runs another request's activity, made that flow a child of this
-    /// call's request. A flow whose current activity is the span still gets the request's back (the test above).
+    /// <see cref="Activity.Stop"/> makes the activity a span started over current, whatever the flow's current one.
     /// </summary>
     [Theory]
     [InlineData(ListenerStage.None)]
@@ -78,11 +69,6 @@ public sealed class IoCallSpanTests
         Assert.Same(flow.Request, Activity.Current);
     }
 
-    /// <summary>
-    /// The call's span is stopped in the call site's context, so the flow completing it is not touched at all.
-    /// Stopped on that flow and given its activity back afterwards, one whose activity had already stopped (which the
-    /// setter refuses) stayed in this call's request, and the host's CurrentChanged handlers saw it moved there.
-    /// </summary>
     [Fact]
     public async Task ACallCompletedOnAFlowWhoseActivityStopped_LeavesIt_AndTheFlowIsNeverMovedToTheRequest()
     {
@@ -128,10 +114,6 @@ public sealed class IoCallSpanTests
         Assert.True(Assert.Single(flow.Named("recall late")).IsStopped);
     }
 
-    /// <summary>
-    /// A call started where the execution context does not flow has none to stop its span in. Stopped on the
-    /// flow completing it, that flow was left in this call's request: its next span joined the request's trace.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -162,11 +144,6 @@ public sealed class IoCallSpanTests
     }
 }
 
-/// <summary>
-/// Each metric of a call has its own boundary. A host's listener that threw on the duration skipped the call's
-/// key count and its error count, which other listeners subscribe to on their own; the health and failure summaries were
-/// kept.
-/// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class IoCallMetricTests
 {

@@ -8,7 +8,6 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>Side summaries of the recorded-mode comparison: error, degraded and score metrics.</summary>
 public sealed class ReplayComparisonTests
 {
     [Fact]
@@ -23,7 +22,7 @@ public sealed class ReplayComparisonTests
         Assert.Equal((2, 1), (report.Baseline.NonFiniteScores, report.Candidate.NonFiniteScores));
         Assert.Equal((1, 2), (report.Baseline.Scores.Count, report.Candidate.Scores.Count));
         Assert.Equal(0.5, report.ScoreKs);
-        Assert.Equal(1, report.ScoreDelta.Count); // only item 2 has a finite score on both sides
+        Assert.Equal(1, report.ScoreDelta.Count);
         Assert.Equal(-0.25, report.ScoreDelta.Mean);
     }
 
@@ -39,13 +38,12 @@ public sealed class ReplayComparisonTests
             new[] { Pair(failed), Pair(servedByFallback), Pair(skipped), Pair(clean) }, 10, "score", "base", "base");
 
         Assert.Equal(0.25, report.Baseline.ErrorRate);
-        Assert.Equal(0.5, report.Baseline.DegradedRate); // the fallback and the skipped failure; not the failed request
+        Assert.Equal(0.5, report.Baseline.DegradedRate);
     }
 
     [Fact]
     public void AnAbortedRecording_IsLeftOutOfBothSides_AndCountedApart()
     {
-        // Not replayed on either side: no error, no reproduction, no latency, no overlap; not a request of the comparison.
         var clean = Outcome(true, Items(0.5));
         var abortedOutcome = Outcome(false, Items());
         var aborted = new ReplayOutcome
@@ -62,17 +60,13 @@ public sealed class ReplayComparisonTests
         Assert.Equal((1, 0.0, 1), (report.Candidate.Requests, report.Candidate.ErrorRate, report.Candidate.ReproducedRecording));
         Assert.Equal(1, report.Baseline.LatencyMs.Count);
         Assert.Equal((1, 1), (report.Identical, report.Overlap.Count));
-        Assert.True(Assert.Single(report.Requests).BaselineSucceeded); // the clean one
+        Assert.True(Assert.Single(report.Requests).BaselineSucceeded);
 
         var onlyAborted = ReplayComparison.Compare(new[] { Pair(aborted) }, 10, "score", "base", "base");
 
-        Assert.Equal(("failed", 0, 1), (onlyAborted.Status, onlyAborted.Compared, onlyAborted.AbortedInRecording)); // nothing was compared
+        Assert.Equal(("failed", 0, 1), (onlyAborted.Status, onlyAborted.Compared, onlyAborted.AbortedInRecording));
     }
 
-    /// <summary>
-    /// A bundle only one side replayed is in neither side's rates: the baseline counted its failure
-    /// there, and showed 50% errors of two requests beside the candidate's 0% of one.
-    /// </summary>
     [Fact]
     public void ABundleOnlyOneSideReplayed_IsInNeitherSidesRates()
     {
@@ -84,7 +78,7 @@ public sealed class ReplayComparisonTests
         Assert.Equal((2, 1, 1), (report.Bundles, report.Compared, report.Unreadable));
         Assert.Equal((1, 0.0), (report.Baseline.Requests, report.Baseline.ErrorRate));
         Assert.Equal((1, 0.0), (report.Candidate.Requests, report.Candidate.ErrorRate));
-        Assert.Equal(2, report.Requests.Count); // the one-sided bundle is still listed, with its error
+        Assert.Equal(2, report.Requests.Count);
     }
 
     private static ReplayPair Pair(ReplayOutcome outcome) => new("b", "r", outcome, outcome);

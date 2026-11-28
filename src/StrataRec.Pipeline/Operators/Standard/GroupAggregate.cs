@@ -7,14 +7,12 @@ using StrataRec.Core.Types;
 
 namespace StrataRec.Pipeline.Operators.Standard;
 
-/// <summary>The mean of values taken one at a time, in row order (<c>GroupAggregate@1</c>, <c>RequestAggregate@1</c>).</summary>
 internal static class RunningMean
 {
     /// <summary>
-    /// The mean after its <paramref name="k"/>-th value <paramref name="x"/>: equal values leave it exactly the value (a mean
-    /// from the sum is off by its rounding, and the deviations from it made a std of equal values > 0, a z-score of ±1). The
-    /// step is x/k − mean/k, not (x − mean)/k: neither a sum nor the difference of two large values of opposite signs
-    /// overflows.
+    /// The mean after its <paramref name="k"/>-th value <paramref name="x"/>: equal values leave it exactly the value.
+    /// The step is x/k − mean/k, not (x − mean)/k: neither a sum nor the difference of two large values of opposite
+    /// signs overflows.
     /// </summary>
     public static double Step(double mean, double x, long k) => mean + ((x / k) - (mean / k));
 }
@@ -56,16 +54,15 @@ public sealed class GroupAggregateOutput
 
 /// <summary>
 /// <c>GroupAggregate@1</c>: per group of rows (by a column, or all rows), a statistic written back to every row of the
-/// group (ColumnWriter). Composes with the other operators instead of growing options: at most two items per author is
-/// <c>rank</c> then <c>ExpressionFilter</c> on <c>col.author_rank &lt;= 2</c>; a score normalized over the request is
-/// <c>mean</c> and <c>std</c> without a group, then <c>ExpressionScorer</c>; a merchant's score in grouped results is
-/// <c>max</c> by merchant.
+/// group (ColumnWriter). Composes with the other operators: at most two items per author is <c>rank</c> then
+/// <c>ExpressionFilter</c> on <c>col.author_rank &lt;= 2</c>; a score normalized over the request is <c>mean</c> and
+/// <c>std</c> without a group, then <c>ExpressionScorer</c>; a merchant's score in grouped results is <c>max</c> by
+/// merchant.
 /// </summary>
 /// <remarks>
 /// It aggregates the rows alive when it runs, in their order, so floating-point sums are deterministic; values are read
-/// as float64, as <c>MmrDiversifier@1</c> reads scores (int64 values beyond 2^53 lose their last bits). Groups take
-/// dense ids (<see cref="RowGroups"/>) and every buffer is rented from the request's memory: nothing is allocated per
-/// row, and the cost is O(n) per output, O(n log n) for integer keys and for rank.
+/// as float64, as <c>MmrDiversifier@1</c> reads scores (int64 values beyond 2^53 lose their last bits). nothing is
+/// allocated per row, and the cost is O(n) per output, O(n log n) for integer keys and for rank.
 /// </remarks>
 public sealed class GroupAggregateFactory : IOperatorFactory
 {
@@ -79,7 +76,6 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         var config = context.BindConfig<GroupAggregateConfig>();
         if (config is null)
         {
-            // The outputs the config names cannot be declared: marked unusable, their readers fail without a second error.
             if (context.Config["outputs"] is JsonObject named)
             {
                 foreach (var (name, _) in named)
@@ -91,8 +87,8 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             return null;
         }
 
-        // A wrong group column fails the node, not its outputs' readers: every output is still compiled, so each error is
-        // reported once and a column it cannot declare is marked unusable (as MultiSourceRecall@1 declares its columns).
+        // A wrong group column fails the node, not its outputs' readers: every output is still compiled, so each error
+        // is reported once and a column it cannot declare is marked unusable.
         ColumnRef? group = null;
         var groupFailed = false;
         if (config.GroupCol is not null)
@@ -185,7 +181,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
 
         if (groupFailed)
         {
-            return Unusable(context, name); // whether it may be missing depends on the group column
+            return Unusable(context, name);
         }
 
         // A row is missing its value when it is in no group, or when its group has no value to aggregate (rank places
@@ -199,7 +195,6 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             return null;
         }
 
-        // A declared column keeps its type, which must be one it can write; an undeclared one is what it produces.
         var kinds = integer ? "int64 or int32" : "float64 or float32";
         if (integer ? !output.Type.IsInteger : !output.Type.IsFloat)
         {
@@ -221,8 +216,8 @@ public sealed class GroupAggregateFactory : IOperatorFactory
     }
 
     /// <summary>
-    /// An output the node cannot declare for an error reported already: readers of an undeclared one fail without a second
-    /// error (a declared one they read as declared). Null.
+    /// An output the node cannot declare for an error reported already: readers of an undeclared one fail without a
+    /// second error (a declared one they read as declared).
     /// </summary>
     private static Output? Unusable(OperatorCompileContext context, string name)
     {
@@ -292,7 +287,6 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             return 1;
         }
 
-        /// <summary>Each row's group statistic into <paramref name="values"/>; whether each row has one into <paramref name="present"/>.</summary>
         private static void Aggregate(
             OperatorContext context, Output output, ReadOnlySpan<int> live, int[] groupOf, int groups, Span<double> values, Span<bool> present)
         {
@@ -300,8 +294,8 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             var n = live.Length;
             var column = output.Value is { } v ? context.Read(v) : null;
             var counts = memory.RentScratch<long>(groups);
-            var totals = memory.RentScratch<double>(groups); // the sum, min or max; the running mean for mean and std
-            var peaks = output.Function == Function.Std ? memory.RentScratch<double>(groups) : null; // the largest |x|
+            var totals = memory.RentScratch<double>(groups);
+            var peaks = output.Function == Function.Std ? memory.RentScratch<double>(groups) : null;
             counts.AsSpan(0, groups).Clear();
             totals.AsSpan(0, groups).Clear();
             peaks?.AsSpan(0, groups).Clear();
@@ -391,20 +385,9 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         /// </summary>
         private static double Factor(double peak) => peak > double.MaxValue / 2 ? 0.5 : 1;
 
-        /// <summary>
-        /// The deviations of each group's values from its center (its running mean, held within ±its largest |x|), taken at
-        /// the group's <see cref="Factor"/>, as <c>scale · sums</c> (their signed sum) and <c>scale² · squares</c> (the sum
-        /// of their squares), with every deviation divided by the group's largest (LAPACK's dlassq): no square of a large
-        /// deviation overflows and none of a small one underflows, so the std is right at every scale a float64 holds
-        /// (±1e200 has std 1e200 and ±1e-200 has 1e-200; summing the squares themselves made the first infinite and the
-        /// second 0).
-        /// </summary>
         /// <remarks>
-        /// The signed sum is the corrected two-pass term: the running mean is rounded at the values' scale, and the
-        /// deviations from it alone made the std of 1e16+6 and 1e16+4 alternating √2 instead of 1, and that of 0 and the
-        /// smallest subnormal that subnormal instead of 0; the variance about the true mean is
-        /// <c>E[d²] − E[d]²</c> of the deviations d from any center. Holding the center within ±largest |x| (a rounded mean
-        /// can step past it) keeps every deviation within twice that, which the factor keeps finite.
+        /// Holding the center within ±largest |x| (a rounded mean can step past it) keeps every deviation within twice
+        /// that, which the factor keeps finite.
         /// </remarks>
         private static void Deviations(
             ColumnBuffer column, ReadOnlySpan<int> live, int[] groupOf, double[] means, double[] peaks, double[] scales, double[] sums,
@@ -412,7 +395,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
         {
             for (var g = 0; g < groups; g++)
             {
-                means[g] = Math.Clamp(means[g], -peaks[g], peaks[g]) * Factor(peaks[g]); // the center, at the group's factor
+                means[g] = Math.Clamp(means[g], -peaks[g], peaks[g]) * Factor(peaks[g]);
                 scales[g] = 0;
                 sums[g] = 0;
                 squares[g] = 0;
@@ -430,7 +413,7 @@ public sealed class GroupAggregateFactory : IOperatorFactory
                 var size = Math.Abs(d);
                 if (size == 0)
                 {
-                    continue; // equal to the center: adds nothing, and the std of equal values stays exactly 0
+                    continue;
                 }
 
                 if (scales[g] < size)
@@ -451,9 +434,8 @@ public sealed class GroupAggregateFactory : IOperatorFactory
 
         /// <summary>
         /// A group's population std from its <see cref="Deviations"/>: <c>scale · √(squares/n − (sums/n)²)</c>, the
-        /// difference clamped at 0, then bounded by the group's largest |x| (a population std is at most that) before it
-        /// is divided by the factor: rounding can no longer carry it past the largest float64 (four −MaxValue then four
-        /// +MaxValue have std MaxValue; the rounded mean made it infinite and the node failed).
+        /// difference clamped at 0, then bounded by the group's largest |x| (a population std is at most that) before
+        /// it is divided by the factor: rounding can no longer carry it past the largest float64.
         /// </summary>
         private static double Std(double scale, double sums, double squares, long count, double peak)
         {
@@ -468,7 +450,6 @@ public sealed class GroupAggregateFactory : IOperatorFactory
             return variance > 0 ? Math.Min(scale * Math.Sqrt(variance), peak * factor) / factor : 0;
         }
 
-        /// <summary>Each row's rank within its group into <paramref name="values"/>; whether it has one into <paramref name="present"/>.</summary>
         private static void Rank(
             OperatorContext context, Output output, ReadOnlySpan<int> live, int[] groupOf, Span<double> values, Span<bool> present)
         {

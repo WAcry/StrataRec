@@ -20,7 +20,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.Pipeline.Execution;
 
-/// <summary>One run of a plan as <c>RecEngine</c> asks for it, with the request's arms already decided.</summary>
 internal sealed class PipelineRequest
 {
     public required string RequestId { get; init; }
@@ -29,10 +28,8 @@ internal sealed class PipelineRequest
 
     private RequestArms _arms;
 
-    /// <summary>The request's arms; the executor runs them as <see cref="ExecutionPlan.Yields"/> resolves them.</summary>
     public RequestArms Arms { get => _arms; init => _arms = value; }
 
-    /// <summary>This request with other arms (a shallow copy: the rest is shared).</summary>
     internal PipelineRequest WithArms(in RequestArms arms)
     {
         var copy = (PipelineRequest)MemberwiseClone();
@@ -56,89 +53,68 @@ internal sealed class PipelineRequest
 
     /// <summary>
     /// Whether the run may send its log batches (taps and the <c>$experiments</c> record) to the log pipeline, the
-    /// persistent logs: the engine sets it for traffic, and not for a run whose arms or configuration a debugger forced,
-    /// whose logs are captured, or that replays, since what they log is not what the
-    /// served configuration did for the request and must not reach experiment analysis or training data. Separate from
-    /// <see cref="CaptureLogs"/>: a forced run that captures nothing writes nothing either. False by default, so a run
-    /// writes only when asked to; a replay never writes.
+    /// persistent logs: the engine sets it for traffic, and not for a run whose arms or configuration a debugger
+    /// forced, whose logs are captured, or that replays. Separate from <see cref="CaptureLogs"/>: a forced run that
+    /// captures nothing writes nothing either. False by default.
     /// </summary>
     public bool WriteLogs { get; init; }
 
     /// <summary>
-    /// Record the run for a replay bundle: <see cref="PipelineResult.Recording"/> then holds every external
-    /// call, node decision and the sampling. Requests that do not record pay nothing for the feature but a null check per
-    /// external call and node.
+    /// Record the run for a replay bundle: <see cref="PipelineResult.Recording"/> then holds every external call, node
+    /// decision and the sampling.
     /// </summary>
     public bool Record { get; init; }
 
     /// <summary>
-    /// Receives the run's recording on every exit: with the result when the run returns, and before the
-    /// exception propagates when it is aborted (cancelled by the caller, or a defect), so the engine can still deliver the
-    /// request's bundle (<c>DebugOptions.OnRecording</c>). Setting it records the run. Called once, on the request's
-    /// thread; an exception it throws is reported as an event and does not change the run's outcome.
+    /// Receives the run's recording on every exit: with the result when the run returns, and before the exception
+    /// propagates when it is aborted (cancelled by the caller, or a defect). Setting it records the run. Called once,
+    /// on the request's thread; an exception it throws is reported as an event and does not change the run's outcome.
     /// </summary>
-    /// <remarks>
-    /// An aborted run's recording is a snapshot taken at the abort: calls still in flight are <c>outstanding</c>, and what
-    /// they return afterwards is not in it. Nothing waits for them.
-    /// </remarks>
     public Action<ReplayRunRecord>? OnRecording { get; init; }
 
     /// <summary>
-    /// Replay a recorded run instead of calling sources and models: external calls are answered from the
-    /// recording and timing decisions come from it, not from the clock. A replay never writes persistent logs and records
-    /// no metrics, event logs or spans. Use <see cref="RunReplay.Deadline"/> as <see cref="Deadline"/>.
+    /// Use <see cref="RunReplay.Deadline"/> as <see cref="Deadline"/>.
     /// </summary>
     public RunReplay? Replay { get; init; }
 
     /// <summary>
-    /// Told once when the run and every external call it started have ended (its request memory is returned), which may be
-    /// after the run returned: a call it abandoned at a timeout runs on inside its client. An engine passes the plan's
-    /// binding lease, so the plan's clients are not disposed while anything of the run can still call them.
+    /// Told once when the run and every external call it started have ended (its request memory is returned), which may
+    /// be after the run returned: a call it abandoned at a timeout runs on inside its client.
     /// </summary>
-    /// <remarks>Set, it is called exactly once per <see cref="PipelineExecutor.ExecuteAsync"/>, whatever the outcome.</remarks>
     public IRequestEndObserver? OnEnd { get; init; }
 
     /// <summary>
-    /// Candidates to explain: <see cref="PipelineResult.Explanation"/> then has, for each, its state after
-    /// every node. At most <see cref="ExplainTargets.MaxCount"/>, or the run fails as with invalid inputs; repeated ids are
-    /// explained once, and an id of the other key type is never found (a host checks ids first with
-    /// <see cref="ExplainTargets.Check"/>). Null, the default, costs nothing but a null check per node.
+    /// At most <see cref="ExplainTargets.MaxCount"/>, or the run fails as with invalid inputs; repeated ids are
+    /// explained once, and an id of the other key type is never found.
     /// </summary>
     public IReadOnlyList<EntityKey>? ExplainIds { get; init; }
 
     /// <summary>
-    /// Runs the pipelines the run's nodes call (<see cref="Operators.OperatorContext.CallPipelineAsync"/>):
-    /// the engine's, which serves them. Null for a run nothing serves pipelines to: a call then fails as a result.
+    /// Null for a run nothing serves pipelines to: a call then fails as a result.
     /// </summary>
     public IPipelineCalls? Calls { get; init; }
 
-    /// <summary>For a run a node of another pipeline called: who called, for its log batches (<see cref="Logging.LogBatch.CalledBy"/>).</summary>
     public string? CalledBy { get; init; }
 
     /// <summary>
-    /// What the cached reads of the request's runs share (<see cref="RequestReads"/>): the same for every
-    /// run of one request. Null for a request of one run, which has nobody to share with.
+    /// What the cached reads of the request's runs share (<see cref="RequestReads"/>): the same for every run of one
+    /// request.
     /// </summary>
     public RequestReads? Reads { get; init; }
 
-    /// <summary>The seed of a request that does not set one: a hash of its id.</summary>
     public static long DefaultSeed(string requestId) => unchecked((long)StableHash.Hash(StableHash.SeedFromSalt(requestId)));
 }
 
-/// <summary>Result of one run (<see cref="PipelineExecutor"/>); <c>RecEngine</c> turns it into the request's result.</summary>
 internal sealed class PipelineResult
 {
     public required bool Succeeded { get; init; }
 
     public string? Error { get; init; }
 
-    /// <summary>The returned items column by column (<see cref="ResultColumns"/>): the form to read many rows in.</summary>
     public required ResultColumns Columns { get; init; }
 
-    /// <summary>The output's request-level values (<c>output.values</c>); empty for a failed run.</summary>
     public ResultValues Values { get; init; } = ResultValues.Empty;
 
-    /// <summary>The returned items as rows, a dictionary of output columns each, made from <see cref="Columns"/> when first read.</summary>
     public IReadOnlyList<RankedItem> Items => Columns.Rows;
 
     public required IReadOnlyList<NodeOutcome> Outcomes { get; init; }
@@ -146,20 +122,16 @@ internal sealed class PipelineResult
     /// <summary>Assigned arms as <c>experiment/arm</c>.</summary>
     public required IReadOnlyList<string> AssignedArms { get; init; }
 
-    /// <summary>Experiments whose modifications were actually reached.</summary>
     public required IReadOnlyList<string> TriggeredExperiments { get; init; }
 
-    /// <summary>Output column → node that produced it (lineage).</summary>
     public required IReadOnlyDictionary<string, string> ColumnProducers { get; init; }
 
     public double ElapsedMs { get; init; }
 
-    /// <summary>Number of non-finite values replaced or masked at commit (metric <c>column_nonfinite_total</c>).</summary>
+    /// <summary>Number of non-finite values replaced or masked.</summary>
     public int NonFiniteValues { get; init; }
 
     /// <summary>
-    /// Number of values that did not fit the int32 storage of an <c>int32</c> or <c>list&lt;int32&gt;</c> column or feature
-    /// and were replaced by its default or marked missing (metric <c>stratarec.column.out_of_range</c>).
     /// Counted where the value is written, so it includes writes of nodes that later failed.
     /// </summary>
     public long OutOfRangeValues { get; init; }
@@ -179,17 +151,13 @@ internal sealed class PipelineResult
     /// </summary>
     public bool CallsUnanswered { get; init; }
 
-    /// <summary>Log batches of the request when <see cref="PipelineRequest.CaptureLogs"/> was set.</summary>
     public IReadOnlyList<Logging.LogBatch> LogBatches { get; set; } = Array.Empty<Logging.LogBatch>();
 
-    /// <summary>The run's recording when <see cref="PipelineRequest.Record"/> was set.</summary>
     public ReplayRunRecord? Recording { get; set; }
 
-    /// <summary>The explained candidates when <see cref="PipelineRequest.ExplainIds"/> was set; null otherwise.</summary>
     public RunExplanation? Explanation { get; set; }
 }
 
-/// <summary>Mutable per-request state shared by the executor and operator contexts.</summary>
 internal sealed class RequestState
 {
     public required ExecutionPlan Plan { get; init; }
@@ -232,42 +200,34 @@ internal sealed class RequestState
 
     /// <summary>
     /// By position, the fill of the features a <c>when</c> reads when it was not whole: failed, so that the condition
-    /// cannot be decided and its node fails, or degraded, so that a node skipped says what it was decided on. No array
-    /// until one was not whole.
+    /// cannot be decided and its node fails, or degraded, so that a node skipped says what it was decided on.
     /// </summary>
     public FeatureFillResult[]? WhenFills { get; set; }
 
     /// <summary>Selected tap variant per tap slot; null when absent or its group did not sample the request.</summary>
     public CompiledTap?[] Taps { get; set; } = Array.Empty<CompiledTap?>();
 
-    /// <summary>Batches captured so far; null when no tap is active for the request.</summary>
     public List<Logging.LogBatch>? Batches { get; set; }
 
-    /// <summary>Request hash shared by all row priorities.</summary>
     public long RequestHash => Logging.CoordinatedSampling.RequestHash(RequestId);
 
     public List<NodeOutcome> Outcomes { get; } = new();
 
     public int NonFinite { get; set; }
 
-    /// <summary>Set by any outcome other than success or a <c>when</c> skip.</summary>
     public bool Degraded { get; set; }
 
-    /// <summary>A call of a pipeline a node made was not answered when the node ended (<see cref="PipelineResult.CallsUnanswered"/>).</summary>
     public volatile bool CallsUnanswered;
 
-    /// <summary>Windowed failure summaries and source health; null when the executor has no logger.</summary>
     public RequestEventLog? Events { get; init; }
 
-    /// <summary>The request span is recorded: create node spans.</summary>
     public bool TraceNodes { get; init; }
 
-    /// <summary>Span of the position being run, when <see cref="TraceNodes"/>.</summary>
     public Activity? NodeSpan { get; set; }
 
     /// <summary>
-    /// The position being run has started and not yet recorded its outcome. An abort (caller cancellation, defect) records
-    /// it then, so slow attempts the caller gave up on stay in node latency and outcome metrics.
+    /// The position being run has started and not yet recorded its outcome. An abort (caller cancellation, defect)
+    /// records it then.
     /// </summary>
     public bool PositionOpen { get; set; }
 
@@ -278,22 +238,16 @@ internal sealed class RequestState
     /// <summary>The fallback node run for the current position, for its span's variant and experiment attribution.</summary>
     public CompiledNode? PositionFallback { get; set; }
 
-    /// <summary>Records the run for a replay bundle; null unless the request asked for it.</summary>
     public RunRecorder? Recorder { get; init; }
 
-    /// <summary>Answers external calls and timing decisions from a recording; null unless the request is a replay.</summary>
     public RunReplay? Replay { get; init; }
 
-    /// <summary>Follows the candidates the request explains; null unless it asked to.</summary>
     public CandidateExplainer? Explainer { get; init; }
 
-    /// <summary>Runs the pipelines the run's nodes call (<see cref="PipelineRequest.Calls"/>); null when nothing does.</summary>
     public IPipelineCalls? Calls { get; init; }
 
-    /// <summary>Who called the run (<see cref="PipelineRequest.CalledBy"/>); null for a run of the request's own pipeline.</summary>
     public string? CalledBy { get; init; }
 
-    /// <summary>What the request's runs share of their cached reads (<see cref="PipelineRequest.Reads"/>); null for a request of one run.</summary>
     public RequestReads? Reads { get; init; }
 
     /// <summary>
@@ -326,7 +280,6 @@ internal sealed class RequestState
         }
     }
 
-    /// <summary>How many pipeline calls the node has made in the run so far.</summary>
     public int PipelineCallsOf(string nodeId)
     {
         lock (this)
@@ -339,54 +292,24 @@ internal sealed class RequestState
 
     public EvalContext Eval => new(Table, Bindings, Context, Params, Counters);
 
-    /// <summary>
-    /// The buffer a column reads in this request, as an expression reads it: its fixed slot (a feature, an <c>@node</c>
-    /// version, <c>col.entity_id</c>) when it has one, otherwise the committed version through the bindings; null when no
-    /// node has produced it.
-    /// </summary>
     public ColumnBuffer? ReadColumn(int fixedSlot, int logicalId)
     {
         var slot = fixedSlot >= 0 ? fixedSlot : Bindings.Resolve(logicalId);
         return slot < 0 ? null : Table.TryGetSlot(slot);
     }
 
-    /// <summary>
-    /// The slot a node writes an output into now: its own, except that a row source writes the rows it
-    /// appends into the column's current version once a node has committed one. Its rows then join the values readers
-    /// already see, and nothing is committed for the column: a row source after a scorer can give the rows it injects a
-    /// score in the same column. Before any version, and after a row source's, this is the row sources' shared version.
-    /// </summary>
-    /// <remarks>Stable for a node's attempt: nothing commits while it runs. A failed attempt's rows are released by the
-    /// rollback, in every slot, so writing into another node's version leaves nothing behind.</remarks>
+    /// <remarks>A failed attempt's rows are released by the rollback, in every slot, so writing into another node's
+    /// version leaves nothing behind.</remarks>
     public int OutputSlot(Operators.Effects effects, in Operators.OutputColumn output) =>
         (effects & Operators.Effects.RowSource) != 0 && Bindings.Resolve(output.LogicalId) is >= 0 and var current ? current : output.Slot;
 }
 
-/// <summary>
-/// Executes an <see cref="ExecutionPlan"/> for one request: walk the timeline in order, pick each
-/// position's variant, make its features available, run it with its time budget, and commit outputs only on success.
-/// CPU work runs on the request's logical thread; concurrency comes from overlapping I/O.
-/// </summary>
-/// <remarks>
-/// <para>Internal: <c>RecEngine</c> is the one host API. It owns what a run needs around it (the plan's
-/// binding lease, assignment, the fallback pipeline, bundles, the request span and request-level metrics), which a
-/// second, lower-level way to run plans would have had to repeat or leave out. Tests reach the executor through
-/// <c>InternalsVisibleTo</c>.</para>
-/// <para>Observability: node, source, model, column and memory metrics go to <see cref="StrataRecMetrics"/>.
-/// Node and I/O spans are created only under a recorded request span (<see cref="StrataRecTracing.IsRecording"/>),
-/// which <c>RecEngine</c> starts; request-level metrics are recorded there too.</para>
-/// </remarks>
 internal sealed class PipelineExecutor
 {
     private readonly IBufferPool _pool;
     private readonly Logging.LogPipeline? _logs;
     private readonly RequestEventLog? _events;
 
-    /// <param name="pool">Buffer pool for request memory.</param>
-    /// <param name="logs">Where tap batches and trigger records go; null disables persistent logging.</param>
-    /// <param name="loggerFactory">
-    /// Receives windowed summaries of request-level failures and source health changes; null logs nothing.
-    /// </param>
     public PipelineExecutor(IBufferPool? pool = null, Logging.LogPipeline? logs = null, ILoggerFactory? loggerFactory = null)
         : this(pool, logs, loggerFactory is null ? null : new RequestEventLog(loggerFactory.CreateLogger<PipelineExecutor>()))
     {
@@ -407,8 +330,6 @@ internal sealed class PipelineExecutor
     {
         var start = Stopwatch.GetTimestamp();
 
-        // Arms one of which yields never run together, whoever decided them (ArmYields): the engine has resolved them
-        // after the assignment (and recorded what yielded); a caller that passes such arms gets what a request in them runs.
         if (!plan.Yields.IsEmpty)
         {
             var running = plan.Yields.Resolve(request.Arms);
@@ -418,8 +339,6 @@ internal sealed class PipelineExecutor
             }
         }
 
-        // A replay is not traffic: no metrics, event logs or spans (its timings are not real, and the recorded request
-        // was already counted), and never a persistent log.
         var replay = request.Replay;
         var events = replay is null ? _events : null;
         var memory = new RequestMemory(_pool, request.OnEnd, events, plan.PipelineId, request.RequestId); // from here the run owns telling OnEnd
@@ -474,12 +393,11 @@ internal sealed class PipelineExecutor
             var table = new CandidateTable(plan.TableSchema, (int)Math.Min(capacity, int.MaxValue), memory);
             var bindings = new OutputBindings(plan.Schema.Columns.Count, memory);
             var deadline = CallBound.DeadlineAfter(start, request.Deadline);
-            // One set of counters per request: operator expressions and derived features count into the same totals.
             var counters = new ExpressionCounters();
             fetcher = new FeatureFetcher(plan.Features, table, context, bindings, parameters, memory, deadline, counters, request.RequestId, events,
                 (IFeatureCallHook?)replay ?? recorder, context[PlanSchema.RequestSeedContext].AsInt64())
             {
-                Reads = replay is null ? request.Reads : null, // a replay reads no cache
+                Reads = replay is null ? request.Reads : null,
             };
             state = new RequestState
             {
@@ -507,28 +425,25 @@ internal sealed class PipelineExecutor
                 Explainer = request.ExplainIds is { } explain ? new CandidateExplainer(explain) : null,
                 Calls = request.Calls,
                 CalledBy = request.CalledBy,
-                Reads = replay is null ? request.Reads : null, // a replay reads no cache
+                Reads = replay is null ? request.Reads : null,
             };
 
             fetcher.StartContextFetch(plan.ContextFeatures.AsSpan(), cancellationToken);
             if (ConsumesLogs(request))
             {
-                // Without a consumer every captured batch would be discarded: skip sampling and capture entirely.
                 await TapCapture.SelectAsync(state, cancellationToken).ConfigureAwait(false);
             }
 
             PipelineResult? result = null;
             for (; position < plan.Timeline.Length && result is null; position++)
             {
-                // A caller that cancelled gets no result, whatever the remaining nodes are: nodes that compute without
-                // I/O never look at the token, and went on to log rows as served that nobody received.
+                // Before every node: nodes without I/O never look at the token, and a cancelled request must not log
+                // rows as served.
                 cancellationToken.ThrowIfCancellationRequested();
                 var appended = table.AppendedRows;
                 var error = await RunPositionAsync(state, position, cancellationToken).ConfigureAwait(false);
                 if (rowLimits[position] > 0)
                 {
-                    // The position can append no more: what it did not use of its limit is not reserved for later columns
-                    // (a recall that found 500 of its 2,000 rows sizes every later column for 500).
                     table.ReleaseRowBudget(rowLimits[position] - (table.AppendedRows - appended));
                 }
 
@@ -539,7 +454,7 @@ internal sealed class PipelineExecutor
                 }
             }
 
-            cancellationToken.ThrowIfCancellationRequested(); // as before each node: before the result is built and logged as returned
+            cancellationToken.ThrowIfCancellationRequested();
             result ??= await BuildResultAsync(state, request, start, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested(); // a result built while the caller cancelled (a fetch it cut short reads as failed) is nobody's
             if (state.Explainer is { } explainer)
@@ -559,8 +474,7 @@ internal sealed class PipelineExecutor
         catch (Exception ex) when (state is not null)
         {
             // Cancelled by the caller (or a defect): nobody receives a result, but the request was assigned, may have
-            // been exposed, and may have captured taps. Dropping those records would remove slow or failing requests
-            // from experiment analysis, biased by arm. Request memory is still held here.
+            // been exposed, and may have captured taps. Request memory is still held here.
             var reason = ex switch
             {
                 OperationCanceledException => "cancelled by the caller",
@@ -574,7 +488,7 @@ internal sealed class PipelineExecutor
             EndNodeSpan(state, position, reason);
             if (state.OutputBatchesFrom is { } from && state.Batches is { } batches && batches.Count > from)
             {
-                batches.RemoveRange(from, batches.Count - from); // the output's taps: rows logged as returned, which they were not
+                batches.RemoveRange(from, batches.Count - from);
             }
 
             var aborted = Failed(plan, request, reason, start, state.Outcomes, state.Triggered, state.NonFinite, state.Counters.OutOfRange);
@@ -582,7 +496,6 @@ internal sealed class PipelineExecutor
             {
                 try
                 {
-                    // A snapshot, taken while the request still holds its memory; calls in flight stay outstanding in it.
                     Deliver(plan, request, recorder.Build(plan, request, state.Params, aborted, LogDestination(request, returned: false), ConsumesLogs(request), aborted: true), events);
                 }
                 catch (Exception recordError)
@@ -630,11 +543,9 @@ internal sealed class PipelineExecutor
         }
     }
 
-    /// <summary>The rows a row source may append for this request; 0 for other nodes.</summary>
     private static long RowLimit(CompiledNode node, ReadOnlySpan<ScalarValue> parameters) =>
         (node.Effects & Effects.RowSource) != 0 ? Math.Max(0, node.Operator.GetRowLimit(parameters)) : 0;
 
-    /// <summary>Runs one timeline position. Returns an error message when the request must fail.</summary>
     private static async ValueTask<string?> RunPositionAsync(RequestState state, int position, CancellationToken cancellationToken)
     {
         var slot = state.Plan.Timeline[position];
@@ -645,7 +556,6 @@ internal sealed class PipelineExecutor
             return null;
         }
 
-        // Node spans exist only inside a recorded request span: an unrecorded request creates no node-level objects.
         // The caller ends the span after the position (EndNodeSpan), so this method keeps its single state machine.
         if (state.TraceNodes)
         {
@@ -658,9 +568,6 @@ internal sealed class PipelineExecutor
         state.PositionStarted = started;
         state.PositionRowsIn = rowsIn;
         state.PositionFallback = null;
-        // A `when` is decided on the features it got, and a node it skips says so when they were not whole. One that
-        // cannot be decided (EvaluateWhenAsync) does not end the node here: the node goes on as one whose `when` holds,
-        // and its own fill, which covers what its `when` reads, fails it as any read of that feature does.
         if (!await EvaluateWhenAsync(state, position, node, cancellationToken).ConfigureAwait(false))
         {
             var why = (state.WhenFills?[position] ?? default) switch
@@ -676,7 +583,6 @@ internal sealed class PipelineExecutor
 
         if (node.MinRemainingMs is not null || state.Recorder is not null)
         {
-            // A replay compares with the time that was left in the recording, not with its own clock.
             var remainingMs = state.Replay?.RemainingMs(node.NodeId) ?? state.Remaining.TotalMilliseconds;
             state.Recorder?.Remaining(remainingMs);
             if (node.MinRemainingMs is { } minRemaining && remainingMs < minRemaining)
@@ -694,7 +600,6 @@ internal sealed class PipelineExecutor
             state.Table.Rows.Capture(entered);
         }
 
-        // Unless the node says otherwise, it leaves its fallback the time the fallback may take.
         var reserve = node.OnFailure == FailurePolicy.Fallback
             ? node.FallbackReserveMs ?? state.Plan.SelectFallback(node, state.Arms)?.TimeoutMs ?? 0
             : 0;
@@ -718,7 +623,6 @@ internal sealed class PipelineExecutor
             return null;
         }
 
-        // Failed: apply on_failure.
         switch (node.OnFailure)
         {
             case FailurePolicy.Skip:
@@ -770,7 +674,6 @@ internal sealed class PipelineExecutor
         Failed,
     }
 
-    /// <summary>Runs one attempt of a node; for a request that explains candidates, also records the attempt's step.</summary>
     private static ValueTask<Attempt> RunNodeAsync(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
     {
         return state.Explainer is null ? AttemptAsync(state, node, reserveMs, cancellationToken) : Explained(state, node, reserveMs, cancellationToken);
@@ -798,7 +701,6 @@ internal sealed class PipelineExecutor
 
     private static async ValueTask<Attempt> AttemptAsync(RequestState state, CompiledNode node, int reserveMs, CancellationToken cancellationToken)
     {
-        // Runtime protection: a required input with no producer skips the node.
         foreach (var logical in node.RequiredOutputs)
         {
             if (!state.Bindings.IsProduced(logical))
@@ -823,8 +725,6 @@ internal sealed class PipelineExecutor
         var budgetMs = node.TimeoutMs is { } timeout ? Math.Min(timeout, remainingMs) : remainingMs;
         if (state.Replay is { } replay)
         {
-            // Whether the attempt had time to start, and whether it ran out of time, comes from the recording: the replay
-            // makes the same timeout, fallback and skip decisions without waiting.
             var recorded = replay.NextAttempt(node.NodeId);
             if (recorded?.Timing == ReplayTiming.DeadlineExceeded)
             {
@@ -837,7 +737,7 @@ internal sealed class PipelineExecutor
                 MarkParamTriggers(state, node);
                 if (recorded.PipelineCalls > 0)
                 {
-                    state.SkipPipelineCalls(node.NodeId, recorded.PipelineCalls); // the calls the attempt made, which is not run again
+                    state.SkipPipelineCalls(node.NodeId, recorded.PipelineCalls);
                 }
 
                 state.Recorder?.Attempt(node.NodeId, ReplayTiming.TimedOut, recorded.BudgetMs ?? budgetMs, recorded.PipelineCalls);
@@ -850,15 +750,14 @@ internal sealed class PipelineExecutor
             return new Attempt(AttemptKind.Failed, "deadline exceeded");
         }
 
-        // A failed attempt leaves the table exactly as it was: the ranking, no rows and no slots of its own, so
-        // nothing that runs or reads later (the fallback, a pinned col.x@node, the output) sees what it wrote, just as in a
-        // replay, which skips a recorded timeout instead of running it.
+        // A failed attempt leaves the table exactly as it was: the ranking, no rows and no slots of its own, so nothing
+        // that runs or reads later (the fallback, a pinned col.x@node, the output) sees what it wrote.
         var checkpoint = state.Table.Checkpoint();
 
         try
         {
-            // The attempt's absolute deadline. The context hands the operator a token cancelled at it and bounds every external
-            // wait by it, whether or not the client honours the token. A replay takes timing from its recording instead.
+            // The attempt's absolute deadline. The context hands the operator a token cancelled at it and bounds every
+            // external wait by it, whether or not the client honours the token.
             var deadline = state.Replay is null
                 ? Stopwatch.GetTimestamp() + (long)(Math.Min(budgetMs, AttemptBudget.MaxWaitMs) * Stopwatch.Frequency / 1000)
                 : long.MaxValue;
@@ -883,21 +782,17 @@ internal sealed class PipelineExecutor
             var timedOut = false;
             try
             {
-                // The operator is about to read its parameters: that is exposure, whether it then succeeds or fails
-                //. Recording only successes would bias triggered analysis against arms that fail more.
+                // The operator is about to read its parameters: that is exposure, whether it then succeeds or fails.
                 MarkParamTriggers(state, node);
                 await node.Operator.ExecuteAsync(context).ConfigureAwait(false);
                 if (budget.RanOut)
                 {
-                    // A late success is not a success (AttemptBudget.RanOut). The operator itself is awaited, never abandoned:
-                    // it changes the table the fallback works on.
+                    // The operator itself is awaited, never abandoned: it changes the table the fallback works on.
                     timedOut = true;
                     failure = $"timed out after {budgetMs:0} ms";
                 }
                 else if ((failure = context.FailureReason) is null)
                 {
-                    // An explained request sees the attempt as the operator left it, before its outputs are committed: the
-                    // operator explains itself reading the versions it read (CandidateExplainer.Observe).
                     state.Explainer?.Observe(state, node);
                     failure = Commit(state, node, context);
                 }
@@ -928,7 +823,6 @@ internal sealed class PipelineExecutor
 
             if (failure is not null)
             {
-                // Every way an attempt fails ends here: an exception, a failure it reported, a timeout, a late success, a commit.
                 state.Table.Rollback(checkpoint);
                 return new Attempt(AttemptKind.Failed, failure);
             }
@@ -938,28 +832,12 @@ internal sealed class PipelineExecutor
         }
         finally
         {
-            state.Table.Discard(checkpoint); // settled, or the request is cancelled: nothing rolls back to it again
+            state.Table.Discard(checkpoint);
         }
     }
 
-    /// <summary>The exception's type name for a failure detail.</summary>
     private static string ExceptionName(Exception ex) => ex.GetType().Name;
 
-    /// <summary>
-    /// Validates and publishes a successful node's outputs: non-finite values take the column default
-    /// or become missing; non-nullable columns must then have a value on every live row.
-    /// </summary>
-    /// <remarks>
-    /// A row nobody wrote is missing (<see cref="CandidateTable"/>), so a row the node skipped, a column it never wrote,
-    /// and a row an earlier row source appended without this column all fail the node here. The default does not fill
-    /// them: it replaces only values that cannot be stored (non-finite, out of int32 range), which the writer and the
-    /// sanitizing above already did, so a missing producer never turns into the default.
-    /// </remarks>
-    /// <remarks>
-    /// A request column the node writes is published the same way, as one value (<see cref="CommitRequestColumns"/>): every
-    /// check comes before anything is published, so a node that fails here leaves the table and the request columns as
-    /// they were.
-    /// </remarks>
     private static string? Commit(RequestState state, CompiledNode node, OperatorContext context)
     {
         var table = state.Table;
@@ -995,7 +873,6 @@ internal sealed class PipelineExecutor
         context.PublishRewrites();
         foreach (var output in node.Outputs)
         {
-            // A row source that wrote into another node's version leaves that version current (OutputSlot).
             if (state.OutputSlot(node.Effects, output) == output.Slot)
             {
                 state.Bindings.Commit(output.LogicalId, output.Slot, node.Index);
@@ -1012,9 +889,6 @@ internal sealed class PipelineExecutor
     }
 
     /// <summary>
-    /// Settles what the attempt staged for each request column it writes, as a column's commit settles its rows:
-    /// stored as the column's type holds it (<see cref="ColumnValues.Store"/>), NaN/±∞ and a value outside int32
-    /// storage replaced by the column's default or missing, and counted; then a non-nullable column must have a value.
     /// A column the node wrote nothing to is missing, as a column whose slot it never asked for is: the node's write is
     /// the new value, so a nullable flow column written before is missing after it.
     /// </summary>
@@ -1054,14 +928,9 @@ internal sealed class PipelineExecutor
     }
 
     /// <summary>
-    /// The first non-nullable request column among <paramref name="reads"/> (context ids) that no node has written in this
-    /// request, or null: what a node, condition or output value reading it cannot be evaluated without. The data-flow
-    /// checks rule it out for every arm combination. A trigger site evaluates another arm's condition in a request of
-    /// this arm, which they do not check, but there too the column has been written: when the arms differ in its
-    /// producer (one adds, deletes or moves it), the producer's position is an earlier site of the experiment, which
-    /// triggered it already, and a triggered experiment's conditions are not evaluated. Like the skip of a
-    /// node whose input column was not produced, this is the runtime's own protection: a defect skips
-    /// a node rather than aborting the request. A tap reading such a column logs it missing.
+    /// The first non-nullable request column among <paramref name="reads"/> (context ids) that no node has written in
+    /// this request, or null: what a node, condition or output value reading it cannot be evaluated without. The
+    /// data-flow checks rule it out for every arm combination.
     /// </summary>
     internal static string? MissingRequestColumn(RequestState state, ReadOnlySpan<int> reads)
     {
@@ -1077,7 +946,6 @@ internal sealed class PipelineExecutor
         return null;
     }
 
-    /// <summary><see cref="MissingRequestColumn(RequestState, ReadOnlySpan{int})"/> over the symbols an expression reads.</summary>
     internal static string? MissingRequestColumn(RequestState state, IReadOnlyList<Symbol> reads)
     {
         for (var i = 0; i < reads.Count; i++) // an interface foreach would box the enumerator
@@ -1103,7 +971,7 @@ internal sealed class PipelineExecutor
         if (node.Compact == CompactMode.Always || (node.Compact == CompactMode.Auto && state.Table.LiveRatio < 0.5))
         {
             state.Table.Compact();
-            state.Explainer?.Compacted(); // rows moved: the explained ones are followed, not looked up again
+            state.Explainer?.Compacted();
         }
 
         if (node.FetchBarrier)
@@ -1113,9 +981,8 @@ internal sealed class PipelineExecutor
     }
 
     /// <summary>
-    /// After a fetch barrier, starts fetches for every node up to and including the next barrier, plus their fallbacks
-    ///. Nodes already known to be skipped by <c>when</c> are left out; a <c>when</c> that reads a request
-    /// column is not known yet (the nodes before its own may still write it), so its node's features are prefetched.
+    /// Nodes already known to be skipped by <c>when</c> are left out; a <c>when</c> that reads a request column is not
+    /// known yet (the nodes before its own may still write it), so its node's features are prefetched.
     /// </summary>
     private static async ValueTask PrefetchSegmentAsync(RequestState state, int position, CancellationToken cancellationToken)
     {
@@ -1178,8 +1045,7 @@ internal sealed class PipelineExecutor
     }
 
     /// <summary>
-    /// Whether a condition lets its node be reached, on the features it got: it holds, or it cannot be decided. A
-    /// feature whose source failed is missing where it can be, and the condition is decided on that, as it is on any
+    /// A feature whose source failed is missing where it can be, and the condition is decided on that, as it is on any
     /// missing value. One that cannot be missing has no value to decide on: the node is reached, as one whose condition
     /// holds, and fails by its own fill of that feature.
     /// </summary>
@@ -1201,10 +1067,6 @@ internal sealed class PipelineExecutor
         return Holds(state, when);
     }
 
-    /// <summary>
-    /// Whether a <c>when</c> holds: not when its value is missing, nor when it reads a non-nullable request column no node
-    /// has written in this request (<see cref="MissingRequestColumn(RequestState, IReadOnlyList{Symbol})"/>), which it cannot be evaluated without.
-    /// </summary>
     private static bool Holds(RequestState state, CompiledExpression when)
     {
         if (MissingRequestColumn(state, when.Reads) is not null)
@@ -1218,7 +1080,6 @@ internal sealed class PipelineExecutor
 
     /// <summary>
     /// `when` and site conditions read request-level values only; make sure the context features they read are present.
-    /// What the fill says of them is the caller's to act on (<see cref="Reaches"/>).
     /// </summary>
     private static ValueTask<FeatureFillResult> EnsureContextAsync(RequestState state, CompiledExpression expression, CancellationToken cancellationToken)
     {
@@ -1239,13 +1100,6 @@ internal sealed class PipelineExecutor
             state.Features.EnsureAsync(CollectionsMarshal.AsSpan(features), cancellationToken);
     }
 
-    /// <summary>
-    /// Records the experiments reaching this position triggers: an assigned experiment is triggered when one
-    /// of its arms, together with the request's arms in the other layers, has a node here whose <c>when</c> holds (or that
-    /// has none, or is the fallback being invoked). Every arm is looked at, whichever the request has, so the decision is
-    /// the same for all of them, control included; the other layers' arms are the request's own, since another layer may
-    /// change the node's <c>when</c> or remove it.
-    /// </summary>
     private static async ValueTask RecordSiteTriggersAsync(RequestState state, TimelineSlot slot, bool fallback, CancellationToken cancellationToken)
     {
         for (var i = 0; i < slot.SiteExperiments.Length; i++)
@@ -1257,12 +1111,12 @@ internal sealed class PipelineExecutor
             }
 
             var info = state.Plan.Experiments[experiment];
-            string? untrue = null; // a `when` found false: another arm's node with the same one is not evaluated again
+            string? untrue = null;
             for (var a = 0; a < info.ArmIndices.Length; a++)
             {
                 if (slot.SelectWith(state.Arms, info.LayerIndex, info.ArmIndices[a]) is not { } node)
                 {
-                    continue; // this arm has no node here
+                    continue;
                 }
 
                 if (fallback || node.When is not { } when)
@@ -1276,9 +1130,8 @@ internal sealed class PipelineExecutor
                     continue;
                 }
 
-                // A condition that cannot be decided counts as one that holds: the arm's node is reached and fails for
-                // it, as a node that fails otherwise is reached. Looking at an arm the request does not have says
-                // nothing of the run: only a node the run reaches marks it degraded (EvaluateWhenAsync).
+                // Looking at an arm the request does not have says nothing of the run: only a node the run reaches
+                // marks it degraded (EvaluateWhenAsync).
                 var fill = await EnsureContextAsync(state, when, cancellationToken).ConfigureAwait(false);
                 if (Reaches(state, when, fill))
                 {
@@ -1309,10 +1162,6 @@ internal sealed class PipelineExecutor
         return arm >= 0 && state.Plan.Arms[arm].ExperimentIndex == experimentIndex;
     }
 
-    /// <summary>
-    /// Records a position's outcome: in the result, as node metrics (duration and rows by node only, the
-    /// category on a counter), in the windowed failure summaries, and on the node span.
-    /// </summary>
     private static void Record(RequestState state, CompiledNode node, NodeOutcomeKind category, string? detail, string? producedBy, long started, int rowsIn)
     {
         state.PositionOpen = false;
@@ -1324,7 +1173,7 @@ internal sealed class PipelineExecutor
         state.Recorder?.Position(outcome, NodeOutcomeNames.Name(category));
         if (state.Replay is not null)
         {
-            return; // a replay records no metrics, event logs or spans
+            return;
         }
 
         var telemetry = state.Plan.Telemetry.Nodes[node.Index];
@@ -1379,10 +1228,6 @@ internal sealed class PipelineExecutor
         return span;
     }
 
-    /// <summary>
-    /// Ends the span of <paramref name="position"/>, if one is open, tagging the experiments triggered there (the
-    /// position's trigger sites and the parameters its node reads).
-    /// </summary>
     private static void EndNodeSpan(RequestState state, int position, string? abortReason)
     {
         if (state.NodeSpan is not { } span)
@@ -1438,7 +1283,6 @@ internal sealed class PipelineExecutor
         }
     }
 
-    /// <summary>The column an expression reads, when it reads exactly one; null when none or several.</summary>
     private static Symbol? OnlyColumn(IReadOnlyList<Symbol> reads)
     {
         Symbol? only = null;
@@ -1458,7 +1302,6 @@ internal sealed class PipelineExecutor
         return only;
     }
 
-    /// <summary>The node whose version output column <paramref name="name"/> reads (<c>col.x@node</c>), or null.</summary>
     private static string? PinnedProducer(OutputPlan output, string name)
     {
         foreach (var (column, read) in output.VersionReads)
@@ -1489,11 +1332,10 @@ internal sealed class PipelineExecutor
         var rows = FirstRows(state.Table, limit);
         var count = rows.Length;
 
-        // Output expressions may read features; make sure they are present for the returned rows, and for
-        // those only: no one reads the others, so nothing is fetched or computed for them, and a value of theirs that
-        // cannot be served does not fail the request. A feature that failed on a returned row (a source failure, or a
-        // non-nullable derived int32 that did not fit) cannot be served as typed: expressions compiled against it skip
-        // validity checks. The request fails, as a node reading it would.
+        // Output expressions may read features; make sure they are present for the returned rows, and for those only:
+        // no one reads the others, so nothing is fetched or computed for them, and a value of theirs that cannot be
+        // served does not fail the request. A feature that failed on a returned row cannot be served as typed:
+        // expressions compiled against it skip validity checks.
         if (count > 0)
         {
             var outputFeatures = new List<int>();
@@ -1518,14 +1360,10 @@ internal sealed class PipelineExecutor
                         state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
                 }
 
-                // Answered in part or stale: the rows carry defaults where values were, as a node's reads would have
-                // made the node degraded. The output is no node, so the result says it.
                 state.Degraded |= fill.State == FeatureState.Degraded;
             }
         }
 
-        // The result column by column (ResultColumns): each output column evaluated over the rows into one array; the
-        // rows' dictionaries are made only for a caller that reads Items.
         var names = new string[output.Columns.Length];
         var types = new ColumnType[output.Columns.Length];
         var values = new ScalarValue[output.Columns.Length][];
@@ -1543,7 +1381,6 @@ internal sealed class PipelineExecutor
 
             if (MissingRequestColumn(state, expression.Reads) is { } unwritten)
             {
-                // The data-flow checks rule it out, as for the output's values (ValuesAsync).
                 return Failed(plan, request, $"output column '{name}' reads request column '{unwritten}', which no node wrote", start, state.Outcomes,
                     state.Triggered, state.NonFinite + state.Features.NonFiniteReplaced, state.Counters.OutOfRange);
             }
@@ -1554,7 +1391,7 @@ internal sealed class PipelineExecutor
                 && storage.Type.AsNullable() == types[c].AsNullable())
             {
                 // A column is read from its own storage, as a tap reads it: nothing to evaluate, and no buffer of the
-                // table's size for the few rows returned (2 MB for a 128-float embedding over 4,096 rows).
+                // table's size for the few rows returned.
                 for (var i = 0; i < count; i++)
                 {
                     values[c][i] = ColumnValues.Get(storage, rows[i]);
@@ -1562,7 +1399,6 @@ internal sealed class PipelineExecutor
             }
             else
             {
-                // Evaluated into storage of the declared type, so a float32 column's values print as the floats they are.
                 var buffer = ColumnBuffer.Create(types[c], Math.Max(1, state.Table.StorageCapacity), state.Memory);
                 expression.Evaluate(state.Eval, rows, buffer);
                 for (var i = 0; i < count; i++)
@@ -1571,8 +1407,6 @@ internal sealed class PipelineExecutor
                 }
             }
 
-            // The one column the expression reads, whatever parameters and request values it reads beside it, as a tap's
-            // lineage has it.
             if (OnlyColumn(expression.Reads) is { } symbol)
             {
                 if (symbol.FixedSlot < 0)
@@ -1585,7 +1419,7 @@ internal sealed class PipelineExecutor
                 }
                 else if (PinnedProducer(output, name) is { } pinned && TapCapture.Produced(state, pinned))
                 {
-                    producers[name] = pinned; // col.x@node always reads that node's version
+                    producers[name] = pinned;
                 }
             }
         }
@@ -1603,14 +1437,13 @@ internal sealed class PipelineExecutor
             results = computed!;
         }
 
-        // The rows are about to be logged as returned (the output's taps), and the result handed over: not for a caller that
-        // cancelled while it was built (the output's features and values are awaited above). A cancellation that lands
-        // later, while the taps fire or the result is put together, is seen where the result is handed over, and the abort
-        // takes back what the output's taps captured: it delivers what the nodes logged, never an exposure nobody received.
+        // A cancellation that lands later, while the taps fire or the result is put together, is seen where the result
+        // is handed over, and the abort takes back what the output's taps captured: it delivers what the nodes logged,
+        // never an exposure nobody received.
         cancellationToken.ThrowIfCancellationRequested();
         if (state.Batches is { } captured)
         {
-            state.OutputBatchesFrom = captured.Count; // what the abort takes back (see the catch of ExecuteAsync)
+            state.OutputBatchesFrom = captured.Count;
             await TapCapture.OutputAsync(state, rows, cancellationToken).ConfigureAwait(false);
         }
 
@@ -1637,10 +1470,6 @@ internal sealed class PipelineExecutor
         };
     }
 
-    /// <summary>
-    /// The output's request-level values, evaluated once after every node: with the context features they read, a failed
-    /// one failing the result as a failed feature an output column reads does; a request column as the nodes left it.
-    /// </summary>
     private static async ValueTask<(ResultValues? Values, string? Failure)> ValuesAsync(RequestState state, OutputPlan output, CancellationToken cancellationToken)
     {
         var plan = state.Plan;
@@ -1665,7 +1494,7 @@ internal sealed class PipelineExecutor
                 return (null, "output reads a feature that failed: " + fill.Error);
             }
 
-            state.Degraded |= fill.State == FeatureState.Degraded; // as for the output's columns
+            state.Degraded |= fill.State == FeatureState.Degraded;
         }
 
         var values = new ResultValue[output.Values.Length];
@@ -1674,7 +1503,6 @@ internal sealed class PipelineExecutor
             var (name, expression) = output.Values[v];
             if (MissingRequestColumn(state, expression.Reads) is { } unwritten)
             {
-                // The data-flow checks rule it out (a non-nullable one read here has a producer that cannot be skipped).
                 return (null, $"output value '{name}' reads request column '{unwritten}', which no node wrote");
             }
 
@@ -1684,15 +1512,8 @@ internal sealed class PipelineExecutor
         return (ResultValues.OfOutput(values), null);
     }
 
-    /// <summary>
-    /// Completes every batch with the request's final record (assignment, triggers, node outcomes) and either returns
-    /// them with the result (<see cref="Returns"/>) or hands them to the log pipeline (<see cref="Writes"/>), or neither.
-    /// Experiment requests also emit a durable trigger record.
-    /// </summary>
     private void PublishLogs(RequestState state, PipelineRequest request, PipelineResult result, bool returned)
     {
-        // Only a run the engine lets write reaches the persistent logs, also when it is aborted and nobody receives a
-        // capture: forced arms and configurations must not contaminate experiment data.
         var capture = returned && Returns(request);
         if (!capture && !Writes(request))
         {
@@ -1729,7 +1550,7 @@ internal sealed class PipelineExecutor
         var outcomes = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var outcome in result.Outcomes)
         {
-            outcomes[outcome.NodeId] = NodeOutcomeNames.Name(outcome.Kind); // a fallback that served is "fallback" at the primary
+            outcomes[outcome.NodeId] = NodeOutcomeNames.Name(outcome.Kind);
         }
 
         foreach (var batch in batches)
@@ -1753,12 +1574,9 @@ internal sealed class PipelineExecutor
 
     /// <summary>
     /// The <c>$experiments</c> record of a run that did not happen because a cache answered the call of its pipeline
-    /// (<see cref="Operators.PipelineCallCache"/>): the request was exposed to the arms that computed the result, and a
-    /// record only for the runs that happened would make exposure counts depend on the hit rate. It carries where the
-    /// result comes from and no node outcomes: nothing ran. The run's other taps wrote under the request that computed it.
+    /// (<see cref="Operators.PipelineCallCache"/>). It carries where the result comes from and no node outcomes:
+    /// nothing ran. The run's other taps wrote under the request that computed it.
     /// </summary>
-    /// <param name="capture">The request captures its log batches: the batch is returned instead of written.</param>
-    /// <param name="write">The request's runs may write the persistent logs.</param>
     /// <returns>The batch when captured; null when it was written, or goes nowhere.</returns>
     internal Logging.LogBatch? PublishCachedExposure(
         string requestId, long timeMs, string calledBy, Operators.CallExposure exposure, Operators.CachedFrom from, bool capture, bool write)
@@ -1799,28 +1617,20 @@ internal sealed class PipelineExecutor
         return null;
     }
 
-    /// <summary>Whether the run's log batches are returned to the caller: captured, or a replay's (compared, never written).</summary>
     private static bool Returns(PipelineRequest request) => request.CaptureLogs || request.Replay is not null;
 
-    /// <summary>
-    /// Whether the run's log batches go to the persistent logs: there are some, the engine allows it
-    /// (<see cref="PipelineRequest.WriteLogs"/>), and they are not the caller's instead.
-    /// </summary>
     private bool Writes(PipelineRequest request) => _logs is not null && request.WriteLogs && !Returns(request);
 
-    /// <summary>Whether anything takes the run's log batches, so that it samples its taps and captures them.</summary>
     private bool ConsumesLogs(PipelineRequest request) => Writes(request) || Returns(request);
 
     /// <summary>
     /// Where the run's log batches went, as a bundle records it: <c>captured</c> only when they were returned, with the
     /// run's result. An aborted run returns nothing, and one that captures writes nothing either, so its batches went
-    /// nowhere (<c>none</c>), though it sampled its taps; it recorded <c>captured</c>.
+    /// nowhere (<c>none</c>), though it sampled its taps.
     /// </summary>
-    /// <param name="returned">The run returns a result (<see cref="PublishLogs"/>'s <c>returned</c>).</param>
     private string LogDestination(PipelineRequest request, bool returned) =>
         returned && request.CaptureLogs ? "captured" : Writes(request) ? "pipeline" : "none";
 
-    /// <summary>Hands a run's recording to <see cref="PipelineRequest.OnRecording"/>; a callback that throws never changes the run's outcome.</summary>
     private static void Deliver(ExecutionPlan plan, PipelineRequest request, ReplayRunRecord run, RequestEventLog? events)
     {
         if (request.OnRecording is not { } deliver)
@@ -1844,7 +1654,6 @@ internal sealed class PipelineExecutor
         return order[..Math.Min(limit, order.Length)].ToArray();
     }
 
-    /// <summary>The feature a column or context symbol reads, or -1.</summary>
     internal static int FeatureOf(ExecutionPlan plan, Symbol symbol) => symbol.Kind switch
     {
         SymbolKind.Column => plan.Schema.Columns[symbol.Id].FeatureIndex,
@@ -1883,10 +1692,6 @@ internal sealed class PipelineExecutor
         return ids;
     }
 
-    /// <summary>
-    /// Validates inputs against <c>request_schema</c> (<see cref="RequestSchema"/>: the rules and words hosts and the engine
-    /// use) and fills request-level context values.
-    /// </summary>
     private static string? BindInputs(ExecutionPlan plan, PipelineRequest request, ScalarValue[] context)
     {
         if (plan.RequestSchema.Bind(request.Inputs, context) is { } error)

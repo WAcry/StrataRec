@@ -5,10 +5,6 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// A float32 value (<see cref="ScalarValue.FromFloat32"/>) is the double it widens to, printed as the float it is: people
-/// read <c>0.1</c>, comparisons see the double, wherever the value came from.
-/// </summary>
 public sealed class Float32ValueTests
 {
     [Fact]
@@ -19,7 +15,7 @@ public sealed class Float32ValueTests
 
         Assert.Equal(("0.1", "0.10000000149011612"), (single.ToString(), widened.ToString()));
         Assert.Equal((double)0.1f, single.AsFloat64());
-        Assert.Equal(widened, single); // equality and hash are the double's
+        Assert.Equal(widened, single);
         Assert.Equal(widened.GetHashCode(), single.GetHashCode());
         Assert.Equal((true, false), (single.IsFloat32, widened.IsFloat32));
         Assert.False(ScalarValue.FromInt64(1).IsFloat32);

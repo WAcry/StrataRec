@@ -8,10 +8,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// <c>memory@1</c> looks int64 keys up in a <c>long</c> index built at load time; it must find exactly the records a
-/// lookup by the key's decimal string finds, and string keys keep matching property names verbatim.
-/// </summary>
 public class MemoryFeatureConnectorTests
 {
     private static readonly CompiledFieldBinding[] Fields = { new("x", 0, ColumnType.Float64) };
@@ -29,11 +25,9 @@ public class MemoryFeatureConnectorTests
 
     private static EntityKeyBatch Many(params EntityKey[] keys) => new(keys);
 
-    /// <summary>A context key: one key, its one part shared.</summary>
     private static EntityKeyBatch Single(EntityKey key) =>
         EntityKeyBatch.Create(new EntityKeyLayout([new EntityKeyPart("ctx.request.user_id", key.IsString ? EntityKeyType.String : EntityKeyType.Int64, IsShared: true)]), 1, new[] { key });
 
-    /// <summary>A key of two parts: a shared request input, then the candidate keys (the former cross entity).</summary>
     private static EntityKeyBatch Cross(EntityKey context, params EntityKey[] candidates) =>
         EntityKeyBatch.Create(
             new EntityKeyLayout([
@@ -80,7 +74,7 @@ public class MemoryFeatureConnectorTests
         var byUser = Fetch(Data, Cross(EntityKey.FromInt64(1001), candidates));
         var byName = Fetch(Data, Cross(EntityKey.FromString("u"), candidates));
 
-        Assert.Equal(new double?[] { 1.0, null, 2.0, 3.0, null }, byUser); // "8" is not a record: missing
+        Assert.Equal(new double?[] { 1.0, null, 2.0, 3.0, null }, byUser);
         Assert.Equal(new double?[] { 4.0, null, null, null, null }, byName);
     }
 

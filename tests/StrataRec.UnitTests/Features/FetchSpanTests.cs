@@ -4,13 +4,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// Every chunk of a traced fetch, and every chunk of a read of the distributed cache tier, is a child of the span the fetch
-/// runs under, not of the chunk sent before it. The send loop starts each chunk's call in its own flow, so a call's span
-/// that stayed current there became the next chunk's parent: one whose start or stop callback threw (home_feed
-/// with <c>max_batch</c> 1), and any call that had not answered when the loop sent the next chunk, for its span ends on the
-/// flow that awaits it.
-/// </summary>
 public sealed class FetchSpanTests
 {
     [Theory]
@@ -62,7 +55,7 @@ public sealed class FetchSpanTests
         var result = await request.EnsureAsync(score);
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal(3, store.Gets.Count); // every key missed the store too, one chunk each
+        Assert.Equal(3, store.Gets.Count);
         var reads = flow.Named("cache cached_store");
         Assert.Equal(3, reads.Length);
         Assert.All(reads, read => Assert.Same(flow.Request, read.Parent));

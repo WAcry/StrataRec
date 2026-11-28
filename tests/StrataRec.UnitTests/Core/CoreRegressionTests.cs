@@ -8,7 +8,6 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>Defects of the core types that were fixed, one test each.</summary>
 public class CoreRegressionTests
 {
     private static CandidateTable NewTable(int capacity, params ColumnType[] extra)
@@ -30,7 +29,6 @@ public class CoreRegressionTests
         Assert.Equal(50 + 100, table.StorageCapacity);
         Assert.Equal(150, ((ListColumn<float>)table.TryGetSlot(1)!).Capacity);
 
-        // The remaining append budget still fits after compaction.
         table.AppendRows(Enumerable.Range(5000, 100).Select(i => (long)i).ToArray());
         Assert.Equal(150, table.Rows.Count);
         Assert.Equal(0, table.FreeRows);
@@ -86,11 +84,6 @@ public class CoreRegressionTests
         Assert.Throws<ObjectDisposedException>(() => memory.Rent<int>(16));
     }
 
-    /// <summary>
-    /// A string is hashed by its UTF-8 bytes, the documented encoding another language computes too. A string with an
-    /// unpaired surrogate has none of its own and is written as UTF-8 writes it everywhere, with the replacement
-    /// character: it is the string that has that character there, here as in a store's key or a log.
-    /// </summary>
     [Fact]
     public void StableHash_OfAString_IsOfItsUtf8Bytes()
     {
@@ -102,7 +95,6 @@ public class CoreRegressionTests
             return builder.Finish();
         }
 
-        // Tag, UTF-8 length, UTF-8 bytes; tag, 8 bytes.
         var utf8 = System.Text.Encoding.UTF8.GetBytes("u\uFFFD");
         byte[] encoded = [0x03, (byte)utf8.Length, 0, 0, 0, .. utf8, 0x01, 7, 0, 0, 0, 0, 0, 0, 0];
 

@@ -72,8 +72,8 @@ public sealed class StrataRecOptions
 /// another's release (an emergency revocation included); loads of different pipelines may run at the same time. The
 /// <see cref="IReleaseStatusReporter"/> is told the outcomes after the fact, off the polling: a slow reporter delays only
 /// the reports.</para>
-/// <para>No last-known-good copy is kept on disk in this version: a host that must start while the
-/// control plane is down composes an <see cref="IManifestSource"/> that falls back to a pointer baked into its image.</para>
+/// <para>No last-known-good copy is kept on disk: a host that must start while the control plane is down composes an
+/// <see cref="IManifestSource"/> that falls back to a pointer baked into its image.</para>
 /// </remarks>
 public sealed class ReleaseOptions
 {
@@ -95,37 +95,26 @@ public sealed class ReleaseOptions
     /// </summary>
     public TimeSpan ReportTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
-    /// <summary>The clock of the polls and retries; tests pass one they advance by hand. Timeouts use the system clock.</summary>
+    /// <summary>The clock of the polls and retries. Timeouts use the system clock.</summary>
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 }
 
 /// <summary>Registers the engine in a host's service container.</summary>
 public static class ServiceCollectionExtensions
 {
-    /// <summary>
-    /// Registers <see cref="RecEngine"/> as a singleton <see cref="IRecEngine"/>, and a hosted service that loads every
-    /// configured pipeline when the host starts, from a local workspace or from release manifests
-    /// (<see cref="StrataRecOptions.Releases"/>). A configuration with errors stops the host there,
-    /// with a <see cref="ConfigException"/> listing every error, so a bad configuration never serves traffic; load warnings
-    /// go to the host's logger (event 1003). An <see cref="IAssignmentProvider"/> registered in the container asks the
-    /// experimentation platform for the arms of requests that do not carry them, and an <see cref="ISecretResolver"/>
-    /// resolves the <c>secret://</c> references of bindings when plans load. An <see cref="ILoggerFactory"/>
-    /// in the container (from <c>AddLogging</c>) receives the engine's event logs; without one the engine
-    /// logs nothing. Metrics and spans need no registration: subscribe to the <c>StrataRec</c> meter and activity source.
-    /// </summary>
     /// <remarks>
-    /// <para>The load runs in the hosted services' starting phase (<see cref="IHostedLifecycleService.StartingAsync"/>),
-    /// which the generic host completes for every service before it starts any, the web server of an ASP.NET Core app
-    /// included, also when services start concurrently (<c>HostOptions.ServicesStartConcurrently</c>): a
-    /// service takes no request until every plan has loaded, so once it listens, it is ready. A host that is not a generic
-    /// host (a bare service provider) loads the workspace itself with <see cref="LoadWorkspaceAsync"/>.</para>
-    /// <para>The engine serves the workspace as it was at startup. With <see cref="StrataRecOptions.Releases"/> it serves
-    /// release manifests instead: it loads the manifest each pipeline's pointer names in the same starting
+    /// <para>The load runs in the hosted services' starting phase
+    /// (<see cref="IHostedLifecycleService.StartingAsync"/>), which the generic host completes for every service before
+    /// it starts any, also when services start concurrently (<c>HostOptions.ServicesStartConcurrently</c>): a service
+    /// takes no request until every plan has loaded. A host that is not a generic host (a bare service provider) loads
+    /// the workspace itself with <see cref="LoadWorkspaceAsync"/>.</para>
+    /// <para>The engine serves the workspace as it was at startup. With <see cref="StrataRecOptions.Releases"/> it
+    /// serves release manifests instead: it loads the manifest each pipeline's pointer names in the same starting
     /// phase, and a pipeline without one, or whose manifest is not applied (unreadable, incompatible, rejected), or
-    /// whose plan falls back to a pipeline not served, stops the host with a <see cref="ConfigException"/> that gives each
-    /// pipeline's status. Once the host has started, it polls the pointers in the background and swaps in each new manifest
-    /// that loads (<see cref="ReleaseOptions"/>). The container must then hold an <see cref="IManifestSource"/> and an
-    /// <see cref="IArtifactStore"/>, and may hold an <see cref="IReleaseStatusReporter"/>, which is told every outcome.</para>
+    /// whose plan falls back to a pipeline not served, stops the host with a <see cref="ConfigException"/> that gives
+    /// each pipeline's status. The container must then hold an <see cref="IManifestSource"/> and an
+    /// <see cref="IArtifactStore"/>, and may hold an <see cref="IReleaseStatusReporter"/>, which is told every
+    /// outcome.</para>
     /// </remarks>
     /// <exception cref="ArgumentException"><see cref="StrataRecOptions.Releases"/> is set without
     /// <see cref="StrataRecOptions.Pipelines"/>, or with intervals that are not positive.</exception>
@@ -140,7 +129,7 @@ public static class ServiceCollectionExtensions
 
         if (options.LogSink is { } sink)
         {
-            options.LogPipeline.Validate(); // at registration: the pipeline itself is made when first resolved
+            options.LogPipeline.Validate();
             // Disposed by the container on shutdown, which drains durable batches.
             services.AddSingleton(provider => new Logging.LogPipeline(sink, options.LogPipeline, loggerFactory: provider.GetService<ILoggerFactory>()));
         }
@@ -214,7 +203,6 @@ public static class ServiceCollectionExtensions
         }
     }
 
-    /// <summary>The config root, absolute: a relative one against the host's content root.</summary>
     private static string ConfigRoot(StrataRecOptions options, IServiceProvider provider) =>
         Path.GetFullPath(options.ConfigRoot, provider.GetService<IHostEnvironment>()?.ContentRootPath ?? Directory.GetCurrentDirectory());
 
@@ -253,8 +241,6 @@ public static class ServiceCollectionExtensions
             ids.AddRange(workspace.Pipelines.Keys);
         }
 
-        // A pipeline's fallback_pipeline is served with it. A pipeline whose fallback cannot be resolved is not loaded: it
-        // keeps its current plan, like any failed load.
         ids = workspace.WithFallbacks(ids, diagnostics, out var unresolved);
 
         // The pipelines a loaded plan's nodes call are served with it too (a call of one not served fails): each is loaded
@@ -306,16 +292,8 @@ public static class ServiceCollectionExtensions
     }
 }
 
-/// <summary>
-/// The startup of <see cref="ServiceCollectionExtensions.AddStrataRec"/>: loads the workspace into the engine when the
-/// host starts, so the host fails to start on a configuration with errors instead of failing requests, and logs what
-/// loads with warnings.
-/// </summary>
 /// <remarks>
-/// The load is in <see cref="StartingAsync"/>, not <see cref="StartAsync"/>: with
-/// <c>HostOptions.ServicesStartConcurrently</c> the host does not wait for one service's StartAsync before the next
-/// one's, so a web server registered later could listen with no plan loaded. Every StartingAsync completes
-/// before any StartAsync runs, in either mode.
+/// Every StartingAsync completes before any StartAsync runs, in either mode.
 /// </remarks>
 internal sealed partial class StrataRecStartup(
     RecEngine engine, string configRoot, string environment, IReadOnlyCollection<string> pipelines, ILogger<StrataRecStartup> logger) : IHostedLifecycleService

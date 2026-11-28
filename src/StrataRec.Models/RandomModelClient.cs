@@ -10,66 +10,30 @@ using StrataRec.Core.Services;
 namespace StrataRec.Models;
 
 /// <summary>
-/// <c>random@1</c>: a stand-in for a real model that scores each element of its outputs (a row, a pair, a row of a list)
-/// with a deterministic pseudo-random value in [0, 1). A dev or test environment binds the real model's logical name
-/// (e.g. <c>ctr_ranker</c>) to it instead of the model service, and the pipelines and experiments that call the model stay
-/// unchanged.
+/// <c>random@1</c>: a stand-in for a real model that scores each element of its outputs (a row, a pair, a row of a
+/// list) with a deterministic pseudo-random value in [0, 1).
 /// </summary>
 /// <remarks>
-/// <para>The settings declare the signature it mimics, so the calling operator's load-time signature check passes as it
-/// would against the real model. The short form names the tensors, every one float32 <c>[-1]</c>: what
-/// <c>ModelScorer@1</c> sends for a float32 column and reads into one. It sends every column as its declared type, so an
-/// input mapped to another type (an int64 id, an int32 count) needs the full form's <c>"type"</c>:</para>
 /// <code>
 /// { "client": "random@1",
 ///   "inputs": ["smoothed_ctr", "log_followers"],   // the model's input names
 ///   "outputs": ["p_click"],                        // its output names
 ///   "seed": 42 }                                   // optional: a fixed seed instead of the call's (the same scores in every request)
 /// </code>
-/// <para>The full form maps each name to its tensor as the real model's signature declares it: an input's <c>type</c>
-/// (bool, int32, int64, float32, float64 or string) and <c>shape</c>, an output's <c>shape</c> and <c>type</c> (float32,
-/// the default, or float64: the outputs are scores). Each
-/// dimension is -1 (dynamic) or a positive size. Either form may be used for either setting. A pairwise model, as
-/// <c>PairwiseRanker@1</c> calls it (a column as <c>[pairs, 2]</c>, a context value as <c>[pairs]</c>):</para>
-/// <code>
-/// "inputs":  { "final": { "type": "float32", "shape": [-1, 2] }, "item_id": { "type": "int64", "shape": [-1, 2] },
-///              "quality": { "type": "float32", "shape": [-1] } },
-/// "outputs": { "p_first": { "shape": [-1] } }
-/// </code>
-/// <para>and a listwise one, as <c>ListwiseReranker@1</c> calls it (a column as <c>[1, rows]</c>, a context value as
-/// <c>[1]</c>): <c>"final": { "type": "float32", "shape": [1, -1] }</c>, <c>"seed": { "type": "int64", "shape": [1] }</c>,
-/// <c>"scores": { "shape": [1, -1] }</c>.</para>
-/// <para>One rule scores every shape. For each output, an input is <em>per element</em> when its declared shape starts
-/// with the output's declared shape (the same dimensions, -1 matching only -1), and <em>shared</em> otherwise. The value
-/// of output <c>o</c> at an element is the top 24 bits of the <see cref="StableHash"/> of <c>(salt, seed, x_1, …, x_n)</c>
-/// in its canonical encoding, times 2^-24: <c>salt</c> is the hash of the strings <c>(model, o)</c> (the binding's
-/// logical name), <c>seed</c> is the binding's or else the call's <see cref="ServiceCallOptions.Seed"/> (the model operators
-/// pass <c>ctx.request.seed</c>), and <c>x_i</c> is input i in ordinal order of the input names: its sub-tensor at the
-/// element's index if it is per element, else the whole input, row-major: integers (and a bool as 0 or 1) as int64,
-/// floats as float64 (a float32 widened exactly), strings as strings. Names, types and shapes are not hashed, so both
-/// forms give the same scores for the same values, and so does a value sent at another width. An output's shape in a call is the leading dimensions of its per-element inputs (they must agree, and the
-/// first must be the call's <see cref="ServiceCall.BatchSize"/>), so every output needs a per-element input: nothing else
-/// would size it or vary it.</para>
-/// <para>So a score depends only on what the model would see for that element: a row's own values (and the shared
-/// inputs), a pair's two rows in their order, a list row's slice of the list. Reordering and rebatching keep it, a new
-/// request seed changes it, and elements with equal inputs score equally, as they would from a real model (ties rank by
-/// <c>entity_id</c>). Unlike a real model, a pair's preference and its reverse's are independent draws, and a list row's
-/// score ignores the other rows of the list. The canonical encoding treats −0.0 as 0.0 and every NaN alike, as
-/// <c>hash01</c> does. 24 bits keep every value exact in float32 and below 1. A context embedding (a <c>list&lt;float32,8&gt;</c>) of a
-/// listwise model is declared with its size (<c>[1, 8]</c>): as <c>[1, -1]</c> it would start with the output's shape and count as
-/// per element.</para>
+/// <para>For each output, an input is <em>per element</em> when its declared shape starts with the output's declared
+/// shape (the same dimensions, -1 matching only -1), and <em>shared</em> otherwise. An output's shape in a call is the
+/// leading dimensions of its per-element inputs (they must agree, and the first must be the call's
+/// <see cref="ServiceCall.BatchSize"/>), so every output needs a per-element input.</para>
+/// <para>Unlike a real model, a pair's preference and its reverse's are independent draws, and a list row's score
+/// ignores the other rows of the list.</para>
 /// <para>A call fails unless it sends every declared input with its declared element type and rank, every fixed
 /// dimension equal, the first dimension of a per-element input equal to the batch size, and data for the whole shape. A
-/// call without a seed fails, unless the binding fixes one: no hidden default seed. A call allocates nothing (the hash's
-/// byte buffer is pooled, and the bookkeeping per input is on the stack, or pooled for a model of more than 32 inputs);
-/// the client is immutable, needs no load and holds nothing to release.</para>
+/// call without a seed fails, unless the binding fixes one.</para>
 /// </remarks>
 public sealed class RandomModelClient : IServiceClient
 {
-    /// <summary>2^-24: the spacing of the 24-bit scores.</summary>
     private const float Unit = 1f / (1 << 24);
 
-    /// <summary>The inputs whose per-call bookkeeping fits on the stack; a model with more rents it from the pool.</summary>
     private const int StackInputs = 32;
 
     private readonly string _modelName;
@@ -94,8 +58,9 @@ public sealed class RandomModelClient : IServiceClient
     private readonly long? _seed;
     private readonly ServiceSignature _signature;
 
-    /// <param name="inputs">Distinct, non-empty names, float32 or int64, each dimension -1 or positive; at least one.</param>
-    /// <param name="outputs">Distinct, non-empty names, float32, each with an input per element (<see cref="IsPerElement"/>); at least one.</param>
+    /// <param name="inputs">Distinct, non-empty names, each dimension -1 or positive; at least one.</param>
+    /// <param name="outputs">Distinct, non-empty names, each with an input per element (<see cref="IsPerElement"/>); at
+    /// least one.</param>
     internal RandomModelClient(string modelName, TensorSpec[] inputs, TensorSpec[] outputs, long? seed)
     {
         _modelName = modelName;
@@ -162,10 +127,6 @@ public sealed class RandomModelClient : IServiceClient
         _signature = new ServiceSignature((TensorSpec[])_inputs.Clone(), (TensorSpec[])_outputs.Clone());
     }
 
-    /// <summary>
-    /// True when an input of shape <paramref name="input"/> is scored per element of an output of shape
-    /// <paramref name="output"/>: its declared shape starts with the output's, -1 matching only -1.
-    /// </summary>
     internal static bool IsPerElement(IReadOnlyList<int> input, IReadOnlyList<int> output)
     {
         if (input.Count < output.Count)
@@ -327,8 +288,7 @@ public sealed class RandomModelClient : IServiceClient
     }
 
     /// <summary>
-    /// The call's input <paramref name="j"/> (in hash order) has the declared element type and rank, every fixed dimension
-    /// equal, its first dimension the batch if it is per element of some output, and a value (its data is its shape's, by
+    /// The call's input <paramref name="j"/> (in hash order) has a value (its data is its shape's, by
     /// <see cref="NamedInput"/>), not a missing one.
     /// </summary>
     private bool Fits(in NamedInput input, int j, int batch)
@@ -366,7 +326,6 @@ public sealed class RandomModelClient : IServiceClient
         return $"Input '{spec.Name}' must be {expected}; the call sends {(input.IsMissing ? "a missing " : "")}{TypeName(input.ElementType)} {sent}.";
     }
 
-    /// <summary>Elements [<paramref name="start"/>, +<paramref name="length"/>) in the canonical encoding (see the type's remarks).</summary>
     private static void AddValues(ref StableHash.Builder hash, in TensorValues values, int start, int length)
     {
         switch (values.ElementType)
@@ -443,7 +402,6 @@ public sealed class RandomModelClient : IServiceClient
         return count;
     }
 
-    /// <summary>The position of input <paramref name="j"/> (in hash order) in the call, or -1.</summary>
     private int Find(ReadOnlySpan<NamedInput> inputs, int j)
     {
         var name = _inputs[j].Name;
@@ -474,10 +432,8 @@ public sealed class RandomModelClient : IServiceClient
         return dims;
     }
 
-    /// <summary>A tensor spec as <c>int64 [-1, 2]</c>.</summary>
     internal static string Describe(TensorSpec spec) => $"{TypeName(spec.ElementType)} {Dims(spec.Shape, spec.Shape.Count)}";
 
-    /// <summary>The first <paramref name="rank"/> dimensions, as <c>[3, 2]</c>.</summary>
     internal static string Dims(IReadOnlyList<int> shape, int rank)
     {
         var text = new StringBuilder("[");
@@ -489,7 +445,6 @@ public sealed class RandomModelClient : IServiceClient
         return text.Append(']').ToString();
     }
 
-    /// <summary>The first <paramref name="rank"/> dimensions of a call's input, as <c>[3, 2]</c>.</summary>
     private static string DimsOf(ReadOnlySpan<int> shape, int rank)
     {
         var text = new StringBuilder("[");
@@ -576,13 +531,8 @@ public sealed class RandomModelClientFactory : BindingFactory<IServiceClient, Ra
         return new RandomModelClient(context.Name, inputSpecs, outputSpecs, seed);
     }
 
-    /// <summary>The declared tensors of a setting, and where to report a problem with each one's shape.</summary>
     private readonly record struct Tensors(TensorSpec[] Specs, string[] ShapePointers);
 
-    /// <summary>
-    /// <c>"inputs": ["smoothed_ctr"]</c> (each float32 <c>[-1]</c>) or <c>"inputs": { "item_id": { "type": "int64", "shape": [-1, 2] } }</c>:
-    /// a setting of two forms, bound as the one it is written in.
-    /// </summary>
     private static Tensors Parse(BindingContext context, JsonElement value, string setting)
     {
         var pointer = "/" + setting;
@@ -629,7 +579,6 @@ public sealed class RandomModelClientFactory : BindingFactory<IServiceClient, Ra
         return new Tensors(specs.ToArray(), pointers.ToArray());
     }
 
-    /// <summary>One tensor spec of the full form: <c>{ "type": "int64", "shape": [-1, 2] }</c>; an output's type is float32 unless it says float64.</summary>
     private static TensorSpec Spec(RandomTensorSettings spec, bool input, string name, string pointer)
     {
         var what = (input ? "input '" : "output '") + name + "'";

@@ -8,17 +8,12 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec diff</c>: the semantic difference of two configurations by arm combination, from
-/// their compiled plans (<see cref="PlanDiff"/>), instead of a line diff of their JSON. Exit codes follow diff(1).
-/// </summary>
 internal static class DiffCommand
 {
     private const string Description =
         "Compare two configurations by arm combination: the nodes (merged definitions), parameters, taps, funnel groups and output " +
         "a request runs, and the layers, experiments and arms either side lacks. Exits with 0 when nothing differs, 1 when something does, 2 on errors.";
 
-    /// <summary>The shape of <c>--format json</c>: in <c>diff --help</c>, not in the list of commands.</summary>
     private const string JsonFormat =
         "Output format. json: { from: {ref, pipeline}, to: {ref, pipeline}, differences: bool, " +
         "structure: [{kind: layer|experiment|arm|yield, id, change: added|removed|moved, from_layer, to_layer, yields_to (a yield)}], compared: [combination], " +
@@ -53,9 +48,6 @@ internal static class DiffCommand
         return command;
     }
 
-    /// <param name="from">The configuration before; null for the <c>previous</c> manifest of <paramref name="to"/>.</param>
-    /// <param name="errors">Where diagnostics go; standard error by default.</param>
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string? from, string to, string? store, string environment, string? pipeline, string[] armArgs, string format, TextWriter output,
         CancellationToken cancellationToken, TextWriter? errors = null)
@@ -113,7 +105,7 @@ internal static class DiffCommand
         }
         catch (PlanDiffCanonicalizationException ex)
         {
-            // Not expected (what compiled passed the same check), but reported as any configuration error, not as a stack.
+            // Not expected (what compiled passed the same check).
             var at = ex.Canonicalization;
             diagnostics.Error("PLAN_NOT_CANONICAL", "--" + ex.Side, at.Pointer.ToString(),
                 $"The plan of {ex.Combination} holds a value RFC 8785 cannot hold exactly, and plans are compared in that form: {at.Reason}",
@@ -134,7 +126,6 @@ internal static class DiffCommand
         return diff.HasDifferences ? 1 : 0;
     }
 
-    /// <summary>The manifest <paramref name="to"/> names as <c>previous</c> (kept for audit and diff), in the same store.</summary>
     private static async Task<ConfigRef?> PreviousAsync(PlanEnvironment provided, ConfigRef to, string? store, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
         if (!to.IsManifest)
@@ -166,7 +157,6 @@ internal static class DiffCommand
         return ConfigRef.Parse(previous, store, "/previous", diagnostics, provided);
     }
 
-    /// <summary>Compiles one side; its diagnostics are labelled with the side (<c>--from</c>, <c>--to</c>), which both sides' artifacts share.</summary>
     private static async Task<ExecutionPlan?> CompileAsync(
         ConfigRef reference, string side, string environment, string? pipeline, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
@@ -216,7 +206,6 @@ internal static class DiffCommand
                 var (name, rest) = Entry(change.Pointer);
                 if (rest.Length == 0)
                 {
-                    // The entry itself: a node, tap or group added or removed, or a parameter's value.
                     entry = null;
                     o.WriteLine($"  {Marker(change.Kind)} {name}: {Values(change)}");
                     continue;
@@ -254,7 +243,6 @@ internal static class DiffCommand
         };
     }
 
-    /// <summary>The entry a change belongs to (<c>node fusion</c>, <c>param final_top_k</c>, <c>output</c>) and its pointer inside the entry.</summary>
     private static (string Entry, string Inner) Entry(string pointer)
     {
         var tokens = JsonPointer.Parse(pointer).Tokens;

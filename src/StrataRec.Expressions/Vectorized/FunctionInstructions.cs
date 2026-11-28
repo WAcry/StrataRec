@@ -13,9 +13,8 @@ using StrataRec.Expressions.Runtime;
 namespace StrataRec.Expressions.Vectorized;
 
 /// <summary>
-/// One lane of an int list operand, viewed in place: int64 elements (<c>list&lt;int64&gt;</c> storage, request-level
-/// values, literals) or int32 elements (<c>list&lt;int32&gt;</c> storage). Either way the elements mean int64 values
-///, so a kernel branches on the width instead of widening into a buffer per row: once per call for a plain
+/// One lane of an int list operand, viewed in place: int64 elements or int32 elements. Either way the elements mean
+/// int64 values, so a kernel branches on the width instead of widening into a buffer per row: once per call for a plain
 /// column (<see cref="Lanes.DirectIntListColumn"/>), once per lane for selects that may mix widths.
 /// </summary>
 internal readonly ref struct IntListLane
@@ -31,20 +30,16 @@ internal readonly ref struct IntListLane
         IsInt32 = true;
     }
 
-    /// <summary>The elements when <see cref="IsInt32"/> is false.</summary>
     public ReadOnlySpan<long> Int64 { get; }
 
-    /// <summary>The elements when <see cref="IsInt32"/> is true.</summary>
     public ReadOnlySpan<int> Int32 { get; }
 
     public bool IsInt32 { get; }
 
     public int Length => IsInt32 ? Int32.Length : Int64.Length;
 
-    /// <summary>Membership with int64 semantics: a probe outside the int32 range is simply absent from int32 storage.</summary>
     public bool Contains(long value) => IsInt32 ? ListOps.Contains(Int32, value) : Int64.Contains(value);
 
-    /// <summary><c>overlap_count(this, other)</c>: elements of this list (with multiplicity) that occur in <paramref name="other"/>.</summary>
     public long OverlapWith(IntListLane other) => (IsInt32, other.IsInt32) switch
     {
         (false, false) => ListOps.Overlap(Int64, other.Int64),
@@ -54,11 +49,6 @@ internal readonly ref struct IntListLane
     };
 }
 
-/// <summary>
-/// One lane of a float list operand, viewed in place: float64 elements (<c>list&lt;float64&gt;</c> storage, request-level
-/// values, literals) or float32 elements (<c>list&lt;float32&gt;</c> storage), each meaning the float64 it reads as,
-/// as <see cref="IntListLane"/> does for integers.
-/// </summary>
 internal readonly ref struct FloatListLane
 {
     public FloatListLane(ReadOnlySpan<double> values)
@@ -72,20 +62,16 @@ internal readonly ref struct FloatListLane
         IsFloat32 = true;
     }
 
-    /// <summary>The elements when <see cref="IsFloat32"/> is false.</summary>
     public ReadOnlySpan<double> Float64 { get; }
 
-    /// <summary>The elements when <see cref="IsFloat32"/> is true.</summary>
     public ReadOnlySpan<float> Float32 { get; }
 
     public bool IsFloat32 { get; }
 
     public int Length => IsFloat32 ? Float32.Length : Float64.Length;
 
-    /// <summary>Membership with <c>==</c>, as the language compares floats.</summary>
     public bool Contains(double value) => IsFloat32 ? ListOps.Contains(Float32, value) : ListOps.Contains(Float64, value);
 
-    /// <summary><c>overlap_count(this, other)</c>: elements of this list (with multiplicity) that occur in <paramref name="other"/>.</summary>
     public long OverlapWith(FloatListLane other)
     {
         long count = 0;
@@ -101,14 +87,12 @@ internal readonly ref struct FloatListLane
     }
 }
 
-/// <summary>Per-lane access to list and string operands.</summary>
 internal static class Lanes
 {
     /// <summary>
-    /// The <c>ListColumn&lt;long&gt;</c> or <c>ListColumn&lt;int&gt;</c> an int list operand reads in place (a plain column
-    /// reference), or null when its lanes must be resolved one by one (a request-level value, an all-missing column, a
-    /// lazy select). Kernels test it once per call and loop over the typed column, keeping the width dispatch of
-    /// <see cref="IntList"/> out of the common case.
+    /// The <c>ListColumn&lt;long&gt;</c> or <c>ListColumn&lt;int&gt;</c> an int list operand reads in place (a plain
+    /// column reference), or null when its lanes must be resolved one by one (a request-level value, an all-missing
+    /// column, a lazy select).
     /// </summary>
     public static ColumnBuffer? DirectIntListColumn(ref Frame f, Opnd o)
     {
@@ -149,11 +133,8 @@ internal static class Lanes
         }
     }
 
-    /// <summary>The list column a list operand reads in place (a plain column reference), or null when its lanes must be
-    /// resolved one by one; as <see cref="DirectIntListColumn"/>, for any element type.</summary>
     public static ListColumn? DirectListColumn(ref Frame f, Opnd o) => DirectIntListColumn(ref f, o) as ListColumn;
 
-    /// <summary>A float list lane, zero-copy over whichever storage backs it, as <see cref="IntList"/>.</summary>
     public static FloatListLane FloatList(ref Frame f, Opnd o, int lane)
     {
         if (o.IsScalar)
@@ -196,7 +177,6 @@ internal static class Lanes
         };
     }
 
-    /// <summary>The number of elements of a list lane of <paramref name="kind"/>.</summary>
     public static int ListLength(ref Frame f, Opnd o, int lane, TypeKind kind) => kind switch
     {
         TypeKind.ListBool => BoolList(ref f, o, lane).Length,
@@ -265,7 +245,6 @@ internal static class Lanes
     }
 }
 
-/// <summary><c>size(list)</c> and <c>size(string)</c> (code points).</summary>
 internal sealed class SizeInstr(TypeKind operandKind, ExprType type, Opnd operand) : Instr(type, operand)
 {
     public override void Execute(ref Frame f)
@@ -301,9 +280,8 @@ internal sealed class SizeInstr(TypeKind operandKind, ExprType type, Opnd operan
     }
 }
 
-/// <summary><c>contains(list, x)</c> / <c>x in list</c> and <c>contains(s, part)</c>. A request-level int or string list
-/// is sorted once per call and probed by binary search; bool and float lists, which hold attributes rather than ids, are
-/// scanned.</summary>
+/// <summary>A request-level int or string list is sorted once per call and probed by binary search; bool and float
+/// lists, which hold attributes rather than ids, are scanned.</summary>
 internal sealed class ContainsInstr(TypeKind listKind, ExprType type, Opnd list, Opnd element) : Instr(type, list, element)
 {
     private static readonly Comparison<string> Ordinal = string.CompareOrdinal;
@@ -424,7 +402,6 @@ internal sealed class ContainsInstr(TypeKind listKind, ExprType type, Opnd list,
     }
 }
 
-/// <summary><c>x in [constants]</c> against a compile-time set.</summary>
 internal sealed class InSetInstr(ConstSet set, ExprType type, Opnd element) : Instr(type, element)
 {
     public override void Execute(ref Frame f)
@@ -476,12 +453,10 @@ internal sealed class InSetInstr(ConstSet set, ExprType type, Opnd element) : In
     }
 }
 
-/// <summary><c>overlap_count(l1, l2)</c>: elements of l1 (with multiplicity) that occur in l2.</summary>
 internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first, Opnd second) : Instr(type, first, second)
 {
     private static readonly Comparison<string> Ordinal = string.CompareOrdinal;
 
-    /// <summary>Elements of <paramref name="list"/> (with multiplicity) found in the sorted request-level keys.</summary>
     private static long CountIn(ReadOnlySpan<long> list, ReadOnlySpan<long> sortedKeys)
     {
         long count = 0;
@@ -496,7 +471,6 @@ internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first,
         return count;
     }
 
-    /// <inheritdoc cref="CountIn(ReadOnlySpan{long}, ReadOnlySpan{long})"/>
     private static long CountIn(ReadOnlySpan<int> list, ReadOnlySpan<long> sortedKeys)
     {
         long count = 0;
@@ -632,7 +606,6 @@ internal sealed class OverlapInstr(TypeKind listKind, ExprType type, Opnd first,
     }
 }
 
-/// <summary><c>startsWith</c> and <c>endsWith</c> per lane.</summary>
 internal sealed class AffixInstr(IrOp op, ExprType type, Opnd text, Opnd affix) : Instr(type, text, affix)
 {
     public override void Execute(ref Frame f)
@@ -655,11 +628,6 @@ internal sealed class AffixInstr(IrOp op, ExprType type, Opnd text, Opnd affix) 
     }
 }
 
-/// <summary>
-/// <c>dot</c>, <c>cosine</c>, <c>l2_norm</c> per lane with the shared kernels (<see cref="VectorOps"/>), in the precision the
-/// binder chose (<see cref="Float32Lists"/>). A lane whose two lists differ in length is missing; the binder makes the
-/// result nullable unless both lengths are declared and equal, when no lane can differ.
-/// </summary>
 internal sealed class VectorFunctionInstr(IrOp op, bool float32, ExprType type, Opnd[] operands) : Instr(type, operands)
 {
     public override void Execute(ref Frame f)
@@ -749,14 +717,6 @@ internal sealed class VectorFunctionInstr(IrOp op, bool float32, ExprType type, 
     }
 }
 
-/// <summary>
-/// One operand of <see cref="VectorFunctionInstr"/> read as lists of <typeparamref name="T"/>, the call's precision. A
-/// column whose storage is <typeparamref name="T"/> is read in place, and so is a request-level list (a context value, a
-/// hoisted invariant) of <typeparamref name="T"/>; one of the other storage, the same on every lane, is converted once
-/// per call (a <c>list&lt;float32&gt;</c> context value, held as float64, in a float32 call). Any other lane of the other
-/// storage (a <c>?:</c> choosing such a value, or float32 storage in a float64 call) is converted into a scratch buffer:
-/// exactly, as the scalar backend converts it.
-/// </summary>
 internal struct PrecisionLanes<T>
     where T : unmanaged
 {
@@ -823,7 +783,6 @@ internal struct PrecisionLanes<T>
         return _buffer.AsSpan(0, list.Length);
     }
 
-    /// <summary>Returns the buffers a conversion rented, if any.</summary>
     public readonly void Return()
     {
         if (_invariant is not null)
@@ -878,7 +837,6 @@ internal sealed class PiecewiseInstr(Knots knots, ExprType type, Opnd operand) :
     }
 }
 
-/// <summary><c>hash01(...)</c>; two or three int64 arguments use <see cref="StableHash.Hash01(long, long)"/>.</summary>
 internal sealed class Hash01Instr(TypeKind[] argumentKinds, ExprType type, Opnd[] operands) : Instr(type, operands)
 {
     private readonly TypeKind[] _kinds = argumentKinds;
@@ -967,7 +925,6 @@ internal sealed class Hash01Instr(TypeKind[] argumentKinds, ExprType type, Opnd[
     }
 }
 
-/// <summary><c>lookup('table', key, default)</c>: a missing key or a key not in the table gives the default.</summary>
 internal sealed class LookupInstr(ILookupTable table, TypeKind keyKind, ExprType type, Opnd key, Opnd fallback) : Instr(type, key, fallback)
 {
     private readonly ColumnType _valueType = type.ToColumnType();

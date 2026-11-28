@@ -5,10 +5,7 @@ using StrataRec.Hosting;
 namespace StrataRec.Samples.Host;
 
 /// <summary>
-/// <c>POST /recommend/{pipeline}</c>: the HTTP transport around <see cref="IRecEngine.ExecuteAsync"/>. The engine knows no
-/// transport, so the host turns the body into a <see cref="RecRequest"/>, and the <see cref="RecResult"/> into a response;
-/// the request document (<see cref="RecRequestJson"/>) and the result document (<see cref="RecResultJson"/>) are the
-/// engine's, so every host speaks the same ones.
+/// <c>POST /recommend/{pipeline}</c>: the HTTP transport around <see cref="IRecEngine.ExecuteAsync"/>.
 /// </summary>
 /// <remarks>
 /// <para>The body: <c>{ "inputs": { … }, "request_id": "…", "assignment": ["experiment/arm", …] }</c>, all optional.
@@ -58,15 +55,13 @@ public static class RecommendEndpoint
                 Inputs = document.Inputs,
                 Assignment = document.Assignment,
                 Deadline = settings.Deadline,
-                // Debug options (trace, forced arms, recording) are the host's to authorize, e.g. for internal callers only.
-                // To let an authorized caller ask "why is item 42 not in my feed", read its ids (as the pipeline's key
-                // type, ExplainTargets.TryParse) into Debug = new DebugOptions { ExplainIds = ... }; the result document
-                // then carries "explanation". The engine bounds the ids (DebugOptions.MaxExplainIds) and rejects ids of
-                // the other key type as an invalid request; who may ask stays the host's decision.
+                // Debug options (trace, forced arms, recording) are the host's to authorize, e.g. for internal callers
+                // only. To let an authorized caller ask "why is item 42 not in my feed", read its ids (as the
+                // pipeline's key type, ExplainTargets.TryParse) into Debug = new DebugOptions { ExplainIds =. }; the
+                // result document then carries "explanation".
             };
         }
 
-        // The caller's disconnect cancels the request: what it started stops, and nothing is written back.
         return Answer(await engine.ExecuteAsync(request, cancellationToken), engine);
     }
 
@@ -74,7 +69,7 @@ public static class RecommendEndpoint
     public static IResult Answer(RecResult result, IRecEngine engine) => result.ErrorKind switch
     {
         RecErrorKind.None => new Response(result),
-        RecErrorKind.UnknownPipeline => UnknownPipeline(result.ServedBy, engine), // unloaded since its schema was read
+        RecErrorKind.UnknownPipeline => UnknownPipeline(result.ServedBy, engine),
         RecErrorKind.InvalidRequest => BadRequest(new JsonBindingError(result.ErrorPointer ?? string.Empty, result.Error!, null)),
         RecErrorKind.DeadlineExceeded => Problem(StatusCodes.Status504GatewayTimeout, "Deadline exceeded", result),
         RecErrorKind.Failed => Problem(StatusCodes.Status500InternalServerError, "Recommendation failed", result),
@@ -88,7 +83,6 @@ public static class RecommendEndpoint
         TypedResults.Problem(statusCode: status, title: title, detail: result.Error,
             extensions: new Dictionary<string, object?> { ["request_id"] = result.RequestId, ["served_by"] = result.ServedBy });
 
-    /// <summary>400 with the pointer of the first problem, and every problem under <c>errors</c>.</summary>
     private static IResult BadRequest(params IReadOnlyList<JsonBindingError> errors)
     {
         var all = new List<object>(errors.Count);
@@ -101,7 +95,6 @@ public static class RecommendEndpoint
             extensions: new Dictionary<string, object?> { ["pointer"] = errors[0].Pointer, ["errors"] = all });
     }
 
-    /// <summary>The result document (<see cref="RecResultJson"/>), written straight to the response.</summary>
     private sealed class Response(RecResult result) : IResult
     {
         public async Task ExecuteAsync(HttpContext http)

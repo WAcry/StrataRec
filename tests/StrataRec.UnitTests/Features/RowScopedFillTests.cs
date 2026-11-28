@@ -8,12 +8,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// The row-scoped fill (<see cref="FeatureFetcher.EnsureAsync(ReadOnlySpan{int}, ReadOnlySpan{int}, CancellationToken)"/>),
-/// which the output uses for its returned rows: the waves of a whole fill, but the keys fetched or read, the derived values
-/// computed and the rows marked filled are those of the given rows; a later whole fill fills the rest. A value of another
-/// row cannot fail it.
-/// </summary>
 public class RowScopedFillTests
 {
     private static readonly long[] FourItems = [1, 2, 3, 4];
@@ -27,7 +21,7 @@ public class RowScopedFillTests
         var result = await request.Fetcher.EnsureAsync([tenfold], [2, 0], CancellationToken.None);
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal(new long[] { 3, 1 }, Assert.Single(connector.Calls).Keys.Select(k => k.Int64Value)); // in the rows' order
+        Assert.Equal(new long[] { 3, 1 }, Assert.Single(connector.Calls).Keys.Select(k => k.Int64Value));
         Assert.Equal(10, request.Value(tenfold, 0).AsInt64());
         Assert.Equal(30, request.Value(tenfold, 2).AsInt64());
         foreach (var row in new[] { 1, 3 })
@@ -50,7 +44,7 @@ public class RowScopedFillTests
         Assert.Equal(FeatureState.Ok, again.State);
         Assert.Equal(FeatureState.Ok, whole.State);
         var calls = connector.Calls.ToArray();
-        Assert.Equal(2, calls.Length); // none for the rows already filled
+        Assert.Equal(2, calls.Length);
         Assert.Equal(new long[] { 2, 4 }, calls[1].Keys.Select(k => k.Int64Value));
         Assert.Equal(new long[] { 10, 20, 30, 40 }, Enumerable.Range(0, 4).Select(r => request.Value(tenfold, r).AsInt64()));
     }
@@ -58,7 +52,6 @@ public class RowScopedFillTests
     [Fact]
     public async Task AValueOutsideTheRows_ThatTheTypeCannotHold_DoesNotFailTheFill_AWholeFillThenFailsOnIt()
     {
-        // Item 1's 1.5e9 fits a non-nullable int32 feature, item 2's 3e9 does not.
         var (rig, _, _, narrow) = BaseRig("col.item.base * 1500000000", ColumnType.Int32);
         var request = rig.NewRequest([1, 2]);
 
@@ -69,7 +62,6 @@ public class RowScopedFillTests
         Assert.False(request.IsFilled(narrow, 1));
         Assert.Equal(0, request.Fetcher.Counters.OutOfRange);
 
-        // The state recorded covers row 0 only: a whole fill computes row 1 and records its failure.
         var whole = await request.EnsureAsync(narrow);
 
         Assert.Equal(FeatureState.Failed, whole.State);
@@ -90,7 +82,6 @@ public class RowScopedFillTests
         Assert.Contains("declare a default", returned.Error);
         Assert.False(request.IsFilled(narrow, 0));
 
-        // Row 1 is live: a whole fill fails on it as well, and fails.
         var whole = await request.EnsureAsync(narrow);
         Assert.Equal(FeatureState.Failed, whole.State);
         Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(narrow));
@@ -142,18 +133,12 @@ public class RowScopedFillTests
         var result = await request.Fetcher.EnsureAsync([tenfold], [3], CancellationToken.None);
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal(new long[] { 1, 2, 3, 4 }, Assert.Single(connector.Calls).Keys.Select(k => k.Int64Value)); // the prefetch's
+        Assert.Equal(new long[] { 1, 2, 3, 4 }, Assert.Single(connector.Calls).Keys.Select(k => k.Int64Value));
         Assert.All(Enumerable.Range(0, 4), row => Assert.True(request.IsFilled(@base, row)));
         Assert.Equal(40, request.Value(tenfold, 3).AsInt64());
-        Assert.False(request.IsFilled(tenfold, 0)); // computed for the rows only
+        Assert.False(request.IsFilled(tenfold, 0));
     }
 
-    /// <summary>
-    /// A prefetch started for other rows (a fallback's declared reads, after rows were appended), which fails for
-    /// all its keys, is not waited for by a row-scoped fill whose rows have what it needs: waiting set the feature failed
-    /// and failed the fill. Its rows' derived values are computed; the prefetch is left in flight, for the request's end.
-    /// When a row of the fill is unfilled, the prefetch is waited for, and its failure fails the fill, not fetched again.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -177,7 +162,7 @@ public class RowScopedFillTests
         rig.Build();
         var request = rig.NewRequest([1, 2]);
         Assert.Equal(FeatureState.Ok, (await request.Fetcher.EnsureAsync([@base], [0], CancellationToken.None)).State);
-        request.Fetcher.Prefetch([@base], CancellationToken.None); // key 2, which fails
+        request.Fetcher.Prefetch([@base], CancellationToken.None);
 
         var result = await request.Fetcher.EnsureAsync([tenfold], overlapping ? [0, 1] : [0], CancellationToken.None);
 
@@ -196,13 +181,6 @@ public class RowScopedFillTests
         }
     }
 
-    /// <summary>
-    /// A prefetch that asked for other keys is not waited for, although a row of the fill is unfilled: a row
-    /// appended after it started. Waiting set the feature failed when the prefetch failed for all its keys and failed the
-    /// fill, though the connector was never asked for the row's key; the fill now fetches that key itself. A prefetch that
-    /// asked for the key of one of the fill's rows is waited for, as before, though another row's key is not among its
-    /// keys: its failure fails the fill, and that key is not fetched.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -220,8 +198,8 @@ public class RowScopedFillTests
         });
         var (rig, @base, tenfold) = BaseRig(connector);
         var request = rig.NewRequest([1], capacity: 3);
-        request.Fetcher.Prefetch([@base], CancellationToken.None); // key 1, which fails
-        request.Table.AppendRows([2, 3]); // after it started: keys it never asked for
+        request.Fetcher.Prefetch([@base], CancellationToken.None);
+        request.Table.AppendRows([2, 3]);
 
         var result = await request.Fetcher.EnsureAsync([tenfold], overlapping ? [1, 0] : [1], CancellationToken.None);
 
@@ -236,22 +214,18 @@ public class RowScopedFillTests
             Assert.Equal(new long[][] { [1], [2] }, connector.Calls.Select(c => c.Keys.Select(k => k.Int64Value).ToArray()));
             Assert.Equal(FeatureState.Ok, result.State);
             Assert.Equal(20, request.Value(tenfold, 1).AsInt64());
-            Assert.False(request.IsFilled(@base, 0)); // the prefetch is still unread
+            Assert.False(request.IsFilled(@base, 0));
             Assert.False(request.IsFilled(@base, 2));
-            request.Fetcher.EndRequest(); // settles it
+            request.Fetcher.EndRequest();
         }
     }
 
-    /// <summary>
-    /// A prefetch that asked for some of the fill's keys is waited for, as before, and fills every live row it covers; the
-    /// fill then fetches the keys it lacks, and only those.
-    /// </summary>
     [Fact]
     public async Task AFetchInFlight_ThatAskedForSomeOfTheRowsKeys_IsWaitedFor_AndTheOtherKeysAreFetchedAfterIt()
     {
         var (rig, connector, @base, tenfold) = BaseRig("col.item.base * 10", ColumnType.Int64);
         var request = rig.NewRequest([1, 2], capacity: 3);
-        request.Fetcher.Prefetch([@base], CancellationToken.None); // keys 1 and 2
+        request.Fetcher.Prefetch([@base], CancellationToken.None);
         request.Table.AppendRows([3]);
 
         var result = await request.Fetcher.EnsureAsync([tenfold], [2, 1], CancellationToken.None);
@@ -259,7 +233,7 @@ public class RowScopedFillTests
         Assert.Equal(FeatureState.Ok, result.State);
         Assert.Equal(new long[][] { [1, 2], [3] }, connector.Calls.Select(c => c.Keys.Select(k => k.Int64Value).ToArray()));
         Assert.Equal((20L, 30L), (request.Value(tenfold, 1).AsInt64(), request.Value(tenfold, 2).AsInt64()));
-        Assert.True(request.IsFilled(@base, 0)); // the prefetch's other row
+        Assert.True(request.IsFilled(@base, 0));
         Assert.False(request.IsFilled(tenfold, 0));
     }
 
@@ -276,11 +250,9 @@ public class RowScopedFillTests
     }
 
     /// <summary>
-    /// Whether a prefetch holds the key of a row of the fill is judged by the whole key, as its backfill matches
-    /// rows: a key read from a candidate feature (computed by the fill for an appended row before its fetches), two
-    /// varying parts, a varying part beside a request input. The prefetch of items 11 and 21 fails; item 12 is appended
-    /// after it. Its foreign key, creator 1, is the prefetch's (11 / 10): waited for, the fill fails. Its pairs (12, 1)
-    /// and (12, "US") are not, though a part of each is: the fill fetches them itself.
+    /// The prefetch of items 11 and 21 fails; item 12 is appended after it. Its foreign key, creator 1, is the
+    /// prefetch's (11 / 10): waited for, the fill fails. Its pairs (12, 1) and (12, "US") are not, though a part of
+    /// each is: the fill fetches them itself.
     /// </summary>
     [Theory]
     [InlineData(KeyKind.Creator, true)]
@@ -312,10 +284,10 @@ public class RowScopedFillTests
         };
         var score = rig.Physical(entity.Name + ".score", entity, ColumnType.Float64, "score_store");
         rig.Build();
-        Assert.Equal(0, rig.Plan.Features[score].Wave); // prefetched
+        Assert.Equal(0, rig.Plan.Features[score].Wave);
         var request = rig.NewRequest([11, 21], capacity: 3);
         request.Context[country] = ScalarValue.FromString("US");
-        Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(creatorId)).State); // the key a prefetch takes
+        Assert.Equal(FeatureState.Ok, (await request.EnsureAsync(creatorId)).State);
         request.Fetcher.Prefetch([score], CancellationToken.None);
         request.Table.AppendRows([12]);
 
@@ -389,7 +361,6 @@ public class RowScopedFillTests
         Assert.Equal(2.0, request.Value(clicks, 1).AsFloat64());
     }
 
-    /// <summary><c>item.base</c> from <paramref name="connector"/> and <c>item.derived</c>, ten times it.</summary>
     private static (FeatureTestRig Rig, int Base, int Derived) BaseRig(ScriptedConnector connector)
     {
         var rig = new FeatureTestRig().Source("item_store", connector);
@@ -401,10 +372,6 @@ public class RowScopedFillTests
         return (rig, @base, tenfold);
     }
 
-    /// <summary>
-    /// <c>item.base</c> (non-nullable int64, the item's id, fetched from <c>item_store</c>) and <c>item.derived</c> computed
-    /// from it by <paramref name="expression"/>, of <paramref name="type"/> with no default.
-    /// </summary>
     private static (FeatureTestRig Rig, ScriptedConnector Connector, int Base, int Derived) BaseRig(string expression, ColumnType type)
     {
         var connector = ScriptedConnector.Values((key, _) => key);

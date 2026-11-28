@@ -10,10 +10,9 @@ namespace StrataRec.Core.Columns;
 /// <remarks>
 /// <para>Each row stores <c>(start, length)</c> into an append-only arena. Unlike strict CSR offsets, rows may be written in
 /// any order (backfill writes rows in arbitrary physical order), and zero-initialized rows are valid empty lists.</para>
-/// <para>A fixed-length list (an embedding) is stored the same way: a row is a contiguous span either way, which is all
-/// the SIMD kernels need, so one storage serves both. The column does not check lengths; the writers that apply the
-/// type's rules do (<see cref="ColumnValues.TrySet"/>), as for int32 narrowing. The type only sizes the first arena: N per
-/// row, so filling every row never grows it.</para>
+/// <para>A fixed-length list (an embedding) is stored the same way: a row is a contiguous span either way. The column
+/// does not check lengths; the writers that apply the type's rules do (<see cref="ColumnValues.TrySet"/>), as for int32
+/// narrowing. The type only sizes the first arena: N per row, so filling every row never grows it.</para>
 /// </remarks>
 public abstract class ListColumn : ColumnBuffer
 {
@@ -56,13 +55,10 @@ public abstract class ListColumn : ColumnBuffer
             lengths[i] = _lengths[rows[i]];
         }
 
-        // The arena is shared: gathered rows keep pointing at their existing extents.
         _starts = starts;
         _lengths = lengths;
     }
 
-    /// <summary>The list column of <paramref name="type"/>: <c>ListColumn&lt;T&gt;</c> with T the element's storage
-    /// (<c>bool</c>, <c>int</c>, <c>long</c>, <c>float</c>, <c>double</c>, <c>string</c>).</summary>
     internal static ListColumn CreateList(ColumnType type, int capacity, RequestMemory memory) => type.Element switch
     {
         StorageKind.Bool => new ListColumn<bool>(type, capacity, memory),
@@ -79,7 +75,6 @@ public abstract class ListColumn : ColumnBuffer
 /// <c>long</c>, <c>float</c> (<c>list&lt;float32&gt;</c>), <c>double</c> or <c>string</c>; created by
 /// <see cref="ColumnBuffer.Create"/> from the type.
 /// </summary>
-/// <remarks>Sealed, so a reader's <c>is ListColumn&lt;int&gt;</c> test is one method-table compare.</remarks>
 public sealed class ListColumn<T> : ListColumn
 {
     private T[] _arena;
@@ -93,7 +88,6 @@ public sealed class ListColumn<T> : ListColumn
             throw new ArgumentException($"{type} is not stored as {typeof(T).Name} elements.", nameof(type));
         }
 
-        // A fixed length is the exact size of a full column; four elements per row is a guess for lists of any length.
         _arena = memory.Rent<T>(Math.Max(16, checked(capacity * (type.IsFixedLength ? type.FixedLength : 4))));
     }
 
@@ -136,8 +130,6 @@ public sealed class ListColumn<T> : ListColumn
             throw new ArgumentException($"A {Type} column takes elements of a column that stores the same, not of a {source?.Type} one.", nameof(source));
         }
 
-        // Read before the extent is made: the span stays valid when the arena grows (SetUninitialized), also when the
-        // source is this column. Checked before it is made too: a position outside the list leaves the row as it was.
         var values = from.Get(sourceRow);
         foreach (var position in positions)
         {

@@ -10,16 +10,6 @@ namespace StrataRec.Expressions.Runtime;
 /// <c>hash01(a, b, ...)</c>: <see cref="StableHash.ToUnit"/> of the XXH3 hash of the canonical encoding of the
 /// arguments in order — exactly what a <see cref="StableHash.Builder"/> fed the same values produces.
 /// </summary>
-/// <remarks>
-/// All-int64 calls with two or three arguments use <see cref="StableHash.Hash01(long, long)"/> directly. Mixed
-/// arguments are encoded into a reusable byte buffer and hashed in one shot, which equals the builder's streaming
-/// result and allocates nothing per row.
-/// This is deliberately a second writer of the canonical encoding rather than a <see cref="StableHash.Builder"/>: it
-/// starts on a caller-provided stack buffer, so the scalar path never touches the array pool. Float64 values go through
-/// <see cref="StableHash.CanonicalFloat64Bits"/> like the builder's (−0.0 as 0.0, every NaN as one quiet NaN), so the
-/// optimizer's and the SIMD kernels' freedom over NaN sign and payload cannot change a hash. The hash01 parity tests
-/// (<c>SemanticsTests</c>, <c>ExpressionRegressionTests</c>) pin both writers to the same bytes.
-/// </remarks>
 internal ref struct Hash01Encoder
 {
     private const byte TagInt64 = 0x01;

@@ -6,12 +6,8 @@ namespace StrataRec.Testing;
 
 /// <summary>
 /// Gives each test process (and a benchmark's) a temporary directory of its own, and removes it when the process exits.
-/// Nearly every test makes a workspace (a copy of a sample, a table's snapshot, a bundle) with
-/// <see cref="Directory.CreateTempSubdirectory(string?)"/> and leaves it: a run of the suites left thousands, and a
-/// machine that ran them all day filled its disk within days. Under one directory a process they go with it, whatever
-/// a test forgot to remove, and tests that run at once still each have a workspace of their own. What the tests start
-/// (the command line tool, a sample host) inherits the directory, and is waited for by the test that started it: a
-/// process left running after its parent would find the directory gone.
+/// What the tests start (the command line tool, a sample host) inherits the directory, and is waited for by the test
+/// that started it: a process left running after its parent would find the directory gone.
 /// </summary>
 internal static class TestTemp
 {
@@ -24,8 +20,7 @@ internal static class TestTemp
 
     /// <summary>
     /// Set to <c>inherit</c> by a tool that passes files to the test process through the temporary directory it was
-    /// started with, and removes that directory itself (<c>scripts/mutate.sh</c>: the mutation tool reads each test's
-    /// coverage from files there, found none under a directory per process, and ran every test for every mutant).
+    /// started with, and removes that directory itself (<c>scripts/mutate.sh</c>).
     /// </summary>
     private const string Switch = "STRATAREC_TEST_TMPDIR";
 
@@ -38,7 +33,7 @@ internal static class TestTemp
         }
 
         var system = Path.GetTempPath();
-        var own = Directory.CreateTempSubdirectory(Prefix + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "-").FullName; // named for Sweep
+        var own = Directory.CreateTempSubdirectory(Prefix + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + "-").FullName;
         foreach (var variable in (ReadOnlySpan<string>)["TMPDIR", "TMP", "TEMP"]) // what Path.GetTempPath reads, here and on Windows
         {
             Environment.SetEnvironmentVariable(variable, own);
@@ -54,8 +49,7 @@ internal static class TestTemp
     /// <summary>
     /// A process that was killed (a run that timed out, a mutation run's) left its directory: this one removes those
     /// whose process is no longer running. Not by a directory's age: a process that works in directories under its own
-    /// does not touch it, and a run of a day is not over. A process id taken again by another process keeps a directory
-    /// until that one ends, which costs nothing.
+    /// does not touch it, and a run of a day is not over.
     /// </summary>
     private static void Sweep(string system, string own)
     {
@@ -109,7 +103,7 @@ internal static class TestTemp
         }
         catch (ArgumentException)
         {
-            return false; // no such process
+            return false;
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {

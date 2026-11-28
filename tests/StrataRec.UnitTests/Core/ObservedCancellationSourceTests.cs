@@ -8,11 +8,6 @@ using StrataRec.UnitTests.Features.Cache;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// Every cancellation of a token the framework handed to code it does not own runs that code's callbacks
-/// on the pool and observes what they throw (<see cref="ObservedCancellationSource"/>). The sites' own regressions, with
-/// the system's timers and in a child process, are the integration tests' <c>TimerFaultTests</c>.
-/// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class ObservedCancellationSourceTests
 {
@@ -44,10 +39,6 @@ public sealed class ObservedCancellationSourceTests
         Assert.Equal(("fetch", "req-1", "cleanup failed"), ((string)summary.State["Subject"]!, (string?)summary.State["SampleRequestId"], (string?)summary.State["SampleError"]));
     }
 
-    /// <summary>
-    /// A delay past what timers accept is capped, a negative one cancels at once, and <see cref="Timeout.InfiniteTimeSpan"/>
-    /// sets no time, as for <c>CancelAfter</c> (the cap made it cancel at once).
-    /// </summary>
     [Fact]
     public async Task AnInfiniteDelay_SetsNoTime_ANegativeOneCancelsAtOnce()
     {
@@ -81,7 +72,7 @@ public sealed class ObservedCancellationSourceTests
         });
 
         var watch = Stopwatch.StartNew();
-        caller.Cancel(); // throws the callback's exception, after the patience, when the link runs callbacks inline
+        caller.Cancel();
         var cancelling = watch.Elapsed;
         Assert.True(source.IsCancellationRequested);
         release.Set();
@@ -93,7 +84,6 @@ public sealed class ObservedCancellationSourceTests
     [Fact]
     public void ASourceNestedInAnother_IsCancelledByItsTimer_WithTheCallbacksOfBothObserved()
     {
-        // The node token and a call's own token linked to it: the node's deadline passes the cancellation on.
         using var counted = new Counted();
         using var node = new ObservedCancellationSource(CancellationSite.Node);
         using var call = new ObservedCancellationSource(CancellationSite.Call, node.Token);
@@ -127,7 +117,7 @@ public sealed class ObservedCancellationSourceTests
 
         Thread.Sleep(200);
         Assert.False(source.IsCancellationRequested);
-        Assert.True(source.CancelObservedAsync().IsCompletedSuccessfully); // disposed: left as it is
+        Assert.True(source.CancelObservedAsync().IsCompletedSuccessfully);
         Assert.Equal(0, counted.Of("call"));
     }
 
@@ -141,10 +131,9 @@ public sealed class ObservedCancellationSourceTests
         var callbacks = source.CancelObservedAsync();
         Assert.True(source.IsCancellationRequested); // the token observes it before the callbacks have run
 
-        // As CancellationTokenSource.Cancel throws it: the callbacks' exceptions in one AggregateException.
         var thrown = await Assert.ThrowsAsync<AggregateException>(() => callbacks);
         Assert.Equal("cleanup failed", Assert.IsType<InvalidOperationException>(Assert.Single(thrown.InnerExceptions)).Message);
-        Assert.Same(callbacks, source.CancelObservedAsync()); // cancelled already: nothing runs again, the same callbacks
+        Assert.Same(callbacks, source.CancelObservedAsync());
         Assert.True(SpinWait.SpinUntil(() => counted.Of("assignment") == 1, Patience));
         Thread.Sleep(50);
         Assert.Equal(1, counted.Of("assignment"));
@@ -164,8 +153,6 @@ public sealed class ObservedCancellationSourceTests
         Assert.True(SpinWait.SpinUntil(() => counted.Of("call") == 1, Patience));
     }
 
-    /// <summary>A source with a logger of its own: records what it was told, and throws if asked to.</summary>
-    /// <summary>a cancellation through the base Cancel ran its callbacks already; one disposal disposes.</summary>
     [Fact]
     public void ACancellationThroughTheBaseCancel_IsDisposedByOneDisposal()
     {
@@ -198,9 +185,8 @@ public sealed class ObservedCancellationSourceTests
     }
 
     /// <summary>
-    /// A second disposal must not dispose ahead of the callbacks the first one waits for. The callbacks are
-    /// running (their task is published) when the disposals come; the window before publication is the stress test's
-    /// (<c>TimerFaultTests</c>, cancel-races).
+    /// The callbacks are running (their task is published) when the disposals come; the window before publication is
+    /// the stress test's (<c>TimerFaultTests</c>, cancel-races).
     /// </summary>
     [Fact]
     public async Task DisposedTwiceWhileItsCallbacksRun_IsDisposedOnceTheyHaveRun()
@@ -220,7 +206,7 @@ public sealed class ObservedCancellationSourceTests
         Assert.True(entered.Wait(Patience, TestContext.Current.CancellationToken));
         source.Dispose();
         source.Dispose();
-        Assert.False(Disposed(source)); // the callbacks are still running
+        Assert.False(Disposed(source));
 
         release.Set();
         await callbacks.WaitAsync(Patience, TestContext.Current.CancellationToken);
@@ -228,7 +214,6 @@ public sealed class ObservedCancellationSourceTests
         Assert.True(SpinWait.SpinUntil(() => Disposed(source), Patience));
     }
 
-    /// <summary>Of two cancellations, one after the other, one cancels and the other returns its callbacks' task.</summary>
     [Fact]
     public async Task OfTwoCancellations_OneRunsTheCallbacks_Once()
     {
@@ -281,7 +266,6 @@ public sealed class ObservedCancellationSourceTests
         }
     }
 
-    /// <summary>Counts <c>stratarec.cancellation.callback_errors</c> per site while alive.</summary>
     private sealed class Counted : IDisposable
     {
         private readonly MeterListener _listener = new();

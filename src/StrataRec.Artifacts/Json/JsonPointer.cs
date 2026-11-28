@@ -32,7 +32,7 @@ public sealed class JsonPointer : IEquatable<JsonPointer>, IComparable<JsonPoint
     private readonly ImmutableArray<string> _tokens;
     private readonly int _hashCode;
 
-    // Lazily formatted string form. Racing initializations compute identical strings, so no lock is needed.
+    // Racing initializations compute identical strings, so no lock is needed.
     private string? _text;
 
     private JsonPointer(ImmutableArray<string> tokens, string? text)
@@ -391,7 +391,6 @@ public sealed class JsonPointer : IEquatable<JsonPointer>, IComparable<JsonPoint
         return true;
     }
 
-    /// <summary>RFC 6901 section 4 array index: <c>0</c> or a non-zero digit followed by digits.</summary>
     internal static bool TryParseArrayIndex(string token, out int index)
     {
         index = 0;

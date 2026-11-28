@@ -32,13 +32,10 @@ public sealed record JsonChange(string Pointer, JsonChangeKind Kind, JsonNode? B
 /// Objects are compared member by member, recursively, so a changed setting deep in a node's config is reported at its
 /// own pointer. A member present on one side only is one change carrying its whole value: an added node is one entry,
 /// not one per field. Every other value, arrays included, is compared as a whole, by RFC 8785 equality (numbers by
-/// value, member order irrelevant): arrays have no stable element identity (an inserted element would shift every later
-/// index), so element-wise changes would be guesses. A JSON <c>null</c> member is a value, distinct from an absent one.
+/// value, member order irrelevant). A JSON <c>null</c> member is a value, distinct from an absent one.
 /// </para>
-/// <para>Changes come out in ordinal order of their pointers, whatever order the documents list their members in, so equal
-/// inputs always give the same report. They are sorted at the end, not visited in name order: escaping (<c>/</c> becomes
-/// <c>~1</c>, <c>~</c> becomes <c>~0</c>) and the <c>/</c> between a member and its children both reorder pointers
-/// relative to names.</para>
+/// <para>Changes come out in ordinal order of their pointers, whatever order the documents list their members in, so
+/// equal inputs always give the same report.</para>
 /// </remarks>
 public static class JsonDiff
 {

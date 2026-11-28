@@ -8,15 +8,8 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Llm;
 
-/// <summary>
-/// What the generative operators share around the model call: their prompts, the load-time check of every version's text
-/// signature, the cost limit, the wording of a truncated answer and the tags of their answer metrics. One copy, so the
-/// operators agree on codes, hints and messages.
-/// </summary>
 internal static class LlmNode
 {
-    /// <summary><c>max_output_tokens</c> is at least 1; false after reporting it.</summary>
-    /// <param name="hint">What the limit has to allow for this operator's answers, with its default.</param>
     public static bool CheckMaxOutputTokens(OperatorCompileContext context, int maxOutputTokens, string hint)
     {
         if (maxOutputTokens >= 1)
@@ -29,7 +22,6 @@ internal static class LlmNode
         return false;
     }
 
-    /// <summary><c>output</c> names a text output; false after reporting it empty.</summary>
     public static bool CheckOutput(OperatorCompileContext context, string? output)
     {
         if (!string.IsNullOrEmpty(output))
@@ -42,8 +34,6 @@ internal static class LlmNode
         return false;
     }
 
-    /// <summary>Every prompt, in ordinal order of the input names (the order a call sends them); sets <paramref name="ok"/> false after an error.</summary>
-    /// <param name="example">A <c>prompts</c> value for the hint of an empty map.</param>
     public static (string Name, PromptTemplate Template)[] CompilePrompts(
         OperatorCompileContext context, Dictionary<string, string>? prompts, PromptScope scope, string example, ref bool ok)
     {
@@ -73,7 +63,6 @@ internal static class LlmNode
         return compiled;
     }
 
-    /// <summary>Checks every version a request may call against the prompts sent and the output read; false after reporting a mismatch.</summary>
     public static bool CheckSignatures(OperatorCompileContext context, BoundModel model, (string Name, PromptTemplate Template)[] prompts, string output)
     {
         var inputs = new (string Name, string ConfigKey)[prompts.Length];
@@ -104,16 +93,10 @@ internal static class LlmNode
         return ok;
     }
 
-    /// <summary>
-    /// For a message about an answer: when the client said it stopped at <c>max_output_tokens</c>, that, since a cut-off
-    /// answer is the likely cause, with <paramref name="remedy"/>; otherwise empty.
-    /// </summary>
-    /// <param name="remedy">What else shortens the answer, e.g. <c>shorten the window</c>.</param>
     public static string Cut(in ServiceStatus status, int maxOutputTokens, string remedy) => status.Truncated
         ? $"; the answer was cut at max_output_tokens ({maxOutputTokens.ToString(CultureInfo.InvariantCulture)}): raise max_output_tokens or {remedy}"
         : string.Empty;
 
-    /// <summary>The tags of an answer metric: the model's, and the outcome. Built once per compiled node.</summary>
     public static KeyValuePair<string, object?>[] Tags(BoundModel model, string outcome)
     {
         var tags = new KeyValuePair<string, object?>[model.Target.Tags.Length + 1];
@@ -122,7 +105,6 @@ internal static class LlmNode
         return tags;
     }
 
-    /// <summary>Adds <paramref name="value"/> when it is positive and the counter is enabled; a replay is not traffic and counts nothing.</summary>
     public static void Count(Counter<long> counter, OperatorContext context, int value, KeyValuePair<string, object?>[] tags)
     {
         if (value > 0 && counter.Enabled && !context.Replays)

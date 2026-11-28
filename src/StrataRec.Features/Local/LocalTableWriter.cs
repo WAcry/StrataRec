@@ -17,18 +17,13 @@ namespace StrataRec.Features.Local;
 /// background writer); readers never wait for it.
 /// </summary>
 /// <remarks>
-/// <para>A record is built in private buffers (<see cref="RecordBuilder"/>) and only reaches the pages at
-/// <see cref="RecordBuilder.Commit"/>: the record bytes are written into free space at the end of a page, then the index
-/// slot is pointed at them with one release write. Published values are immutable, so a reader sees the old record or
-/// the new one, both complete. String values are encoded at commit, after any compaction the commit itself triggered, so a code
-/// always belongs to the dictionary of the version the record lands in.</para>
+/// <para>Published values are immutable, so a reader sees the old record or the new one, both complete.</para>
 /// <para>Compaction runs here, synchronously: when superseded records and the dictionary strings only they referenced
 /// make up more than half of the record and string bytes (and at least
-/// <see cref="LocalFeatureTableOptions.CompactionMinBytes"/>), or when a write would pass <c>max_bytes</c> and superseded
-/// records could be freed. It copies the current record of every key, tombstones included, into a new version
-/// built aside (<see cref="BuildCompacted()"/>), which is published whole only when it fits <c>max_bytes</c> (with the
-/// pending write, when the write asked for it); otherwise it is dropped and the table stays as it was. Updates wait
-/// while it runs.</para>
+/// <see cref="LocalFeatureTableOptions.CompactionMinBytes"/>), or when a write would pass <c>max_bytes</c> and
+/// superseded records could be freed. It copies the current record of every key, tombstones included, into a new
+/// version which is published whole only when it fits <c>max_bytes</c> (with the pending write, when the write asked
+/// for it); otherwise it is dropped and the table stays as it was. Updates wait while it runs.</para>
 /// </remarks>
 public sealed class LocalTableWriter : IFeatureTableWriter
 {
@@ -37,17 +32,17 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private readonly LocalFeatureTableOptions _options;
     private TableVersion _version; // where writes go: the table's current version, or the one a reload is building
     private bool _reloading;
-    private long _reloadStarted; // Stopwatch timestamp of BeginReload, for the load duration
+    private long _reloadStarted;
     private long _generation;          // of the newest version installed; a version built and discarded does not count
     private long _autoCompactionDeclined; // superseded bytes when an automatic compaction did not fit, see MaybeCompact
 
-    // The record being built. A builder is valid while _open and its token equals _token.
+    // A builder is valid while _open and its token equals _token.
     private int _token;
     private bool _open;
     private bool _ignored;
     private long _recordVersion;
     private long _indexKey;
-    private byte[] _key = new byte[64]; // a hashed key's canonical bytes (TableKeys); empty for a one-part int64 key
+    private byte[] _key = new byte[64];
     private int _keyLength;
     private TableVersion? _probedVersion;
     private IndexTable? _probedIndex;
@@ -56,7 +51,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private readonly byte[] _fixed;
     private readonly ulong[] _written;
     private readonly PendingBuffer _pending = new();
-    private long[] _newStrings = new long[16]; // scratch set of the record's new strings, see NewStringBytes
+    private long[] _newStrings = new long[16];
     // Each budget trial replaces this lookup. The last successful trial used the dictionary we now encode into.
     private int _lookedUpField = -1;
     private int _lookedUpCode;
@@ -79,11 +74,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     public LocalTableSchema Schema => _layout.Schema;
 
-    /// <summary>The table written to (a cache's writer finds its queue there).</summary>
     internal LocalFeatureTable Table => _table;
 
-    /// <summary>Sees every version <see cref="BuildCompacted()"/> builds, installed or discarded: lets a test check that a
-    /// discarded copy is not kept alive. Null outside tests.</summary>
+    /// <summary>Sees every version <see cref="BuildCompacted()"/> builds, installed or discarded: lets a test check
+    /// that a discarded copy is not kept alive.</summary>
     internal Action<TableVersion>? CompactedCopyBuilt { get; set; }
 
     /// <summary>True between <see cref="BeginReload"/> and <see cref="CompleteReload"/> or <see cref="AbortReload"/>.</summary>
@@ -180,8 +174,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>Compacts now: copies the current record of every key (and every tombstone) into a new version and publishes it.</summary>
-    /// <exception cref="LocalTableFullException">The compacted copy would not fit <c>max_bytes</c> (laying records out
-    /// anew can leave more of the pages' tails empty); it is discarded and the table is unchanged.</exception>
+    /// <exception cref="LocalTableFullException">The compacted copy would not fit <c>max_bytes</c>; it is discarded and
+    /// the table is unchanged.</exception>
     public void Compact()
     {
         Discard();
@@ -193,10 +187,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
         Install(next);
     }
-
-    // ---------------------------------------------------------------------------------------------------------------
-    // Record builder operations (called through RecordBuilder)
-    // ---------------------------------------------------------------------------------------------------------------
 
     internal bool IsIgnored(int token)
     {
@@ -212,8 +202,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         MarkWritten(field, valid: true);
     }
 
-    /// <summary>A <c>string</c> value. Kept as chars until commit; a string is created only for a value the dictionary does
-    /// not hold yet.</summary>
+    /// <summary>Kept as chars until commit; a string is created only for a value the dictionary does not hold
+    /// yet.</summary>
     internal void SetString(int token, int field, ReadOnlySpan<char> value)
     {
         CheckOpen(token);
@@ -238,14 +228,13 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             throw KindMismatch(field, "StartList");
         }
 
-        _pending.Reserve(0, 8, out var start); // the items follow contiguously
+        _pending.Reserve(0, 8, out var start);
         _pendingStart[field] = start;
         _pendingCount[field] = 0;
         _openList = field;
         MarkWritten(field, valid: true);
     }
 
-    /// <summary>An item of the open list of fixed-size elements (bool, int32, int64, float32, float64), stored natively.</summary>
     internal void AddItem<T>(int token, int field, T value, string method)
         where T : unmanaged
     {
@@ -254,7 +243,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _pendingCount[field]++;
     }
 
-    /// <summary>A whole list of fixed-size elements: <see cref="StartList"/> and one copy of the items.</summary>
     internal void SetList<T>(int token, int field, ReadOnlySpan<T> value, string method)
         where T : unmanaged
     {
@@ -264,7 +252,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _pendingCount[field] = value.Length;
     }
 
-    /// <summary>A <c>list&lt;string&gt;</c> item, kept as <c>[int32 length][UTF-16 chars]</c> until commit encodes it.</summary>
     internal void AddStringItem(int token, int field, ReadOnlySpan<char> item)
     {
         CheckListItem(token, field, StorageKind.String, "AddStringItem");
@@ -308,8 +295,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         ReprobeIfMoved(newKey);
         var oldPage = OldRecord(out oldOffset);
 
-        // Unwritten fields keep their old values. String codes are copied as they are: the old
-        // record is in this version, so its codes belong to this version's dictionary.
+        // String codes are copied as they are: the old record is in this version, so its codes belong to this version's
+        // dictionary.
         if (oldPage is not null)
         {
             for (var f = 0; f < _layout.FieldCount; f++)
@@ -394,10 +381,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         return true;
     }
 
-    // ---------------------------------------------------------------------------------------------------------------
-    // Internals
-    // ---------------------------------------------------------------------------------------------------------------
-
     private RecordBuilder BeginCore(long indexKey, long version)
     {
         Discard();
@@ -460,7 +443,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         return true;
     }
 
-    /// <summary>Finds the key in the version being written: its position (0 = new key) and slot.</summary>
     private void Probe()
     {
         _oldPosition = _version.ProbeForWrite(_indexKey, _key.AsSpan(0, _keyLength), out _slot);
@@ -479,8 +461,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// Re-finds the key's slot when a compaction (new version) or an index growth happened since the probe, and grows the
-    /// index first when the key is new. A cache eviction may have removed the key being replaced.
+    /// A cache eviction may have removed the key being replaced.
     /// </summary>
     private void ReprobeIfMoved(bool newKey)
     {
@@ -498,7 +479,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private long ExistingVersion() =>
         BinaryPrimitives.ReadInt64LittleEndian(_version.PageOf(_oldPosition).AsSpan((int)_oldPosition + RecordLayout.VersionOffset));
 
-    /// <summary>The key's current record (not a tombstone) in the version being written, or null.</summary>
     private byte[]? OldRecord(out int offset)
     {
         offset = (int)_oldPosition;
@@ -548,9 +528,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// Enforces <c>max_bytes</c>: the table's size after this write (a new page, index growth, new strings) must fit.
-    /// If needed, compaction reclaims superseded records, then a cache write can also evict live keys. Each candidate
-    /// is built aside and installed only if it leaves room for the pending write.
+    /// Each candidate is built aside and installed only if it leaves room for the pending write.
     /// </summary>
     /// <returns>Whether the key needs a new index slot in the version that receives the write.</returns>
     private bool EnsureBudget(int recordBytes, bool newKey, bool strings, LocalTableCache? cache = null)
@@ -576,10 +554,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
         if (cache is not null)
         {
-            // Plan the eviction while the fully decoded write is still staged. A copy that cannot admit it leaves
-            // the old cache and its metrics intact, including the record being replaced.
-            // Victims release records and unshared strings. Charging a whole index doubling or the next append page
-            // against those bytes can evict every small record, even though rebuilding avoids that growth.
+            // A copy that cannot admit it leaves the old cache and its metrics intact, including the record being
+            // replaced. Victims release records and unshared strings. Charging a whole index doubling or the next
+            // append page against those bytes can evict every small record, even though rebuilding avoids that growth.
             var avoidableGrowth = _version.IndexGrowthBytes(newKey) + Math.Max(0, _version.PageGrowthBytes(recordBytes) - recordBytes);
             var toFree = BytesToFree(packedBytes, required - avoidableGrowth - _table.MaxBytes);
             var livePayload = LivePayload;
@@ -599,7 +576,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
                 required = Math.Min(required, afterEviction);
                 if (toFree == long.MaxValue)
                 {
-                    break; // not even alone in the table
+                    break;
                 }
 
                 toFree = More(toFree, livePayload, attempt);
@@ -611,7 +588,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     /// <summary>
     /// What a cache eviction is to free, counted as its victims are: by the payload they release (records and unshared
-    /// strings). It aims for three quarters of <c>max_bytes</c>, and frees at least what the pending write lacks.
+    /// strings).
     /// </summary>
     /// <param name="packedBytes">The table's size without its superseded records.</param>
     /// <param name="lacking">What the table with the pending write would be over <c>max_bytes</c>.</param>
@@ -627,30 +604,20 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
         // The limit was lowered under what the table holds (LocalFeatureTable.Retune). What it is over is of its whole
         // size (pages, index, dictionary), of which the payload is a part: the share of the payload to free is the
-        // share of the size to lose. Taken as payload, the excess evicted every record of a table of small ones, where
-        // a table created with the lower limit keeps most of them.
+        // share of the size to lose.
         var share = (double)(packedBytes - target) / packedBytes;
         return Math.Max(1, Math.Max((long)(livePayload * share), lacking - (packedBytes - max)));
     }
 
-    /// <summary>The records and strings the keys of the table hold now: what an eviction can free.</summary>
     private long LivePayload => _version.RecordBytes - _version.SupersededBytes + _version.StringBytes - _version.UnreferencedStringBytes;
 
     /// <summary>
-    /// What an eviction frees next when its estimate fell short (an index that does not get smaller with its keys, a
-    /// table of a few pages where one record is much of it): half of what is left, and after four such everything. The
-    /// one rule of a write under pressure and of a lowered limit: a record its empty table holds is not refused while
-    /// records could still go, and a limit is met.
+    /// The one rule of a write under pressure and of a lowered limit: a record its empty table holds is not refused
+    /// while records could still go, and a limit is met.
     /// </summary>
     private static long More(long toFree, long livePayload, int attempt) =>
         attempt < 4 && toFree < livePayload ? toFree + ((livePayload - toFree + 1) / 2) : long.MaxValue;
 
-    /// <summary>
-    /// Brings a cache's table under a limit that was lowered under what it holds (<see cref="LocalFeatureTable.Retune"/>),
-    /// with no write pending, as a write under pressure does: a compaction first, and alone when that is enough; then it
-    /// evicts. A limit no record fits under leaves the table empty, as a table created with that limit stays. One
-    /// comparison for a table within its limit.
-    /// </summary>
     internal void ShrinkToLimit(LocalTableCache cache)
     {
         var max = _table.MaxBytes;
@@ -664,7 +631,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         // What is over the limit may be what the keys do not hold: the records written over since, the unused ends of
         // pages. A packed copy has neither, and keeps every key when it fits. When it does not, the share to evict is
         // taken of the smaller of the two sizes: a packed copy may be the larger one (a record that did not fit a
-        // page's end starts the next), and a share taken of that emptied a table that was a byte over its limit.
+        // page's end starts the next).
         if (TryCompactToLimit(max, out var packedBytes))
         {
             return;
@@ -708,7 +675,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private bool TryCompactForWrite(int recordBytes, bool newKey, bool strings, ref long required, ref long packedBytes)
     {
         var compacted = BuildCompacted();
-        // Its pages are packed and its dictionary now contains only strings still in use.
         var afterCompaction = Required(compacted, recordBytes, newKey, strings, out _);
         if (afterCompaction <= _table.MaxBytes)
         {
@@ -721,7 +687,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         return false;
     }
 
-    /// <summary>The size <paramref name="version"/> would have after this write.</summary>
     private long Required(TableVersion version, int recordBytes, bool newKey, bool strings, out long newStringObjects)
     {
         newStringObjects = 0;
@@ -731,10 +696,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
     /// <summary>
     /// What the record's strings add to the dictionary of the version being written: each distinct value of its written
-    /// <c>string</c> fields and <c>list&lt;string&gt;</c> items that the dictionary does not hold yet, once however often
-    /// the record repeats it, plus the dictionary growths that adding them passes. This is what <see cref="Encode"/> then
-    /// does at commit (fields kept from the old record already have codes). Allocates only when a record brings more
-    /// strings than any record before it.
+    /// <c>string</c> fields and <c>list&lt;string&gt;</c> items that the dictionary does not hold yet, once however
+    /// often the record repeats it, plus the dictionary growths that adding them passes. This is what
+    /// <see cref="Encode"/> then does at commit (fields kept from the old record already have codes).
     /// </summary>
     private long NewStringBytes(TableVersion version, out long objectBytes)
     {
@@ -759,7 +723,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 
         if (candidates == 1 && _layout.Kinds[single] == StorageKind.String)
         {
-            // The common case, one string value: nothing to repeat, so no set; the lookup is kept for Encode.
             var chars = MemoryMarshal.Cast<byte, char>(_pending.Read(_pendingStart[single], 2 * _pendingCount[single]));
             _lookedUpCode = version.FindString(chars);
             _lookedUpField = single;
@@ -795,7 +758,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             }
             else
             {
-                // A list<string>: its staged items.
                 var at = _pendingStart[f];
                 for (var i = 0; i < _pendingCount[f]; i++)
                 {
@@ -833,18 +795,14 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             if (seenLength == length
                 && MemoryMarshal.Cast<byte, char>(_pending.Read((int)(entry >> 32) - 1, 2 * seenLength)).SequenceEqual(chars))
             {
-                return; // repeated within the record: one dictionary string
+                return;
             }
         }
     }
 
     /// <summary>
-    /// The automatic compaction: when what a compaction would free, superseded records and the
-    /// dictionary strings only they referenced, is more than half of the records and strings. Strings count because a string
-    /// costs its record only a 4-byte code: a field rewritten with long new values (a description) supersedes small records
-    /// and leaves its old values in the dictionary, which the records alone would not show. It runs after a write that
-    /// already succeeded, so a compacted copy that would not fit <c>max_bytes</c> is simply discarded; it is tried again only
-    /// once twice as many bytes could be freed, not after every write.
+    /// It runs after a write that already succeeded, so a compacted copy that would not fit <c>max_bytes</c> is simply
+    /// discarded; it is tried again only once twice as many bytes could be freed, not after every write.
     /// </summary>
     private void MaybeCompact()
     {
@@ -865,30 +823,22 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// Builds an unpublished version holding the surviving records and tombstones. A caller that finds the result
-    /// too large just drops it; <see cref="Install"/> makes it current.
+    /// Builds an unpublished version holding the surviving records and tombstones.
     /// </summary>
     /// <remarks>
     /// Physical order is insertion order, including across sealed pages shared by both versions. Packing the other
-    /// records in this order preserves the eviction hand and avoids mixing sizes in index-slot order. String codes
-    /// are remapped into a dictionary containing only live strings. Tombstones prevent a late update from reviving
-    /// a deleted key.
+    /// records in this order preserves the eviction hand and avoids mixing sizes in index-slot order. Tombstones
+    /// prevent a late update from reviving a deleted key.
     /// </remarks>
     private TableVersion BuildCompacted() => BuildCompacted(long.MinValue, 0, 0, out _, out _);
 
-    /// <summary>
-    /// The build of a cache write that needs room (<paramref name="bytesToFree"/> above zero): it also leaves out the
-    /// records written before <paramref name="dropWrittenBefore"/>, the record at <paramref name="replacedPosition"/>
-    /// and the victims that free the rest (<see cref="SelectSurvivors"/>).
-    /// </summary>
     private TableVersion BuildCompacted(long dropWrittenBefore, long bytesToFree, long replacedPosition, out int expired, out int evicted)
     {
         var old = _version;
         var index = old.Index;
         var evicting = bytesToFree > 0;
-        // Eviction leaves most pages nearly whole, and copying them is most of its cost: without sharing them a write
-        // under capacity pressure takes about 70% longer and allocates 2.5 times as much (CacheWriteBenchmarks). A shared
-        // page keeps its string codes, which belong to the old dictionary, so only a table without strings shares.
+        // A shared page keeps its string codes, which belong to the old dictionary, so only a table without strings
+        // shares.
         var sharing = evicting && old.StringCount == 0;
         var slots = ArrayPool<int>.Shared.Rent(index.Count);
         var codeMap = ArrayPool<int>.Shared.Rent(old.StringCount);
@@ -926,7 +876,7 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             }
 
             codeMap.AsSpan(0, old.StringCount).Fill(-1);
-            var toPack = liveBytes; // the bytes still to copy into the pages being laid out: each is sized for what is to come
+            var toPack = liveBytes;
             int sharedEnd = 0, tombstones = 0;
             long sharedPage = 0;
             for (var i = 0; i < live; i++)
@@ -996,10 +946,10 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// Decides, page by page, whether the survivors of a page are copied or the page is shared with the new version as it
-    /// is (at least 15/16 of it still live), in <paramref name="plan"/>: at the first survivor of a shared page, minus
-    /// the number of its survivors; at the first survivor of a run of pages to copy, the bytes of the run, which size the
-    /// pages it is packed into; zero elsewhere. Either way the survivors stay in insertion order.
+    /// Decides, page by page, whether the survivors of a page are copied or the page is shared with the new version as
+    /// it is, in <paramref name="plan"/>: at the first survivor of a shared page, minus the number of its survivors; at
+    /// the first survivor of a run of pages to copy, the bytes of the run, which size the pages it is packed into; zero
+    /// elsewhere. Either way the survivors stay in insertion order.
     /// </summary>
     private void PlanPages(ReadOnlySpan<int> slots, Span<long> plan)
     {
@@ -1038,7 +988,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
     }
 
-    /// <summary>Sorts the slots by the position of their records: page order, which is insertion order.</summary>
     private void OrderByPosition(Span<int> slots)
     {
         var scratch = ArrayPool<long>.Shared.Rent(slots.Length);
@@ -1064,10 +1013,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
     }
 
-    // Records of similar width often occupy consecutive cells of their pages. If each occupied cell holds just
-    // one record start, scanning the cells yields exact page order in linear time. Sparse pages or a collision
-    // fall back to sorting, which is what this saves: without it a write under capacity pressure takes about 70% longer
-    // (CacheWriteBenchmarks).
+    // Records of similar width often occupy consecutive cells of their pages. If each occupied cell holds just one
+    // record start, scanning the cells yields exact page order in linear time. Sparse pages or a collision fall back to
+    // sorting.
     private bool TryOrderDensePages(Span<int> slots, Span<int> scratch)
     {
         var version = _version;
@@ -1121,12 +1069,9 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// Leaves the survivors' slots at the start of the span. Drops expired values, then evicts from the hand in
-    /// insertion order until the payload charge reaches the byte target: SIEVE (Zhang et al., "SIEVE is Simpler than
-    /// LRU", NSDI 2024), where a record read since the hand last passed it loses its mark and stays one more round.
-    /// A full cache write replaces every field of its previous record, whose bytes can therefore make room before any
-    /// other key is evicted. A timestamp can cover a whole batch, so victims are selected individually. A shared string
-    /// frees space only when the last record referencing it goes.
+    /// Leaves the survivors' slots at the start of the span. A full cache write replaces every field of its previous
+    /// record, whose bytes can therefore make room before any other key is evicted. A timestamp can cover a whole
+    /// batch, so victims are selected individually.
     /// </summary>
     private int SelectSurvivors(
         Span<int> slots, int[] droppedReferences, long dropWrittenBefore, long bytesToFree, long replacedPosition,
@@ -1164,8 +1109,8 @@ public sealed class LocalTableWriter : IFeatureTableWriter
             slots[candidates++] = slot;
         }
 
-        // Positions are FIFO insertion order, kept across compactions. An append replacing a record is a new arrival.
-        // Advance the hand only when pressure actually scans; untouched survivors keep their visited bits.
+        // An append replacing a record is a new arrival. Advance the hand only when pressure actually scans; untouched
+        // survivors keep their visited bits.
         if (cursor == candidates)
         {
             cursor = 0;
@@ -1224,8 +1169,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         return kept;
     }
 
-    /// <summary>Makes a version from <see cref="BuildCompacted()"/> the one written to, and current unless a reload is
-    /// building it.</summary>
     private void Install(TableVersion next)
     {
         _version = next;
@@ -1233,7 +1176,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         _autoCompactionDeclined = 0;
         if (!_reloading)
         {
-            // Release: the new version's pages, index and dictionary are complete before a reader can pin it.
             _table.Publish(next);
         }
 
@@ -1261,8 +1203,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     private TableVersion NewVersion(int expectedKeys) =>
         new(_layout, _version.Hasher, _options.PageSize, _generation + 1, expectedKeys);
 
-    /// <summary>Statistics of a published write: its bytes, the bytes of the record or tombstone it replaced (and the
-    /// string references the replaced record let go of), and counts.</summary>
     private void Account(int size, byte[]? oldPage, bool newKey, bool tombstone)
     {
         _version.AddRecordBytes(size);
@@ -1305,7 +1245,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         }
     }
 
-    /// <summary>Holds a hashed key's canonical bytes for the record being written; returns their hash, the index key.</summary>
     private long SetKey(ReadOnlySpan<byte> key)
     {
         EnsureKeyRoom(key.Length);
@@ -1314,11 +1253,6 @@ public sealed class LocalTableWriter : IFeatureTableWriter
         return _version.Hash(key);
     }
 
-    /// <summary>
-    /// Holds a key given by its parts: its canonical bytes for a hashed key, nothing for a one-part int64 key. Returns the
-    /// index key (the int64 itself, or the bytes' hash).
-    /// </summary>
-    /// <exception cref="ArgumentException">The parts are not a key of the table's layout: wrong count or a part's type.</exception>
     private long SetKey(ReadOnlySpan<EntityKey> key)
     {
         var layout = Schema.Key;
@@ -1457,23 +1391,20 @@ public sealed class LocalTableWriter : IFeatureTableWriter
     }
 
     /// <summary>
-    /// Where the record being built stages its variable-length values until commit: the chars of <c>string</c> values and
-    /// the elements of lists. Its cursor moves only in <see cref="Reserve"/>, which aligns it,
-    /// makes room (growing, and so replacing, the array) and returns the reserved bytes. Callers write through that span
-    /// and read back by offset, so none can hold the array across a growth or take an offset past its end.
+    /// Its cursor moves only in <see cref="Reserve"/>, which aligns it, makes room (growing, and so replacing, the
+    /// array) and returns the reserved bytes. Callers write through that span and read back by offset, so none can hold
+    /// the array across a growth or take an offset past its end.
     /// </summary>
     private sealed class PendingBuffer
     {
         private byte[] _bytes = new byte[256];
         private int _used;
 
-        /// <summary>Starts a new record: what was staged before is dropped.</summary>
         public void Clear() => _used = 0;
 
         /// <summary>
-        /// <paramref name="bytes"/> bytes at the next multiple of <paramref name="alignment"/> (a power of two), starting
-        /// at <paramref name="offset"/>. Room is made even for 0 bytes, so the offset of an empty value is inside the array.
-        /// Reservations of one list are contiguous, since each element's size is a multiple of its alignment.
+        /// Room is made even for 0 bytes, so the offset of an empty value is inside the array. Reservations of one list
+        /// are contiguous, since each element's size is a multiple of its alignment.
         /// </summary>
         public Span<byte> Reserve(int bytes, int alignment, out int offset)
         {
@@ -1536,8 +1467,8 @@ public readonly struct RecordBuilder
     public void SetFloat64(int field, double value) => Writer.SetFixed(_token, field, StorageKind.Float64, value);
 
     /// <summary>
-    /// A <c>string</c> value, stored as a code into the table's string dictionary: a value the dictionary holds is not
-    /// stored again, and every read hands out the dictionary's instance, so a fill allocates no string, whatever the length.
+    /// A <c>string</c> value: a value the dictionary holds is not stored again, and every read hands out the
+    /// dictionary's instance, so a fill allocates no string, whatever the length.
     /// </summary>
     public void SetString(int field, string value)
     {
@@ -1585,7 +1516,6 @@ public readonly struct RecordBuilder
         }
     }
 
-    /// <summary>A list of fixed-size elements of the field's element storage (the cache's records hold them so).</summary>
     internal void SetList<T>(int field, ReadOnlySpan<T> value)
         where T : unmanaged => Writer.SetList(_token, field, value, "SetList");
 
@@ -1609,8 +1539,8 @@ public readonly struct RecordBuilder
     public void SetMissing(int field) => Writer.SetMissing(_token, field);
 
     /// <summary>
-    /// Writes a promoted value (as configuration and tests hold them): int64 into <c>int32</c> storage must fit, float64
-    /// into <c>float32</c> narrows, a missing value clears the field.
+    /// Writes a promoted value: int64 into <c>int32</c> storage must fit, float64 into <c>float32</c> narrows, a
+    /// missing value clears the field.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">An integer (or list element) outside the int32 range of an int32 field, or
     /// a list of another length than a <c>list&lt;E,N&gt;</c> field's.</exception>
@@ -1690,7 +1620,6 @@ public readonly struct RecordBuilder
     /// <exception cref="LocalTableFullException">The table would pass <c>max_bytes</c> even after compaction.</exception>
     public bool Commit() => Writer.Commit(_token);
 
-    /// <summary>Commits a complete cache record; the writer may evict other keys to make room for it.</summary>
     internal bool CommitCached(LocalTableCache cache) => Writer.Commit(_token, cache);
 
     private LocalTableWriter Writer => _writer ?? throw new InvalidOperationException("This RecordBuilder was not created by IFeatureTableWriter.Begin.");

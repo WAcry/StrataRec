@@ -8,9 +8,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The sample with a <c>PairwiseRanker@1</c> and a <c>ListwiseReranker@1</c> after the final sort, each bound to a test
-/// model: their calls carry no per-row keys, so a recording keeps each call by the digest of its whole input and a replay
-/// serves it back only for the same input. Runs alone: it counts the pairs the model's calls send (<c>stratarec.io.keys</c>).
+/// Runs alone: it counts the pairs the model's calls send (<c>stratarec.io.keys</c>).
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class ModelRankerReplayTests
@@ -33,16 +31,15 @@ public sealed class ModelRankerReplayTests
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "listwise_rerank").Outcome);
         var pairCalls = run.ServiceCalls.FindAll(c => c.Role == "model").Where(c => c.Service == "pair_model").ToList();
         Assert.Equal(new[] { 3, 4, 4, 4 }, pairCalls.Select(c => c.BatchSize).Order()); // window 6: 15 pairs in batches of 4
-        Assert.All(pairCalls, c => Assert.Equal(("ok", false, 1), (c.Status, c.Keys.HasValue, c.InputDigests.Count))); // one digest per call
+        Assert.All(pairCalls, c => Assert.Equal(("ok", false, 1), (c.Status, c.Keys.HasValue, c.InputDigests.Count)));
         var listCall = Assert.Single(run.ServiceCalls.FindAll(c => c.Role == "model"), c => c.Service == "list_model");
         Assert.Equal(("ok", 1, false), (listCall.Status, listCall.BatchSize, listCall.Keys.HasValue));
         Assert.Equal(new[] { "final float32 [1, 8]", "seed int64 [1]", "smoothed_ctr float32 [1, 8]" }, lists.Seen);
         Assert.Equal(15.0, PairsCounted(metrics));
         var scored = recorded.Items.Where(i => !i.Columns["pairwise"].IsMissing).ToList();
-        Assert.InRange(scored.Count, 1, 6); // the window's rows, of those served
+        Assert.InRange(scored.Count, 1, 6);
         Assert.All(scored, i => Assert.InRange(i.Columns["pairwise"].AsFloat64(), 0, 5));
 
-        // Through JSON, on a fresh engine whose models would answer differently: every answer must come from the recording.
         metrics.Measurements.Clear();
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording));
         var (replayPairs, replayLists) = (new PairModels(bias: 1f), new ListModels(bias: 1f));
@@ -55,7 +52,7 @@ public sealed class ModelRankerReplayTests
         Assert.All(report.Nodes, n => Assert.False(n.Changed, $"{n.Node}: {n.Recorded} -> {n.Replayed}"));
         Assert.Empty(replayPairs.Seen);
         Assert.Empty(replayLists.Seen);
-        Assert.Equal(0.0, PairsCounted(metrics)); // a replay is not traffic
+        Assert.Equal(0.0, PairsCounted(metrics));
     }
 
     [Fact]
@@ -66,7 +63,6 @@ public sealed class ModelRankerReplayTests
             .ExecuteAsync(ReplayTests.Request("req-rankers-changed", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
-        // Each ranker reads the model's score instead of the one it was recorded with.
         var modified = HomeFeedTestHost.LoadModified(root =>
         {
             AddRankers(root);
@@ -77,21 +73,17 @@ public sealed class ModelRankerReplayTests
         var outcome = await Load(modified, pairs, lists).ReplayAsync(recorded.Recording!, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
-        Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip
+        Assert.True(outcome.Result.Succeeded, outcome.Result.Error);
         Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "pair_model", Reason: "inputs_changed" });
         Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "list_model", Reason: "inputs_changed" });
-        Assert.DoesNotContain(report.Gaps, g => g.Source == "ctr_model"); // its inputs did not change
+        Assert.DoesNotContain(report.Gaps, g => g.Source == "ctr_model");
         Assert.Contains(report.Nodes, n => n is { Node: "pairwise_rerank", Recorded: "succeeded", Replayed: "failed" });
         Assert.Contains(report.Nodes, n => n is { Node: "listwise_rerank", Recorded: "succeeded", Replayed: "failed" });
-        Assert.All(outcome.Result.Items, i => Assert.True(i.Columns["pairwise"].IsMissing && i.Columns["listwise"].IsMissing)); // nothing committed
+        Assert.All(outcome.Result.Items, i => Assert.True(i.Columns["pairwise"].IsMissing && i.Columns["listwise"].IsMissing));
         Assert.Empty(pairs.Seen);
         Assert.Empty(lists.Seen);
     }
 
-    /// <summary>
-    /// After <c>rank_sort</c>: a pairwise rerank of the top 6 in batches of 4 pairs, then a listwise rerank of the top 8,
-    /// both skipped when they fail, with their scores in the output.
-    /// </summary>
     private static void AddRankers(string root)
     {
         ReplayTests.Edit(root, Pipeline, "    \"diversity_cap\": {",
@@ -149,8 +141,8 @@ public sealed class ModelRankerReplayTests
     private static string Describe(in NamedInput input) => $"{input.Name} {input.ElementType.ToString().ToLowerInvariant()} [{string.Join(", ", input.Shape.ToArray())}]";
 
     /// <summary>
-    /// A pairwise model over the final score, the ids and the quality weight: the first row is preferred by the logistic
-    /// of their difference (so a replay that served another pair's answer would differ); <c>bias</c> shifts every answer.
+    /// A pairwise model over the final score, the ids and the quality weight: the first row is preferred by the
+    /// logistic of their difference (so a replay that served another pair's answer would differ).
     /// </summary>
     private sealed class PairModels(float bias = 0f) : IBindingFactory<IServiceClient>, IServiceClient
     {
@@ -209,7 +201,6 @@ public sealed class ModelRankerReplayTests
         }
     }
 
-    /// <summary>A listwise model: each row's final score relative to the list's mean, plus a little of its CTR and the seed.</summary>
     private sealed class ListModels(float bias = 0f) : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "list_test@1";

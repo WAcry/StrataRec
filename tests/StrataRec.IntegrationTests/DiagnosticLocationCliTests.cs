@@ -5,9 +5,7 @@ using StrataRec.CommandLine.Commands;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The CLI prints a configuration error as <c>file:line:column: error CODE /pointer: message</c> (and the same location in
-/// <c>--format json</c>), so a terminal or editor opens the place; one mistake is one error, not a cascade. Expected
-/// positions are counted from the edited file here, independently of the locator.
+/// Expected positions are counted from the edited file here, independently of the locator.
 /// </summary>
 public sealed class DiagnosticLocationCliTests : IDisposable
 {
@@ -80,7 +78,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
 
         var (line, column) = Position(root, Pipeline, "'a'\" }");
         var at = lines.IndexOf($"{root}/{Pipeline}:{line}:{column}: error EXPR_TYPE_MISMATCH /nodes/coarse_score/config/expr: '*' needs numbers, got float64 and string.");
-        Assert.True(at >= 0, string.Join("\n", lines)); // the offset and the expression are on the next two lines
+        Assert.True(at >= 0, string.Join("\n", lines));
         Assert.Contains("\"expr\": \"col.item.smoothed_ctr * 'a'\"", lines[at + 1]);
         Assert.EndsWith("^", lines[at + 2]);
     }
@@ -88,7 +86,6 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     [Fact]
     public void Json_EveryLocatedDiagnostic_HasFileLineAndColumn()
     {
-        // Without the sample's review of calibration × MMR, its interaction warning is reported at the node MMR adds.
         var root = Workspace(("experiments/exp_mmr_diversity.jsonc", "\"reviewed_interactions\": { \"exp_freshness_calibration\": [\"score.final\"] },", ""));
         var output = new StringWriter();
 
@@ -124,16 +121,14 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     [InlineData(Pipeline, "\"key\": [\"ctx.request.user_id\", \"ctx.request.session_id\"]", "\"key\": []",
         "FUNNEL_NO_KEY", "/funnel_groups/deep_trace/key", "\"key\": []")]
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"diversity_cap\": null,", "\"diversty_cap\": null,",
-        "PATCH_DELETE_MISSING", "/arms/mmr/nodes/diversty_cap", "\"diversty_cap\"")] // the arm's parameters are not reported again
+        "PATCH_DELETE_MISSING", "/arms/mmr/nodes/diversty_cap", "\"diversty_cap\"")]
     [InlineData("bindings/local.jsonc", "\"fixtures/recall_vectors.json\"", "\"fixtures/no_such_file.json\"",
         "BINDING_SETTINGS", "/services/two_tower/data_file", "\"data_file\": \"fixtures/no_such_file.json\"")] // at the binding, and the
         // recall columns are still declared: the output that reads one is not reported unknown
     [InlineData("bindings/local.jsonc", "\"activation\": \"sigmoid\"", "\"activaton\": \"sigmoid\"",
-        "BINDING_SETTINGS", "/services/ctr_model/outputs/p_click/activaton", "\"activaton\"")] // was ignored: the identity scored
-    // An operator's error is at the setting to change, with a hint (they were at the config or the other column, without).
+        "BINDING_SETTINGS", "/services/ctr_model/outputs/p_click/activaton", "\"activaton\"")]
     [InlineData(Pipeline, "\"source_order\": [\"two_tower\", \"popular\"]", "\"source_order\": [\"two_tower\", \"populr\"]",
         "RECALL_UNKNOWN_SOURCE", "/nodes/recall/config/source_order/1", "\"populr\"")]
-    // A recall source's query: a source without a quota, a value without a name, a candidate column.
     [InlineData(Pipeline, "\"queries\": { \"two_tower\": {", "\"queries\": { \"two_towr\": {",
         "RECALL_UNKNOWN_SOURCE", "/nodes/recall/config/queries/two_towr", "\"two_towr\"")]
     [InlineData(Pipeline, "{ \"user_embedding\": \"ctx.user.embedding\" }", "{ \"\": \"ctx.user.embedding\" }",
@@ -144,7 +139,6 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "QUOTA_BAD_CONFIG", "/nodes/diversity_cap/config/max_per_window", "\"max_per_window\": 0")]
     [InlineData("experiments/exp_mmr_diversity.jsonc", "\"score_col\": \"score.final\"", "\"score_col\": \"item.category\"",
         "COLUMN_TYPE_MISMATCH", "/arms/mmr/nodes/mmr_diversifier/config/score_col", "\"score_col\": \"item.category\"")]
-    // A node's timing is reported at the member that is wrong (it was at the node, naming all three, without a hint).
     [InlineData(Pipeline, "\"fallback\": \"ctr_backup\", \"timeout_ms\": 50,", "\"fallback\": \"ctr_backup\", \"timeout_ms\": 0,",
         "NODE_BAD_TIMING", "/nodes/ctr_ranker/timeout_ms", "\"timeout_ms\": 0")]
     [InlineData(Pipeline, "\"fallback\": \"ctr_backup\", \"timeout_ms\": 50,", "\"fallback\": \"ctr_backup\", \"timeout_ms\": 50, \"min_remaining_ms\": -1,",
@@ -160,11 +154,9 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         var (line, column) = Position(root, file, at);
         var error = lines.FindIndex(l => l.StartsWith($"{root}/{file}:{line}:{column}: error {code} {pointer}: ", StringComparison.Ordinal));
         Assert.True(error >= 0, string.Join('\n', lines));
-        Assert.StartsWith("    hint: ", lines[error + 3]); // after the source line and its caret: how to fix it
+        Assert.StartsWith("    hint: ", lines[error + 3]);
     }
 
-    /// <summary>There is one string type: <c>text</c> is refused wherever a type is declared, at its pointer, and the hint
-    /// is the string spelling meant.</summary>
     [Theory]
     [InlineData("catalog/home_feed.jsonc", "\"item.category\":       { \"type\": \"string\"", "\"item.category\":       { \"type\": \"text\"",
         "FEATURE_BAD_TYPE", "/features/item.category/type", "string")]
@@ -219,7 +211,6 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         "error REQUEST_INVALID /inputs/surfce: Input 'surfce' is not declared in the request_schema of pipeline 'home_feed'.")]
     [InlineData("\"deadline_ms\": 200", "\"deadline_ms\": \"200\"", "\"deadline_ms\"",
         "error REQUEST_INVALID /deadline_ms: 'deadline_ms' must be a number or null, got the string \"200\".")]
-    // A null pipeline_id was an unhandled exception; duplicate members are rejected as in a service's request body.
     [InlineData("\"pipeline_id\": \"home_feed\"", "\"pipeline_id\": null", "\"pipeline_id\"",
         "error REQUEST_INVALID /pipeline_id: 'pipeline_id' must be a string, got null.")]
     [InlineData("\"pipeline_id\": \"home_feed\"", "\"pipeline_id\": \"\"", "\"pipeline_id\"",
@@ -240,7 +231,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
 
         Assert.True(code == 2, $"exit {code}; stderr: {stderr}");
         var (line, column) = Position(root, requestFile, at);
-        var parts = error.Split('\n'); // the message at its location; the hint after the source line
+        var parts = error.Split('\n');
         Assert.Contains($"{request}:{line}:{column}: {parts[0]}", stderr, StringComparison.Ordinal);
         foreach (var part in parts[1..])
         {
@@ -280,11 +271,6 @@ public sealed class DiagnosticLocationCliTests : IDisposable
             errors.ToString(), StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// A value RFC 8785 cannot hold exactly (an integer beyond 2^53, here 2^60) is an error of its file at the value, with a
-    /// hint, and every other file is still read: <c>validate --format json</c> exited 1 with nothing on standard output and
-    /// the canonicalizer's exception on standard error.
-    /// </summary>
     [Fact]
     public void Json_AValueWithoutACanonicalForm_IsAnErrorAtTheValue_AndTheOtherFilesAreStillRead()
     {
@@ -300,7 +286,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         using var report = JsonDocument.Parse(output.ToString());
         var errors = report.RootElement.GetProperty("diagnostics").EnumerateArray().ToList();
         Assert.Equal(3, errors.Count);
-        Assert.Contains(errors, e => e.GetProperty("artifact").GetString() == "experiments/exp_typo.jsonc"); // another file, still read
+        Assert.Contains(errors, e => e.GetProperty("artifact").GetString() == "experiments/exp_typo.jsonc");
         foreach (var (file, pointer, value) in new[] { (Pipeline, "/params/final_top_k", "1152921504606846976"), (Experiment, "/arms/strong/params/final_top_k", "-1152921504606846977") })
         {
             var error = Assert.Single(errors, e => e.GetProperty("artifact").GetString() == file);
@@ -308,7 +294,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
             Assert.Equal("ARTIFACT_NOT_CANONICAL", error.GetProperty("code").GetString());
             Assert.Equal(pointer, error.GetProperty("pointer").GetString());
             Assert.Equal($"{root}/{file}", error.GetProperty("file").GetString());
-            Assert.Equal(line, error.GetProperty("line").GetInt32()); // the member, on the value's line
+            Assert.Equal(line, error.GetProperty("line").GetInt32());
             Assert.StartsWith($"The integer {value} cannot be represented exactly in RFC 8785 form", error.GetProperty("message").GetString(), StringComparison.Ordinal);
             Assert.Equal("write integers beyond ±2^53 (9007199254740992) as strings", error.GetProperty("hint").GetString());
         }
@@ -346,7 +332,6 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         return root;
     }
 
-    /// <summary>Runs <c>stratarec validate</c> in text: its lines, after checking the error count.</summary>
     private static List<string> ValidateText(string root, int expectedErrors)
     {
         var output = new StringWriter();
@@ -381,7 +366,6 @@ public sealed class DiagnosticLocationCliTests : IDisposable
         return (1 + text[..index].Count(c => c == '\n'), index - lineStart + 1);
     }
 
-    /// <summary>The real command line, in its own process (it writes to the console).</summary>
     private static async Task<(int Code, string Stderr)> Cli(params string[] arguments)
     {
         var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")

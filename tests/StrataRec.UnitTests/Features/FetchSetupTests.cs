@@ -8,17 +8,11 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// The what setting up a fetch may do to its bound. Here with the allocation measurements, which run
-/// alone: a test counts the process's live timers.
+/// Here with the allocation measurements, which run alone: a test counts the process's live timers.
 /// </summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class FetchSetupTests
 {
-    /// <summary>
-    /// A pool that refuses a staging buffer fails the fetch without leaving its bound behind: no timer and no registration
-    /// on the caller's token outlive it (the bound was made before the staging, outside the code that
-    /// releases it, and each refusal left a live timer for the request's deadline).
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -69,11 +63,6 @@ public sealed class FetchSetupTests
         }
     }
 
-    /// <summary>
-    /// A hook that is slow to say whether it replays does not move the fetch's deadline: the bound ends when the request's
-    /// deadline or the source's timeout comes, taken with the budget (the bound was made from the
-    /// budget after the hook was asked, so its time was added, and the connector was called past the request's deadline).
-    /// </summary>
     [Fact]
     public async Task ASlowHook_DoesNotMoveTheFetchsDeadline()
     {
@@ -99,11 +88,6 @@ public sealed class FetchSetupTests
         }
     }
 
-    /// <summary>
-    /// A host's clock that throws when a cache read takes its time fails the read without leaving its bound behind, and
-    /// one that stalls there does not move the deadline: the clock is read before the bound is made, and the bound ends
-    /// at the deadline taken with the budget (the bound was made first, and each throw left a timer).
-    /// </summary>
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -217,7 +201,6 @@ public sealed class FetchSetupTests
         public void Return<T>(T[] array, bool clearArray) => SharedArrayBufferPool.Instance.Return(array, clearArray);
     }
 
-    /// <summary>Takes <paramref name="pause"/> the first time it is asked whether it replays; records what is sent.</summary>
     private sealed class SlowHook(TimeSpan pause) : IFeatureCallHook
     {
         public int Pauses { get; private set; }

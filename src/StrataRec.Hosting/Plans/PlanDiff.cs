@@ -41,7 +41,7 @@ public sealed record CombinationDiff(string Label, IReadOnlyList<string> Arms, s
 /// <summary>
 /// One side's plan of a combination holds a value RFC 8785 cannot hold exactly (<see cref="EffectivePlan.ToDocument"/>
 /// compares plans in that form), so the sides cannot be compared. It names the side and the combination, so that a tool
-/// reports where, as a diagnostic: <c>diff --format json</c> printed the canonicalizer's stack instead.
+/// reports where, as a diagnostic.
 /// </summary>
 public sealed class PlanDiffCanonicalizationException : Exception
 {
@@ -69,10 +69,8 @@ public sealed class PlanDiffCanonicalizationException : Exception
 /// (<see cref="EffectivePlan"/>, <see cref="JsonDiff"/>); and the layers, experiments and arms either side lacks.
 /// </summary>
 /// <remarks>
-/// A combination that exists on one side only is reported as missing on the other and not compared: there is no plan to
-/// compare with, and inventing one (say, the baseline) would report every change of the arm as a change of the
-/// configuration. What is not a configuration difference is left out: compile times, manifest ids, how many
-/// combinations the compiler validated.
+/// A combination that exists on one side only is reported as missing on the other and not compared What is not a
+/// configuration difference is left out: compile times, manifest ids, how many combinations the compiler validated.
 /// </remarks>
 public sealed class PlanDiff
 {
@@ -155,7 +153,6 @@ public sealed class PlanDiff
     /// <summary><c>baseline</c>, or the arms joined with <c> + </c>.</summary>
     public static string Label(IReadOnlyList<string> arms) => arms.Count == 0 ? "baseline" : string.Join(" + ", arms);
 
-    /// <summary>One side's plan of a combination, as compared; a value it cannot hold exactly is reported with the side.</summary>
     private static JsonObject Document(ExecutionPlan plan, RequestArms arms, string side, string label)
     {
         try
@@ -249,7 +246,6 @@ public sealed class PlanDiff
         return changes;
     }
 
-    /// <summary>A plan's yields by <c>experiment\nyielded-to</c> (sorting by the one that yields).</summary>
     private static SortedDictionary<string, (string From, string To)> Yields(ExecutionPlan plan)
     {
         var yields = new SortedDictionary<string, (string From, string To)>(StringComparer.Ordinal);

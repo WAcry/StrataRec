@@ -5,33 +5,8 @@ using StrataRec.Core.Types;
 
 namespace StrataRec.Features.Local;
 
-/// <summary>
-/// Byte layout of one record of a local table, derived once from the schema.
-/// </summary>
-/// <remarks>
-/// <para>A record is a fixed part followed by its variable-length data, both in the same page, so the record is one
-/// contiguous, self-contained byte range: copying it (compaction) needs no fix-ups other than string codes.</para>
-/// <code>
-/// 0   int64  version       event version (local) or write time (cache)
-/// 8   int32  length        bytes of the whole record, fixed part plus variable data, a multiple of 8
-/// 12  uint8  flags         bit 0 marks a tombstone, bit 1 marks a recent cache hit
-/// 13  uint8[V] validity    bit f set = field f has a value (V = ceil(fields / 8))
-/// …   int32  key offset    hashed keys only: the key's canonical bytes (<see cref="TableKeys"/>), relative to the record start
-///     int32  key length    in bytes
-/// H   fields               8-byte values first (int64, float64, variable-length references), then 4-byte values
-///                          (int32, float32, string codes), then bools; each at its natural alignment
-/// F   variable data        lists (native elements, a bool one byte; list&lt;string&gt; as string codes), the key's bytes;
-///                          each item 8-byte aligned
-/// </code>
-/// <para>A variable-length field's slot holds <c>(int32 offset relative to the record start, int32 element count)</c>.
-/// A tombstone is just the header (validity all clear), plus the key's bytes for hashed keys.</para>
-/// <para>A one-part int64 key is the index's key itself and is not stored. Every other key (one string part, or several
-/// parts) is hashed: the index holds the XXH3-64 of its canonical bytes and the record the bytes, which a lookup compares.
-/// A one-string key's bytes are its UTF-16 code units, as before keys had several parts.</para>
-/// <para>A fixed-length list (<c>list&lt;float32,64&gt;</c>) is a list here like any other: the table stores what its writer
-/// wrote, and a read checks the length (<see cref="TableVersion"/>'s fill, as a request's other writers do), so one layout
-/// and one copy loop serve every list.</para>
-/// </remarks>
+/// <remarks>A record is its fixed part and its variable-length data in one contiguous byte range of one page: copying
+/// it (compaction) needs no fix-ups other than string codes.</remarks>
 internal sealed class RecordLayout
 {
     public const int VersionOffset = 0;
@@ -116,7 +91,6 @@ internal sealed class RecordLayout
 
     public int FieldCount { get; }
 
-    /// <summary>True unless the key is one int64 part: records hold the key's canonical bytes and the index their hash.</summary>
     public bool HashedKeys { get; }
 
     public int ValidityBytes { get; }
@@ -127,12 +101,10 @@ internal sealed class RecordLayout
     /// <summary>Bytes of the header, which is also the fixed part of a tombstone.</summary>
     public int HeaderSize { get; }
 
-    /// <summary>Bytes of the fixed part of a (non-tombstone) record.</summary>
     public int FixedSize { get; }
 
     public StorageKind[] Kinds { get; }
 
-    /// <summary>Each list field's element kind; 0 for other fields.</summary>
     public StorageKind[] Elements { get; }
 
     /// <summary>Bytes of one element of each variable-length field (a list's native element, a string code); 0 for a
@@ -142,7 +114,6 @@ internal sealed class RecordLayout
     /// <summary>Offset of each field's value (or variable-length reference) from the record start.</summary>
     public int[] Offsets { get; }
 
-    /// <summary>Bytes each field occupies in the fixed part.</summary>
     public int[] Sizes { get; }
 
     /// <summary>Per field: its index among the variable-length fields, or -1.</summary>
@@ -150,19 +121,16 @@ internal sealed class RecordLayout
 
     public int VarFieldCount { get; }
 
-    /// <summary>The field index of each variable-length field.</summary>
     public int[] VarFields { get; }
 
-    /// <summary>The fields whose values are codes into the table's string dictionary (<c>string</c>, <c>list&lt;string&gt;</c>).</summary>
     public int[] DictionaryFields { get; }
 
-    /// <summary>True for a field whose values are codes into the table's string dictionary: <c>string</c>, <c>list&lt;string&gt;</c>.</summary>
     public bool IsCoded(int field) => (Kinds[field] == StorageKind.List ? Elements[field] : Kinds[field]) == StorageKind.String;
 
     /// <summary>
-    /// The string codes a coded field (<see cref="IsCoded"/>) of the record at <paramref name="offset"/> holds, in place: one
-    /// for a <c>string</c>, the items of a <c>list&lt;string&gt;</c>; empty when the field has no value (a tombstone has
-    /// none). What compaction renumbers and the dictionary's reference counts follow.
+    /// The string codes a coded field (<see cref="IsCoded"/>) of the record at <paramref name="offset"/> holds, in
+    /// place; empty when the field has no value (a tombstone has none). What compaction renumbers and the dictionary's
+    /// reference counts follow.
     /// </summary>
     public Span<int> Codes(byte[] page, int offset, int field)
     {
@@ -182,8 +150,6 @@ internal sealed class RecordLayout
         return MemoryMarshal.Cast<byte, int>(page.AsSpan(offset + relative, 4 * count));
     }
 
-    /// <summary>Bytes of one element of a variable-length type (native list elements, string codes); 0 for a fixed-size
-    /// type.</summary>
     private static int VariableElementSize(ColumnType type) => type.Kind switch
     {
         StorageKind.List => type.Element switch

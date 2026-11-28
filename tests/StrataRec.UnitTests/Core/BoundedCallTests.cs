@@ -12,15 +12,8 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// The rules of the framework's I/O boundary (<see cref="BoundedCall"/>: service calls, feature connectors, distributed
-/// caches, assignment providers), checked on the helper itself so that no call site can break them unnoticed: the wait has its own bound, the memory and the
-/// client's tokens outlive an abandoned client, the outcome is classified one way, and each call ends exactly once.
-/// </summary>
 /// <remarks>
-/// Clients that ignore cancellation answer on dedicated threads once the test opens their gate. Whether the helper waited
-/// for one is therefore not a question of timing: it returned while the gate was closed, or the test fails after
-/// <see cref="Patience"/> (which is what an unbounded wait does here).
+/// Clients that ignore cancellation answer on dedicated threads once the test opens their gate.
 /// </remarks>
 public sealed class BoundedCallTests
 {
@@ -47,19 +40,19 @@ public sealed class BoundedCallTests
         Assert.Equal((CallEnd.BudgetRanOut, IoOutcome.Timeout, true, "timed out: the time budget ran out"), (result.End, result.Outcome, result.Abandoned, result.Error));
         Assert.IsAssignableFrom<OperationCanceledException>(result.Exception);
         var ended = Assert.Single(site.Recorded);
-        Assert.True(ended.MemoryLive); // recorded while the call held the memory
-        Assert.Equal(budget.Token, client); // no timeout of its own: the client got the node token
+        Assert.True(ended.MemoryLive);
+        Assert.Equal(budget.Token, client);
 
-        budget.Release(); // the attempt ends
-        Assert.Equal(1, memory.Release()); // the request returns: the client still holds the memory, once
-        Assert.True(pool.Outstanding > 0); // the ledger is still out
-        Assert.True(SpinWait.SpinUntil(() => client.IsCancellationRequested, Patience)); // cancelled at the budget...
+        budget.Release();
+        Assert.Equal(1, memory.Release());
+        Assert.True(pool.Outstanding > 0);
+        Assert.True(SpinWait.SpinUntil(() => client.IsCancellationRequested, Patience));
         _ = client.WaitHandle; // ...and still alive: the source is not disposed while the client runs
 
         gate.Set();
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
-        DisposedTokens.AssertEventuallyDisposed(client); // disposed once the client completed
-        Assert.Single(site.Recorded); // nothing is recorded when the abandoned client answers
+        DisposedTokens.AssertEventuallyDisposed(client);
+        Assert.Single(site.Recorded);
     }
 
     [Fact]
@@ -163,8 +156,7 @@ public sealed class BoundedCallTests
     [InlineData("throws a timeout of its own")]
     public async Task AClientCompletingAfterItsTimeoutWon_ButBeforeTheCallIsClassified_HasTimedOut(string completion)
     {
-        // The wait ends at the call's timeout; its continuation is held until the client has completed. The call has
-        // timed out all the same: the winner is the wait's outcome, not the client's state when the call is classified.
+        // The wait ends at the call's timeout; its continuation is held until the client has completed.
         using var gate = new ResumeGate();
         var client = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var memory = new RequestMemory();
@@ -186,7 +178,7 @@ public sealed class BoundedCallTests
         }
         else
         {
-            client.SetException(new TimeoutException("transport")); // not to be mistaken for the wait's own timeout
+            client.SetException(new TimeoutException("transport"));
         }
 
         gate.Release();
@@ -215,7 +207,7 @@ public sealed class BoundedCallTests
         {
             gate.Mark();
             var pending = Run(site.With(_ => new ValueTask<int>(client.Task)), budget, memory, timeoutMs: null);
-            waiting.Set(); // the pending call has started its wait
+            waiting.Set();
             return await pending;
         });
         Assert.True(waiting.Wait(Patience, TestContext.Current.CancellationToken));
@@ -241,9 +233,8 @@ public sealed class BoundedCallTests
     [InlineData("after the caller cancelled")]
     public async Task AClientCompletingWhileItsValueTaskBecomesATask_IsHeardOnlyIfItsBoundHasNotPassed(string when)
     {
-        // Send returns pending; the client completes while the framework turns its ValueTask into a task, before any wait
-        // is set up. WaitAsync then returns the completed client as it is, whatever the time left or the caller, so its
-        // outcome proves nothing: the framework observes the completion itself, as an answer before Send returned.
+        // Send returns pending; the client completes while the framework turns its ValueTask into a task, before any
+        // wait is set up.
         using var caller = new CancellationTokenSource();
         var memory = new RequestMemory();
         var budget = new AttemptBudget(caller.Token, Deadline(600_000));
@@ -262,7 +253,7 @@ public sealed class BoundedCallTests
 
         var result = await Run(site.With(client.Send), budget, memory, timeoutMs: when == "after its own timeout" ? 10 : 300_000).AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        Assert.Equal((1, 1), (client.OnCompletedCalls, client.GetResultCalls)); // pending when sent; its result taken once
+        Assert.Equal((1, 1), (client.OnCompletedCalls, client.GetResultCalls));
         var expected = when switch
         {
             "in time" => (CallEnd.Answered, IoOutcome.Ok, 81, (string?)null),
@@ -273,13 +264,12 @@ public sealed class BoundedCallTests
         Assert.Equal(when == "after the caller cancelled", result.Exception is OperationCanceledException { } cancelled && cancelled.CancellationToken == caller.Token);
         Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
         budget.Release();
-        Assert.Equal(0, memory.Release()); // the completed client and the call site let go before the call returned
+        Assert.Equal(0, memory.Release());
     }
 
     [Fact]
     public async Task AClientsOwnTimeoutException_ThrownInTime_IsTheClientsFailure()
     {
-        // The wait passes the client's exception on: the very object it threw tells it apart from the wait's own timeout.
         var client = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var memory = new RequestMemory();
         var budget = new AttemptBudget(CancellationToken.None, Deadline(600_000));
@@ -303,8 +293,6 @@ public sealed class BoundedCallTests
     [InlineData("caller")]
     public async Task ASynchronousAnswerAfterTheCallsBound_IsNotUsed(string bound)
     {
-        // The client waits until its token is cancelled and then answers anyway, synchronously. With an own timeout shorter
-        // than the budget, the node's budget is far from spent: only the call's own bound can tell the answer is late.
         using var caller = new CancellationTokenSource();
         var memory = new RequestMemory();
         var budget = new AttemptBudget(caller.Token, Deadline(bound == "budget" ? 10 : 600_000));
@@ -314,7 +302,7 @@ public sealed class BoundedCallTests
         {
             if (bound == "caller")
             {
-                caller.Cancel(); // the caller gives up while the client is still working
+                caller.Cancel();
             }
 
             Assert.True(token.WaitHandle.WaitOne(Patience));
@@ -331,17 +319,12 @@ public sealed class BoundedCallTests
         };
         Assert.Equal((expected.Item1, expected.Item2, expected.Item3, 0, false), (result.End, result.Outcome, result.Error, result.Value, result.Abandoned));
         Assert.Equal(bound != "own", result.Exception is OperationCanceledException);
-        Assert.Equal(bound == "own", !budget.Token.IsCancellationRequested); // an own timeout: the node's budget was left
+        Assert.Equal(bound == "own", !budget.Token.IsCancellationRequested);
         Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
         budget.Release();
         Assert.Equal(0, memory.Release());
     }
 
-    /// <summary>
-    /// A synchronous client that returns only after both the node's budget and its own, later, timeout have passed was cut
-    /// off by the earlier, the budget: the operator gets the budget's cancellation. It was classified
-    /// by its own timeout, which was checked first, and the operator got a failed status instead.
-    /// </summary>
     [Fact]
     public async Task ASynchronousAnswerAfterBothDeadlines_IsCutOffByTheEarlier()
     {
@@ -375,23 +358,18 @@ public sealed class BoundedCallTests
         {
             client = token;
             return ValueTask.FromResult(value);
-        }), budget, memory, timeoutMs: 300_000); // its own, shorter than the node's: a token source of its own
+        }), budget, memory, timeoutMs: 300_000);
 
         Assert.True(pending.IsCompletedSuccessfully);
         var result = await pending;
         Assert.Equal((CallEnd.Answered, value, outcome, error, false), (result.End, result.Value, result.Outcome, result.Error, result.Abandoned));
         Assert.True(Assert.Single(site.Recorded).MemoryLive);
         budget.Release();
-        DisposedTokens.AssertEventuallyDisposed(client); // the call's own token source is gone already
+        DisposedTokens.AssertEventuallyDisposed(client);
         DisposedTokens.AssertEventuallyDisposed(budget.Token);
-        Assert.Equal(0, memory.Release()); // nothing holds the memory but the request
+        Assert.Equal(0, memory.Release());
     }
 
-    /// <summary>
-    /// A client that cancels its own call, with none of the framework's tokens cancelled and its deadline ahead, threw: a
-    /// timeout of its own, said so without reading the exception's message (the message, a getter an
-    /// exception may override, was read on the request's thread, and a cancellation's message does not say whose it was).
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -413,11 +391,8 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
-    /// A client that answers its token's cancellation with an exception of its protocol, not a cancellation (gRPC's
-    /// <c>RpcException</c>, status <c>Cancelled</c>), before the wait ends: the call's own deadline cancelled the token, so
-    /// it timed out, as when the wait ends first, and the protocol's echo of the cancellation is dropped (2026-11-22: it
-    /// was recorded as the client's error). The wait's timer is put far off by moving the deadline's clock back once the
-    /// call is sent, so the client always comes first.
+    /// The wait's timer is put far off by moving the deadline's clock back once the call is sent, so the client always
+    /// comes first.
     /// </summary>
     [Fact]
     public async Task AClientThatAnswersItsCancelledTokenWithAnotherException_TimedOut()
@@ -427,7 +402,7 @@ public sealed class BoundedCallTests
         var site = new Site(memory);
         var clock = new ManualClock();
         clock.HoldTimestamps();
-        var deadline = CallDeadline.At(clock, clock.GetTimestamp() + (clock.TimestampFrequency / 50), 20); // the token: 20 ms
+        var deadline = CallDeadline.At(clock, clock.GetTimestamp() + (clock.TimestampFrequency / 50), 20);
         var client = default(CancellationToken);
 
         var result = await BoundedCall.RunAsync<int, Site>(site.With(token =>
@@ -444,13 +419,10 @@ public sealed class BoundedCallTests
         Assert.Equal(result.End, Assert.Single(site.Recorded).Result.End);
         budget.Release();
         memory.Release();
-        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience)); // the client completed: nothing holds it
+        Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
     }
 
     /// <summary>
-    /// A client's failure that came before any of the framework's tokens was cancelled stays its own, type and message,
-    /// when the caller cancels or the budget runs out after it and before the call is classified (the
-    /// tokens were read when the call was classified, so the failure became the caller's cancellation, or the budget's).
     /// The client completes on a thread of its own with its continuations inline: the lease reads the tokens, then the
     /// wait ends and its continuation, which alone carries the gate's mark, is held there.
     /// </summary>
@@ -499,10 +471,7 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
-    /// A client whose task ended cancelled on its own (its transport's token: an HTTP client's own timeout ends its async
-    /// method cancelled, not faulted) cancelled the call itself, though the caller cancels after it and before the call is
-    /// classified (the caller was read when the call was classified, and the client, done, was said to
-    /// be abandoned). Set up as the failure that came first: its wait's continuation is held until the caller cancelled.
+    /// Set up as the failure that came first: its wait's continuation is held until the caller cancelled.
     /// </summary>
     [Fact]
     public async Task AClientsOwnCancellation_ThatCameFirst_StaysItsOwn_WhenTheCallerCancelsBeforeTheCallIsClassified()
@@ -541,11 +510,8 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
-    /// A caller that ended the wait before the cancellation a client's task ended with reached it was first: the call is
-    /// the caller's, though the client's task had ended cancelled, on its own, before the caller cancelled
-    /// (the lease had seen the client complete with no token cancelled, and the call was the client's own
-    /// timeout, the operator given a failed status instead of the caller's cancellation). The client's completion is held
-    /// after the lease's continuation and before the wait's, by one registered between them.
+    /// The client's completion is held after the lease's continuation and before the wait's, by one registered between
+    /// them.
     /// </summary>
     [Fact]
     public async Task ACallerThatEndedTheWaitFirst_IsWhoEndedTheCall_ThoughTheClientsTaskEndedCancelledBefore()
@@ -589,11 +555,6 @@ public sealed class BoundedCallTests
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
     }
 
-    /// <summary>
-    /// A client whose task ended cancelled with no token cancelled the call itself, with a caller that passed no token,
-    /// as with one that never cancels (the wait's token, none, equalled the caller's, none, so the call
-    /// was the caller's cancellation, which never came).
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -618,11 +579,6 @@ public sealed class BoundedCallTests
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
     }
 
-    /// <summary>
-    /// A client that answered the call's own deadline (an exception of its protocol) timed out, though the node's budget
-    /// ran out too before the call was classified: the call's own deadline came first (it was the
-    /// budget's, and the operator was thrown a cancellation instead of a failed status).
-    /// </summary>
     [Fact]
     public async Task ACallsOwnDeadline_ThatCameFirst_IsItsTimeout_ThoughTheBudgetRunsOutBeforeTheCallIsClassified()
     {
@@ -632,7 +588,7 @@ public sealed class BoundedCallTests
         var site = new Site(memory).WhenPending(gate.Mark);
         var clock = new ManualClock();
         clock.HoldTimestamps();
-        var deadline = CallDeadline.At(clock, clock.GetTimestamp() + (clock.TimestampFrequency / 20), 50); // the token: 50 ms
+        var deadline = CallDeadline.At(clock, clock.GetTimestamp() + (clock.TimestampFrequency / 20), 50);
         var client = new TaskCompletionSource<int>(); // continuations inline, on the thread the token's callbacks run on
 
         var running = Task.Run(async () => await BoundedCall.RunAsync<int, Site>(site.With(token =>
@@ -701,7 +657,7 @@ public sealed class BoundedCallTests
         var site = new Site(memory);
 
         var running = Run(site.With(_ => OnThread(gate, () => 3)), budget, memory, timeoutMs: null).AsTask();
-        Assert.Equal(1, memory.Release()); // the request has gone; the call is still waiting
+        Assert.Equal(1, memory.Release());
         gate.Set();
         var result = await running.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
@@ -712,9 +668,9 @@ public sealed class BoundedCallTests
     }
 
     [Theory]
-    [InlineData(-1_000, false, true)] // the deadline has passed
-    [InlineData(600_000, false, false)] // time is left
-    [InlineData(-1_000, true, false)] // the caller cancelled: not the budget's doing
+    [InlineData(-1_000, false, true)]
+    [InlineData(600_000, false, false)]
+    [InlineData(-1_000, true, false)]
     public void RanOut_IsTheBudgetRunningOut_NotTheCaller(int deadlineMs, bool callerCancelled, bool ranOut)
     {
         using var caller = new CancellationTokenSource();
@@ -743,11 +699,6 @@ public sealed class BoundedCallTests
         untimed.Release();
     }
 
-    /// <summary>
-    /// Rule 8: a call whose caller has already cancelled (an earlier source of the
-    /// same recall did, say) or whose time is up is not sent; it ends cancelled or out of budget, recorded once, and gives
-    /// back the memory and the budget.
-    /// </summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -775,7 +726,7 @@ public sealed class BoundedCallTests
             (result.End, result.Outcome, result.Abandoned));
         Assert.True(Assert.Single(site.Recorded).MemoryLive);
         budget.Release();
-        Assert.Equal(0, memory.Release()); // nothing holds it any more
+        Assert.Equal(0, memory.Release());
     }
 
     private static long Deadline(int milliseconds) => Stopwatch.GetTimestamp() + ((long)milliseconds * Stopwatch.Frequency / 1000);
@@ -783,7 +734,6 @@ public sealed class BoundedCallTests
     private static ValueTask<CallResult<int>> Run(Site site, AttemptBudget budget, RequestMemory memory, int? timeoutMs) =>
         BoundedCall.RunAsync<int, Site>(site, budget, memory, Target, CallDeadline.After(timeoutMs));
 
-    /// <summary>Completes the call on a dedicated thread once <paramref name="gate"/> is set; the client ignores its token.</summary>
     private static ValueTask<int> OnThread(ManualResetEventSlim gate, Func<int> work)
     {
         var done = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -809,10 +759,8 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
-    /// Holds back the first continuation that resumes the marked flow on another thread, until released. The wait for a
-    /// pending client resumes that way when it ends (an async method restores its execution context when it resumes, and
-    /// the AsyncLocal is told), so a test can complete the client after the wait has ended and before the call is
-    /// classified: a window no timing makes reliable.
+    /// The wait for a pending client resumes that way when it ends, so a test can complete the client after the wait
+    /// has ended and before the call is classified.
     /// </summary>
     private sealed class ResumeGate : IDisposable
     {
@@ -826,7 +774,6 @@ public sealed class BoundedCallTests
         /// <summary>Marks the current flow: what it awaits from now on carries the mark.</summary>
         public void Mark() => _flow.Value = this;
 
-        /// <summary>Waits until a continuation is held.</summary>
         public bool WaitHeld() => _held.Wait(Patience);
 
         public void Release() => _released.Set();
@@ -844,9 +791,7 @@ public sealed class BoundedCallTests
     }
 
     /// <summary>
-    /// A client whose ValueTask is still pending when Send returns and completes with 81 while the framework turns it into
-    /// a task: AsTask registers its continuation through OnCompleted, which first runs <c>meanwhile</c> with the token the
-    /// client got, then completes. No timing is involved: by the time a wait could be set up, the client has completed.
+    /// No timing is involved: by the time a wait could be set up, the client has completed.
     /// </summary>
     private sealed class CompletingWhileAdapted(Action<CancellationToken> meanwhile) : IValueTaskSource<int>
     {
@@ -881,7 +826,6 @@ public sealed class BoundedCallTests
         }
     }
 
-    /// <summary>A call site: a negative answer is a failure; every end is recorded with whether the memory was still live.</summary>
     private readonly struct Site(
         RequestMemory memory, Func<CancellationToken, ValueTask<int>>? send = null, List<(CallResult<int> Result, bool MemoryLive)>? ended = null, Action? pending = null)
         : IBoundedCall<int>
@@ -937,12 +881,6 @@ public sealed class BoundedCallTests
     }
 }
 
-/// <summary>
-/// A host's metric listener that throws while a call completes loses its measurement. The call is still
-/// recorded, with the outcome it had, the caller gets its result rather than the listener's exception, and the call lets
-/// go of the memory: the call site completed the call before recording it, so the throw left a call that had answered
-/// unrecorded (outstanding in a recording) and threw out of the node.
-/// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class BoundedCallListenerTests
 {
@@ -966,7 +904,7 @@ public sealed class BoundedCallListenerTests
 
         Assert.Equal((CallEnd.Answered, 5, IoOutcome.Ok), (result.End, result.Value, result.Outcome));
         Assert.Equal(IoOutcome.Ok, Assert.Single(call.Results).Outcome);
-        Assert.Equal(1, listener.Calls); // it ran, and threw
+        Assert.Equal(1, listener.Calls);
         budget.Release();
         memory.Release();
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
@@ -975,8 +913,6 @@ public sealed class BoundedCallListenerTests
     [Fact]
     public async Task AnActivityListenerThatThrowsWhenACallStarts_LeavesItWithoutASpan_AndTheCallLetsGoOfTheMemory()
     {
-        // The call site holds the request's memory, then starts the call: a throw from the host's start callback kept the
-        // memory held for good. The listener samples only this test's trace.
         var root = "bounded-call-start-" + Guid.NewGuid().ToString("N");
         ActivityTraceId trace = default;
         var started = 0;
@@ -1008,17 +944,12 @@ public sealed class BoundedCallListenerTests
             .AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal((CallEnd.Answered, 5, IoOutcome.Ok), (result.End, result.Value, result.Outcome));
-        Assert.Equal(1, Volatile.Read(ref started)); // it ran, and threw
+        Assert.Equal(1, Volatile.Read(ref started));
         budget.Release();
         memory.Release();
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, Patience));
     }
 
-    /// <summary>
-    /// A host's sampler that takes the time of both deadlines as the call starts leaves it not sent, cut off at the one
-    /// that came first, the call's own: as a sent call would have been (it was put down to the
-    /// scope's bound, which the operator sees as its budget running out rather than the service timing out).
-    /// </summary>
     [Fact]
     public async Task ACallWhoseTwoDeadlinesPassInTheHostsSampler_IsCutOffAtTheEarlier_AndNotSent()
     {
@@ -1036,7 +967,7 @@ public sealed class BoundedCallListenerTests
 
                 if (trace != default && options.Parent.TraceId == trace)
                 {
-                    Thread.Sleep(400); // past both deadlines
+                    Thread.Sleep(400);
                     return ActivitySamplingResult.AllDataAndRecorded;
                 }
 
@@ -1047,7 +978,7 @@ public sealed class BoundedCallListenerTests
         using var request = StrataRecTelemetry.ActivitySource.StartActivity(root);
         trace = request!.TraceId;
         var started = Stopwatch.GetTimestamp();
-        var budget = new AttemptBudget(CancellationToken.None, started + (Stopwatch.Frequency / 5)); // 200 ms
+        var budget = new AttemptBudget(CancellationToken.None, started + (Stopwatch.Frequency / 5));
         var sent = 0;
         var call = new Recording(new ValueTask<int>(5), () => sent++);
 
@@ -1059,11 +990,6 @@ public sealed class BoundedCallListenerTests
         budget.Release();
     }
 
-    /// <summary>
-    /// A call whose host's sampler takes only the scope's time is the scope's, though its own deadline came first when it
-    /// started: that deadline, on a clock of its own (held still here), has not passed (the
-    /// order told before the call started put it down to its own deadline).
-    /// </summary>
     [Fact]
     public async Task ACallWhoseSamplerTakesOnlyTheScopesTime_IsTheScopes()
     {
@@ -1081,7 +1007,7 @@ public sealed class BoundedCallListenerTests
 
                 if (trace != default && options.Parent.TraceId == trace)
                 {
-                    Thread.Sleep(400); // past the scope's deadline
+                    Thread.Sleep(400);
                     return ActivitySamplingResult.AllDataAndRecorded;
                 }
 
@@ -1091,9 +1017,9 @@ public sealed class BoundedCallListenerTests
         ActivitySource.AddActivityListener(listener);
         using var request = StrataRecTelemetry.ActivitySource.StartActivity(root);
         trace = request!.TraceId;
-        var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (Stopwatch.Frequency / 5)); // 200 ms
+        var budget = new AttemptBudget(CancellationToken.None, Stopwatch.GetTimestamp() + (Stopwatch.Frequency / 5));
         var held = new HeldClock();
-        var own = CallDeadline.At(held, held.GetTimestamp() + (held.TimestampFrequency / 10), 100); // 100 ms, never passing
+        var own = CallDeadline.At(held, held.GetTimestamp() + (held.TimestampFrequency / 10), 100);
         var sent = 0;
         var call = new Recording(new ValueTask<int>(5), () => sent++);
 
@@ -1111,7 +1037,6 @@ public sealed class BoundedCallListenerTests
         public override long GetTimestamp() => _timestamp;
     }
 
-    /// <summary>Answers with <paramref name="answer"/> and keeps what each end recorded.</summary>
     private readonly struct Recording(ValueTask<int> answer, Action? onSend = null) : IBoundedCall<int>
     {
         public List<CallResult<int>> Results { get; } = new();
@@ -1144,10 +1069,6 @@ public sealed class BoundedCallListenerTests
     }
 }
 
-/// <summary>
-/// What a synchronously answering call through <see cref="BoundedCall"/> allocates (rule 6): nothing when it shares the
-/// node's budget, one linked token source and its timer when it has an own, shorter timeout.
-/// </summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class BoundedCallAllocationTests
 {
@@ -1160,15 +1081,12 @@ public sealed class BoundedCallAllocationTests
     [Fact]
     public void ASynchronousAnswer_WithAShorterOwnTimeout_CostsOneTokenSourceAndTimer()
     {
-        // The token source is created before the call is sent, so that the client's token carries the timeout. About
-        // 224 B on .NET 10: the source, its registration on the node token and the timer (160 B with CancelAfter, whose
-        // timer cancels on the timer's thread). Bounded, so that anything more per call shows up here.
+        // About 224 B on.NET 10: the source, its registration on the node token and the timer.
         var bytes = BytesPerCall(timeoutMs: 300_000, calls: 2_000);
 
         Assert.InRange(bytes, 1, 256);
     }
 
-    /// <summary>The average bytes one call allocates on this thread, after warming up.</summary>
     private static double BytesPerCall(int? timeoutMs, int calls)
     {
         var memory = new RequestMemory();
@@ -1191,7 +1109,6 @@ public sealed class BoundedCallAllocationTests
         return bytes;
     }
 
-    /// <summary>Takes the result of a call that must have completed synchronously.</summary>
     private static void Consume(ValueTask<CallResult<int>> pending)
     {
         if (!pending.IsCompletedSuccessfully)
@@ -1224,10 +1141,8 @@ public sealed class BoundedCallAllocationTests
     }
 }
 
-/// <summary>A candidate buffer abandoned with its source still running reads as empty and takes no more candidates.</summary>
 public sealed class CandidateBufferTests
 {
-    /// <summary>The items dropped past the limit stay at most int.MaxValue, however a recorded count adds to them.</summary>
     [Fact]
     public void TheDroppedCount_StaysAtMostIntMaxValue()
     {
@@ -1235,7 +1150,7 @@ public sealed class CandidateBufferTests
         var buffer = new ServiceResponse(memory, 1);
         buffer.AddItem(1, 0.9);
         buffer.AddDropped(int.MaxValue);
-        buffer.AddItem(2, 0.8); // over the limit
+        buffer.AddItem(2, 0.8);
         buffer.AddDropped(5);
 
         Assert.Equal(int.MaxValue, buffer.Dropped);
@@ -1249,7 +1164,7 @@ public sealed class CandidateBufferTests
         var buffer = new ServiceResponse(memory, 2);
         buffer.AddItem(1, 0.9);
         buffer.AddItem(2, 0.8);
-        buffer.AddItem(3, 0.7); // over the limit
+        buffer.AddItem(3, 0.7);
 
         buffer.Abandon();
         buffer.AddItem(4, 0.6);

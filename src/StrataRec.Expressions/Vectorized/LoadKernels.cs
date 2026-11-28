@@ -4,21 +4,12 @@ using System.Runtime.Intrinsics;
 
 namespace StrataRec.Expressions.Vectorized;
 
-/// <summary>
-/// Kernels that load column storage into lanes: SIMD widening of narrow storage (<c>float32</c> → <c>float64</c>,
-/// <c>int32</c> → <c>int64</c>), gathers of values and validity bits for the gather row domain, and the row range check
-/// of an evaluation.
-/// </summary>
 /// <remarks>
-/// <para>A scalar <c>float</c> → <c>double</c> loop is latency-bound on x64 (<c>cvtss2sd</c> merges into its
-/// destination register, chaining every iteration), about 1 ns per row; widening 8 lanes at a time removes that chain.
-/// Widening is exact, so results are identical to the scalar conversion.</para>
 /// <para>Gathers index without per-element bounds checks: <see cref="VectorProgram"/> checks every row against the
 /// table's physical row count once per call, and each gather checks once that its source covers that many rows.</para>
 /// </remarks>
 internal static class LoadKernels
 {
-    /// <summary>Rows gathered per chunk before widening.</summary>
     private const int Chunk = 256;
 
     public static void Widen(ReadOnlySpan<float> source, Span<double> destination)
@@ -146,7 +137,6 @@ internal static class LoadKernels
         }
     }
 
-    /// <summary>True when every row is in <c>[0, physical)</c>.</summary>
     public static bool AllInRange(ReadOnlySpan<int> rows, int physical)
     {
         var limit = (uint)physical;

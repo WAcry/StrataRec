@@ -22,7 +22,7 @@ public static class ContentHash
     public const int HexDigestLength = 64;
 
     /// <summary>Total length of a content id string.</summary>
-    public const int ContentIdLength = 71; // Prefix.Length + HexDigestLength
+    public const int ContentIdLength = 71;
 
     private const string LowerHex = "0123456789abcdef";
 
@@ -82,7 +82,6 @@ public static class ContentHash
         return problem is null ? contentId[Prefix.Length..] : throw new FormatException(problem);
     }
 
-    /// <summary>Returns why <paramref name="contentId"/> is invalid, or <see langword="null"/> when it is valid.</summary>
     private static string? Describe(string? contentId)
     {
         if (contentId is null)

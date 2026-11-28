@@ -13,9 +13,8 @@ internal static class RowRanking
     private const ulong SignBit = 0x8000_0000_0000_0000UL;
 
     /// <summary>
-    /// Reads a numeric column as double, for operators that compute with scores (MMR); returns false when the row is
-    /// missing or NaN. Ranking compares <see cref="TryGetSortKey"/> instead: a double holds 53 bits, so distinct int64
-    /// scores beyond 2^53 can read as the same double.
+    /// Ranking compares <see cref="TryGetSortKey"/> instead: a double holds 53 bits, so distinct int64 scores beyond
+    /// 2^53 can read as the same double.
     /// </summary>
     public static bool TryGetScore(ColumnBuffer column, int row, out double value)
     {
@@ -37,9 +36,9 @@ internal static class RowRanking
     }
 
     /// <summary>
-    /// An exact sort key of a row's score: keys compared as unsigned integers order the scores of one column as numbers,
-    /// ascending. Integers flip the sign bit, so every int64 keeps its own place; floats take the IEEE 754 total order,
-    /// with −0.0 read as +0.0 so the two zeros tie. Returns false when the row is missing or NaN.
+    /// An exact sort key of a row's score: keys compared as unsigned integers order the scores of one column as
+    /// numbers, ascending. Integers flip the sign bit, so every int64 keeps its own place; floats take the IEEE 754
+    /// total order, with −0.0 read as +0.0 so the two zeros tie.
     /// </summary>
     public static bool TryGetSortKey(ColumnBuffer column, int row, out ulong key)
     {
@@ -60,7 +59,7 @@ internal static class RowRanking
             case ScalarColumn<double> d:
                 return TryFloat64Key(d[row], out key);
             case ScalarColumn<float> f:
-                return TryFloat64Key(f[row], out key); // widening is exact
+                return TryFloat64Key(f[row], out key);
             default:
                 throw new InvalidOperationException($"Column of type {column.Type} is not numeric.");
         }
@@ -129,8 +128,7 @@ internal static class RowRanking
 
     /// <summary>
     /// Orders <paramref name="rows"/> in place by scores an operator computed for them (<paramref name="scores"/>[i] is
-    /// the score of <paramref name="rows"/>[i]) as <see cref="SelectTop"/> ranks a column: higher first, NaN last, ties
-    /// by <c>entity_id</c> ascending, never by the incoming order.
+    /// the score of <paramref name="rows"/>[i]) as <see cref="SelectTop"/> ranks a column.
     /// </summary>
     public static void Sort(Span<int> rows, ReadOnlySpan<double> scores, CandidateTableView table, Core.Memory.RequestMemory memory)
     {
@@ -160,9 +158,9 @@ internal static class RowRanking
     }
 
     /// <summary>
-    /// The 1-based rank of each row within its group, in the order <see cref="SelectTop"/> ranks a column, so the rows a
-    /// group's rank keeps are the ones <c>TopK@1</c> would keep of that group. <paramref name="groups"/>[i] is the group of
-    /// <paramref name="rows"/>[i], negative for none: its rank is left as it is. O(n log n), nothing allocated per row.
+    /// The 1-based rank of each row within its group, in the order <see cref="SelectTop"/> ranks a column.
+    /// <paramref name="groups"/>[i] is the group of <paramref name="rows"/>[i], negative for none: its rank is left as
+    /// it is.
     /// </summary>
     public static void RankWithinGroups(
         ReadOnlySpan<int> rows, ReadOnlySpan<int> groups, ColumnBuffer? score, CandidateTableView table, bool ascending, Span<long> ranks,
@@ -205,7 +203,6 @@ internal static class RowRanking
         while (hi > lo)
         {
             var mid = lo + ((hi - lo) / 2);
-            // Median of three as pivot.
             if (comparer.Compare(span[mid], span[lo]) < 0)
             {
                 (span[mid], span[lo]) = (span[lo], span[mid]);
@@ -269,7 +266,6 @@ internal static class RowRanking
         public int Compare(GroupedEntry x, GroupedEntry y) => x.Group != y.Group ? x.Group.CompareTo(y.Group) : within.Compare(x.Entry, y.Entry);
     }
 
-    /// <summary>Rank order: present before missing, then the key, then <c>entity_id</c> ascending (ordinal for strings).</summary>
     private readonly struct EntryComparer(CandidateTableView table) : IComparer<Entry>
     {
         private readonly bool _strings = table.KeyType == EntityKeyType.String;

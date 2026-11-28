@@ -5,18 +5,10 @@ using System.Runtime.Intrinsics;
 
 namespace StrataRec.Expressions.Runtime;
 
-/// <summary>
-/// Transcendental kernels shared by every evaluator.
-/// </summary>
 /// <remarks>
-/// <para>Vectorized <see cref="TensorPrimitives"/> implementations of <c>exp</c>, <c>log</c>, <c>pow</c> and
-/// <c>sigmoid</c> may differ from <see cref="Math"/> in the last bit. So that a value computed once per request
-/// (hoisted, constant-folded) is bit-identical to the same value computed per row, the scalar entry points run the
-/// same SIMD kernel on a small broadcast span, and span entry points shorter than <see cref="Width"/> fall back to the
-/// scalar entry point. Every element therefore always goes through the vector code path, and its result depends only
-/// on its own input, never on neighbouring lanes (see <see cref="LaneIndependent"/>).</para>
-/// <para><c>log1p</c> uses the accurate form <c>log(u) * (x / (u - 1))</c> with <c>u = 1 + x</c> (Goldberg), built on the
-/// same <c>log</c> kernel; .NET's <c>LogP1</c> is <c>log(1 + x)</c>, which loses all precision for tiny x.</para>
+/// <para>So that a value computed once per request (hoisted, constant-folded) is bit-identical to the same value
+/// computed per row, the scalar entry points run the same SIMD kernel on a small broadcast span, and span entry points
+/// shorter than <see cref="Width"/> fall back to the scalar entry point.</para>
 /// </remarks>
 internal static class MathKernels
 {
@@ -106,8 +98,7 @@ internal static class MathKernels
     /// <see cref="TensorPrimitives.Exp{T}(ReadOnlySpan{T}, Span{T})"/> (and Sigmoid, built on it) switch a whole SIMD
     /// block to a fallback path when any lane is NaN, ±∞ or beyond about ±708, which changes the last bit of the
     /// <em>other</em> lanes in that block. A row's value must not depend on its neighbours (dead rows hold garbage, and
-    /// the row domain depends on the live ratio), so lanes outside <see cref="CleanLimit"/> are replaced by 0 for the
-    /// SIMD pass and then recomputed alone through the scalar entry point.
+    /// the row domain depends on the live ratio).
     /// </summary>
     private static void LaneIndependent(ReadOnlySpan<double> x, Span<double> destination, bool sigmoid)
     {
@@ -164,7 +155,6 @@ internal static class MathKernels
         }
     }
 
-    /// <summary>True when every |x| ≤ limit (false for NaN).</summary>
     private static bool AllWithin(ReadOnlySpan<double> x, double limit)
     {
         var i = 0;
@@ -264,8 +254,7 @@ internal static class MathKernels
     }
 
     /// <summary>
-    /// <c>u[i] = Log1pFinish(x[i], u[i], logU[i])</c>, 4 lanes at a time. The same IEEE operations (no fused
-    /// multiply-add) give the same bits as the scalar form.
+    /// The same IEEE operations (no fused multiply-add) give the same bits as the scalar form.
     /// </summary>
     private static void Log1pFinish(ReadOnlySpan<double> x, Span<double> u, ReadOnlySpan<double> logU)
     {

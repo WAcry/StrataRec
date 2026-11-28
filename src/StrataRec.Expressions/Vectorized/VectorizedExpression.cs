@@ -8,7 +8,6 @@ using StrataRec.Expressions.Runtime;
 
 namespace StrataRec.Expressions.Vectorized;
 
-/// <summary>A compiled expression on backend A. Immutable and safe for concurrent evaluation.</summary>
 internal sealed class VectorizedExpression : CompiledExpression
 {
     private readonly ExprType _type;
@@ -56,17 +55,14 @@ internal sealed class VectorizedExpression : CompiledExpression
     /// <summary>The type-checked IR before optimization (input of the reference interpreter).</summary>
     internal IrNode Bound { get; }
 
-    /// <summary>The optimized IR DAG the backend executes.</summary>
     internal IrNode Optimized { get; }
 
-    /// <summary>The lowered program of a row-level expression (null for request-level ones).</summary>
     internal VectorProgram? Program => _vector;
 
     public override string Describe() => IrPrinter.Print(Optimized);
 
     public override ScalarValue EvaluateScalar(in EvalContext context) => Run(context);
 
-    /// <summary>Evaluates the request-level program.</summary>
     private ScalarValue Run(in EvalContext context)
     {
         if (_scalar is null)

@@ -17,8 +17,6 @@ namespace StrataRec.Pipeline.Operators;
 /// chose it. Calls go through <see cref="OperatorContext.CallAsync"/> with the request's seed
 /// (<c>ctx.request.seed</c>), so they are bounded, measured, recorded and replayed like every other
 /// model call.</para>
-/// <para>Public so that operators outside this assembly (the generative ones in StrataRec.Llm) bind and call models with
-/// the same keys, error codes and messages as the built-in model operators, instead of a copy that would drift.</para>
 /// </remarks>
 public sealed class BoundModel
 {

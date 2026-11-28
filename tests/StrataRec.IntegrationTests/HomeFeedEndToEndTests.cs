@@ -87,7 +87,6 @@ public sealed class HomeFeedEndToEndTests
     [Fact]
     public async Task UnifiedPlanMatchesThePlainCompileOfTheMergedConfigForEveryArmCombination()
     {
-        // The differential anchor.
         var host = HomeFeedTestHost.Load();
         var unified = host.Plan();
         var executor = new PipelineExecutor();
@@ -125,7 +124,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.Equal(8, strong.Items.Count);
         Assert.Equal(10, control.Items.Count);
         Assert.Contains("exp_quality_weight", strong.TriggeredExperiments);
-        Assert.Contains("exp_quality_weight", control.TriggeredExperiments); // symmetric across arms
+        Assert.Contains("exp_quality_weight", control.TriggeredExperiments);
     }
 
     [Fact]
@@ -161,8 +160,8 @@ public sealed class HomeFeedEndToEndTests
         Assert.Equal("ctr_backup", ranker.ProducedBy);
 
         var inputs = Assert.Single(result.LogBatches, b => b.TapId == "ranker_inputs");
-        Assert.Equal("fallback", inputs.NodeOutcomes["ctr_ranker"]); // the same names as the result, the trace and the metrics
-        Assert.False(inputs.NodeOutcomes.ContainsKey("ctr_backup")); // a fallback is not a position of its own
+        Assert.Equal("fallback", inputs.NodeOutcomes["ctr_ranker"]);
+        Assert.False(inputs.NodeOutcomes.ContainsKey("ctr_backup"));
         Assert.Equal("ctr_backup", inputs.ColumnProducers["p_click"]);
     }
 
@@ -178,7 +177,7 @@ public sealed class HomeFeedEndToEndTests
         Assert.Equal(LogDelivery.Durable, served.Delivery);
         Assert.Equal(result.Items.Select(i => i.Id.Int64Value), served.Int64EntityIds!);
         Assert.Equal(Enumerable.Range(1, 10), served.Ranks);
-        Assert.Contains(served.Columns, c => c.Name == "pre_calibration"); // the arm's tap variant
+        Assert.Contains(served.Columns, c => c.Name == "pre_calibration");
         Assert.Contains(served.Columns, c => c.Name == "age_hours");
         Assert.Equal("freshness_calibration", served.ColumnProducers["final"]);
         Assert.Equal("fusion", served.ColumnProducers["pre_calibration"]);
@@ -198,7 +197,6 @@ public sealed class HomeFeedEndToEndTests
 
         Assert.Single(result.LogBatches, b => b.TapId == "$experiments");
 
-        // Without the arm the tap uses the baseline variant.
         var baseline = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(captureLogs: true), TestContext.Current.CancellationToken);
         Assert.DoesNotContain(Assert.Single(baseline.LogBatches, b => b.TapId == "served").Columns, c => c.Name == "pre_calibration");
     }
@@ -232,7 +230,6 @@ public sealed class HomeFeedEndToEndTests
         var diagnostics = ServiceCollectionExtensions.LoadWorkspace(engine, host.Root, "local");
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
 
-        // Every combination of one arm per layer the platform may answer runs with exactly those arms.
         var combinations = 0;
         foreach (var freshness in ArmsOf("exp_freshness_calibration"))
         {
@@ -258,7 +255,6 @@ public sealed class HomeFeedEndToEndTests
 
         Assert.Equal(8, combinations);
 
-        // Without the platform's answer and without a provider, nothing assigns arms: the request runs the baseline.
         var baseline = await engine.ExecuteAsync(new RecRequest
         {
             PipelineId = "home_feed", RequestId = "req-baseline", Inputs = HomeFeedTestHost.Inputs(1001, "home"), Deadline = HomeFeedTestHost.Deadline,

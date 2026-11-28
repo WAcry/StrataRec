@@ -7,10 +7,6 @@ using StrataRec.Artifacts.Model;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary>
-/// <see cref="JsonBindingErrors"/>: every way a document fails to bind is told in the words of the JSON written, at the
-/// pointer of the value at fault, without a .NET type name or the serializer's own path syntax.
-/// </summary>
 public class JsonBindingErrorsTests
 {
     public sealed class Sample
@@ -104,8 +100,6 @@ public class JsonBindingErrorsTests
         public Speed Plain { get; init; }
     }
 
-    // ---- unknown keys ------------------------------------------------------------------------------------------------
-
     [Fact]
     public void UnknownKey_NamesTheKeyAndSuggestsTheClosest()
     {
@@ -132,8 +126,6 @@ public class JsonBindingErrorsTests
         Assert.Equal("Unknown key 'x' in the config of Noop@1.", error.Message);
         Assert.Equal("it takes no keys", error.Hint);
     }
-
-    // ---- values of the wrong kind ------------------------------------------------------------------------------------
 
     [Theory]
     [InlineData("""{ "model": "m", "order": "350" }""", "/order", """'order' must be an integer or null, got the string "350".""")]
@@ -176,7 +168,6 @@ public class JsonBindingErrorsTests
     [Fact]
     public void NullForAMemberAConverterReads_ThatIsNotNullable_SaysSo_WithoutTheSerializersWords()
     {
-        // The converter never sees the null: the serializer refused it with a message naming the .NET type.
         var error = Error<Pointed>("""{ "at": null }""");
 
         Assert.Equal(("/at", "'at' must not be null."), (error.Pointer, error.Message));
@@ -195,8 +186,6 @@ public class JsonBindingErrorsTests
         Assert.Equal(string.Empty, error.Pointer);
         Assert.Equal("The config of TopK@1 must be an object, got null.", error.Message);
     }
-
-    // ---- missing required keys ---------------------------------------------------------------------------------------
 
     [Fact]
     public void MissingRequiredKey_PointsAtTheObject_AndTheHintSaysWhatTheKeyMeans()
@@ -227,8 +216,6 @@ public class JsonBindingErrorsTests
         Assert.Equal("The time_ms of the request.", MemberDocs.Flatten("The <see cref=\"P:A.B.TimeMs\"/>   of the\n            request.", JsonNamingPolicy.SnakeCaseLower));
         Assert.Null(MemberDocs.Flatten("""A <see cref="T:StrataRec.Core.Types.ColumnType"/>.""", JsonNamingPolicy.SnakeCaseLower));
     }
-
-    // ---- nested paths ------------------------------------------------------------------------------------------------
 
     [Fact]
     public void IntoAList_ThePointerHasTheIndex_AndTheMessageTheElement()
@@ -292,7 +279,6 @@ public class JsonBindingErrorsTests
     [Fact]
     public void AKeyThatLooksLikePathSyntax_NextToItsShortPrefix_IsTheOneTheRestOfThePathFits()
     {
-        // With "a" beside "a'].b", the error in "a'].b" was an unknown key "b']" in entry "a".
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PipelineArtifact>(
             """{"pipeline_id":"p","nodes":{"a":{"op":"TopK@1","order":1},"a'].b":{"op":"TopK@1","order":"bad"}}}"""));
 
@@ -317,15 +303,12 @@ public class JsonBindingErrorsTests
         Assert.False(certain);
     }
 
-    // ---- the contract the serializer used: polymorphism and converters ------------------------------------------------
-
     [Theory]
     [InlineData("""{ "$type": "counted", "count": "bad" }""", "/count", """'count' must be an integer, got the string "bad".""", null)]
     [InlineData("""{ "$type": "counted", "cout": 1 }""", "/cout", "Unknown key 'cout' in the shape.", "did you mean 'count'?")]
     [InlineData("""{ "$type": "square" }""", "/$type", """'$type' must be one of "counted", got the string "square".""", null)]
     public void APolymorphicObject_IsReadWithTheTypeItsDiscriminatorSelects(string json, string pointer, string message, string? hint)
     {
-        // The base contract (no properties) made count an unknown key, with the hint "it takes no keys".
         var error = Error<Shape>(json, "the shape");
 
         Assert.Equal((pointer, message, hint), (error.Pointer, error.Message, error.Hint));
@@ -353,24 +336,20 @@ public class JsonBindingErrorsTests
 
     [Theory]
     [InlineData("""{ "mode": "Medium" }""", "/mode", """'mode' must be one of "Fast", "Slow", "VeryFast" or null, got the string "Medium".""")]
-    [InlineData("""{ "snake": 1 }""", "/snake", """'snake' must be one of "fast", "slow", "very_fast", got the number 1.""")] // no integers allowed
+    [InlineData("""{ "snake": 1 }""", "/snake", """'snake' must be one of "fast", "slow", "very_fast", got the number 1.""")]
     [InlineData("""{ "gear": "Neutral" }""", "/gear", """'gear' must be one of "Low", "High", got the string "Neutral".""")] // converter on the type
     [InlineData("""{ "gears": ["High", "Top"] }""", "/gears/1", """Element 1 of 'gears' must be one of "Low", "High", got the string "Top".""")]
-    [InlineData("""{ "plain": "Fast" }""", "/plain", """'plain' must be an integer, got the string "Fast".""")] // the serializer's own enum converter reads numbers
+    [InlineData("""{ "plain": "Fast" }""", "/plain", """'plain' must be an integer, got the string "Fast".""")]
     public void AnEnum_IsDescribedByTheConverterThatReadsIt(string json, string pointer, string message)
     {
-        // A string enum converter (allowIntegerValues: false, or on the member) was told "must be an integer".
         var error = Error<Modes>(json);
 
         Assert.Equal((pointer, message), (error.Pointer, error.Message));
     }
 
-    // ---- documents that cannot be read as written ---------------------------------------------------------------------
-
     [Fact]
     public void AStringThatIsNotValidUnicode_InAnArtifact_IsAControlledError()
     {
-        // Describing the value decoded it again and threw InvalidOperationException.
         var json = """{"pipeline_id":"p","nodes":{"a":{"op":"TopK@1","order":""" + Unpaired + "}}}";
 
         var ex = Assert.Throws<ArtifactFormatException>(() => ArtifactSerializer.Deserialize<PipelineArtifact>(json, "p.json"));
@@ -421,8 +400,6 @@ public class JsonBindingErrorsTests
     {
         Assert.Equal("a string that is not valid Unicode", JsonWords.Value(JsonNode.Parse(Unpaired)));
     }
-
-    // ---- artifacts -----------------------------------------------------------------------------------------------------
 
     [Fact]
     public void AnArtifact_ReportsThePointerAndReasonInJsonWords()

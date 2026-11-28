@@ -10,17 +10,11 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The log batches of a request whose fallback pipeline served. Pipeline <c>primary</c> recalls (tap
-/// <c>recalled</c> captures after it), then a node whose source fails fails it; <c>backup</c> serves, with an output tap.
-/// A request that captures its logs gets both runs' batches; one whose fallback is cancelled records that the batches it
-/// captured went nowhere.
+/// Pipeline <c>primary</c> recalls (tap <c>recalled</c> captures after it), then a node whose source fails fails it;
+/// <c>backup</c> serves, with an output tap.
 /// </summary>
 public sealed class FallbackCaptureTests
 {
-    /// <summary>
-    /// Written to the sink, a request writes both runs' batches; captured, it got only the fallback's, and the primary's
-    /// taps were lost. They are returned in run order, each with its own pipeline and manifest, and the sink stays empty.
-    /// </summary>
     [Fact]
     public async Task ACapturingRequest_GetsTheBatchesOfBothRuns_InRunOrder()
     {
@@ -42,18 +36,13 @@ public sealed class FallbackCaptureTests
 
         Assert.Equal(("backup", "backup"), (written.ServedBy, captured.ServedBy));
         Assert.True(captured.Succeeded, captured.Error);
-        var manifests = sink.Snapshot().Where(b => b.RequestId == "written").ToDictionary(b => b.PipelineId, b => b.ManifestId); // each run's own
+        var manifests = sink.Snapshot().Where(b => b.RequestId == "written").ToDictionary(b => b.PipelineId, b => b.ManifestId);
         Assert.Equal([("primary", "recalled", manifests["primary"]), ("backup", "served", manifests["backup"])],
             captured.LogBatches!.Select(b => (b.PipelineId, b.TapId, b.ManifestId)));
         Assert.Equal(captured.ManifestId, manifests["backup"]);
         Assert.DoesNotContain(sink.Snapshot(), b => b.RequestId == "captured");
     }
 
-    /// <summary>
-    /// A capturing request cancelled while its fallback pipeline ran: the primary had finished, and recorded its batches
-    /// as captured, for a result the caller never got. Neither run's batches were returned or written: both say none,
-    /// and keep their sampling decisions.
-    /// </summary>
     [Fact]
     public async Task ACapturingRequestCancelledInItsFallback_RecordsThatItsBatchesWentNowhere()
     {
@@ -88,7 +77,6 @@ public sealed class FallbackCaptureTests
         Debug = new DebugOptions { CaptureLogs = captureLogs, OnRecording = onRecording },
     };
 
-    /// <param name="backupSource">The client of the fallback pipeline's source.</param>
     private static string Workspace(string backupSource = "memory_list@1")
     {
         var root = Directory.CreateTempSubdirectory("stratarec-fallback-capture-").FullName;

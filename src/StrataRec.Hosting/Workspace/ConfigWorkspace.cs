@@ -60,10 +60,9 @@ public sealed class ConfigWorkspace
     public SortedDictionary<string, LoadedArtifact<DataTableArtifact>> Tables { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Loads every artifact under <paramref name="root"/>. Problems go to <paramref name="diagnostics"/>: besides each file's
-    /// own, two files that define the same artifact (<c>pipelines/home_feed.json</c> and <c>pipelines/home_feed.jsonc</c>),
-    /// and a workspace without a pipeline. Validate, build, the other commands and a host serving the workspace all read it
-    /// through here, so none of them uses one of two definitions, or serves nothing, without saying so.
+    /// Loads every artifact under <paramref name="root"/>. Problems go to <paramref name="diagnostics"/>: besides each
+    /// file's own, two files that define the same artifact (<c>pipelines/home_feed.json</c> and
+    /// <c>pipelines/home_feed.jsonc</c>), and a workspace without a pipeline.
     /// </summary>
     public static ConfigWorkspace Load(string root, DiagnosticBag diagnostics)
     {
@@ -117,7 +116,6 @@ public sealed class ConfigWorkspace
 
         if (pipelineFiles.Count == 0)
         {
-            // Nothing to validate, build or serve: without this, validate passed and a host started that answered nothing.
             diagnostics.Error("WORKSPACE_NO_PIPELINE", workspace.Root, string.Empty,
                 $"The workspace {workspace.Root} has no pipeline: {Path.Combine(workspace.Root, "pipelines")} holds no .json or .jsonc file.",
                 "add pipelines/<pipeline_id>.jsonc, with catalog/, bindings/ and releases/ beside it ('stratarec init' writes a workspace to start from), " +
@@ -153,12 +151,6 @@ public sealed class ConfigWorkspace
         return workspace;
     }
 
-    /// <summary>
-    /// Adds an artifact under its id, unless another file defined it already: then the later file is an error naming
-    /// both, and the first stays (nothing is compiled or served from a workspace with errors). A file is named by its id
-    /// with either extension, so <c>home_feed.json</c> and <c>home_feed.jsonc</c> both define <c>home_feed</c>; taking the
-    /// last, as assigning by id did, validated a workspace with one of them while the other was silently ignored.
-    /// </summary>
     private static void Index<T>(
         SortedDictionary<string, LoadedArtifact<T>> index, string id, LoadedArtifact<T> artifact, string what, string pointer, DiagnosticBag diagnostics)
     {
@@ -176,10 +168,10 @@ public sealed class ConfigWorkspace
             $"keep one of the two files and delete the other ({first} or {second})");
 
     /// <summary>
-    /// The pipelines to compile or load for <paramref name="ids"/>: those, then the <c>fallback_pipeline</c> of each that is
-    /// not among them, since a fallback that is not served silently never happens. A fallback not in the
+    /// The pipelines to compile or load for <paramref name="ids"/>: those, then the <c>fallback_pipeline</c> of each
+    /// that is not among them, since a fallback that is not served silently never happens. A fallback not in the
     /// workspace is an error at the pipeline's <c>/fallback_pipeline</c>, and the pipeline is added to
-    /// <paramref name="unresolved"/>. Loading and <c>validate</c> both use it, so they agree on what is served.
+    /// <paramref name="unresolved"/>.
     /// </summary>
     public List<string> WithFallbacks(IEnumerable<string> ids, DiagnosticBag diagnostics, out HashSet<string> unresolved)
     {
@@ -240,7 +232,6 @@ public sealed class ConfigWorkspace
         IReadOnlyDictionary<string, string>? extraExperiments = null) =>
         CreateCompileRequest(pipelineId, environment, diagnostics, today, extraExperiments, new WorkspacePipelines(this, environment, pipelineId), called: false);
 
-    /// <param name="pipelines">The workspace's pipelines as the request's nodes may call them.</param>
     /// <param name="called">The request is for a pipeline another calls (<see cref="WorkspacePipelines"/>): its arms are not validated one by one.</param>
     internal PlanCompileRequest? CreateCompileRequest(
         string pipelineId,
@@ -428,7 +419,6 @@ public sealed class ConfigWorkspace
         }
         catch (JsoncException ex)
         {
-            // No pointer to a value that does not parse: the position is the reader's.
             diagnostics.Add(new ConfigDiagnostic(DiagnosticSeverity.Error, ex.Code, relative, string.Empty, ex.Reason, ex.Hint) { Line = ex.Line, Column = ex.Column });
             return null;
         }
@@ -444,7 +434,6 @@ public sealed class ConfigWorkspace
             return null;
         }
 
-        // "$schema" is the editor's: not part of the artifact, so neither bound nor hashed.
         var kind = ArtifactSerializer.ArtifactName(typeof(T));
         if (!ArtifactSchemas.TryRemoveSchemaMember(document, kind is null ? null : ArtifactSchemas.Reference(relative, kind), out var schemaError))
         {
@@ -464,9 +453,6 @@ public sealed class ConfigWorkspace
             return null;
         }
 
-        // The content id hashes the RFC 8785 form, and every later hash (of a plan's nodes, of the store's blobs, of a
-        // manifest) is of what this document holds: a value that form cannot hold exactly (an integer beyond 2^53 that would
-        // read back as another) is this file's error, here, not an exception out of validate, build or a host's startup.
         string contentId;
         try
         {
@@ -523,7 +509,7 @@ public sealed class ConfigWorkspace
 
     /// <summary>
     /// The label before <c> with exp_a/x + exp_b/y</c>, the arms of a combination as the plan compiler appends them, or
-    /// null when the label does not end so. Every arm id is <c>experiment/arm</c> without spaces.
+    /// null when the label does not end so.
     /// </summary>
     private static string? WithoutCombination(string artifact)
     {

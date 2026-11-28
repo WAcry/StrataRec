@@ -118,9 +118,8 @@ public sealed class RecRequest
 
 /// <summary>
 /// Requests a host sends at the same time for one thing: the feed and the promoted row of one page visit, each a
-/// request of its own pipeline. They read the same things (the user's features, a call of a service with the same
-/// inputs, a call of a pipeline), and without a group each asks the origin, since no cache tier has yet what the other
-/// is still getting. Make one for the visit and give it to each of its requests (<see cref="RecRequest.Group"/>).
+/// request of its own pipeline. Make one for the visit and give it to each of its requests
+/// (<see cref="RecRequest.Group"/>).
 /// </summary>
 /// <remarks>
 /// <para>What is shared, and how, is what the runs of one request share: a read through a declared cache that no tier
@@ -137,18 +136,17 @@ public sealed class RecRequest
 /// </remarks>
 public sealed class RequestGroup
 {
-    /// <summary>The reads of the group's requests under way.</summary>
     internal RequestReads.Group Reads { get; } = new();
 }
 
 /// <summary>Debugging controls, authorized by the host.</summary>
 /// <remarks>
-/// <para>Which requests write the persistent logs (the log sink's taps and the <c>$experiments</c> record): a request that changes what is served, with <see cref="ForceArms"/> (an empty list, the baseline,
-/// included) or a <see cref="ConfigOverride"/>, writes none, also when its fallback pipeline serves it: what it logged
-/// would read as the platform's assignment and the released configuration, and contaminate experiment analysis and
-/// training data. Nor does a request that <see cref="CaptureLogs"/>: its batches are returned instead. Options that only
-/// look at a request, <see cref="Trace"/>, <see cref="ExplainIds"/>, <see cref="Record"/> and <see cref="OnRecording"/>,
-/// leave its logging as it is: it is served as any request is, and logged as one.</para>
+/// <para>Which requests write the persistent logs (the log sink's taps and the <c>$experiments</c> record): a request
+/// that changes what is served, with <see cref="ForceArms"/> (an empty list, the baseline, included) or a
+/// <see cref="ConfigOverride"/>, writes none, also when its fallback pipeline serves it. Nor does a request that
+/// <see cref="CaptureLogs"/>: its batches are returned instead. Options that only look at a request,
+/// <see cref="Trace"/>, <see cref="ExplainIds"/>, <see cref="Record"/> and <see cref="OnRecording"/>, leave its logging
+/// as it is.</para>
 /// </remarks>
 public sealed class DebugOptions
 {
@@ -164,19 +162,18 @@ public sealed class DebugOptions
     /// <summary>
     /// A configuration to try on this request alone: an RFC 7396 merge patch of the pipeline, in the shape an
     /// experiment arm patches (<c>params</c>, <c>nodes</c>, <c>log_taps</c>, <c>columns</c>, <c>param_schema</c>,
-    /// <c>funnel_groups</c>, <c>features</c>, <c>derived_features</c>), applied after the request's arms, so it wins over
-    /// them. The plan is compiled for the request, which costs milliseconds and allocations a served plan never makes, and
-    /// counts against the deadline; one that does not compile, or whose new bindings fail to load, rejects the request
-    /// as invalid, naming the first error. Nothing of it outlives the request.
+    /// <c>funnel_groups</c>, <c>features</c>, <c>derived_features</c>), applied after the request's arms, so it wins
+    /// over them. The plan is compiled for the request and counts against the deadline; one that does not compile, or
+    /// whose new bindings fail to load, rejects the request as invalid, naming the first error. Nothing of it outlives
+    /// the request.
     /// </summary>
     /// <remarks>
-    /// The request writes no persistent logs (its batches are returned when <see cref="CaptureLogs"/> is set): what a
-    /// configuration nobody released produced must not reach training data under the served manifest's id.
-    /// Its record lists the arms applied and no triggered experiment, since the plan it ran has none. A recording carries
+    /// The request writes no persistent logs (its batches are returned when <see cref="CaptureLogs"/> is set). Its
+    /// record lists the arms applied and no triggered experiment, since the plan it ran has none. A recording carries
     /// the override, and replaying it applies the override again. The fallback pipeline, when it serves, runs as
     /// configured. The engine reads the object once, when it checks it: a CLR value wrapped in it
-    /// (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is written then, and the JSON it wrote is what is compiled
-    /// and recorded; what the host does with the object afterwards changes neither.
+    /// (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is written then, and the JSON it wrote is what is
+    /// compiled and recorded; what the host does with the object afterwards changes neither.
     /// </remarks>
     public JsonObject? ConfigOverride { get; init; }
 
@@ -211,14 +208,12 @@ public sealed class DebugOptions
     public Action<ReplayBundle>? OnRecording { get; init; }
 
     /// <summary>
-    /// Candidates to explain, as entity ids of the pipeline's key type: <see cref="RecResult.Explanation"/>
-    /// then says, for each, where it ended (returned, past the limit, dropped by which node, never recalled) and its state
-    /// after every node of the run that served: live or not, its rank, the values of the columns the node read and wrote,
-    /// and the operator's reason where it gives one. At most <see cref="MaxExplainIds"/>; ids of the other key type or
-    /// more ids than that fail the request with <see cref="RecErrorKind.InvalidRequest"/> before anything runs. Costs
-    /// nothing when null. When set, the recording grows with ids × nodes; finding ranks scans the live rows after a node
-    /// that reorders or filters them, and an operator explaining itself evaluates into a pooled column of the table's size,
-    /// as a debug request may.
+    /// Candidates to explain, as entity ids of the pipeline's key type: <see cref="RecResult.Explanation"/> then says,
+    /// for each, where it ended (returned, past the limit, dropped by which node, never recalled) and its state after
+    /// every node of the run that served: live or not, its rank, the values of the columns the node read and wrote, and
+    /// the operator's reason where it gives one. At most <see cref="MaxExplainIds"/>; ids of the other key type or more
+    /// ids than that fail the request with <see cref="RecErrorKind.InvalidRequest"/> before anything runs. Costs
+    /// nothing when null. When set, the recording grows with ids × nodes.
     /// </summary>
     public IReadOnlyList<EntityKey>? ExplainIds { get; init; }
 
@@ -366,22 +361,12 @@ public sealed class LoadedPipeline
     /// <summary>Content ids of the artifacts the plan was compiled from, when the loader knew them (replay bundles record them).</summary>
     public IReadOnlyDictionary<string, string> ArtifactIds { get; init; } = new Dictionary<string, string>();
 
-    /// <summary>
-    /// What the plan binds: its local tables, held while the plan is served, and its clients and
-    /// connectors, held until no request of the plan can still call them. Every run of the plan enters it.
-    /// </summary>
     internal BindingLease Bindings { get; init; } = null!;
 
-    /// <summary>The plan's experiment metadata as read-only views, built with the plan: every provider call passes these.</summary>
     internal PlanLayout Layout { get; init; } = null!;
 
-    /// <summary>What the plan was compiled from, copied at the load: a request's configuration override compiles it again (<see cref="DebugOptions.ConfigOverride"/>).</summary>
     internal PlanSource Source { get; init; } = null!;
 
-    /// <summary>
-    /// What the plan contributes to the key of a cached call of the pipeline: found when the plan is loaded, so no
-    /// request pays for it.
-    /// </summary>
     internal CallIdentity CallIdentity { get; init; } = null!;
 
     /// <summary>
@@ -390,7 +375,6 @@ public sealed class LoadedPipeline
     /// </summary>
     internal JsonObject? ConfigOverride { get; init; }
 
-    /// <summary>Request-level metric tags of the plan, built once per loaded plan.</summary>
     internal RequestTelemetry Telemetry =>
         _telemetry ?? Interlocked.CompareExchange(ref _telemetry, RequestTelemetry.Create(Plan), null) ?? _telemetry!;
 
@@ -427,32 +411,19 @@ public sealed record PlanLoadResult(
 }
 
 /// <summary>
-/// The engine: holds one immutable plan per pipeline and swaps it atomically when a new one compiles.
 /// In-flight requests keep the plan they started with; a plan that fails to compile never replaces the current one.
 /// </summary>
 /// <remarks>
-/// <para>What plans bind belongs to <see cref="Bindings"/>: local feature tables, service clients and
-/// connectors. A plan is served only once every table it reads has completed its first load and
-/// every instance it uses has loaded; what a new plan shares by identity with the served one is taken over, not loaded
-/// again. Disposing the engine stops the tables' update sources and disposes the instances once no request can call
-/// them.</para>
-/// <para><b>Lifecycle.</b> One lock orders loads, publishing and disposal. A load registers itself (with its binding
-/// lease) under it, and publishes under it; a disposal marks the engine disposed under it and takes every registered
-/// load and every served plan. So nothing is published after a disposal, a disposal cancels the loads still running,
-/// and each lease the engine opened is retired exactly by its owner at that moment: the load until it publishes (in
-/// its <c>finally</c> when it does not), the served plan afterwards (when it is replaced, or by the disposal).</para>
-/// <para><b>Requests.</b> Every run enters its plan's lease and leaves it when the run and every call it started have
-/// ended, so the instances of a replaced plan are disposed only after its last request, and the calls those requests
-/// abandoned at a timeout, returned. A request that finds its plan's lease retired reads the current plan again; after a
-/// disposal it throws <see cref="ObjectDisposedException"/>.</para>
-/// <para>Observability: each request gets one span (<see cref="StrataRecTracing.RequestSpanName"/>), under
-/// which its nodes and external calls get theirs when it is recorded, and request-level metrics per pipeline and per
-/// assigned arm; plan loads are metrics and event logs. Everything is optional: without listeners or a logger factory
-/// the engine records nothing and allocates nothing for it.</para>
+/// <para>What plans bind belongs to <see cref="Bindings"/>: local feature tables, service clients and connectors. A
+/// plan is served only once every table it reads has completed its first load and every instance it uses has loaded;
+/// what a new plan shares by identity with the served one is taken over, not loaded again.</para>
+/// <para>The instances of a replaced plan are disposed once its last request, and every call those requests started,
+/// has ended. After disposal a request throws <see cref="ObjectDisposedException"/>.</para>
+/// <para>Each request gets one span (<see cref="StrataRecTracing.RequestSpanName"/>) and request metrics per pipeline
+/// and arm; without listeners or a logger factory the engine records nothing and allocates nothing for it.</para>
 /// </remarks>
 public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposable
 {
-    /// <summary>The message of the cancellation <see cref="ExecuteAsync"/> throws as the caller's; what was thrown is its inner exception.</summary>
     private const string CallerCancelled = "The request was cancelled by its caller.";
 
     private readonly ConcurrentDictionary<string, LoadedPipeline> _pipelines = new(StringComparer.Ordinal);
@@ -488,7 +459,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     {
     }
 
-    /// <summary>With an executor of the caller's: a test's own buffer pool, or an event log it flushes by hand.</summary>
     internal RecEngine(
         PlanEnvironment? environment,
         PipelineExecutor executor,
@@ -541,22 +511,13 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         LoadAsync(request, sequence).GetAwaiter().GetResult();
 
     /// <summary>
-    /// Compiles a plan and, when it has no errors, makes it current for its pipeline. Thread-safe. A plan becomes current
-    /// only after every local feature table it reads has completed its first load and every client and
-    /// connector it uses has loaded; until then the current plan keeps serving. Model signatures that need a
-    /// loaded client or I/O are looked up here, concurrently, and checked before the plan is served. A table
-    /// that fails to load rejects the plan with <c>LOCAL_TABLE_LOAD_FAILED</c> naming the binding and the bad file, an
-    /// instance with <c>BINDING_LOAD_FAILED</c> at its binding. What the current plan already holds with the same identity
-    /// is taken over at once, so a configuration change that does not touch a binding never reloads it.
+    /// A table that fails to load rejects the plan with <c>LOCAL_TABLE_LOAD_FAILED</c> naming the binding and the bad
+    /// file, an instance with <c>BINDING_LOAD_FAILED</c> at its binding.
     /// </summary>
-    /// <param name="sequence">
-    /// Release order (the manifest's <c>seq</c>). A plan never replaces one with an equal or higher
-    /// sequence, so a slow load of an older release cannot overwrite a newer one that finished first
-    /// (<see cref="PlanLoadResult.Stale"/>). When omitted, a
-    /// ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.
-    /// </param>
-    /// <param name="cancellationToken">Cancels the load until the plan is applied: checked when the call starts, while it
-    /// waits for signatures and loads (the bindings of other plans load on), and when it is about to publish.</param>
+    /// <param name="sequence">A plan never replaces one with an equal or higher sequence, so a slow load of an older
+    /// release cannot overwrite a newer one that finished first (<see cref="PlanLoadResult.Stale"/>). When omitted, a
+    /// ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.</param>
+    /// <param name="cancellationToken">Cancels the load until the plan is applied.</param>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled before the plan was
     /// applied; the current plan is unchanged.</exception>
     /// <exception cref="ObjectDisposedException">The engine is disposed, or was disposed before the plan was applied.</exception>
@@ -582,15 +543,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
     }
 
-    /// <summary>
-    /// Whether what a load threw comes from the engine's disposal: only that cancels a load other than through the
-    /// caller's token (see <see cref="DisposeAsync"/>), and the load stopped wherever it was: downloading, waiting for
-    /// tables, or compiling against its released lease.
-    /// </summary>
     private static bool DisposedDuring(PendingLoad load, CancellationToken cancellationToken) =>
         load.Cancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
 
-    /// <summary>Registers a load and opens its lease; a disposed engine takes no load.</summary>
     private PendingLoad BeginLoad(CancellationToken cancellationToken)
     {
         lock (_publishGate)
@@ -606,8 +561,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
     }
 
-    /// <summary>Every load ends here: a plan that was not published returns its lease (its new tables stop, shared ones
-    /// lose a reference); a published one's lease belongs to the served plan.</summary>
+    /// <summary>Every load ends here: a plan that was not published returns its lease; a published one's lease belongs
+    /// to the served plan.</summary>
     private void EndLoad(PendingLoad load)
     {
         bool published;
@@ -636,8 +591,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     {
         var lease = load.Lease;
 
-        // Model signatures that need a client loaded (or a model server asked) are awaited here, off the compile, and the
-        // plan is compiled once more with the answers; plans whose clients are loaded compile once.
         var environment = Environment;
         var compilation = await lease.CompileAsync(bindings => PlanCompiler.Compile(request, environment, bindings), load.Cancellation.Token)
             .ConfigureAwait(false);
@@ -650,9 +603,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             return new PlanLoadResult(pipelineId, false, request.ManifestId, TimeSpan.Zero, diagnostics.Items, compilation.Report);
         }
 
-        // Readiness: the plan is served only once its tables hold a complete load and its
-        // instances have loaded. A disposal during the wait also stops them (their loads end as failures): the
-        // cancellation decides, not those.
+        // A disposal during the wait also stops them (their loads end as failures): the cancellation decides, not
+        // those.
         var failures = await lease.WaitLoadedAsync(load.Cancellation.Token).ConfigureAwait(false);
         load.Cancellation.Token.ThrowIfCancellationRequested();
         if (failures.Count > 0)
@@ -672,7 +624,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             FallbackPipeline = request.Pipeline.FallbackPipeline,
             Report = compilation.Report,
             Sequence = order,
-            ArtifactIds = request.ArtifactIds.ToFrozenDictionary(StringComparer.Ordinal), // the host's dictionary stays the host's
+            ArtifactIds = request.ArtifactIds.ToFrozenDictionary(StringComparer.Ordinal),
             Bindings = lease,
             Layout = new PlanLayout(plan),
             Source = PlanSource.Capture(request),
@@ -703,8 +655,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                     {
                         replaced = current;
                         _pipelines[pipelineId] = loaded;
-                        load.Published = true; // the lease is the served plan's now
-                        lease.Serve(); // the tables it shares with the plan before take its limits only now
+                        load.Published = true;
+                        lease.Serve();
                         PlanLoadTelemetry.Applied(plan, order); // gauges stay ordered with the swaps
                     }
                 }
@@ -713,9 +665,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         finally
         {
             // Once swapped, nothing owns the replaced plan's lease but this load, whatever happened after the swap (the
-            // telemetry does not throw, but the lease must not depend on it): its tables that the new plan does not
-            // share stop their sources, and its instances go once its last request has ended. Requests still running on
-            // the old plan read the versions they pinned.
+            // telemetry does not throw, but the lease must not depend on it)
             replaced?.Bindings.Dispose();
         }
 
@@ -774,7 +724,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
         foreach (var lease in leases)
         {
-            lease.Dispose(); // stopping a source or disposing an instance runs none of its code here (BindingHost)
+            lease.Dispose();
         }
 
         if (_ownsBindings)
@@ -783,7 +733,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
     }
 
-    /// <summary>A load between its start and its end (see the lifecycle remarks): its lease, and the cancellation a disposal uses.</summary>
     private sealed class PendingLoad(BindingLease lease, ObservedCancellationSource cancellation)
     {
         public BindingLease Lease { get; } = lease;
@@ -802,34 +751,27 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         // One end-to-end deadline: assignment, the pipeline and its fallback pipeline all spend the same budget.
         var started = Stopwatch.GetTimestamp();
 
-        // One span per request; null when nobody listens or the host's sampler drops it.
         var activity = RequestTelemetry.StartRequest(request.PipelineId, request.RequestId);
         LoadedPipeline? pipeline = null;
         var arms = RequestArms.None;
         var degraded = false;
         RecResult? result = null; // stays null when the request is aborted (cancelled by the caller, or a defect)
 
-        // A request's time is taken once, when it arrives: the pipeline, its fallback pipeline and the pipelines its nodes
-        // call see the same, and so does a recorded request, whose bundle holds exactly what ran. Left to
-        // each run, a request that waited for its assignment, or fell back, ran at a later time than the same request
-        // recorded, and a filter on the time could serve it other items. A recorded request resolves
-        // its seed here too; otherwise each run derives the same from the request id.
+        // A request's time is taken once, when it arrives: the pipeline, its fallback pipeline and the pipelines its
+        // nodes call see the same, and so does a recorded request, whose bundle holds exactly what ran.
         var record = request.Debug is { } debug && (debug.Record || debug.OnRecording is not null);
         var seed = record ? request.Seed ?? PipelineRequest.DefaultSeed(request.RequestId) : request.Seed;
         long? timeMs = request.TimeMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var runs = record ? new RunCapture() : null;
         IReadOnlyList<IgnoredArm> ignored = Array.Empty<IgnoredArm>();
         LoadedPipeline? fallback = null;
-        RequestCalls? calls = null; // what the pipelines the request's nodes call ran, when a run calls any
+        RequestCalls? calls = null;
 
-        // What the request's runs share of their cached reads: among themselves, or with the requests of its group. A
-        // request that writes no logs is not of its group (RequestGroup).
         var reads = request.Group is { } group && WritesLogs(request) ? new RequestReads(group.Reads) : new RequestReads();
         LoadedPipeline? overridden = null; // the plan compiled for a configuration override, entered until the finally below
         IReadOnlyList<string>? merged = null; // the arms such a plan has merged in: it runs with none of its own
         try
         {
-            // Entered (see Enter) until the finally below; each run joins the lease for as long as its calls run.
             pipeline = Enter(request.PipelineId, out var disposed);
             if (pipeline is null)
             {
@@ -842,15 +784,11 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             // cancelled while it runs is.
             cancellationToken.ThrowIfCancellationRequested();
 
-            // The caller's mistakes first, against the plan this request runs (a host may have read the inputs with an
-            // older one): nothing is asked of the assignment provider for a request that cannot run, and the fallback
-            // pipeline, which stands in for a pipeline that failed, does not serve it.
             if (pipeline.Plan.RequestSchema.Check(request.Inputs) is { } invalid)
             {
                 return result = Rejected(request, RecErrorKind.InvalidRequest, RequestSchema.Describe(invalid), pointer: invalid.Pointer);
             }
 
-            // A debug option, like forced arms: the caller's mistake, without a pointer into the body.
             if (request.Debug?.ExplainIds is { } explainIds
                 && ExplainTargets.Check(explainIds, pipeline.Plan.TableSchema.KeyType, request.PipelineId) is { } explainError)
             {
@@ -863,19 +801,16 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 return result = Rejected(request, assignment.ErrorKind, assignmentError);
             }
 
-            // Whatever assigned the arms, an experiment that yields to another the request is in does not run.
             arms = ExternalArms.Yield(pipeline.Plan, assignment.Arms, assignment.Ignored, out var ignoredOrYielded);
             ignored = ignoredOrYielded;
             pipeline.Telemetry.RecordIgnored(ignoredOrYielded);
             var remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {
-                // The arms were decided and the ignored ids counted: the record says so, as the metric does.
                 return result = Rejected(request, RecErrorKind.DeadlineExceeded, "deadline exceeded before execution (assignment took the whole budget)",
                     new ExperimentRecord(pipeline.Plan.ArmIds(arms), Array.Empty<string>(), ignored), pipeline.Plan.ManifestId);
             }
 
-            // A configuration override runs a plan compiled for this request, the arms merged in (DebugOptions.ConfigOverride).
             var running = pipeline;
             var runArms = arms;
             if (request.Debug?.ConfigOverride is { } configOverride)
@@ -911,8 +846,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 return result = calls?.Merge(result) ?? result; // after the bundle, which holds the request's own pipeline's
             }
 
-            // The pipeline failed: serve its fallback pipeline, without experiments, within what is left, with
-            // the inputs it declares (FallbackInputs).
             degraded = true;
             var served = await Run(fallback, request, FallbackInputs(request.Inputs, fallback.Plan.RequestSchema), RequestArms.None, remaining, seed, timeMs, runs,
                 reads, ref calls, cancellationToken).ConfigureAwait(false);
@@ -923,16 +856,13 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         catch (Exception ex)
         {
-            // Aborted while (or after) a pipeline ran: the caller gets the exception, the recording callback the bundle of
-            // what ran up to the abort. Nothing here waits for calls still in flight.
             if (runs is { Runs.Count: > 0 } && pipeline is not null)
             {
                 Deliver(request, AbortedBundle(request, pipeline, seed!.Value, timeMs!.Value, runs.Runs, ignored, merged, overridden?.ConfigOverride));
             }
 
-            // The caller's cancellation is thrown as the caller's: a client or a provider that honoured the token the engine
-            // gave it (linked to the caller's) threw that one, which a host matching its own token missed.
-            // Its message is not read: an extension's exception may throw from it.
+            // The caller's cancellation is thrown as the caller's. Its message is not read: an extension's exception
+            // may throw from it.
             if (ex is OperationCanceledException cancelled && cancellationToken.IsCancellationRequested && cancelled.CancellationToken != cancellationToken)
             {
                 throw new OperationCanceledException(CallerCancelled, cancelled, cancellationToken);
@@ -942,7 +872,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         finally
         {
-            reads.End(); // what it read was its group's while it ran
+            reads.End();
             pipeline?.Bindings.RequestEnded();
             fallback?.Bindings.RequestEnded();
             EndOverride(overridden);
@@ -959,11 +889,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
     }
 
-    /// <summary>
-    /// The request's arms, from the first of: forced arms (debug), the platform's answer the caller passed
-    /// (<see cref="RecRequest.Assignment"/>), the assignment provider; otherwise none (the baseline). Returns an error
-    /// instead of arms when the request must be rejected.
-    /// </summary>
     private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, RecErrorKind ErrorKind)> AssignAsync(
         LoadedPipeline pipeline, RecRequest request, long started, CancellationToken cancellationToken)
     {
@@ -1025,11 +950,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         return own ?? forced;
     }
 
-    /// <summary>
-    /// The arms the assignment provider gives the request on <paramref name="pipeline"/>'s plan, asked no longer than
-    /// <paramref name="deadline"/>: of the pipeline the request names, and of each pipeline its nodes call
-    /// (<see cref="RunCalls"/>), which has experiments of its own. None without a provider.
-    /// </summary>
     /// <param name="called">The pipeline is one a node calls: what the provider throws fails the call, as a result, and is
     /// not thrown through the calling operator (the request's own provider failure is the host's to see).</param>
     private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, RecErrorKind ErrorKind)> AskProviderAsync(
@@ -1040,12 +960,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             return (RequestArms.None, Array.Empty<IgnoredArm>(), null, RecErrorKind.None);
         }
 
-        // The provider shares the end-to-end deadline, through the framework's one bounded wait (BoundedCall), as connectors
-        // and models do: it is called inline on the request's thread, and what it does before it returns is not bounded;
-        // its asynchronous part is (its token is cancelled at the deadline, and the wait ends there even if it ignores the
-        // token), its callbacks run on the pool and what they throw is counted and summarized,
-        // an answer that came after the wait timed out is not taken, and its token lives until it ends
-        //. It writes into nothing of the request, which has no memory yet.
         var bound = new CallBound(CancellationSite.Assignment, cancellationToken, deadline, _executor.Events, request.RequestId);
         CallResult<IReadOnlyList<string>> asked;
         try
@@ -1075,11 +989,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 return (RequestArms.None, Array.Empty<IgnoredArm>(), $"its assignment failed: {asked.Error ?? "the provider threw"}", RecErrorKind.Failed);
             case CallEnd.Cancelled:
             case CallEnd.Threw when asked.Outcome != IoOutcome.Timeout:
-                ExceptionDispatchInfo.Throw(asked.Exception!); // the caller's cancellation, or what the provider threw
+                ExceptionDispatchInfo.Throw(asked.Exception!);
                 break;
         }
 
-        // The deadline, the provider's own timeout or a cancellation of its own: rejected, and nothing it said is used.
         return (RequestArms.None, Array.Empty<IgnoredArm>(),
             asked.Sent ? "deadline exceeded during assignment" : "deadline exceeded before assignment", RecErrorKind.DeadlineExceeded);
 
@@ -1092,10 +1005,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
     private static readonly IoTarget AssignmentTarget = new(IoRoles.Assignment, "provider");
 
-    /// <summary>
-    /// The assignment provider as a bounded call. Every answer is one: what the request cannot run with is ignored and
-    /// reported, never an error (<see cref="ExternalArms"/>), and null is no arms.
-    /// </summary>
     private readonly struct ProviderCall(IAssignmentProvider provider, AssignmentContext context) : IBoundedCall<IReadOnlyList<string>>
     {
         public int Keys => -1;
@@ -1120,9 +1029,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
     /// <summary>
     /// The plan a pipeline serves, its binding lease entered (see the lifecycle remarks): the caller ends the entry
-    /// (<see cref="BindingLease.RequestEnded"/>) when it is done with the plan; the plan's runs join the lease meanwhile.
-    /// Null when the pipeline is not served, or when the engine is disposed (<paramref name="disposed"/>). A plan replaced
-    /// between the read and the entry is read again.
+    /// (<see cref="BindingLease.RequestEnded"/>) when it is done with the plan; the plan's runs join the lease
+    /// meanwhile.
     /// </summary>
     private LoadedPipeline? Enter(string pipelineId, out bool disposed)
     {
@@ -1147,9 +1055,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     }
 
     /// <param name="pipeline">Entered by the caller (<see cref="Enter"/>); the run joins its lease until its calls end.</param>
-    /// <param name="runs">Collects the run's recording on every exit; null when the request does not record.</param>
-    /// <param name="reads">The request's reads, which its runs share (<see cref="RequestReads"/>).</param>
-    /// <param name="calls">Collects what the pipelines the run's nodes call ran (<see cref="RequestCalls"/>); made on the first such run.</param>
     private ValueTask<PipelineResult> Run(
         LoadedPipeline pipeline, RecRequest request, RequestInputs inputs, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, RunCapture? runs,
         RequestReads reads, ref RequestCalls? calls, CancellationToken cancellationToken) =>
@@ -1162,7 +1067,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             Seed = seed,
             TimeMs = timeMs,
             CaptureLogs = request.Debug?.CaptureLogs == true,
-            WriteLogs = WritesLogs(request), // for the fallback's run too: it serves a request a debugger shaped
+            WriteLogs = WritesLogs(request),
             ExplainIds = request.Debug?.ExplainIds,
             OnRecording = runs is null ? null : runs.Add,
             Calls = pipeline.Plan.Calls.IsEmpty ? null : new RunCalls(calls ??= new RequestCalls(this, request, reads), pipeline.Plan.PipelineId, 0),
@@ -1170,21 +1075,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
 
-    /// <summary>
-    /// Whether a request's runs may write the persistent logs (the rule <see cref="DebugOptions"/> states): not when a
-    /// debugger chose its arms or its configuration, nor when it captures its logs.
-    /// </summary>
     private static bool WritesLogs(RecRequest request) =>
         request.Debug is not { } debug || (debug.ForceArms is null && debug.ConfigOverride is null && !debug.CaptureLogs);
 
-    /// <summary>
-    /// The inputs of a request that falls back: those the fallback pipeline declares. The caller wrote the
-    /// request for the pipeline it named, and its inputs passed that pipeline's schema; a fallback typically uses fewer
-    /// signals (a popularity list needs no user), and need not declare inputs it does not read. What it declares it checks
-    /// as any pipeline does: an input it requires that the request lacks, or of another type, fails the fallback, and the
-    /// request with <see cref="RecErrorKind.Failed"/> (the configuration's mistake, not the caller's). Allocates only when
-    /// the request has an input the fallback does not declare.
-    /// </summary>
     internal static RequestInputs FallbackInputs(RequestInputs inputs, RequestSchema fallback)
     {
         var undeclared = 0;
@@ -1210,8 +1103,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         return declared;
     }
 
-    /// <summary>The result of a request its fallback pipeline served: the primary's assignment and error, the fallback's items.</summary>
-    /// <param name="merged">The arms a configuration override's plan merged in (see <see cref="ToResult"/>).</param>
     private static RecResult Combine(
         RecRequest request, PipelineResult executed, RecResult converted, PipelineResult served, IReadOnlyList<IgnoredArm> ignored, string fallbackId,
         IReadOnlyList<string>? merged = null) => new()
@@ -1228,16 +1119,10 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ColumnProducers = converted.ColumnProducers,
         Trace = converted.Trace,
         LogBatches = converted.LogBatches is { } fallbackBatches ? BothRuns(executed.LogBatches, fallbackBatches) : null,
-        Explanation = converted.Explanation, // of the run that served
+        Explanation = converted.Explanation,
         ElapsedMs = executed.ElapsedMs + served.ElapsedMs,
     };
 
-    /// <summary>
-    /// The captured batches of a request its fallback pipeline served: the primary run's, then the fallback's, each with
-    /// the pipeline and manifest of the run that captured it. Both ran for the request, and a request that is not captured
-    /// writes both to the sink; only the fallback's were returned, so a capture lost what the primary logged before it
-    /// failed (its taps, and its <c>$experiments</c> record of the arms it ran).
-    /// </summary>
     private static IReadOnlyList<Logging.LogBatch> BothRuns(IReadOnlyList<Logging.LogBatch> primary, IReadOnlyList<Logging.LogBatch> fallback)
     {
         if (primary.Count == 0)
@@ -1280,7 +1165,6 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         ElapsedMs = result.ElapsedMs,
     };
 
-    /// <summary>A request that did not run: before assignment nothing is known about it; after, its arms and release are.</summary>
     private static RecResult Rejected(
         RecRequest request, RecErrorKind kind, string error, ExperimentRecord? experiments = null, string? manifestId = null, string? pointer = null) => new()
     {

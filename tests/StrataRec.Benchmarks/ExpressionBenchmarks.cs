@@ -9,18 +9,6 @@ using StrataRec.Expressions;
 
 namespace StrataRec.Benchmarks;
 
-/// <summary>
-/// ColumnExpr vectorized backend over 5,000 live candidates (a ~20-node formula with two
-/// transcendental calls in at most 50 μs, with no steady-state allocation).
-/// </summary>
-/// <remarks>
-/// <para><c>FullRange</c> evaluates every row of a 5,000-row table (live ratio 1.0, zero-copy column reads).
-/// <c>Gather</c> evaluates 5,000 live rows scattered over a 20,000-row table (live ratio 0.25), which takes the
-/// gather/scatter path. Both write into a preallocated <c>float64</c> destination, except <c>NarrowInt32</c>, which
-/// writes an int64 result into an <c>int32</c> column. The <c>List*</c> cases run the list kernels over 1–8 topic ids
-/// per candidate, stored as <c>list&lt;int32&gt;</c>, <c>list&lt;int64&gt;</c> or (same values) <c>list&lt;float32&gt;</c>.</para>
-/// <para>Run: <c>dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*ExpressionBenchmarks*'</c>.</para>
-/// </remarks>
 [MemoryDiagnoser]
 public class ExpressionBenchmarks
 {
@@ -39,13 +27,14 @@ public class ExpressionBenchmarks
     /// <summary>An int64 result written into an <c>int32</c> column: measures the narrowing write.</summary>
     public const string NarrowFormula = "col.entity_id - 1000000";
 
-    /// <summary>The list kernels over a per-candidate topic list stored as <c>list&lt;int32&gt;</c> (read in place, no widening): <c>size</c>, <c>in</c> and <c>overlap_count</c>.</summary>
+    /// <summary>The list kernels over a per-candidate topic list stored as <c>list&lt;int32&gt;</c>: <c>size</c>,
+    /// <c>in</c> and <c>overlap_count</c>.</summary>
     public const string List32Formula = "overlap_count(col.item.topics32, ctx.user.topics) + size(col.item.topics32) + (col.entity_id % 64 in col.item.topics32 ? 1 : 0)";
 
     /// <summary><see cref="List32Formula"/> over the same topics stored as <c>list&lt;int64&gt;</c>.</summary>
     public const string ListFormula = "overlap_count(col.item.topics64, ctx.user.topics) + size(col.item.topics64) + (col.entity_id % 64 in col.item.topics64 ? 1 : 0)";
 
-    /// <summary><see cref="List32Formula"/> over the same values stored as <c>list&lt;float32&gt;</c> (read in place, compared as float64).</summary>
+    /// <summary><see cref="List32Formula"/> over the same values stored as <c>list&lt;float32&gt;</c>.</summary>
     public const string ListFloat32Formula = "overlap_count(col.item.topicsf32, ctx.user.topic_weights) + size(col.item.topicsf32) + (col.entity_id % 64 in col.item.topicsf32 ? 1 : 0)";
 
     private const int LiveRows = 5_000;
@@ -144,7 +133,6 @@ public class ExpressionBenchmarks
     [Benchmark]
     public void ListFloat32Gather() => _listFloat32.Evaluate(_sparse.Context, _sparse.Rows, _sparse.Destination);
 
-    /// <summary>One request: a table whose live rows are every <c>stride</c>-th physical row.</summary>
     private sealed class Fixture
     {
         public Fixture(int physicalRows, int stride)

@@ -4,7 +4,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary><c>stratarec operators</c>: the operators, connectors and clients this binary provides.</summary>
 internal static class OperatorsCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -15,7 +14,6 @@ internal static class OperatorsCommand
         return command;
     }
 
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static int Run(PlanEnvironment provided, string format, TextWriter output)
     {
         var environment = provided;

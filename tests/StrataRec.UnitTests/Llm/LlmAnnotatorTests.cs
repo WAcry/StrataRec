@@ -6,18 +6,12 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
-/// <summary>
-/// <c>LlmAnnotator@1</c>: one call per window row, each answer parsed by the column's type and written to the
-/// row or left missing, the node Degraded when some rows have no value and Failed when every call failed, the load-time
-/// checks, and a replay per entity.
-/// </summary>
 public sealed class LlmAnnotatorTests
 {
     private const string Op = "LlmAnnotator@1";
 
     private const string Note = "\"note\": \"col.llm.note\"";
 
-    /// <summary>The prompt is the row's id, so a test answers per row.</summary>
     private const string ById = "{{col.entity_id}}";
 
     [Fact]
@@ -34,7 +28,7 @@ public sealed class LlmAnnotatorTests
         Assert.All(models.Calls, c => Assert.Equal((null, 1, 99L, 16), (c.Version, c.BatchSize, c.Seed, c.MaxOutputTokens)));
         Assert.Equal(new[] { "10: Red \"shoes\" (friendly)", "30: Green\nscarf (friendly)", "50: Mug (friendly)" },
             models.Calls.Select(c => c.Prompts["user"]).Order(StringComparer.Ordinal));
-        Assert.Equal(Incoming, IdsOf(result)); // the order is not the annotator's
+        Assert.Equal(Incoming, IdsOf(result));
         Assert.Equal(new Dictionary<long, object?>
         {
             [30] = "Note on 30: Green\nscarf (friendly)", [10] = "Note on 10: Red \"shoes\" (friendly)", [50] = "Note on 50: Mug (friendly)",
@@ -53,7 +47,7 @@ public sealed class LlmAnnotatorTests
 
         Assert.True(plan.Schema.TryGetColumn("llm.note", out var column));
         Assert.Equal(ColumnType.String.AsNullable(), column.Type);
-        Assert.Equal(7, models.Calls.Count); // all seven rows: fewer than the window
+        Assert.Equal(7, models.Calls.Count);
         Assert.All(models.Calls, c => Assert.Equal(64, c.MaxOutputTokens));
         Assert.All(Values(result, "note"), v => Assert.Equal("x" + v.Key, v.Value));
     }
@@ -85,7 +79,6 @@ public sealed class LlmAnnotatorTests
         Assert.Null(values[20]);
     }
 
-    /// <summary>An answer that is not a value of the column leaves the row missing: never a guess, never a default.</summary>
     [Theory]
     [InlineData("string?", " \n ", "\"\": it is empty")]
     [InlineData("string?", "```\n```", "\"```\\n```\": it is empty")]
@@ -137,7 +130,6 @@ public sealed class LlmAnnotatorTests
             Rank(result).Detail);
     }
 
-    /// <summary>Rows whose call failed, threw or returned no text, and rows whose answer is unusable, are missing and named.</summary>
     [Fact]
     public async Task SomeRowsWithoutAValue_DegradeTheNode_NamingTheCountsAndTheFirstOfEach()
     {
@@ -275,10 +267,6 @@ public sealed class LlmAnnotatorTests
         Assert.True(compilation.Succeeded, string.Join("\n", compilation.Diagnostics));
     }
 
-    /// <summary>
-    /// Each row's call is keyed by its entity, so a replay answers each entity from its own recorded call: the same window,
-    /// a window that grew (the new rows were never annotated: missing, reported, the node Degraded) or shrank.
-    /// </summary>
     [Fact]
     public async Task AReplay_AnswersEachEntityFromItsRecordedCall_WhateverWindowItIsIn()
     {
@@ -310,7 +298,6 @@ public sealed class LlmAnnotatorTests
         Assert.Empty(shrunkReplay.Gaps);
     }
 
-    /// <summary>A row whose prompt changed is not served the recorded answer: its inputs changed, and it has no value.</summary>
     [Fact]
     public async Task AReplayAfterThePromptChanged_ReportsEachRowsInputsAsChanged()
     {
@@ -326,9 +313,9 @@ public sealed class LlmAnnotatorTests
     }
 
     /// <summary>
-    /// Two annotators of one model and the same rows, with different prompts. When the first one's window no longer has a
-    /// row, the second's call of that row takes the first one's recorded call (same entity, other inputs) and is answered
-    /// from its own recorded call of that entity alone: a single-row call's text is synthesized per entity.
+    /// Two annotators of one model and the same rows, with different prompts. When the first one's window no longer has
+    /// a row, the second's call of that row takes the first one's recorded call (same entity, other inputs) and is
+    /// answered from its own recorded call of that entity alone.
     /// </summary>
     [Fact]
     public async Task ARowsTextIsSynthesizedFromTheRecordedCallOfThatEntityAlone_WhenAnotherNodesCallTookItsPlace()

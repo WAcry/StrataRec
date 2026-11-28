@@ -2,10 +2,6 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// An operator's declared effects are what it may do: the data-flow checks trust them, so an operator that
-/// writes a column without declaring <see cref="Effects.ColumnWriter"/> is refused when it compiles, not trusted.
-/// </summary>
 public sealed class OperatorEffectsTests
 {
     [Fact]
@@ -32,7 +28,6 @@ public sealed class OperatorEffectsTests
     {
     }
 
-    /// <summary><c>Sorter@1</c>: declares only <see cref="Effects.RowOrder"/>, yet asks to write <c>score.s</c>.</summary>
     private sealed class SorterFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("Sorter", 1, Effects.RowOrder, typeof(SorterConfig), "Orders rows, and writes a score.");

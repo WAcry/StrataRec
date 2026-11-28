@@ -6,7 +6,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
 
-/// <summary>Validation passes over arm combinations.</summary>
 internal sealed partial class UnifiedCompilation
 {
     internal sealed class CombinationReport
@@ -16,17 +15,8 @@ internal sealed partial class UnifiedCompilation
         public bool Exhaustive { get; set; } = true;
     }
 
-    /// <summary>
-    /// Data-flow check per arm combination: every non-nullable column read has an unskippable
-    /// producer before it, fixed columns have one producer per path, same-order nodes are independent. All
-    /// combinations of the layers that touch nodes are enumerated when there are at most
-    /// <see cref="PlanCompileRequest.MaxCombinationsChecked"/>. Otherwise every single arm and every pair, and for each
-    /// rule of the check every combination of the layers that decide it (<see cref="PlanBuilder.DataFlowScopes"/>);
-    /// a rule whose layers have more combinations than the limit is an error, never left unchecked.
-    /// </summary>
     private void ValidateCombinations(ImmutableArray<TimelineSlot> timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, CombinationReport report)
     {
-        // Layers that touch nodes, and per layer the arms that touch nodes (others behave like "not assigned" here).
         var choices = new SortedDictionary<int, List<int>>();
         var spaces = new List<VariantSpace>();
         foreach (var (_, v) in _variants)
@@ -92,9 +82,8 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        // Per rule: every combination of the layers that decide it. A rule depends only on the
-        // variants of its scope, so this checks it as completely as the whole space would; scopes within two layers are
-        // covered by the singles and pairs above.
+        // A rule depends only on the variants of its scope, so this checks it as completely as the whole space would;
+        // scopes within two layers are covered by the singles and pairs above.
         var nodes = new Dictionary<string, List<CompiledNode>>(StringComparer.Ordinal);
         foreach (var (id, v) in _variants)
         {
@@ -108,7 +97,6 @@ internal sealed partial class UnifiedCompilation
         }
 
         var enumerated = new HashSet<string>(StringComparer.Ordinal);
-        // Rules of one set of layers count it once; a rule of every layer has the count above.
         var counted = new Dictionary<string, long>(StringComparer.Ordinal) { [string.Join(",", allLayers)] = all };
         var reported = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in _builder.DataFlowScopes(nodes, taps, output, Conditional))
@@ -142,12 +130,8 @@ internal sealed partial class UnifiedCompilation
 
             if (product > _request.MaxCombinationsChecked)
             {
-                // Without a complete check some assignment could run a plan this rule rejects, so the plan is rejected
-                // rather than published on a warning.
                 if (reported.Add(scope.Pointer))
                 {
-                    // Each layer with what it changes in the scope: which experiments to move into one layer is what the
-                    // author has to decide, and the subject alone does not say which node a layer reaches it through.
                     var names = new List<string>(list.Count);
                     foreach (var layer in list)
                     {
@@ -172,7 +156,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>The nodes and taps of <paramref name="scope"/> whose variants <paramref name="layer"/> decides, by id.</summary>
     private string ChangedBy(int layer, DataFlowScope scope)
     {
         var changed = new List<string>();
@@ -195,7 +178,6 @@ internal sealed partial class UnifiedCompilation
         return string.Join(", ", changed);
     }
 
-    /// <summary>The distinct variants of a space (combinations share deduplicated variants), without "absent".</summary>
     private static List<T> Compiled<T>(T?[] variants)
         where T : class
     {
@@ -214,7 +196,7 @@ internal sealed partial class UnifiedCompilation
 
     private void Check(int[] combination, ImmutableArray<TimelineSlot> timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan output, HashSet<string> seen, CombinationReport report)
     {
-        combination = Running(combination); // one with an arm that yields runs without it: that is what is checked
+        combination = Running(combination);
         if (!seen.Add(string.Join(",", combination)))
         {
             return;
@@ -285,13 +267,6 @@ internal sealed partial class UnifiedCompilation
         report.Checked++;
     }
 
-    /// <summary>
-    /// Checks every pair of arms that can run together (any two of different layers, unless one's experiment yields to the
-    /// other's) for path conflicts (errors) and interactions (warnings for review). Two arms placing nodes at
-    /// the same order are not a conflict: the per-combination data-flow check refuses same-order nodes that depend on each
-    /// other (ORDER_DEPENDENCY), and independent ones run in either order with the same result. A pair that never runs
-    /// together because of a yield is not reported: what it would be is what the yield resolves (<see cref="ValidateYields"/>).
-    /// </summary>
     private void ValidatePairs()
     {
         var writes = new Dictionary<int, Dictionary<int, string>>();
@@ -344,7 +319,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>What a yield between two experiments resolves (<see cref="_yieldResolves"/>), by the pair, lower index first.</summary>
     private SortedSet<string> YieldResolves(int a, int b)
     {
         var key = a < b ? (a, b) : (b, a);
@@ -357,7 +331,6 @@ internal sealed partial class UnifiedCompilation
         return set;
     }
 
-    /// <summary>How to declare that <paramref name="a"/>'s experiment yields to <paramref name="b"/>'s, for a hint.</summary>
     private string YieldHint(ArmPatch a, ArmPatch b) =>
         $"in the release, \"{a.ExperimentId}\": {{ \"layer\": \"{_layers[a.LayerIndex]}\", \"yields_to\": [\"{b.ExperimentId}\"] }}";
 
@@ -397,10 +370,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>
-    /// The name and flow of a footprint's key (<see cref="DescribeArm"/>): a column's logical id, or a request column's
-    /// context id complemented (<c>~id</c>), named <c>req.&lt;name&gt;</c> so a review tells it from a column of its name.
-    /// </summary>
     private (string Name, bool Flow) Footprinted(int key)
     {
         if (key >= 0)
@@ -417,10 +386,6 @@ internal sealed partial class UnifiedCompilation
         $"if the two may compose, record the review in '{a.ExperimentId}': \"reviewed_interactions\": {{ \"{b.ExperimentId}\": [\"{column}\"] }}; " +
         $"otherwise put the experiments in the same layer, or let one yield to the other where both are assigned: {YieldHint(a, b)}";
 
-    /// <summary>
-    /// A yield that resolves nothing is a warning: the arms of the two neither conflict nor interact, so it only costs the
-    /// experiment that yields the traffic of the other, and a yield that outlived its conflict would hide the next one.
-    /// </summary>
     private void ValidateYields()
     {
         // With an error anywhere, conflicts and interactions are not all known (as for reviewed interactions).
@@ -467,15 +432,10 @@ internal sealed partial class UnifiedCompilation
         return false;
     }
 
-    /// <summary>
-    /// A reviewed interaction with an experiment of this release that no interaction needed is a warning: the experiments
-    /// share a layer now, or neither adds a node interacting on the column, and a review that outlived its interaction would
-    /// silence the next one. One with an experiment this release does not have says nothing here (another environment's).
-    /// </summary>
     private void ValidateReviewedInteractions()
     {
-        // With an error anywhere, interactions are not known: an arm whose patch or node did not compile has none to find
-        // (a node's config error made a valid review "unused", and the hint said to remove it).
+        // With an error anywhere, interactions are not known: an arm whose patch or node did not compile has none to
+        // find.
         if (_diagnostics.HasErrors)
         {
             return;
@@ -496,8 +456,6 @@ internal sealed partial class UnifiedCompilation
                     continue;
                 }
 
-                // A yield between the two keeps them from running together: say which, since they are in different layers
-                // and may still both add nodes on the column.
                 var index = placed[experiment];
                 var hint = _yields.Yields(index, otherIndex) ? $"remove the entry: '{experiment}' yields to '{other}', so the two never run together"
                     : _yields.Yields(otherIndex, index) ? $"remove the entry: '{other}' yields to '{experiment}', so the two never run together"
@@ -514,11 +472,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>
-    /// The column footprint of an arm from its single-arm variants: columns its touched nodes write,
-    /// and columns its added nodes read. Request columns are in it as candidate columns are, keyed by their context id
-    /// complemented (<see cref="Footprinted"/>).
-    /// </summary>
     private void DescribeArm(ArmPatch arm, out Dictionary<int, string> writes, out Dictionary<int, ArmRead> addedReads)
     {
         writes = new Dictionary<int, string>();
@@ -538,14 +491,8 @@ internal sealed partial class UnifiedCompilation
                 continue;
             }
 
-            // What the arm adds to the pipeline's structure: every column of a node it adds, and of a node it changes only the
-            // columns the baseline's node did not write or read. Changing an existing node's settings, inline or through a
-            // parameter, changes its values as any parameter does and composes by the structure: counting
-            // every column of a touched node warned for every pair of experiments tuning different multipliers of one flow
-            // column. A node whose operator or config now writes or reads another column is a change of structure
-            // (a filter replaced by a writer of score.final, read by another experiment's added node, did not warn). Only
-            // a read of the current version counts: a pinned one (col.x@node) does not see a writer another arm adds, and a
-            // read changed from pinned to current is a new dependency.
+            // Only a read of the current version counts: a pinned one (col.x@node) does not see a writer another arm
+            // adds, and a read changed from pinned to current is a new dependency.
             var baseline = arm.AddedNodes.Contains(nodeId) ? null : v.Variants[v.IndexOf(RequestArms.None)];
             foreach (var output in node.Outputs)
             {
@@ -635,7 +582,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>A current read an arm adds: the node the arm adds or changes, and the fallback that reads it, if one does.</summary>
     private readonly record struct ArmRead(string Node, string? Fallback);
 
     private static bool IsAddition(ArmPatch arm, PatchOperation op)
@@ -648,10 +594,6 @@ internal sealed partial class UnifiedCompilation
         return arm.Additions.TryGetValue(op.Path.Tokens[0], out var entries) && entries.ContainsKey(op.Path.Tokens[1]);
     }
 
-    /// <summary>
-    /// Compiles baseline ⊕ arm on its own for every arm. It sees only the baseline and the arm's
-    /// own additions, which enforces the independence rule.
-    /// </summary>
     private void ValidateArmsIndependently()
     {
         var plain = WithoutExperiments(_request);
@@ -677,11 +619,9 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Compiles the bare baseline on its own whenever there is an arm: the unified schema has whatever any
-    /// arm declares, so an invalid baseline could resolve there, and removing that experiment (a revocation, which does
-    /// not compile again) would publish a release no node can load. Not only when arms add schema entries or parameter
-    /// leaves: a node an arm adds declares its outputs implicitly, and listing the ways an arm can declare a name missed
-    /// that one. One more compile of the baseline, without building a plan, per plan compile.
+    /// Compiles the bare baseline on its own whenever there is an arm: the unified schema has whatever any arm
+    /// declares, so an invalid baseline could resolve there, and removing that experiment (a revocation, which does not
+    /// compile again) would publish a release no node can load.
     /// </summary>
     private void ValidateBaselineAlone()
     {
@@ -696,8 +636,6 @@ internal sealed partial class UnifiedCompilation
             return;
         }
 
-        // What a check of the unified plan has already found here (a tap after a node only an arm adds, say) it said
-        // more precisely, for the arm combinations: the same code at the same place is not said again.
         var found = new HashSet<(string, string, string)>();
         foreach (var d in _diagnostics.Items)
         {
@@ -722,12 +660,6 @@ internal sealed partial class UnifiedCompilation
         return combination;
     }
 
-    /// <summary>
-    /// How many combinations of <paramref name="layers"/> run (<see cref="Enumerate"/>): the product of the layers'
-    /// choices without yields; with them, counted up to the limit, and <see cref="long.MaxValue"/> above it. A yield
-    /// removes the combinations with arms of both experiments: for two layers of one experiment each, those merging the
-    /// two layers would remove.
-    /// </summary>
     private long Combinations(SortedDictionary<int, List<int>> choices, List<int> layers)
     {
         var product = Product(choices, layers);
@@ -756,14 +688,12 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// Every combination of the given layers (each: not assigned, or one of its arms) that runs, in order (the first layer
-    /// varying slowest, "not assigned" first): none with two arms one of whose experiments yields to the other's, since a
-    /// request assigned both runs without one, a combination visited too. Stops after <paramref name="limit"/>
-    /// combinations; returns how many it visited. Without yields, every combination.
+    /// Every combination of the given layers (each: not assigned, or one of its arms) that runs, in order (the first
+    /// layer varying slowest, "not assigned" first).
     /// </summary>
     private long Enumerate(SortedDictionary<int, List<int>> choices, List<int> layers, Action<int[]>? visit, long limit = long.MaxValue)
     {
-        // Iterative, as the odometer it replaces: a scope can span more layers than a thread's stack has frames for.
+        // Iterative: a scope can span more layers than a thread's stack has frames for.
         var combination = NewCombination();
         if (layers.Count == 0)
         {
@@ -790,7 +720,6 @@ internal sealed partial class UnifiedCompilation
                 return count;
             }
 
-            // The next: the deepest layer with a further arm that runs with the layers before it.
             while (true)
             {
                 var options = choices[layers[depth]];
@@ -817,7 +746,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>Whether <paramref name="arm"/> runs beside the arms of the first <paramref name="depth"/> <paramref name="layers"/> of <paramref name="combination"/>.</summary>
     private bool RunsWith(int arm, int[] combination, List<int> layers, int depth)
     {
         if (_yields.IsEmpty)

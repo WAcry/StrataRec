@@ -39,7 +39,6 @@ public sealed class OperatorCompileContext
     private readonly List<PipelineCall> _calls = new();
     private readonly CallerOfPipelines _caller;
 
-    /// <summary>Set while an awaited expression's reads are recorded (<see cref="CompileAwaitedExpression"/>).</summary>
     private bool _awaiting;
 
     internal OperatorCompileContext(
@@ -92,10 +91,8 @@ public sealed class OperatorCompileContext
 
     internal IReadOnlyCollection<int> CurrentReads => _currentReads;
 
-    /// <summary>The features filled before the node runs: every feature it reads but those only awaited expressions read.</summary>
     internal IReadOnlyCollection<int> ReadFeatures => _readFeatures;
 
-    /// <summary>The context features awaited expressions read (<see cref="CompileAwaitedExpression"/>), which the operator waits for itself.</summary>
     internal IReadOnlyCollection<int> AwaitedFeatures => _awaitedFeatures;
 
     internal IReadOnlyCollection<int> RequiredOutputs => _requiredOutputs;
@@ -108,21 +105,17 @@ public sealed class OperatorCompileContext
 
     internal IReadOnlyList<RequestOutput> RequestOutputs => _requestOutputs;
 
-    /// <summary>The pipelines the node declared it calls (<see cref="TryCallPipeline"/>), in the order declared.</summary>
     internal IReadOnlyList<PipelineCall> Calls => _calls;
 
-    /// <summary>The request columns read (<see cref="Planning.CompiledNode.RequestReads"/>), by context id.</summary>
     internal IReadOnlyCollection<int> RequestReads => _requestReads;
 
-    /// <summary>The names the node binds (<see cref="CompiledNode.Requires"/>).</summary>
     internal IReadOnlyCollection<NameRef> Requires => _requires;
 
-    /// <summary>The columns written with a type of the node's own, in the order written (<see cref="CompiledNode.Declares"/>).</summary>
     internal List<ColumnDeclaration> Declares => _declares;
 
     /// <summary>
-    /// Deserializes <see cref="Config"/> strictly (unknown keys rejected). Returns null after reporting the error at the
-    /// key at fault, in JSON words (<see cref="Artifacts.Json.JsonBindingErrors"/>).
+    /// Deserializes <see cref="Config"/> strictly (unknown keys rejected). Returns null after reporting the error at
+    /// the key at fault, in JSON words.
     /// </summary>
     public T? BindConfig<T>()
         where T : class
@@ -146,7 +139,7 @@ public sealed class OperatorCompileContext
         {
             if (_schema.IsUnusable("col." + name))
             {
-                HasErrors = true; // declared with an error, reported at the declaration
+                HasErrors = true;
                 return false;
             }
 
@@ -173,17 +166,15 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
-    /// Resolves an output column the node writes. With <paramref name="implicitType"/>, a column nothing has declared is
-    /// declared with that type, so the write declares it (<see cref="Planning.CompiledNode.Declares"/>), and a declared
-    /// one keeps its declared type, which the caller checks it can write; without, the column must be declared. A node
-    /// that writes a declared column as declared and declares an undeclared one passes its type either way, rather than
-    /// asking the schema first: whether a column is declared can differ between arm combinations, which compile the node
-    /// once.
+    /// Resolves an output column the node writes. With <paramref name="implicitType"/>, a column nothing has declared
+    /// is declared with that type, so the write declares it, and a declared one keeps its declared type, which the
+    /// caller checks it can write; without, the column must be declared. A node that writes a declared column as
+    /// declared and declares an undeclared one passes its type either way, rather than asking the schema first: whether
+    /// a column is declared can differ between arm combinations, which compile the node once.
     /// </summary>
-    /// <exception cref="InvalidOperationException">
-    /// The operator declares neither <see cref="Effects.ColumnWriter"/> nor <see cref="Effects.RowSource"/>: its descriptor
-    /// is wrong, which is the operator author's bug, not the configuration's (the data-flow checks trust the effects).
-    /// </exception>
+    /// <exception cref="InvalidOperationException">The operator declares neither <see cref="Effects.ColumnWriter"/> nor
+    /// <see cref="Effects.RowSource"/>: its descriptor is wrong, which is the operator author's bug, not the
+    /// configuration's.</exception>
     public bool TryWriteColumn(string name, string configKey, ColumnType? implicitType, out OutputColumn column)
     {
         if ((Descriptor.Effects & (Effects.ColumnWriter | Effects.RowSource)) == 0)
@@ -197,7 +188,7 @@ public sealed class OperatorCompileContext
         {
             if (_schema.IsUnusable("col." + name))
             {
-                HasErrors = true; // declared with an error, reported at the declaration
+                HasErrors = true;
                 return false;
             }
 
@@ -221,8 +212,6 @@ public sealed class OperatorCompileContext
 
         if (implicitType is { } type && logical.Implicit && type != logical.Type)
         {
-            // An undeclared column takes its type from the first variant or node that writes it, and every combination
-            // runs on one schema: another variant writing another type would be read, or written, as the first one's.
             Error(configKey, "COLUMN_TYPE_MISMATCH",
                 $"{Descriptor.Id} writes '{name}' as {type} here, but as {logical.Type} at {logical.Pointer}: a column has one type in every arm combination.",
                 type.Kind == logical.Type.Kind
@@ -240,7 +229,6 @@ public sealed class OperatorCompileContext
             }
         }
 
-        // A write with a type of its own declares the column where nothing has; one without needs a declaration.
         if (implicitType is not null)
         {
             _declares.Add(new ColumnDeclaration(logical.Id, implicitType.Value));
@@ -259,14 +247,13 @@ public sealed class OperatorCompileContext
     /// <summary>
     /// Resolves a request column the node writes (<c>req.&lt;name&gt;</c>, declared under <c>request_columns</c>): the
     /// operator stages its value with <see cref="OperatorContext.SetRequestValue"/>, and it is published when the node
-    /// commits. A request column is always declared: its type, nullability and default are a contract with every later
-    /// reader, a tap and the caller, stated in one place rather than by whichever node writes it first.
+    /// commits. A request column is always declared.
     /// </summary>
     /// <param name="configKey">Pointer suffix under <c>/config</c> for diagnostics, e.g. <c>/values/candidates.count</c>.</param>
     /// <param name="suggested">The type the operator would write, for the hint when the column is not declared: the
     /// declaration to add is then the one the operator accepts.</param>
-    /// <exception cref="InvalidOperationException">The operator does not declare <see cref="Effects.RequestWriter"/>: its
-    /// descriptor is wrong, the operator author's bug (the data-flow checks trust the effects).</exception>
+    /// <exception cref="InvalidOperationException">The operator does not declare <see cref="Effects.RequestWriter"/>:
+    /// its descriptor is wrong, the operator author's bug.</exception>
     public bool TryWriteRequestColumn(string name, string configKey, out RequestOutput output, ColumnType? suggested = null)
     {
         if ((Descriptor.Effects & Effects.RequestWriter) == 0)
@@ -280,7 +267,7 @@ public sealed class OperatorCompileContext
         {
             if (_schema.IsUnusable("req." + name))
             {
-                HasErrors = true; // declared with an error, reported at the declaration
+                HasErrors = true;
                 return false;
             }
 
@@ -316,7 +303,6 @@ public sealed class OperatorCompileContext
 
         if (!ExpressionCompiler.TryCompile(source, _scope, options, out var expression, out var diagnostics))
         {
-            // No diagnostics: the expression reads a name declared with an error, reported at the declaration.
             HasErrors = true;
             ExpressionErrors.Report(_diagnostics, diagnostics, Artifact, Pointer + "/config" + configKey, source);
             return null;
@@ -406,7 +392,7 @@ public sealed class OperatorCompileContext
         {
             if (_schema.IsUnusable("param." + name))
             {
-                HasErrors = true; // declared with an error, reported at the declaration
+                HasErrors = true;
                 return false;
             }
 
@@ -464,7 +450,7 @@ public sealed class OperatorCompileContext
 
         if (result.Count == 0 && _schema.IsUnusable("param." + mapName))
         {
-            HasErrors = true; // declared with an error, reported at the declaration
+            HasErrors = true;
         }
         else if (result.Count == 0)
         {
@@ -476,27 +462,18 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
-    /// Declares that the node calls pipeline <paramref name="pipelineId"/>, and returns the handle its operator calls with
-    /// (<see cref="OperatorContext.CallPipelineAsync"/>). A call runs the pipeline for the
-    /// same request: its id, time and experiment assignment, within what is left of the node's budget. Say what the call
-    /// needs of the pipeline with <see cref="TryCallInput"/>, <see cref="TryCallColumn"/>, <see cref="TryCallValue"/> and
-    /// <see cref="CallAppendsRows"/>: a plan compiled with the pipelines it may call (a workspace) checks each here, at its
-    /// config key; one compiled without them (an engine loading one release) is checked when the call is made, and a call
-    /// that does not fit fails as a result.
+    /// Declares that the node calls pipeline <paramref name="pipelineId"/>, and returns the handle its operator calls
+    /// with (<see cref="OperatorContext.CallPipelineAsync"/>). Say what the call needs of the pipeline with
+    /// <see cref="TryCallInput"/>, <see cref="TryCallColumn"/>, <see cref="TryCallValue"/> and
+    /// <see cref="CallAppendsRows"/>: a plan compiled with the pipelines it may call (a workspace) checks each here, at
+    /// its config key; one compiled without them (an engine loading one release) is checked when the call is made, and
+    /// a call that does not fit fails as a result.
     /// </summary>
-    /// <param name="cache">
-    /// The node's cache of the call's results, from its config (a member named <c>cache</c>, by convention); null runs the
-    /// pipeline for every call. With it, a call whose result is cached does not run the pipeline, and its result says
-    /// where it comes from (<see cref="PipelineCallResult.Cached"/>). The environment binds where the results are kept
-    /// (<c>pipelines.&lt;id&gt;.cache</c>): without that binding the node does not compile.
-    /// </param>
-    /// <param name="cacheKey">
-    /// Where the node's config has <paramref name="cache"/>: a cache that is wrong or not bound is reported there, and
-    /// the call is declared without it, so the node's other declarations are still checked and nothing they declare is
-    /// reported missing.
-    /// </param>
-    /// <returns>False after reporting an error at <paramref name="configKey"/>: no pipeline named, the node's own, one
-    /// the workspace does not have, or one whose calls lead back to this pipeline.</returns>
+    /// <param name="cache">The node's cache of the call's results, from its config (a member named <c>cache</c>, by
+    /// convention); null runs the pipeline for every call.</param>
+    /// <param name="cacheKey">Where the node's config has <paramref name="cache"/>: a cache that is wrong or not bound
+    /// is reported there, and the call is declared without it.</param>
+    /// <returns>False after reporting an error at <paramref name="configKey"/>.</returns>
     public bool TryCallPipeline(
         string pipelineId, string configKey, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PipelineCall? call,
         PipelineCallCacheConfig? cache = null, string cacheKey = "/cache")
@@ -547,11 +524,6 @@ public sealed class OperatorCompileContext
         return true;
     }
 
-    /// <summary>
-    /// The node's cache of a call: its times and version checked at their keys, over the tiers the environment binds for
-    /// the pipeline. With no setting at all, a cache that keeps nothing and asks the environment for nothing: its calls
-    /// share a run only for as long as the request that made it is under way.
-    /// </summary>
     private void DeclareCallCache(PipelineCall call, PipelineCallCacheConfig cache, string cacheKey)
     {
         var at = Pointer + "/config" + cacheKey;
@@ -565,8 +537,6 @@ public sealed class OperatorCompileContext
                 return;
             }
 
-            // One error, whatever those settings' values and whatever the environment binds: whether any of it applies
-            // is what there is to decide first.
             HasErrors = true;
             _diagnostics.Error("CACHE_TTL", Artifact, at, $"The cache of node '{NodeId}' gives {given} but no 'ttl_ms'.",
                 "add how long a result of the call is served, in milliseconds, e.g. \"ttl_ms\": 3600000; "
@@ -594,7 +564,6 @@ public sealed class OperatorCompileContext
         }
         else if (tiers.Distributed is not null)
         {
-            // The store is given a record's longest use as a time to live, as for a source's and a service's cache: the same check.
             ok &= Features.Cache.CacheSettings.TryRetention("pipeline", call.PipelineId, ttlMs, staleMs, _diagnostics, Artifact, at);
         }
 
@@ -687,10 +656,6 @@ public sealed class OperatorCompileContext
 
     private static string Key(EntityKeyType type) => type == EntityKeyType.Int64 ? "int64" : "string";
 
-    /// <summary>
-    /// The inputs each called pipeline requires that nothing passes, reported where the node names the pipeline: known
-    /// once the operator has declared what it passes itself.
-    /// </summary>
     internal void CheckCalls()
     {
         foreach (var call in _calls)
@@ -762,7 +727,7 @@ public sealed class OperatorCompileContext
 
         if (error is null)
         {
-            HasErrors = true; // reported at the binding's setting already
+            HasErrors = true;
             return null;
         }
 
@@ -775,8 +740,8 @@ public sealed class OperatorCompileContext
     /// config against it at load time. Check the node only when it is <see cref="SignatureStatus.Known"/>.
     /// <see cref="SignatureStatus.Failed"/> (the service has no such version, or does not describe itself) is already
     /// reported at <paramref name="configKey"/>: the node fails. <see cref="SignatureStatus.Pending"/> (the engine is
-    /// still loading the client; it compiles the plan again with the answer) and <see cref="SignatureStatus.Unchecked"/>
-    /// (the plan is compiled without loading its clients, as by <c>validate</c>) are no error: compile without the check.
+    /// still loading the client) and <see cref="SignatureStatus.Unchecked"/> (the plan is compiled without loading its
+    /// clients, as by <c>validate</c>) are no error: compile without the check.
     /// </summary>
     public SignatureLookup Signature(BoundService service, string? version, string configKey)
     {
@@ -814,10 +779,8 @@ public sealed class OperatorCompileContext
     /// <summary>
     /// Resolves a name the operator reads outside an expression (<c>col.x</c>, <c>ctx.request.y</c>, <c>param.z</c>, as
     /// a prompt template's references are written) and records the read, as <see cref="CompileExpression"/>,
-    /// <see cref="TryReadColumn"/> and <see cref="TryParam"/> do for theirs: the fetch planner then fetches a feature before
-    /// the node runs, and data-flow validation and experiment footprints see the read. One step, so a
-    /// name cannot be read without being recorded (resolving through <see cref="Scope"/> and recording
-    /// were two calls, and an operator that forgot the second compiled and ran without its feature fetched).
+    /// <see cref="TryReadColumn"/> and <see cref="TryParam"/> do for theirs: the fetch planner then fetches a feature
+    /// before the node runs, and data-flow validation and experiment footprints see the read.
     /// </summary>
     /// <returns>
     /// False when the name is unknown, which the caller reports where it wrote the name, or declared with an error, which
@@ -844,12 +807,9 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
-    /// A node reads what was committed before it ran: the version of a column it writes is published when it commits, so
-    /// its own write is never what it reads. A column that nothing declared before a write of this node has no earlier
-    /// version at all, and a read of it would be missing on every row, whatever the write computes
-    /// (GroupAggregate@1 writing <c>a</c> and summing <c>a</c> into <c>b</c> compiled, and <c>b</c> was missing). Refused
-    /// here, where one compile sees it; a column another arm combination declares is judged per combination, by
-    /// <see cref="CompiledNode.Requires"/>.
+    /// A column that nothing declared before a write of this node has no earlier version at all, and a read of it would
+    /// be missing on every row, whatever the write computes. Refused here, where one compile sees it; a column another
+    /// arm combination declares is judged per combination, by <see cref="CompiledNode.Requires"/>.
     /// </summary>
     private bool ReadsOwnOutput(in Symbol symbol, string configKey)
     {
@@ -865,7 +825,6 @@ public sealed class OperatorCompileContext
         return true;
     }
 
-    /// <summary>Records a name the node binds (<see cref="CompiledNode.Requires"/>).</summary>
     internal void Require(in Symbol symbol)
     {
         if (symbol.Kind is SymbolKind.Column or SymbolKind.Param or SymbolKind.Context)
@@ -876,7 +835,6 @@ public sealed class OperatorCompileContext
 
     private void Require(NameRef name) => _requires.Add(name);
 
-    /// <summary>Records a resolved name as a read of the node (<see cref="TryResolveRead"/>), and as a name it binds.</summary>
     internal void RecordSymbol(in Symbol symbol)
     {
         Require(symbol);
@@ -908,7 +866,6 @@ public sealed class OperatorCompileContext
                     }
                     else if (_selfReads.Add(symbol.Id))
                     {
-                        // The node's own version does not exist until the node commits: it would read a fresh slot.
                         HasErrors = true;
                         _diagnostics.Error("VERSION_REF_SELF", Artifact, Pointer + "/config",
                             $"Node '{NodeId}' reads its own output '{symbol.Name}', which does not exist until the node has run.",
@@ -954,6 +911,5 @@ public sealed class AwaitedReads
     internal ImmutableArray<int> Features { get; }
 }
 
-/// <summary>What a node's compile knows of its own pipeline as a caller of others (<see cref="OperatorCompileContext.TryCallPipeline"/>).</summary>
 /// <param name="Directory">The pipelines the plan may call, when the compile knows them; null checks calls when they are made.</param>
 internal readonly record struct CallerOfPipelines(string PipelineId, RequestSchema Inputs, IPipelineDirectory? Directory, PlanEnvironment Environment);

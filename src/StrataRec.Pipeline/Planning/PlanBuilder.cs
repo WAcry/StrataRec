@@ -24,11 +24,6 @@ using StrataRec.Core.Services;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>Binary-side capabilities and environment used to compile plans.</summary>
-/// <remarks>
-/// A record so that what a binary provides (its registries) is described once and placed in a workspace with
-/// <c>with { BaseDirectory = … }</c>: the engine's host (<c>AddStrataRec</c>) and the command line set the base directory
-/// from the config root they load, every property is copied, and a property added later is copied too.
-/// </remarks>
 public sealed record PlanEnvironment
 {
     public OperatorRegistry Operators { get; init; } = OperatorRegistry.CreateDefault();
@@ -40,7 +35,7 @@ public sealed record PlanEnvironment
     /// </summary>
     public BindingRegistry Bindings { get; init; } = DefaultBindings();
 
-    /// <summary>The clock of <c>cache</c> tables (write times and expiry); tests pass one they move by hand.</summary>
+    /// <summary>The clock of <c>cache</c> tables (write times and expiry).</summary>
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
     /// <summary>Directory that relative fixture paths in bindings resolve against (the config root); null resolves them
@@ -50,8 +45,8 @@ public sealed record PlanEnvironment
     /// <summary>Capability ids this binary provides.</summary>
     public List<string> Capabilities()
     {
-        // A type a binding can name: its factory has a contract of a kind. Only the contract is asked, not the settings
-        // type, which is the schema's (a factory may load it lazily from an assembly a manifest's check never needs).
+        // Only the contract is asked, not the settings type, which is the schema's (a factory may load it lazily from
+        // an assembly a manifest's check never needs).
         var caps = new List<string>(Operators.Ids);
         foreach (var factory in Bindings.Factories())
         {
@@ -61,7 +56,7 @@ public sealed record PlanEnvironment
                 {
                     if (!caps.Contains(factory.Type))
                     {
-                        caps.Add(factory.Type); // once, however many kinds it serves, and once beside an operator of its id
+                        caps.Add(factory.Type);
                     }
 
                     break;
@@ -110,11 +105,6 @@ public sealed record PlanEnvironment
         return sources;
     }
 
-    /// <summary>
-    /// The factory contract of each <see cref="BindingKind"/>: what a binding of the kind gets from <see cref="Bindings"/>,
-    /// and the settings type it then binds, read through that interface (a factory of two contracts may bind different
-    /// settings for each).
-    /// </summary>
     private static readonly (BindingKind Kind, Type Contract, Func<object, Type> SettingsOf)[] KindContracts =
     [
         (BindingKind.Service, typeof(IBindingFactory<IServiceClient>), static f => ((IBindingFactory<IServiceClient>)f).SettingsType),
@@ -163,13 +153,13 @@ public sealed class SchemaSources
 }
 
 /// <summary>
-/// Compiles configuration into the pieces of an <see cref="ExecutionPlan"/>: the schema, node variants, the output
-/// and the feature plan. The unified (multi-experiment) compiler drives it; with no experiments it compiles a plain
-/// pipeline, which also serves as the reference implementation for differential tests.
+/// Compiles configuration into the pieces of an <see cref="ExecutionPlan"/>: the schema, node variants, the output and
+/// the feature plan. The unified (multi-experiment) compiler drives it; with no experiments it compiles a plain
+/// pipeline.
 /// </summary>
 public sealed class PlanBuilder
 {
-    private readonly HashSet<NameRef> _tapNames = new(); // the names of the tap being compiled
+    private readonly HashSet<NameRef> _tapNames = new();
 
     private readonly PlanEnvironment _environment;
     private readonly IPlanBindings _bindings;
@@ -189,7 +179,6 @@ public sealed class PlanBuilder
     private ClientResolver? _clients;
     private BindingResolver? _resolver;
 
-    /// <summary>The operators of every node compiled, fallbacks and every arm's variants included.</summary>
     private readonly SortedSet<string> _operators = new(StringComparer.Ordinal);
     private SchemaSources? _sources;
     private FeatureCatalog? _catalog;
@@ -216,7 +205,6 @@ public sealed class PlanBuilder
 
     private string CatalogLabel => "catalog:" + _sources!.Catalog.CatalogId;
 
-    /// <summary>The plan's registrar of catalog features, which knows what the plan read.</summary>
     private CatalogFeatures? _catalogFeatures;
 
     /// <summary>
@@ -246,7 +234,6 @@ public sealed class PlanBuilder
         _resolver = new BindingResolver(_environment.Bindings, _bindings, _environment.BaseDirectory, "bindings:" + sources.Bindings.Environment, _diagnostics);
         _clients = new ClientResolver(sources.Bindings, _resolver, _bindings, _environment.Clock);
 
-        // Request inputs.
         _requestInputs = new Dictionary<string, ContextField>(StringComparer.Ordinal);
         var inputTypes = new Dictionary<string, ColumnType>(StringComparer.Ordinal);
         var unusableInputs = new HashSet<string>(StringComparer.Ordinal);
@@ -262,7 +249,6 @@ public sealed class PlanBuilder
 
             if (schema.TryGetContext("request." + name, out var builtin) && builtin.Kind == ContextFieldKind.Builtin)
             {
-                // ctx.request.id, seed and time_ms are the engine's: an input of that name could not be read.
                 _diagnostics.Error("REQUEST_RESERVED_NAME", PipelineLabel, "/request_schema/" + JsonPointer.Escape(name),
                     $"'ctx.request.{name}' is built in: the engine sets it for every request ({BuiltinMeaning(name)}).",
                     $"read the built-in ctx.request.{name}, or rename this input");
@@ -305,7 +291,7 @@ public sealed class PlanBuilder
         var node = CompileNodeCore(nodeId, definition, artifact);
         if (node is null)
         {
-            _failedNodes.Add(nodeId); // what refers to it fails without a second error (a tap's columns_from)
+            _failedNodes.Add(nodeId);
         }
 
         return node;
@@ -379,7 +365,6 @@ public sealed class PlanBuilder
                 break;
         }
 
-        // A setting that only means something when the node falls back is an error elsewhere, not silently ignored.
         if (spec.OnFailure is null or "fail_request" or "skip")
         {
             foreach (var (name, set) in new[] { ("fallback", spec.Fallback is not null), ("fallback_reserve_ms", spec.FallbackReserveMs is not null) })
@@ -394,8 +379,6 @@ public sealed class PlanBuilder
             }
         }
 
-        // A fallback runs when the node that names it fails, and then at once: what decides whether a node on the
-        // timeline runs does not apply to it, and is an error there, not silently ignored.
         if (isFallback)
         {
             foreach (var (name, set) in new[] { ("when", spec.When is not null), ("min_remaining_ms", spec.MinRemainingMs is not null) })
@@ -423,7 +406,6 @@ public sealed class PlanBuilder
             ok = false;
         }
 
-        // Each at the member to change: one message for the three named none of them, at the node.
         if (spec.TimeoutMs is <= 0)
         {
             _diagnostics.Error("NODE_BAD_TIMING", artifact, pointer + "/timeout_ms", $"timeout_ms is {spec.TimeoutMs}; a node needs time to run.",
@@ -431,7 +413,7 @@ public sealed class PlanBuilder
             ok = false;
         }
 
-        if (spec.MinRemainingMs is < 0 && !isFallback) // on a fallback the member itself is the error
+        if (spec.MinRemainingMs is < 0 && !isFallback)
         {
             _diagnostics.Error("NODE_BAD_TIMING", artifact, pointer + "/min_remaining_ms", $"min_remaining_ms is {spec.MinRemainingMs}; the time left is never negative.",
                 "give the least time the node is worth starting with, or remove min_remaining_ms to start it whatever is left");
@@ -446,7 +428,7 @@ public sealed class PlanBuilder
         }
 
         CompiledExpression? when = null;
-        if (spec.When is not null && !isFallback) // on a fallback the member itself is the error
+        if (spec.When is not null && !isFallback)
         {
             if (!ExpressionCompiler.TryCompile(spec.When, _scope!, CompileOptions.RequestCondition, out when, out var whenErrors))
             {
@@ -470,7 +452,7 @@ public sealed class PlanBuilder
         var op = factory.Compile(context);
         if (op is not null && !context.HasErrors)
         {
-            context.CheckCalls(); // what each called pipeline requires, now that the operator said what it passes
+            context.CheckCalls();
         }
 
         if (op is null || context.HasErrors || !ok)
@@ -536,11 +518,8 @@ public sealed class PlanBuilder
     /// Call after the nodes are compiled: <c>columns_from</c> expands a compiled model node's inputs. Returns null
     /// after reporting errors.
     /// </summary>
-    /// <param name="resolveNode">
-    /// Resolves a node id to the variant in effect where this tap variant runs (the unified plan compiles a tap per arm
-    /// combination); <c>columns_from</c> expands that variant's inputs. Defaults to the only compiled node
-    /// with the id.
-    /// </param>
+    /// <param name="resolveNode">Resolves a node id to the variant in effect where this tap variant runs;
+    /// <c>columns_from</c> expands that variant's inputs. Defaults to the only compiled node with the id.</param>
     public CompiledTap? CompileTap(string tapId, JsonObject definition, string artifact, Func<string, CompiledNode?>? resolveNode = null)
     {
         var pointer = "/log_taps/" + JsonPointer.Escape(tapId);
@@ -563,7 +542,7 @@ public sealed class PlanBuilder
 
         if (group < 0 && _failedGroups.Contains(spec.Group))
         {
-            ok = false; // the group's declaration has an error, reported there
+            ok = false;
         }
         else if (group < 0)
         {
@@ -678,7 +657,7 @@ public sealed class PlanBuilder
 
             if (model is null && nodeId is not null && _failedNodes.Contains(nodeId))
             {
-                ok = false; // the node did not compile; its error is reported at the node
+                ok = false;
             }
             else if (model is null || model.Operator.NamedInputs.Count == 0)
             {
@@ -724,7 +703,7 @@ public sealed class PlanBuilder
             }
 
             columns.Add((name, e));
-            columnFields.Add(new Logging.LogField(name, Schema.DeclaredType(e), source)); // a reference logs at its declared width
+            columnFields.Add(new Logging.LogField(name, Schema.DeclaredType(e), source));
             var direct = -1;
             string? pin = null;
             for (var i = before; i < reads.Count; i++)
@@ -852,7 +831,6 @@ public sealed class PlanBuilder
                 continue; // identical re-add (checked by the experiment compiler)
             }
 
-            // Every failure is recorded, whichever check finds it: a tap of a failed group fails without a second error.
             if (!(spec.Rate >= 0 && spec.Rate <= 1))
             {
                 _diagnostics.Error("FUNNEL_BAD_RATE", artifact, pointer + "/rate", "rate must be in [0, 1].",
@@ -875,8 +853,6 @@ public sealed class PlanBuilder
                 {
                     if (ReadsFetchedFeature(key) is { } feature)
                     {
-                        // The group decision is made at request start, before any fetch: a fetched key
-                        // would make every request wait for I/O just to decide whether to log.
                         _diagnostics.Error("FUNNEL_KEY_FETCHED", artifact, pointer + "/key/" + i,
                             $"Funnel group key '{spec.Key[i]}' reads fetched feature '{feature}'; keys are evaluated at request start, before any fetch.",
                             "key on request inputs, e.g. [\"ctx.request.user_id\", \"ctx.request.session_id\"]");
@@ -885,7 +861,6 @@ public sealed class PlanBuilder
 
                     if (ReadsRequestColumn(key) is { } column)
                     {
-                        // Decided before any node runs: no node has written a request column yet.
                         _diagnostics.Error("FUNNEL_KEY_REQUEST_COLUMN", artifact, pointer + "/key/" + i,
                             $"Funnel group key '{spec.Key[i]}' reads request column 'req.{column}'; keys are evaluated at request start, before any node writes one.",
                             "key on request inputs, e.g. [\"ctx.request.user_id\", \"ctx.request.session_id\"]");
@@ -940,7 +915,6 @@ public sealed class PlanBuilder
         return null;
     }
 
-    /// <summary>The first request column (<c>req.*</c>) <paramref name="expression"/> reads, without its prefix; null when it reads none.</summary>
     private string? ReadsRequestColumn(CompiledExpression expression)
     {
         foreach (var symbol in expression.Reads)
@@ -964,7 +938,6 @@ public sealed class PlanBuilder
         {
             if (!Schema.IsUnusable("param." + output.LimitParam))
             {
-                // A parameter declared with an error is reported at its declaration.
                 ReportOutputLimit(output.LimitParam, leaf);
             }
 
@@ -990,7 +963,6 @@ public sealed class PlanBuilder
             columns.Add((name, expression));
         }
 
-        // Request-level values the caller receives once, beside the items: read where the result is built, after every node.
         var values = new List<(string, CompiledExpression)>();
         foreach (var name in Sorted(output.Values.Keys))
         {
@@ -1052,11 +1024,10 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Static data-flow check of one fully merged node set: every non-nullable column a node
-    /// reads has a producer that cannot be skipped before it; fixed columns have one producer per path; row sources keep
-    /// every non-nullable column covered (<see cref="ValidateRowSource"/>); nodes sharing an order are independent; every
-    /// pinned version names a node of this set that writes it (<see cref="ValidateVersionRead"/>); taps attach after a node
-    /// of this set and log only context features it reads (<see cref="ValidateTapDependencies"/>).
+    /// Static data-flow check of one fully merged node set: every non-nullable column a node reads has a producer that
+    /// cannot be skipped before it; fixed columns have one producer per path; row sources keep every non-nullable
+    /// column covered; nodes sharing an order are independent; every pinned version names a node of this set that
+    /// writes it; taps attach after a node of this set and log only context features it reads.
     /// </summary>
     /// <remarks>
     /// Each rule here looks at a few nodes and taps; <see cref="DataFlowScopes"/> says which, for a caller that cannot
@@ -1089,9 +1060,6 @@ public sealed class PlanBuilder
         {
             var node = ordered[i];
 
-            // Same order ⇒ no dependency. A position runs its node or, when that fails, its fallback, so
-            // every branch of one position must be independent of every branch of the other: a fallback that
-            // appends rows, filters or reads a column the other writes makes the order matter as much as its node would.
             var branches = Branches(node, fallbacks);
             for (var j = i + 1; j < ordered.Count && ordered[j].Order == node.Order; j++)
             {
@@ -1144,11 +1112,8 @@ public sealed class PlanBuilder
 
             var unskippable = Unskippable(node, fallback);
 
-            // Either the node or, when it fails, its fallback runs here. A failed node is rolled back, so it is not the
-            // fallback's predecessor: both are checked against the state before this position, and the state after it is
-            // what either may leave. They may differ in effects; a fallback produces exactly the node's columns, so the
-            // checks for one effect depend only on that state and those columns. Each runs once, for a branch with the
-            // effect (the node itself when both have it), and errors point at that branch.
+            // A failed node is rolled back, so it is not the fallback's predecessor: both are checked against the state
+            // before this position, and the state after it is what either may leave.
             var appender = IsRowSource(node) ? node : fallback is not null && IsRowSource(fallback) ? fallback : null;
             var rewriter = !IsRowSource(node) ? node : fallback is not null && !IsRowSource(fallback) ? fallback : null;
             if (appender is not null)
@@ -1167,7 +1132,6 @@ public sealed class PlanBuilder
                 }
             }
 
-            // The state after this position: rows either branch may have appended, versions either may have written.
             if (appender is not null)
             {
                 rowSources.Add(appender);
@@ -1195,15 +1159,8 @@ public sealed class PlanBuilder
                 MarkContextFetched(fetched, fallback.ReadFeatures);
             }
 
-            // A fill writes the rows live when it runs, and a tap never fills: the rows this position may append (by the node
-            // or its fallback) have no value for any candidate feature filled before them, the node's own reads too, until a
-            // later node fills it again (a tap after a node whose row-source fallback served logged the appended
-            // row's value from storage nobody wrote). Context features, which the prefetch stores, stay.
-            // A node its 'when' or 'min_remaining_ms' skips fills nothing, and its fallback does not run: after it, only the
-            // context features they read are there whatever ran. A tap attached to it is captured only once it
-            // or its fallback has run, so it may log all the node reads.
-            // A tap of entered or dropped rows logs rows that were live when the node filled, and none that this position
-            // appends: it may log all the node reads, whatever is appended.
+            // A fill writes the rows live when it runs, and a tap never fills. A tap of entered or dropped rows logs
+            // rows that were live when the node filled, and none that this position appends.
             HashSet<int>? entered = null;
             if (AttachedTo(taps, node.NodeId, enteredOrDropped: true))
             {
@@ -1279,7 +1236,6 @@ public sealed class PlanBuilder
             }
         }
 
-        // Pinned versions against the nodes of this combination.
         foreach (var node in ordered)
         {
             foreach (var read in node.VersionReads)
@@ -1323,12 +1279,6 @@ public sealed class PlanBuilder
         ValidateRequestColumns(ordered, fallbacks, output, taps, artifact);
     }
 
-    /// <summary>
-    /// Why a column or request column a node reads may not exist when it runs, and the fix that fits: its producer may be
-    /// skipped, runs later, or does not exist at all.
-    /// </summary>
-    /// <param name="example">A node that would write it, e.g. <c>ExpressionScorer@1 with "output_col": "x"</c>.</param>
-    /// <param name="what"><c>column</c> or <c>request column</c>.</param>
     private static (string Why, string Hint) MissingProducer(
         string name, int id, Func<CompiledNode, bool> writes, string example, string what, CompiledNode reader, Dictionary<int, string> possible,
         List<CompiledNode> ordered, int readerIndex)
@@ -1353,14 +1303,6 @@ public sealed class PlanBuilder
         return ("no node writes it", $"add a node before '{reader.NodeId}' that writes '{name}' (e.g. {example}), or {nullable}");
     }
 
-    /// <summary>
-    /// The data-flow rules of request columns on one path, those of columns for a single value: a node,
-    /// fallback or <c>when</c> reading a non-nullable one has a producer that cannot be skipped before it; one that is not
-    /// a flow column has one producer per path; a tap reads only what a node before its point may have written (it logs
-    /// missing when none did); the output's values read a non-nullable one only once it is certain to be written. A
-    /// fallback writes the request columns of its node (<see cref="SameOutputs"/>), and nodes sharing an order do not read
-    /// or write what the other writes (<see cref="DependsOn"/>).
-    /// </summary>
     private void ValidateRequestColumns(
         List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output, IReadOnlyList<CompiledTap>? taps, string artifact)
     {
@@ -1477,17 +1419,10 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>
-    /// What a tap needs from the nodes of one combination wherever it attaches: its attach point is a
-    /// node there, and every context feature it logs is one they or the output read. The engine prefetches the context
-    /// features of every variant for every request, but that is how it runs the plan, not what the configuration says: a
-    /// tap that logs a feature only an arm's node reads breaks when that experiment ends. So the rule is the one a compile
-    /// of the combination alone applies.
-    /// </summary>
     private void ValidateTapDependencies(
         IReadOnlyList<CompiledTap> taps, List<CompiledNode> timeline, IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output, string artifact)
     {
-        HashSet<int>? read = null; // context features this combination fetches, built for the first tap that logs one
+        HashSet<int>? read = null;
         foreach (var tap in taps)
         {
             if (tap.AttachAfter is { } after)
@@ -1504,7 +1439,6 @@ public sealed class PlanBuilder
 
                 if (!found)
                 {
-                    // A fallback runs in its node's place: the taps after that node capture what it produced.
                     _diagnostics.Error("TAP_UNKNOWN_NODE", artifact, "/log_taps/" + JsonPointer.Escape(tap.TapId) + "/attach/after",
                         fallbacks.ContainsKey(after)
                             ? $"Tap '{tap.TapId}' attaches after fallback '{after}', which only runs in place of another node; taps never fire after it."
@@ -1555,14 +1489,10 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// A pinned version (<c>col.x@node</c>) read where the nodes of one combination run: the pinned node must be
-    /// among them and write the column there, into a version of its own. That it may not run in a request (skipped,
-    /// failed, after the reader) is the runtime's to handle: the read is missing. That it is not in this combination, or
-    /// does not write the column in it, is a configuration mistake, whatever other combinations hold. Row sources write one
-    /// version shared by every row source, so theirs cannot be pinned.
+    /// A pinned version (<c>col.x@node</c>) read where the nodes of one combination run: the pinned node must be among
+    /// them and write the column there, into a version of its own. That it may not run in a request (skipped, failed,
+    /// after the reader) is the runtime's to handle: the read is missing.
     /// </summary>
-    /// <param name="kind">What reads it, for the message: <c>Node</c>, <c>Fallback</c>, <c>Tap</c> or <c>Output column</c>.</param>
-    /// <param name="reader">The reader's id or name.</param>
     /// <param name="pointer">The reader's location with <paramref name="pointerSuffix"/>, joined only for an error: this runs for every combination.</param>
     private void ValidateVersionRead(
         VersionRead read, string kind, string reader, string pointer, string pointerSuffix, List<CompiledNode> timeline,
@@ -1601,7 +1531,6 @@ public sealed class PlanBuilder
         }
         else
         {
-            // Row sources append into one shared slot per column (every row source's rows), not a per-node version.
             _diagnostics.Error("VERSION_REF_ROW_SOURCE", artifact, where,
                 $"{kind} '{reader}' reads 'col.{column}@{read.Node}', which pins a row source's output; row sources have no per-node version.",
                 $"read 'col.{column}' before a later node rewrites it, or copy it to a new column with an ExpressionScorer");
@@ -1618,18 +1547,6 @@ public sealed class PlanBuilder
     /// <para>Nullability exempts a column only from the producer a reader needs; every other rule applies to it. A
     /// position runs its node or that node's fallback, so a scope holds both: the fallbacks of its nodes, and the nodes
     /// that fall back to a fallback in it.</para>
-    /// <para>The rules and what decides them: a reader's non-nullable column, and the declaration of every column a node
-    /// binds (the reader and the column's producers; for the output, the producers); the declaration of a parameter or
-    /// feature a node binds (the node; an arm declaring it elsewhere is not one it may rely on);
-    /// one producer per path and a write declaring a column as an arm declares it (the producers); row sources keeping a non-nullable column
-    /// covered (a row source and the producers); independence of nodes that may share an order (the two nodes); a
-    /// fallback's existence and outputs (the node); a pinned version read by a node or the output (the reader and the
-    /// pinned node); a tap's columns, features and pinned versions (the tap, the nodes it attaches after, and the
-    /// producers, feature readers or pinned node; for a candidate feature, also each row source, whose rows have no value
-    /// for it until a later reader fills them); a tap's attach point (the tap and the nodes it attaches after); a
-    /// context feature a tap logs (the tap and the nodes that read the feature: the output reads the same everywhere); a
-    /// request column's, as a column's: a reader's non-nullable one (the reader and the producers), one producer per path
-    /// and the output's values (the producers), a tap's (the tap, the nodes it attaches after, and the producers).</para>
     /// </remarks>
     /// <param name="nodes">Node id → the variants it takes in some combination (timeline nodes and fallbacks).</param>
     /// <param name="taps">Tap id → the variants it takes in some combination.</param>
@@ -1648,7 +1565,7 @@ public sealed class PlanBuilder
         var fallbacksOf = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         var referrers = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         var orders = new SortedDictionary<string, (HashSet<int> Orders, string Pointer)>(StringComparer.Ordinal);
-        var bindsOther = new SortedSet<string>(StringComparer.Ordinal); // nodes binding a parameter or context field
+        var bindsOther = new SortedSet<string>(StringComparer.Ordinal);
         var requestProducers = new SortedDictionary<int, SortedSet<string>>(); // by context id
         var requestReaders = new SortedDictionary<int, SortedSet<string>>(); // non-nullable reads only
         foreach (var (id, variants) in nodes)
@@ -1726,7 +1643,6 @@ public sealed class PlanBuilder
             }
         }
 
-        // Taps logging a non-nullable output column, and the nodes they attach after (for the row-source rule).
         var tapReaders = new Dictionary<int, SortedSet<string>>();
         var tapAttach = new Dictionary<int, SortedSet<string>>();
         foreach (var (tapId, variants) in taps)
@@ -1761,10 +1677,8 @@ public sealed class PlanBuilder
             return latest;
         }
 
-        // The earliest order a row source may append at: that of a variant that is a row source, or for one that is a fallback,
-        // of a variant of a node falling back to it; null when nothing may run it (a fallback nothing falls back to).
-        // When every variant counted, one at int.MaxValue was taken for no order and so for the first, and so was a fallback
-        // nothing falls back to.
+        // The earliest order a row source may append at: a row-source variant's, or for a fallback that of a variant
+        // falling back to it; null when nothing may run it (int.MaxValue is a valid order).
         int? Earliest(string id)
         {
             int? earliest = null;
@@ -1802,7 +1716,6 @@ public sealed class PlanBuilder
         }
         void Scope(string subject, string pointer, SortedSet<string> involved, string? tap = null, IReadOnlyCollection<string>? moreTaps = null)
         {
-            // A position is its node or its fallback: close over both directions until nothing is added.
             var closed = new SortedSet<string>(involved, StringComparer.Ordinal);
             var pending = new Queue<string>(involved);
             while (pending.TryDequeue(out var id))
@@ -1846,8 +1759,6 @@ public sealed class PlanBuilder
                 Scope($"the producers of column '{column.Name}'", column.Pointer, produced);
                 if (!column.Type.Nullable)
                 {
-                    // Whether a row source must write the column depends on what reads it after the row source, and where
-                    // a tap that logs it attaches.
                     var relying = With(produced, readers.GetValueOrDefault(logical) ?? none);
                     var tapsReading = tapReaders.GetValueOrDefault(logical);
                     relying.UnionWith(tapAttach.GetValueOrDefault(logical) ?? none);
@@ -1926,8 +1837,6 @@ public sealed class PlanBuilder
             Scope($"the names node '{id}' binds", nodes[id][0].Pointer, new SortedSet<string>(StringComparer.Ordinal) { id });
         }
 
-        // A pinned version read by a node or the output: the reader's variants say whether it is read, the pinned node's
-        // whether it is written there and by a row source. A tap's is decided within the tap's scope for that node, below.
         var pins = new HashSet<(string Reader, string Node)>();
         foreach (var (id, variants) in nodes)
         {
@@ -1958,7 +1867,7 @@ public sealed class PlanBuilder
             var features = new SortedSet<int>();
             var contextFeatures = new SortedSet<int>();
             var requestReads = new SortedSet<int>();
-            var bindsArmDeclared = false; // a name only an arm declares (a request column, a parameter, a feature), bound but maybe not read
+            var bindsArmDeclared = false;
             foreach (var tap in variants)
             {
                 if (tap.AttachAfter is { } after)
@@ -1978,11 +1887,9 @@ public sealed class PlanBuilder
                     }
                     else if (conditional(name))
                     {
-                        // An arm's declaration of anything else: a request column bound in a branch the optimizer may drop
-                        // (whether it is declared is the tap's arms' to decide, not its writers'; a read of it has its own
-                        // scope below, with them), a parameter or a feature only an arm adds. Every name the complete check
-                        // judges by the assigned arms decides here that the tap is checked where its arms are
-                        // (a parameter was left out, and a tap reading it without its arm threw when it captured).
+                        // An arm's declaration of anything else: a request column bound in a branch the optimizer may
+                        // drop (whether it is declared is the tap's arms' to decide, not its writers'; a read of it has
+                        // its own scope below, with them), a parameter or a feature only an arm adds.
                         bindsArmDeclared = true;
                     }
                 }
@@ -2042,11 +1949,9 @@ public sealed class PlanBuilder
                 Scope($"tap '{tapId}' reading feature '{name}'", pointer, deciding, tapId);
 
                 // A row source between the last reader and the tap leaves the rows it appends without the feature: one
-                // such position decides it with the readers (a layer adding a row source was not in the scope).
-                // Only one that may run before the tap is captured (one after it made a scope of more layers,
-                // which past the combination limit rejects the plan). Orders and attach points are taken across variants,
-                // not paired by combination: an arm moving both, or a fallback a later node also falls back to, still
-                // counts (see docs/decisions/experiments.md).
+                // such position decides it with the readers. Only one that may run before the tap is captured. Orders
+                // and attach points are taken across variants, not paired by combination: an arm moving both, or a
+                // fallback a later node also falls back to, still counts (see docs/decisions/experiments.md).
                 foreach (var rowSource in rowSources)
                 {
                     if (Earliest(rowSource) is { } earliest && earliest <= latest)
@@ -2071,8 +1976,6 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>A node whose position always leaves its writes: no <c>when</c> or time limit, and a failure fails the request.</summary>
-    /// <summary>The first parameter <paramref name="expression"/> names (in any branch), or null.</summary>
     private string? FirstParam(CompiledExpression expression)
     {
         var names = expression.Names;
@@ -2090,7 +1993,6 @@ public sealed class PlanBuilder
     private static bool Unskippable(CompiledNode node, CompiledNode? fallback) =>
         !MaySkip(node) && (node.OnFailure == FailurePolicy.FailRequest || (fallback is not null && fallback.OnFailure == FailurePolicy.FailRequest));
 
-    /// <summary>Whether the node may not run at all, its fallback neither: its <c>when</c> or <c>min_remaining_ms</c> skips it.</summary>
     private static bool MaySkip(CompiledNode node) => node.When is not null || node.MinRemainingMs is not null;
 
     private void ForgetCandidateFeatures(HashSet<int> fetched)
@@ -2113,7 +2015,6 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>Whether a tap of survived rows (or of entered or dropped ones) attaches after <paramref name="nodeId"/>.</summary>
     private static bool AttachedTo(IReadOnlyList<CompiledTap>? taps, string nodeId, bool enteredOrDropped)
     {
         if (taps is not null)
@@ -2141,7 +2042,7 @@ public sealed class PlanBuilder
     {
         var schema = Schema;
         var result = new Dictionary<int, Dictionary<int, string>>();
-        var read = new Dictionary<int, string>(); // relied on after the current position → by what (the first after it)
+        var read = new Dictionary<int, string>();
         if (output is not null)
         {
             foreach (var (name, expression) in output.Columns)
@@ -2220,16 +2121,6 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>
-    /// Checks a row source against the columns around it on one path. A row source writes the rows it appends
-    /// into the column's current version (the row sources' shared one, or a later node's; see
-    /// <c>RequestState.OutputSlot</c>), and a row has no value in a column until something writes it
-    /// (<c>CandidateTable</c>). So a row source that appends rows after a non-nullable column exists must write it when
-    /// something after it relies on the column for every row (<paramref name="readAfter"/>; <c>ROW_SOURCE_AFTER_COLUMN</c>):
-    /// a column nothing reads again, or that a later node writes anew, may stay unwritten for its rows. Every row source
-    /// before the first one that writes a non-nullable column must write it too (<c>ROW_SOURCE_BEFORE_COLUMN</c>): that one
-    /// checks every live row at commit.
-    /// </summary>
     private void ValidateRowSource(
         CompiledNode node, Dictionary<int, string> possible, Dictionary<int, string> versions, List<CompiledNode> earlier,
         Dictionary<int, string> readAfter, string artifact)
@@ -2254,7 +2145,6 @@ public sealed class PlanBuilder
             var column = schema.Columns[output.LogicalId];
             if (!column.Type.Nullable && !possible.ContainsKey(output.LogicalId))
             {
-                // The first row source to write the column: the rows appended before it have no value in it.
                 foreach (var before in earlier)
                 {
                     if (!Writes(before, output.LogicalId))
@@ -2272,13 +2162,6 @@ public sealed class PlanBuilder
 
     private static bool IsRowSource(CompiledNode node) => (node.Effects & Effects.RowSource) != 0;
 
-    /// <summary>
-    /// A tap is a passive observer: every output column it reads must have a producer before the
-    /// attach point, and every candidate feature must already have been fetched there. A pinned version
-    /// (<c>col.x@node</c>) must not be written in the future (<see cref="ValidateVersionRead"/> checks that it is written).
-    /// </summary>
-    /// <param name="later">The nodes after the attach point.</param>
-    /// <param name="ordered">The combination's nodes in their order.</param>
     private void ValidateTap(
         CompiledTap tap, Dictionary<int, string> possible, HashSet<int> fetched, HashSet<string> later, List<CompiledNode> ordered,
         IReadOnlyDictionary<string, CompiledNode> fallbacks, OutputPlan? output, string artifact)
@@ -2316,22 +2199,16 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>
-    /// Where a tap can log a candidate feature that is not fetched before its attach point: after the first later node
-    /// whose fill writes it, or at the output if it reads it (a tap of survived rows), or after an earlier node that reads
-    /// it before rows were appended, or one that may be skipped (each with why a later point cannot count on it); a
-    /// fallback that reads it is named with the reason it does not count.
-    /// </summary>
     private string NotFetchedHint(
         int feature, TapScope scope, HashSet<string> later, List<CompiledNode> ordered, IReadOnlyDictionary<string, CompiledNode> fallbacks,
         OutputPlan? output)
     {
         var name = _features[feature].Definition.Name;
         var reads = new HashSet<int>();
-        string? reader = null; // the last node before this point that reads it, whether it may be skipped,
+        string? reader = null;
         var readerMaySkip = false;
-        string? appender = null; // and the first position from it on that may append rows
-        string? laterAppender = null; // the last reader after this point passed over because its position appends
+        string? appender = null;
+        string? laterAppender = null;
         foreach (var node in ordered)
         {
             var before = !later.Contains(node.NodeId);
@@ -2339,8 +2216,8 @@ public sealed class PlanBuilder
                 && fallbacks.TryGetValue(id, out var fallback) && IsRowSource(fallback));
             if (Reads(node.ReadFeatures))
             {
-                // A tap attached to a node is captured only once it ran: one that may be skipped counts there too, and one
-                // whose position appends rows only for entered or dropped rows (it was named for any tap).
+                // A tap attached to a node is captured only once it ran: one that may be skipped counts there too, and
+                // one whose position appends rows only for entered or dropped rows.
                 if (!before)
                 {
                     if (!appends || scope != TapScope.Survived)
@@ -2362,8 +2239,7 @@ public sealed class PlanBuilder
             }
         }
 
-        // The output reads its columns' features for every row it returns (the hint only named nodes); a tap
-        // there logs those rows only (an entered or dropped tap was told to attach where its scope is refused).
+        // The output reads its columns' features for the rows it returns: only a survived tap may attach there.
         if (output is not null && scope == TapScope.Survived)
         {
             foreach (var (_, expression) in output.Columns)
@@ -2391,20 +2267,16 @@ public sealed class PlanBuilder
 
         if (appender is not null && scope != TapScope.Survived)
         {
-            // Rows a tap of entered or dropped rows logs there were live when the node filled (it was told to
-            // look for a later reader).
             return $"attach the tap after '{reader}', which reads '{name}': a tap of {(scope == TapScope.Entered ? "entered" : "dropped")} rows there logs rows that were live when it filled them";
         }
 
         if (reader is not null && readerMaySkip && appender is null)
         {
-            // A tap there runs only when the node does (one after it went to a later reader that appends).
             return $"attach the tap after '{reader}', which reads '{name}': its 'when' or 'min_remaining_ms' may skip it, and then nothing writes the feature for a later point";
         }
 
         if ((laterAppender ?? appender) is { } last)
         {
-            // Every later reader appends rows (the hint asked for a node that reads it, and named none).
             return $"attach the tap after a node after '{last}' that reads '{name}': the rows '{last}' or its fallback appends have no value for it";
         }
 
@@ -2429,7 +2301,6 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>Marks the features an expression reads (context or candidate), with their dependencies.</summary>
     private void MarkSymbols(HashSet<int> fetched, CompiledExpression? expression)
     {
         if (expression is null)
@@ -2449,11 +2320,9 @@ public sealed class PlanBuilder
 
     /// <summary>
     /// Marks what a fallback's reads make available before the taps after its node, whether or not it runs: its context
-    /// features, with what they need (<see cref="MarkFetched(HashSet{int}, int)"/>), which the context prefetch stores for
-    /// every request. Its candidate features, and the candidate keys they are fetched by, are written into the table only by
-    /// the fallback's own fill, when it runs; the prefetch for it never backfills. Counted as fetched, they let a tap after
-    /// the node log a column nobody had written when the fallback did not run, and the request threw once the tap was
-    /// sampled (<c>col.creator.pop</c>, which only the fallback reads, and its key <c>col.item.base</c>).
+    /// features, with what they need (<see cref="MarkFetched(HashSet{int}, int)"/>), which the context prefetch stores
+    /// for every request. Its candidate features, and the candidate keys they are fetched by, are written into the
+    /// table only by the fallback's own fill, when it runs; the prefetch for it never backfills.
     /// </summary>
     private void MarkContextFetched(HashSet<int> fetched, ImmutableArray<int> features)
     {
@@ -2467,16 +2336,9 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Marks features as fetched with everything a fill or the prefetch makes available first for them:
-    /// the features a derived one is computed from, and the key features of a physical one's entity, along the chains.
+    /// Marks features as fetched with what is available first for them: a derived one's inputs, and the key features of
+    /// a physical one's entity along the chains (the feature plan adds key dependencies only after these checks).
     /// </summary>
-    /// <remarks>
-    /// The feature plan makes the key features a physical feature's dependencies when it groups the features, after these
-    /// checks run, so they follow the entity's key here: a tap logging <c>ctx.country.region</c>, the key of the
-    /// <c>ctx.region.boost</c> a node reads, was told no node reads it, although the prefetch fetches it for every request
-    /// that runs the node. A key feature is registered with the features keyed by it. What a fallback's reads
-    /// make available is less (<see cref="MarkContextFetched"/>).
-    /// </remarks>
     private void MarkFetched(HashSet<int> fetched, ImmutableArray<int> features)
     {
         foreach (var f in features)
@@ -2530,11 +2392,6 @@ public sealed class PlanBuilder
             FeatureService);
     }
 
-    /// <summary>
-    /// The supply of a feature source in mode <c>service</c>: the service its binding names, called in role
-    /// <c>fetch</c>; null when the service has no binding (a <c>SERVICE_UNBOUND</c> at the source's <c>service</c>) or a
-    /// wrong one (reported at the binding).
-    /// </summary>
     private FeatureServiceSupply? FeatureService(string source, string service, string pointer)
     {
         if (_clients!.TryGetService(service, out var client, out var timeoutMs, out var cache, out var error, out var hint))
@@ -2550,12 +2407,10 @@ public sealed class PlanBuilder
         return null;
     }
 
-    /// <summary>The plan's request schema, which a node that calls a pipeline passes inputs on from.</summary>
     private RequestSchema RequestInputSchema => _requestSchema ??= RequestSchema.FromPlan(_sources!.Pipeline.PipelineId, _requestInputs!);
 
     private RequestSchema? _requestSchema;
 
-    /// <summary>The pipelines the compiled nodes call, of every variant and fallback, sorted.</summary>
     private ImmutableArray<string> CalledPipelines()
     {
         var called = new SortedSet<string>(StringComparer.Ordinal);
@@ -2677,10 +2532,6 @@ public sealed class PlanBuilder
             schema.MarkUnusable("ctx." + name);
         }
 
-        // The catalog's content is checked whole, whichever features this plan reads: every derived feature compiles on a
-        // schema of its own that registers the entire catalog, and its errors and cycles are reported there, once. The
-        // plan's schema then registers a feature when something reads it (CatalogFeatures); what failed the check is
-        // unusable in it, so reading it is not a second error.
         var check = schema.CopyRequestFields();
         var whole = new CatalogFeatures(catalog, check, check.CreateScope(), _diagnostics, CatalogLabel, new List<FeatureRuntimeInfo>());
         check.AttachFeatures(whole);
@@ -2694,10 +2545,8 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// What the configuration compiled so far needs of a binary: the operator of every node compiled, and
-    /// the types of the bindings it bound, the services its nodes resolved and the feature sources of
-    /// the catalog features it registered. Taken from the compile rather than from the names the configuration writes, so
-    /// an operator's default (a model its config does not name) counts, and a binding nothing uses does not.
+    /// Taken from the compile rather than from the names the configuration writes, so an operator's default (a model
+    /// its config does not name) counts, and a binding nothing uses does not.
     /// </summary>
     internal SortedSet<string> RequiredCapabilities()
     {
@@ -2711,7 +2560,6 @@ public sealed class PlanBuilder
         return required;
     }
 
-    /// <summary>The feature sources of the catalog features registered so far.</summary>
     private HashSet<string> ReadSources()
     {
         var sources = new HashSet<string>(StringComparer.Ordinal);
@@ -2727,9 +2575,8 @@ public sealed class PlanBuilder
     }
 
     /// <summary>
-    /// Warns once for each deprecated catalog feature the plan reads, at its declaration: read directly or
-    /// through a derived feature, not when a cache table's whole record registered it unread. Called once, after the
-    /// plan's every variant compiled, so a feature read by several nodes, arms or combinations warns once.
+    /// Called once, after the plan's every variant compiled, so a feature read by several nodes, arms or combinations
+    /// warns once.
     /// </summary>
     internal void ReportDeprecatedReads(string pipelineId)
     {
@@ -2757,10 +2604,6 @@ public sealed class PlanBuilder
         return symbol.Kind == SymbolKind.Context ? Schema.ContextFields[symbol.Id].FeatureIndex : -1;
     }
 
-    /// <summary>
-    /// Declares candidate columns (<c>columns</c>, <c>col.*</c>) or request columns (<c>request_columns</c>, <c>req.*</c>):
-    /// one declaration, one set of rules, so a request column's type, default and flow mean what a column's do.
-    /// </summary>
     private void DefineColumns(IReadOnlyDictionary<string, ColumnSpec> columns, string pointerPrefix, string artifact, bool request)
     {
         var schema = Schema;
@@ -2929,15 +2772,9 @@ public sealed class PlanBuilder
         }
     }
 
-    /// <summary>
-    /// What may run at a node's position: the node and, when it fails over (<c>on_failure: fallback</c>), its fallback;
-    /// null when the fallback is unknown (reported where the fallback is checked). The one description the order and the
-    /// data-flow checks share.
-    /// </summary>
     private static (CompiledNode Node, CompiledNode? Fallback) Branches(CompiledNode node, IReadOnlyDictionary<string, CompiledNode> fallbacks) =>
         (node, node.OnFailure == FailurePolicy.Fallback && fallbacks.TryGetValue(node.FallbackNodeId!, out var fallback) ? fallback : null);
 
-    /// <summary>Whether any branch of one position depends on any branch of the other, in either direction.</summary>
     private static bool Dependent((CompiledNode Node, CompiledNode? Fallback) a, (CompiledNode Node, CompiledNode? Fallback) b)
     {
         return Either(a.Node, b.Node)

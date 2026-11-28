@@ -3,7 +3,6 @@ using System.Text;
 
 namespace StrataRec.Llm.Templates;
 
-/// <summary>A piece of a parsed Mustache template: literal text or a tag.</summary>
 internal abstract class MustacheNode
 {
     private protected MustacheNode(int offset, int length)
@@ -19,7 +18,6 @@ internal abstract class MustacheNode
     public int Length { get; }
 }
 
-/// <summary>Literal text, rendered as written: <see cref="MustacheNode.Length"/> characters of the template from <see cref="MustacheNode.Offset"/>.</summary>
 internal sealed class MustacheText : MustacheNode
 {
     internal MustacheText(int offset, int length)
@@ -28,20 +26,15 @@ internal sealed class MustacheText : MustacheNode
     }
 }
 
-/// <summary>What a tag does.</summary>
 internal enum MustacheTagKind : byte
 {
-    /// <summary><c>{{name}}</c>, <c>{{{name}}}</c> or <c>{{&amp; name}}</c>: the value.</summary>
     Variable = 1,
 
-    /// <summary><c>{{#name}}…{{/name}}</c>: the content once per item of a list, once for a truthy value, never otherwise.</summary>
     Section,
 
-    /// <summary><c>{{^name}}…{{/name}}</c>: the content once when the value is empty, false or missing.</summary>
     InvertedSection,
 }
 
-/// <summary>A variable or a section of a parsed template.</summary>
 internal sealed class MustacheTag : MustacheNode
 {
     private static readonly MustacheNode[] NoChildren = [];
@@ -68,28 +61,24 @@ internal sealed class MustacheTag : MustacheNode
     public int Id { get; }
 
     /// <summary>
-    /// Written as <c>{{{name}}}</c> or <c>{{&amp; name}}</c>. Rendered the same as <c>{{name}}</c>: this renderer never
-    /// escapes (see <see cref="MustacheTemplate"/>).
+    /// Written as <c>{{{name}}}</c> or <c>{{&amp; name}}</c>.
     /// </summary>
     public bool Unescaped { get; }
 
-    /// <summary>A section's content; empty for a variable.</summary>
     public IReadOnlyList<MustacheNode> Children => ChildNodes;
 
     internal MustacheNode[] ChildNodes { get; }
 }
 
-/// <summary>A template the parser rejects: where (the offset of the tag at fault), why, and how to fix it.</summary>
 internal readonly record struct MustacheError(int Offset, string Code, string Message, string Hint);
 
 /// <summary>
-/// What a template renders: the values of its tags. The renderer walks the template and asks for each tag; the
-/// implementation keeps whatever context its names need (a context stack, the current row).
+/// The renderer walks the template and asks for each tag; the implementation keeps whatever context its names need (a
+/// context stack, the current row).
 /// </summary>
 /// <remarks>A struct implementation (a <c>ref struct</c> included) is called without boxing or allocation.</remarks>
 internal interface IMustacheData
 {
-    /// <summary>Appends the value of a <see cref="MustacheTagKind.Variable"/> tag.</summary>
     void Write(MustacheTag variable, StringBuilder output);
 
     /// <summary>
@@ -98,29 +87,11 @@ internal interface IMustacheData
     /// </summary>
     int Count(MustacheTag section);
 
-    /// <summary>Before rendering item <paramref name="index"/> of a (non-inverted) section's content.</summary>
     void Enter(MustacheTag section, int index);
 
-    /// <summary>After rendering an item of a section's content.</summary>
     void Leave(MustacheTag section);
 }
 
-/// <summary>
-/// A Mustache template (the mustache(5) manual and the Mustache specification): parsed once, rendered any number of times
-/// through an <see cref="IMustacheData"/>. Independent of StrataRec's types; prompt templates bind it to columns and
-/// context values (<see cref="PromptTemplate"/>).
-/// </summary>
-/// <remarks>
-/// <para>Supported: variables (<c>{{name}}</c>, <c>{{{name}}}</c>, <c>{{&amp; name}}</c>), sections
-/// (<c>{{#name}}…{{/name}}</c>), inverted sections (<c>{{^name}}…{{/name}}</c>), comments (<c>{{! … }}</c>), the implicit
-/// iterator <c>{{.}}</c>, padding inside tags (<c>{{ name }}</c>), and the specification's standalone-line rule: a line
-/// holding only whitespace and one section, inverted, closing or comment tag is removed whole, its newline included, so
-/// block tags on lines of their own leave no blank lines.</para>
-/// <para>Not supported, each a parse error: partials (<c>{{&gt; name}}</c>), since a prompt is one self-contained
-/// artifact, and set delimiters (<c>{{=&lt;% %&gt;=}}</c>), since every template uses the standard braces.</para>
-/// <para>No HTML escaping: a prompt is not HTML, and escaping would put entities like <c>&amp;quot;</c> in front of the
-/// model. So <c>{{name}}</c> renders like <c>{{{name}}}</c>, a deliberate difference from mustache(5).</para>
-/// </remarks>
 internal sealed class MustacheTemplate
 {
     private readonly MustacheNode[] _nodes;
@@ -134,20 +105,14 @@ internal sealed class MustacheTemplate
 
     public string Source { get; }
 
-    /// <summary>The top-level nodes, in order.</summary>
     public IReadOnlyList<MustacheNode> Nodes => _nodes;
 
-    /// <summary>The number of variables and sections (see <see cref="MustacheTag.Id"/>).</summary>
     public int TagCount { get; }
 
-    /// <summary>
-    /// The deepest nesting of sections a template may have. Binding and rendering recurse once per level, so without a
-    /// bound a long template of nested sections overflowed the stack and ended the process at load; a prompt
-    /// needs a few levels at most.
-    /// </summary>
+    /// <summary>The deepest nesting of sections a template may have: binding and rendering recurse once per
+    /// level.</summary>
     public const int MaxDepth = 32;
 
-    /// <summary>Parses <paramref name="source"/>; false with the first error when it is not a supported template.</summary>
     public static bool TryParse(string source, [NotNullWhen(true)] out MustacheTemplate? template, out MustacheError error)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -240,7 +205,6 @@ internal sealed class MustacheTemplate
         return true;
     }
 
-    /// <summary>Renders the template into <paramref name="output"/>, asking <paramref name="data"/> for every tag.</summary>
     public void Render<TData>(ref TData data, StringBuilder output)
         where TData : IMustacheData, allows ref struct
     {
@@ -290,7 +254,6 @@ internal sealed class MustacheTemplate
 
     private readonly record struct OpenSection(RawTag Tag, int Id, List<MustacheNode> Parent, List<MustacheNode> Children);
 
-    /// <summary>Finds every tag in source order; false with the first malformed or unsupported one.</summary>
     private static bool TryScan(string source, out List<RawTag> tags, out MustacheError error)
     {
         tags = new List<RawTag>();
@@ -366,10 +329,6 @@ internal sealed class MustacheTemplate
         return true;
     }
 
-    /// <summary>
-    /// The specification's standalone rule: a tag alone on its line, with only spaces and tabs around it, up to a newline
-    /// (<c>\n</c> or <c>\r\n</c>) or the end of the template. Then the whole line, newline included, is removed.
-    /// </summary>
     private static bool Standalone(string source, int start, int end, out int lineStart, out int lineEnd)
     {
         lineStart = start;
@@ -413,7 +372,6 @@ internal sealed class MustacheTemplate
 
     private static string Quote(string source, in RawTag tag) => source[tag.Start..tag.End];
 
-    /// <summary>The start of an unsupported or unclosed tag, for messages: up to its closing braces or 40 characters.</summary>
     private static string Excerpt(string source, int start)
     {
         var close = source.IndexOf("}}", start + 2, StringComparison.Ordinal);

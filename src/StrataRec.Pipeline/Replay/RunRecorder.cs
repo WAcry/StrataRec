@@ -14,18 +14,9 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Replay;
 
-/// <summary>
-/// Records one pipeline run for a replay bundle while it executes: every external call at the framework
-/// call sites, every node decision with the timing facts it depended on, and the effective sampling.
-/// </summary>
 /// <remarks>
-/// <para>Created only for requests that ask to be recorded; it allocates freely (trace and replay
-/// capture are normal allocations). Calls finish on connector threads, so call records are added under a lock and
-/// ordered by their start sequence when the run is built; node records come from the request's thread.</para>
-/// <para>A call is registered when it begins, with what is known before it is sent (keys, input digests), and replaced
-/// by its full record when it finishes. Building the run is a snapshot: a call still in flight is recorded as
-/// <c>outstanding</c> and nothing that finishes afterwards is added, so an aborted request is recorded without waiting
-/// for anything.</para>
+/// <para>Calls finish on connector threads, so call records are added under a lock and ordered by their start sequence
+/// when the run is built; node records come from the request's thread.</para>
 /// <para>Values are copied out of pooled buffers when a call begins or finishes, while the call still holds the request
 /// memory.</para>
 /// </remarks>
@@ -36,11 +27,9 @@ internal sealed class RunRecorder : IFeatureCallHook
     private readonly List<ReplayFeatureCall> _features = new();
     private readonly List<ReplayPipelineCall> _pipelines = new();
 
-    // Calls begun and not yet finished, as the outstanding records a snapshot lists them as.
     private readonly Dictionary<int, ReplayServiceCall> _pendingServices = new();
     private readonly Dictionary<int, ReplayFeatureCall> _pendingFeatures = new();
 
-    // The outputs each service call begun reads (empty: all), which are what its record keeps.
     private readonly List<ReplayNodeRecord> _nodes = new();
     private List<ReplayAttemptRecord>? _attempts;
     private double? _remainingMs;
@@ -77,7 +66,7 @@ internal sealed class RunRecorder : IFeatureCallHook
     {
         if (Begun(_pendingFeatures, call.Sequence) is not { } begun)
         {
-            return; // the run was built while the call was in flight: it stays outstanding there
+            return;
         }
 
         Dictionary<string, JsonElement>? recorded = null;
@@ -116,8 +105,8 @@ internal sealed class RunRecorder : IFeatureCallHook
         throw new InvalidOperationException("A recorder does not replay calls.");
 
     /// <summary>
-    /// Registers a service call about to be sent, with its input digests (taken now, before the client sees the inputs):
-    /// one per item for a call about items, one of the whole call otherwise. Returns its sequence for <see cref="EndCall"/>.
+    /// Registers a service call about to be sent, with its input digests (taken now, before the client sees the
+    /// inputs).
     /// </summary>
     public int BeginCall(in ServiceCaller caller, IoTarget target, ServiceCall call)
     {
@@ -174,14 +163,8 @@ internal sealed class RunRecorder : IFeatureCallHook
         return sequence;
     }
 
-    /// <summary>Records a finished service call, as the request saw it; its answer is copied only from a call that answered.</summary>
     /// <param name="cutOff">The node's budget or the caller cut the call off: the operator was thrown cancellation, which a replay throws too.</param>
     /// <param name="response">Closed, and read only when the call answered: an abandoned client may still be writing it.</param>
-    /// <param name="status">
-    /// The status the client returned (default when it did not answer): its generation details are recorded, so a replay
-    /// returns the same status and the operator reports the same (a truncated answer).
-    /// </param>
-    /// <param name="degraded">Why the call left its node Degraded, which a replay reports again.</param>
     public void EndCall(
         int sequence, IoOutcome outcome, string? error, bool cutOff, TimeSpan duration, ServiceResponse response, in ServiceStatus status, string? degraded = null)
     {
@@ -193,7 +176,7 @@ internal sealed class RunRecorder : IFeatureCallHook
 
         if (begun is null)
         {
-            return; // the run's record is out: the call is outstanding there
+            return;
         }
 
         var answered = outcome == IoOutcome.Ok;
@@ -254,27 +237,22 @@ internal sealed class RunRecorder : IFeatureCallHook
         };
         lock (_gate)
         {
-            // A call that finishes after the snapshot is left out: the run's record is already out.
             if (!_built && _pendingServices.Remove(sequence))
             {
                 _services.Add(record);
             }
         }
 
-        // Only the outputs the call reads: a recall reads none, only the items it adds.
         static bool Reads(List<string> requested, string name) => requested.Contains(name);
     }
 
     /// <summary>The time left when the current position passed its <c>when</c>.</summary>
     public void Remaining(double milliseconds) => _remainingMs = double.IsFinite(milliseconds) ? Math.Round(milliseconds, 3) : null;
 
-    /// <summary>How the current position's node (or its fallback) ended relative to its budget.</summary>
-    /// <param name="pipelineCalls">How many calls of other pipelines the attempt made (<see cref="ReplayAttemptRecord.PipelineCalls"/>).</param>
     public void Attempt(string node, string timing, double budgetMs, int pipelineCalls = 0) =>
         (_attempts ??= new List<ReplayAttemptRecord>()).Add(
             new ReplayAttemptRecord { Node = node, Timing = timing, BudgetMs = Math.Round(budgetMs, 3), PipelineCalls = pipelineCalls });
 
-    /// <summary>Closes the current position with its outcome.</summary>
     public void Position(in NodeOutcome outcome, string category)
     {
         _nodes.Add(new ReplayNodeRecord
@@ -293,7 +271,6 @@ internal sealed class RunRecorder : IFeatureCallHook
         _remainingMs = null;
     }
 
-    /// <summary>The request-level sampling decisions and the tap variants they activated.</summary>
     public void Sampling(bool?[] sampled, CompiledTap?[] taps)
     {
         _sampled = sampled;
@@ -301,14 +278,8 @@ internal sealed class RunRecorder : IFeatureCallHook
     }
 
     /// <summary>
-    /// Builds the run's record as a snapshot: calls still in flight are <c>outstanding</c>, and nothing that finishes
-    /// afterwards is added. Never waits for a call. Call it once, while the request still holds its memory.
+    /// Call it once, while the request still holds its memory.
     /// </summary>
-    /// <param name="result">What the run returned; for an aborted run, the failure its logs were published with.</param>
-    /// <param name="logs">none, pipeline or captured: where the run's log batches went.</param>
-    /// <param name="logsConsumed">Something took the run's logs, so it sampled: the groups' effective rates are their rates.
-    /// Apart from <paramref name="logs"/>, since an aborted run that captured its logs sampled them and returned none.</param>
-    /// <param name="aborted">The run was aborted (cancelled by its caller, or a defect) and returned no result.</param>
     public ReplayRunRecord Build(
         ExecutionPlan plan, PipelineRequest request, ScalarValue[]? parameters, PipelineResult result, string logs, bool logsConsumed, bool aborted = false)
     {
@@ -353,7 +324,6 @@ internal sealed class RunRecorder : IFeatureCallHook
         };
     }
 
-    /// <summary>A result record: items with the output column types needed to decode them.</summary>
     /// <param name="aborted">The run or request was aborted: <paramref name="result"/> is the failure it was logged with.</param>
     public static ReplayResultRecord Result(ExecutionPlan plan, PipelineResult result, string? servedBy, bool aborted = false)
     {
@@ -405,9 +375,9 @@ internal sealed class RunRecorder : IFeatureCallHook
     }
 
     /// <summary>
-    /// Records a call of another pipeline with what it returned (<see cref="Operators.OperatorContext.CallPipelineAsync"/>):
-    /// the called run is not recorded itself, a replay answers the call from here. A call still running when the run is
-    /// built is not in the record.
+    /// Records a call of another pipeline with what it returned
+    /// (<see cref="Operators.OperatorContext.CallPipelineAsync"/>). A call still running when the run is built is not
+    /// in the record.
     /// </summary>
     /// <param name="passed">The inputs the operator passed, taken when the call was made (<see cref="ReplayJson.Inputs"/>).</param>
     public void PipelineCall(
@@ -453,7 +423,6 @@ internal sealed class RunRecorder : IFeatureCallHook
         }
     }
 
-    /// <summary>The record of a call as it began; null once the run has been built (the call is outstanding there).</summary>
     private T? Begun<T>(Dictionary<int, T> pending, int sequence)
         where T : class
     {
@@ -467,7 +436,6 @@ internal sealed class RunRecorder : IFeatureCallHook
     {
         lock (_gate)
         {
-            // A call that finishes after the snapshot is left out: the run's record is already out.
             if (!_built && pending.Remove(sequence))
             {
                 finished.Add(record);

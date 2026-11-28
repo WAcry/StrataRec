@@ -12,35 +12,6 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Runtime;
 
-/// <summary>
-/// The context prefetch: everything a request does to make its context features available is here.
-/// </summary>
-/// <remarks>
-/// <para><b>Starts.</b> <see cref="StartContextFetch"/> starts, at request start and concurrently with recall, every context
-/// group the plan's readers need. A group keyed by request inputs alone starts at once: the fetched groups are sent first,
-/// then the local and cache groups are read while those are in flight. A group whose key reads context features (a chain:
-/// a user id that another source resolves from a login key) starts as soon as those features are stored: the groups that
-/// supply them, and for a derived one its inputs, from which it is computed at that moment. It waits for nothing else, so
-/// a slow source the key does not read delays neither its start nor its readers. Each group has its own budget, the source
-/// timeout or what is left before the request deadline when it starts, so the later groups of a chain get what is left.</para>
-/// <para><b>Readiness.</b> Every context feature the prefetch supplies has a task that completes once the feature is stored
-/// (<see cref="_contextReady"/>, all set before <see cref="StartContextFetch"/> returns): its group's, or, for a derived
-/// feature a key reads or an operator awaits while it runs (a recall query), its computation's
-/// (<see cref="FeatureRuntimeInfo.ComputedEarly"/>). A reader waits for the features it reads. Any other derived
-/// context feature is computed once every group is stored, and its readers wait for the whole prefetch.</para>
-/// <para><b>Keys.</b> A chained group's key is read from the stored values, as a request input is: a missing one (absent,
-/// failed, not answered) is no key, so nothing is called and the features take their absent values. As for a foreign key
-///, a failed key feature fails the group's features, without a call, and a degraded one degrades them.</para>
-/// <para><b>Lifetime</b>. The prefetch holds the request memory until every group it started is stored and
-/// every derived feature it computes is computed, however the starts ended; then it rethrows the first failure. A chained
-/// group is not started when what its key reads failed with an exception, and not sent when its key is stored after the
-/// request has ended (<see cref="EndRequest"/>) or been cancelled; its task completes all the same, so nothing is left
-/// waiting.</para>
-/// <para><b>Threads.</b> A chained group starts on the thread that stored the last of its key features (a connector's
-/// completion), while the request's thread goes on: it writes only its own features' states and context values, rents
-/// from the request memory (whose ledger is locked) and pins its table in the version array, which the prefetch rents
-/// before anything starts. Its call's place in a recording's start order is therefore when its key was stored.</para>
-/// </remarks>
 public sealed partial class FeatureFetcher
 {
     private Task? _contextTask;
@@ -88,11 +59,6 @@ public sealed partial class FeatureFetcher
         CountUnreadFetches();
     }
 
-    /// <summary>
-    /// Waits until the context features of <paramref name="closure"/> are stored: each when its group is, or a derived one
-    /// a key reads when it is computed (an ANN recall reading the user's embedding does not wait for a slower source of other
-    /// user features), any other derived one when the whole prefetch is, which computes it last.
-    /// </summary>
     private async ValueTask ContextReadyAsync(IndexList closure)
     {
         for (var c = 0; c < closure.Count; c++)
@@ -116,7 +82,7 @@ public sealed partial class FeatureFetcher
     /// <remarks>Call it on the operator's flow while the request runs. An operator that stopped waiting (the node's budget)
     /// reads nothing more of the request's, so nothing it does outlives the request's memory.</remarks>
     /// <exception cref="InvalidOperationException">The feature is not a context feature (the operator's defect), or the
-    /// prefetch has not started (<see cref="StartContextFetch"/>, which the executor calls before any node runs).</exception>
+    /// prefetch has not started (<see cref="StartContextFetch"/>).</exception>
     public Task ContextStoredTask(int feature)
     {
         if (!_plan.Features[feature].IsContext)
@@ -146,12 +112,10 @@ public sealed partial class FeatureFetcher
         return new FeatureFillResult(_state[feature], _errors[feature]);
     }
 
-    /// <summary>Whether context feature <paramref name="feature"/> is stored (or will never be: no prefetch was started),
-    /// without waiting: a prefetch of a candidate group keyed by it is started only then.</summary>
+    /// <summary>Whether context feature <paramref name="feature"/> is stored (or will never be: no prefetch was
+    /// started), without waiting.</summary>
     private bool ContextStored(int feature) => (_contextReady?[feature] ?? _contextTask) is null or { IsCompletedSuccessfully: true };
 
-    /// <param name="closure">The features to make available; only its context features are fetched.</param>
-    /// <param name="member">Marks <paramref name="closure"/> by feature index.</param>
     private async Task FetchContextAsync(IndexList closure, bool[] member, CancellationToken cancellationToken)
     {
         try
@@ -159,7 +123,7 @@ public sealed partial class FeatureFetcher
             var featureCount = Math.Max(1, _plan.Features.Count);
             var groupCount = Math.Max(1, _plan.Groups.Count);
             var seen = _memory.RentCleared<bool>(groupCount);
-            var stored = _memory.Rent<Task>(groupCount + featureCount); // a task per group, and per derived feature computed early
+            var stored = _memory.Rent<Task>(groupCount + featureCount);
             var ready = _contextReady = _memory.RentCleared<Task?>(featureCount);
             if (_plan.HasTables)
             {
@@ -228,9 +192,7 @@ public sealed partial class FeatureFetcher
             }
 
             // Every group started reads its staging and writes its features when its source answers, and a chained one
-            // starts when its key is stored: the memory is held until all of them are done, however the start ended
-            // (a recording hook that threw while the next group was sent released it, and a group answered later read and
-            // wrote returned buffers). The first failure is rethrown.
+            // starts when its key is stored: the memory is held until all of them are done, however the start ended.
             for (var n = 0; n < storedCount; n++)
             {
                 try
@@ -261,11 +223,6 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>
-    /// Starts one context group for <paramref name="features"/>, the members the prefetch needs, and returns the task that
-    /// has stored them. The key's state rule is a foreign key's: a failed key feature fails the features without
-    /// a call, a degraded one degrades them; a key of request inputs alone is ok.
-    /// </summary>
     private Task StartContextGroup(FetchGroup group, int[] features, CancellationToken cancellationToken)
     {
         var keyState = KeyState(group, out var keyError);
@@ -282,11 +239,10 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// A group whose key (or arguments) reads context features: started once each of them is stored, or failed as soon as
-    /// one of them failed, as its key state would fail it (an entity whose argument had failed
-    /// waited for its other arguments). One whose store failed with an exception is not started (the exception is the
-    /// prefetch's failure); one whose key is stored after the request ended is not sent, its features failed for anyone
-    /// who looks.
+    /// A group whose key (or arguments) reads context features: started once each of them is stored, or failed as soon
+    /// as one of them failed, as its key state would fail it. One whose store failed with an exception is not started
+    /// (the exception is the prefetch's failure); one whose key is stored after the request ended is not sent, its
+    /// features failed for anyone who looks.
     /// </summary>
     private async Task StartChainedContextGroupAsync(FetchGroup group, int[] features, CancellationToken cancellationToken)
     {
@@ -307,16 +263,14 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// A derived context feature computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>): as soon as what it reads is
-    /// stored, or failed as soon as one of its inputs failed, since the others cannot change that (a recall query
-    /// reading the derived value waited for its other inputs, up to the node's budget, though a query reading the inputs
-    /// themselves gave up at once).
+    /// A derived context feature computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>): as soon as what it
+    /// reads is stored, or failed as soon as one of its inputs failed, since the others cannot change that.
     /// </summary>
     private async Task ComputeEarlyDerivedAsync(FeatureRuntimeInfo info)
     {
         if (await StoredOrFailedAsync(info.Dependencies.AsSpan()) is var failed and >= 0)
         {
-            _state[info.Index] = FeatureState.Failed; // what WorstDependency gives, without waiting for the rest
+            _state[info.Index] = FeatureState.Failed;
             _errors[info.Index] = _errors[failed];
             return;
         }
@@ -325,15 +279,13 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// Waits until each of <paramref name="features"/> the context prefetch stores is stored, or one of them has failed,
-    /// which the others cannot change: returns that one, or -1. A store that faulted throws, as awaiting it does. Used by
-    /// what reads context features before the prefetch has stored them all: a derived feature computed early, a group
-    /// whose key or arguments read them.
+    /// Waits until each of <paramref name="features"/> the context prefetch stores is stored, or one of them has
+    /// failed, which the others cannot change: returns that one, or -1. A store that faulted throws, as awaiting it
+    /// does.
     /// </summary>
     internal ValueTask<int> StoredOrFailedAsync(ReadOnlySpan<int> features)
     {
-        // The common case, everything stored already (a synchronous source), without a state machine or a closure: the
-        // wait is static, given what it reads (a closure over them was allocated on every call).
+        // Everything stored already (a synchronous source): no state machine and no closure, so the wait is static.
         var ready = _contextReady!;
         foreach (var k in features)
         {
@@ -369,7 +321,7 @@ public sealed partial class FeatureFetcher
                         continue;
                     }
 
-                    await stored.ConfigureAwait(false); // completed: observes a fault, without yielding
+                    await stored.ConfigureAwait(false);
                     if (state[k] == FeatureState.Failed)
                     {
                         return k;
@@ -386,7 +338,6 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>Evaluates a derived context feature once what it reads is stored, with the state of the worst of its inputs.</summary>
     private void ComputeContextDerived(FeatureRuntimeInfo info)
     {
         var f = info.Index;
@@ -405,7 +356,6 @@ public sealed partial class FeatureFetcher
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Same rule as candidate-derived features: a throwing expression fails this feature only.
             _state[f] = FeatureState.Failed;
             _errors[f] = $"derived feature '{info.Definition.Name}' failed to evaluate: {ex.Message}";
             return;
@@ -414,7 +364,6 @@ public sealed partial class FeatureFetcher
         StoreContext(info, derived);
     }
 
-    /// <summary>The features of a group stored with a degraded key: degraded too, unless their own fetch already was (or failed).</summary>
     private async Task DegradeWhenStoredAsync(Task stored, int[] features, string? keyError)
     {
         await stored.ConfigureAwait(false);
@@ -437,14 +386,9 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>
-    /// Reads a local or cache context group (one key) and returns the task that has stored it: complete at once, but for a
-    /// cache read that missed, which completes once its misses have resolved.
-    /// </summary>
     private Task ReadContextGroup(FetchGroup group, int[] features, CancellationToken cancellationToken) =>
         ReadLocalContext(group, features, cancellationToken) is { } resolving ? CompleteCachedContextAsync(resolving) : Task.CompletedTask;
 
-    /// <summary>Sends the one call of a fetched context group (none without a key) and returns the task that stores its answer.</summary>
     private Task FetchContextGroup(FetchGroup group, int[] features, CancellationToken cancellationToken)
     {
         ContextFetch fetch;
@@ -463,10 +407,6 @@ public sealed partial class FeatureFetcher
             }
             else
             {
-                // As a candidate chunk (FetchCandidates): a context fetch is not sent once the caller has cancelled, or its
-                // time is up (an earlier group's connector ran its synchronous part): BoundedCall's rule 8.
-                // The bound ends at the deadline taken with the budget, and the staging is set up inside the try, as a
-                // candidate fetch's.
                 var bound = _hook is { Replays: true } ? null : new CallBound(CancellationSite.Fetch, cancellationToken, deadline, _events, _requestId);
                 StagingBuffer staging;
                 ValueTask<CallResult<FetchStatus>> call;
@@ -484,20 +424,17 @@ public sealed partial class FeatureFetcher
             }
         }
 
-        // Each group is stored as its source answers, not in the order they were sent.
         return StoreContextGroupAsync(fetch);
     }
 
     /// <summary>
-    /// Stores one context group's values when its source answers: the features' states and values, and the values
-    /// counted. Groups complete concurrently; each writes only its own features' slots.
+    /// Groups complete concurrently; each writes only its own features' slots.
     /// </summary>
     private async Task StoreContextGroupAsync(ContextFetch fetch)
     {
         var status = StatusOf(fetch.Group, fetch.BudgetMs, await fetch.Call.ConfigureAwait(false));
         if (CountsValues && fetch.Staging is { } answered && status.Outcome != FetchOutcome.Failed)
         {
-            // The one key was asked for (a missing context key sends nothing) and answered in time.
             for (var i = 0; i < fetch.Features.Length; i++)
             {
                 var present = answered.HasValue(i, 0) ? 1 : 0;
@@ -513,7 +450,6 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>One member of a context group as its source answered: failed with the call, degraded with a partial answer, else its value.</summary>
     private void StoreContextMember(int f, in FetchStatus status, ScalarValue value)
     {
         if (status.Outcome == FetchOutcome.Failed)
@@ -529,12 +465,6 @@ public sealed partial class FeatureFetcher
         StoreContext(_plan.Features[f], value);
     }
 
-    /// <summary>
-    /// Asks the service of a service group for <paramref name="features"/>, once, with the entity's arguments
-    /// read from the request's context values (a missing one is sent as missing), and returns the task that stores its
-    /// answer. The call goes through the service's own path (its cache, its <c>timeout_ms</c>, the recording and the
-    /// replay), within this fetch's bound: the request's deadline, and the caller's token.
-    /// </summary>
     private Task ServeContextGroup(FetchGroup group, int[] features, CancellationToken cancellationToken)
     {
         var args = new ServiceArg[group.Args.Length];
@@ -546,7 +476,7 @@ public sealed partial class FeatureFetcher
 
         var fields = FieldBindings(group, features);
         var bound = _hook is { Replays: true }
-            ? new CallBound(CancellationSite.Fetch, cancellationToken, long.MaxValue, _events, _requestId) // a replay is untimed
+            ? new CallBound(CancellationSite.Fetch, cancellationToken, long.MaxValue, _events, _requestId)
             : new CallBound(CancellationSite.Fetch, cancellationToken, DeadlineOf(group, out _), _events, _requestId);
         var call = new ServiceSupplyCall
         {
@@ -566,7 +496,6 @@ public sealed partial class FeatureFetcher
         return StoreServedAsync(call, features, served);
     }
 
-    /// <summary>Stores a service group's answer when it comes, then lets go of the call's bound.</summary>
     private async Task StoreServedAsync(ServiceSupplyCall call, int[] features, ValueTask<FetchStatus> served)
     {
         FetchStatus status;
@@ -594,10 +523,6 @@ public sealed partial class FeatureFetcher
         }
     }
 
-    /// <summary>
-    /// The members of a context group the prefetch needs (late materialization applies to context entities too), in
-    /// group order. The context fetch runs once per request, so nothing is filled or in flight yet.
-    /// </summary>
     private static int[] RequestedMembers(FetchGroup group, bool[] member)
     {
         var count = 0;
@@ -624,13 +549,6 @@ public sealed partial class FeatureFetcher
         return selected;
     }
 
-    /// <summary>
-    /// Publishes a context feature value as its storage holds it (<see cref="ColumnValues.AsStored"/>: a float32 feature's
-    /// value is rounded to float32): NaN/±∞, including a float beyond the float32 range, an integer (or list element)
-    /// outside the int32 range of an <c>int32</c> or <c>list&lt;int32&gt;</c> feature, and a list of another length than a
-    /// <c>list&lt;E,N&gt;</c> feature's, are counted and replaced by the default or missing, and a missing value
-    /// takes the default.
-    /// </summary>
     /// <remarks>Context values are held promoted, so an out-of-range value would not wrap here; it is still replaced,
     /// so a feature's value always lies in its declared type wherever it is read, logged or written, and is the value the
     /// same feature computed per candidate would have.</remarks>

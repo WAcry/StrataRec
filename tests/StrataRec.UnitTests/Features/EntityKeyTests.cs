@@ -7,11 +7,6 @@ using StrataRec.Features.Catalog;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// An entity declares only its key, an ordered tuple of 1 to 8 parts; whether it is per request or per candidate, and each
-/// part's type, follow from it. Declared separately, they could disagree: <c>"key_type": "int64"</c> on
-/// <c>col.entity_id</c> in a pipeline of string ids made every lookup of the entity's features miss, with no error.
-/// </summary>
 public sealed class EntityKeyTests
 {
     private static readonly Dictionary<string, ColumnType> Inputs = new(StringComparer.Ordinal)
@@ -45,13 +40,13 @@ public sealed class EntityKeyTests
         var p = pipelineKeys == EntityKeyType.String ? "string" : "int64";
         Assert.Equal((true, "int64"), Of(catalog, "user.x", context: true));
         Assert.Equal((true, "string"), Of(catalog, "session.x", context: true));
-        Assert.Equal((true, "int64"), Of(catalog, "region.x", context: true)); // int32 keys as int64
-        Assert.Equal((false, p), Of(catalog, "item.x")); // the pipeline's entity_key_type
-        Assert.Equal((false, "int64"), Of(catalog, "author.x")); // its key feature's type
+        Assert.Equal((true, "int64"), Of(catalog, "region.x", context: true));
+        Assert.Equal((false, p), Of(catalog, "item.x"));
+        Assert.Equal((false, "int64"), Of(catalog, "author.x"));
         Assert.Equal((false, "string"), Of(catalog, "handle.x"));
         Assert.Equal((false, $"(int64,{p})"), Of(catalog, "user_item.x"));
-        Assert.Equal((false, $"({p},string)"), Of(catalog, "item_country.x")); // a nullable input keys an entity: a missing one, no key
-        Assert.Equal((true, "(int64,int64)"), Of(catalog, "user_day.x", context: true)); // every part per request: context-scoped
+        Assert.Equal((false, $"({p},string)"), Of(catalog, "item_country.x"));
+        Assert.Equal((true, "(int64,int64)"), Of(catalog, "user_day.x", context: true));
         Assert.Equal((false, p), Of(catalog, "single_list.x"));
         Assert.Equal((false, $"(int64,{p},string)"), Of(catalog, "author_item_country.x"));
 
@@ -64,11 +59,6 @@ public sealed class EntityKeyTests
             catalog.Entities["author_item_country"].Key.Select(part => part.Kind));
     }
 
-    /// <summary>
-    /// A key part may be a context feature, physical or derived, of type int64 (int32 promoted) or string,
-    /// nullable or not: the whole key of a context-scoped entity (a chain of context lookups), or a shared part of a
-    /// candidate-scoped one, beside a request input or a column.
-    /// </summary>
     [Fact]
     public void AContextFeature_KeysAnEntity_AsAContextPart()
     {
@@ -92,18 +82,18 @@ public sealed class EntityKeyTests
             """, derived: """{ "u.bucket": { "type": "int64", "expr": "(ctx.u.y ?? 0) / 100" } }""");
 
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
-        Assert.Equal((true, "int64"), Of(catalog, "account.x", context: true)); // u.y is nullable: a missing one, no key
+        Assert.Equal((true, "int64"), Of(catalog, "account.x", context: true));
         Assert.Equal((true, "string"), Of(catalog, "handle.x", context: true));
-        Assert.Equal((true, "int64"), Of(catalog, "shard.x", context: true)); // int32 keys as int64
-        Assert.Equal((true, "int64"), Of(catalog, "derived_key.x", context: true)); // a derived context feature
-        Assert.Equal((true, "int64"), Of(catalog, "chained.x", context: true)); // two levels: u → account → chained
+        Assert.Equal((true, "int64"), Of(catalog, "shard.x", context: true));
+        Assert.Equal((true, "int64"), Of(catalog, "derived_key.x", context: true));
+        Assert.Equal((true, "int64"), Of(catalog, "chained.x", context: true));
         Assert.Equal((true, "(string,int64)"), Of(catalog, "segment_day.x", context: true));
         Assert.Equal((false, "(int64,string)"), Of(catalog, "item_segment.x"));
         Assert.Equal((false, "(int64,int64)"), Of(catalog, "author_segment.x"));
 
         var layout = catalog.Entities["item_segment"].KeyLayout;
         Assert.Equal(["col.entity_id", "ctx.u.handle"], layout.Parts.Select(part => part.Reference));
-        Assert.Equal([false, true], layout.Parts.Select(part => part.IsShared)); // read once per request, as a request input
+        Assert.Equal([false, true], layout.Parts.Select(part => part.IsShared));
         Assert.Equal([EntityKeyPartKind.ContextFeature], catalog.Entities["account"].Key.Select(part => part.Kind));
         Assert.Equal("u.y", catalog.Entities["account"].Key[0].Name);
         Assert.True(catalog.Entities["account"].HasFeatureParts);
@@ -210,7 +200,7 @@ public sealed class EntityKeyTests
             }
             """, EntityKeyType.Int64, out var diagnostics, extraFeatures: """{ "bad.k": { "type": "int64", "source": "s", "field": "k" } }""");
 
-        Assert.Single(diagnostics.Items, d => d.Code == "ENTITY_BAD_KEY"); // the follower fails with the bad key, silently
+        Assert.Single(diagnostics.Items, d => d.Code == "ENTITY_BAD_KEY");
         Assert.False(catalog.Entities.ContainsKey("bad"));
         Assert.False(catalog.Entities.ContainsKey("follower"));
         Assert.False(catalog.TryGet("bad.x", out _));
@@ -237,9 +227,6 @@ public sealed class EntityKeyTests
     [Fact]
     public void AChainOfEightPartKeys_IsCheckedForCyclesOnce_NotOncePerPath()
     {
-        // Each entity's eight parts read eight features of the entity before it, and the cycle check walked
-        // the parent's chain once per part: ten entities took 6 s, fourteen would take hours. Remembering the entities
-        // found acyclic makes it linear.
         var entities = new JsonObject { ["e00"] = new JsonObject { ["key"] = "col.entity_id" } };
         var features = new JsonObject();
         for (var i = 0; i < 14; i++)
@@ -267,14 +254,12 @@ public sealed class EntityKeyTests
 
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
         Assert.True(catalog.Entities.ContainsKey("e13"));
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"{watch.Elapsed.TotalMilliseconds} ms"); // milliseconds when linear
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"{watch.Elapsed.TotalMilliseconds} ms");
     }
 
     [Fact]
     public void AChainOfEightPartContextKeys_IsCheckedForCyclesOnce_NotOncePerPath()
     {
-        // For context keys: each entity keyed by eight context features of the entity before it. The memo of
-        // entities found acyclic holds for every kind of edge.
         var entities = new JsonObject { ["e00"] = new JsonObject { ["key"] = "ctx.request.user_id" } };
         var features = new JsonObject();
         for (var i = 0; i < 14; i++)
@@ -303,7 +288,7 @@ public sealed class EntityKeyTests
         Assert.False(diagnostics.HasErrors, string.Join("\n", diagnostics.Items));
         Assert.True(catalog.Entities["e13"].IsContextScoped);
         Assert.Equal(8, catalog.Entities["e13"].KeyLayout.PartCount);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"{watch.Elapsed.TotalMilliseconds} ms"); // milliseconds when linear
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), $"{watch.Elapsed.TotalMilliseconds} ms");
     }
 
     [Fact]
@@ -336,7 +321,7 @@ public sealed class EntityKeyTests
         Assert.Equal(a, b);
         Assert.Equal(a.GetHashCode(), b.GetHashCode());
         Assert.NotEqual(a, other);
-        Assert.True(a.HasSameTypes(other)); // what a table stores: the part types in order
+        Assert.True(a.HasSameTypes(other));
         Assert.Equal("(int64,string)", a.TypeText);
         Assert.Equal(0b10, a.SharedMask);
         Assert.Contains("ctx.request.c string (shared)", a.ToString(), StringComparison.Ordinal);
@@ -362,10 +347,6 @@ public sealed class EntityKeyTests
         return (f.Entity.IsContextScoped, f.Entity.KeyLayout.TypeText);
     }
 
-    /// <summary>A catalog of <paramref name="entities"/> (plus <c>item</c>, the foreign keys' entity, and <c>u</c>, a context
-    /// entity), with a float feature <c>x</c> on each, the key features <c>item.author_id</c> (int64), <c>item.handle</c>
-    /// (string) and <c>item.ratio</c> (float32), <c>item.k0</c>… (int64), and the context features <c>u.y</c> (int64) and
-    /// <c>u.ratio</c> (float32).</summary>
     private static FeatureCatalog Build(
         string entities, EntityKeyType pipelineKeys, out DiagnosticBag diagnostics, int keyFeatures = 0, string? extraFeatures = null, string? derived = null)
     {

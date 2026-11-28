@@ -72,10 +72,10 @@ public sealed class BindingSpec
     /// The one rule for sharing an instance across plans: two specs with the same identity (and the same
     /// <see cref="Factory"/>) are served by one instance, so a new plan takes over a loaded model or an open connection
     /// instead of creating it again. The identity is the RFC 8785 canonical JSON of the section, the logical name (the
-    /// factory is given it), the type, the binding's own settings as written and the absolute <see cref="BaseDirectory"/>.
-    /// What the framework itself reads from a binding (<c>timeout_ms</c>, <c>max_batch</c>, ...) is not part of it, so
-    /// changing a timeout never reloads a model; nor is anything else in the configuration. The settings are taken whole,
-    /// so a setting added later is part of the identity without anyone remembering to add it.
+    /// factory is given it), the type, the binding's own settings as written and the absolute
+    /// <see cref="BaseDirectory"/>. What the framework itself reads from a binding (<c>timeout_ms</c>,
+    /// <c>max_batch</c>,) is not part of it, so changing a timeout never reloads a model; nor is anything else in the
+    /// configuration.
     /// </summary>
     /// <remarks>Credentials are referenced, never inlined (<see cref="SecretReference"/>): the identity holds no secret, and
     /// a rotated secret keeps the instance, which resolves its secrets when it loads.</remarks>
@@ -110,11 +110,9 @@ public sealed class BindingSpec
 }
 
 /// <summary>
-/// The key of every collection of shared instances (<see cref="BindingSpec.Key"/>): the spec's identity, and its factory
-/// compared by reference. Instances are shared only between plans that would have created them with the same factory
-/// object, so the factory's own <c>Equals</c> and <c>GetHashCode</c> are never used: a factory with value equality (a
-/// record) would get another factory's instances, and one whose hash changes as it creates (a record with a counter)
-/// would lose its own entries. One type, so no collection can compare factories another way.
+/// The key of every collection of shared instances (<see cref="BindingSpec.Key"/>): the spec's identity, and its
+/// factory compared by reference. Instances are shared only between plans that would have created them with the same
+/// factory object, so the factory's own <c>Equals</c> and <c>GetHashCode</c> are never used.
 /// </summary>
 public readonly struct BindingKey : IEquatable<BindingKey>
 {
@@ -141,9 +139,9 @@ public readonly struct BindingKey : IEquatable<BindingKey>
 }
 
 /// <summary>
-/// Gives a plan being compiled the instance each binding names. The engine's provider (the binding lease in
-/// Hosting) shares instances by <see cref="BindingSpec.Identity"/> across plans, loads them before the plan is served
-/// and disposes them once nothing can call them; a plan compiled without an engine gets instances that are never loaded.
+/// Gives a plan being compiled the instance each binding names. The engine's provider shares instances by
+/// <see cref="BindingSpec.Identity"/> across plans, loads them before the plan is served and disposes them once nothing
+/// can call them; a plan compiled without an engine gets instances that are never loaded.
 /// </summary>
 public interface IBindingInstances
 {

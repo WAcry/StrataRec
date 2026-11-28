@@ -37,10 +37,7 @@ public enum SupplyMode : byte
 }
 
 /// <summary>
-/// How one (source, entity) group is supplied: its mode and everything the mode holds. Built only by
-/// <see cref="FeatureSourceResolver"/>; plan building, the read path and the fetch path take the mode from
-/// <see cref="Mode"/> (with switches over every mode, so a new mode fails to compile where it must be handled) and never
-/// re-derive it from which members are set.
+/// How one (source, entity) group is supplied: its mode and everything the mode holds.
 /// </summary>
 public sealed class GroupSupply
 {
@@ -132,7 +129,8 @@ public sealed class CacheSupply
     /// </summary>
     internal int[] MemberOfTableField { get; }
 
-    /// <summary>Metric tags and span name of the distributed tier's reads (role <c>cache</c>, target the source), built with the plan.</summary>
+    /// <summary>Metric tags and span name of the distributed tier's reads (role <c>cache</c>, target the
+    /// source).</summary>
     public IoTarget Io { get; }
 }
 
@@ -156,25 +154,13 @@ public sealed class LocalGroupTable
 }
 
 /// <summary>
-/// Turns the bindings of a plan's feature sources into how each (source, entity) group is supplied:
-/// one <see cref="GroupSupply"/> per group. The one place that knows what each supply mode needs: which binding settings
-/// belong to it, what it requires, and what it takes from the binary (a connector; an update source and a local table).
+/// Turns the bindings of a plan's feature sources into how each (source, entity) group is supplied: one
+/// <see cref="GroupSupply"/> per group.
 /// </summary>
-/// <remarks>Every decision by mode is a switch over all <see cref="SupplyMode"/> values without a default arm (here and
-/// in the fetcher), so adding a mode fails to compile (CS8509) at each place that has to handle it; a test checks that
-/// every mode has a name the binding parses back.</remarks>
 /// <remarks>Only bindings the plan's features use are resolved, so a pipeline is never rejected for another
 /// pipeline's source. Every problem is a diagnostic with the binding's pointer and a hint.</remarks>
 internal sealed class FeatureSourceResolver
 {
-    /// <summary>
-    /// Every setting of <see cref="FeatureSourceBinding"/> (by its JSON name) with the modes it belongs to
-    /// (<see cref="SupplyMode.Cache"/> is a <c>fetch</c> binding with a <c>cache</c>, <see cref="TryMode"/>); the members
-    /// the binding does not declare are connector settings, which belong to the modes with a connector
-    /// (<see cref="TakesConnectorSettings"/>). A setting of a mode the binding is not in is an error. A setting means the
-    /// same in every mode it belongs to, so a binding switched between them keeps it. A test checks that this lists every
-    /// declared member, so a setting added to the binding cannot be silently accepted in a mode that ignores it.
-    /// </summary>
     internal static readonly (string Name, SupplyMode[] Modes, Func<FeatureSourceBinding, bool> IsSet)[] ModeSettings =
     {
         ("connector", [SupplyMode.Fetch, SupplyMode.Cache], static b => b.Connector is not null),
@@ -204,8 +190,6 @@ internal sealed class FeatureSourceResolver
     private readonly Dictionary<string, SourceSupply?> _resolved = new(StringComparer.Ordinal);
     private readonly ServiceSupplyResolver? _services;
 
-    /// <param name="resolver">Creates connectors, update sources and distributed cache stores, and reports their bindings' errors.</param>
-    /// <param name="clock">The clock of the cache tables the plan creates (write times and expiry).</param>
     /// <param name="catalog">The catalog a local table's layout comes from (<see cref="TableFeatures"/>); null lays it
     /// out from the group's members.</param>
     /// <param name="services">The plan's services, for a source in mode <c>service</c>; null leaves the mode unavailable.</param>
@@ -245,8 +229,8 @@ internal sealed class FeatureSourceResolver
 
     /// <summary>
     /// The supply of one (source, entity) group of <paramref name="supply"/>'s source; null (diagnosed) when the group
-    /// cannot be supplied that way: a connector that does not support the entity's key layout, fields a table cannot hold.
-    /// A table holds any key layout: <c>max_bytes</c> bounds its memory, and a cache's TTL and eviction its churn.
+    /// cannot be supplied that way: a connector that does not support the entity's key layout, fields a table cannot
+    /// hold.
     /// </summary>
     public GroupSupply? Group(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members) => !Pairs(supply, entity) ? null : supply.Mode switch
     {
@@ -257,16 +241,6 @@ internal sealed class FeatureSourceResolver
         SupplyMode.Service => OutputsServeTheirReaders(supply, members) ? GroupSupply.ForService(supply.Service!, supply.TimeoutMs) : null,
     };
 
-    /// <summary>
-    /// Whether the features of a service's group can all take what the service answers for each output they read: it
-    /// answers an output once for a call, as one tensor, and a feature takes only its declared element type (no widening
-    /// or rounding) and its length (one value for a scalar, its length for a fixed-length list, any for a list). Two
-    /// readers of one output conflict when their element types differ or their lengths do; a scalar and a list of its
-    /// type, or a list and a fixed-length list, can both be served. A conflict is a <c>SERVICE_OUTPUT_TYPE_CONFLICT</c>
-    /// at the later feature's type, in name order, as a table's field of two types is (such a plan
-    /// loaded, and every call failed; the first check compared whole types and rejected a list read as a
-    /// fixed-length list too).
-    /// </summary>
     private bool OutputsServeTheirReaders(SourceSupply supply, FeatureRuntimeInfo[] members)
     {
         if (members.Length < 2)
@@ -309,16 +283,9 @@ internal sealed class FeatureSourceResolver
 
         static Core.Types.StorageKind ElementOf(Core.Types.ColumnType type) => type.IsList ? type.Element : type.Kind;
 
-        // The number of values a feature of the type takes: one for a scalar, the fixed length of a list; 0 for any.
         static int LengthTaken(Core.Types.ColumnType type) => !type.IsList ? 1 : type.IsFixedLength ? type.FixedLength : 0;
     }
 
-    /// <summary>
-    /// A service computes the features of an entity with args, and only those: a stored entity's are looked up by its key
-    /// (a connector, a table), and an entity with args has no key to look up. A source may compute several: each
-    /// entity's call is its own, by its arguments and the outputs its features read. A pair that does not match is a
-    /// <c>SOURCE_SERVICE_ENTITY</c> at the binding.
-    /// </summary>
     private bool Pairs(SourceSupply supply, EntityDefinition entity)
     {
         var service = supply.Mode == SupplyMode.Service;
@@ -337,10 +304,6 @@ internal sealed class FeatureSourceResolver
         return false;
     }
 
-    /// <summary>
-    /// Whether the connector supports the entity's key layout (asked once, here): a connector that does not is a
-    /// <c>CONNECTOR_KEY</c> error at the binding, naming the layout, rather than a failure on the request path.
-    /// </summary>
     private bool SupportsKey(SourceSupply supply, EntityDefinition entity)
     {
         var connector = supply.Connector!;
@@ -358,16 +321,12 @@ internal sealed class FeatureSourceResolver
 
     /// <summary>
     /// Whether the features of <paramref name="entity"/> are read through the cache of a fetch binding that has one.
-    /// Through a cache with a tier, every entity's. Through one with none (<c>"cache": {}</c>), a context entity's alone:
-    /// a request reads one record of it, which its runs share. The reads of candidates' keys share nothing, and are
-    /// fetched as from a binding without a cache (only the features a node needs, ahead of the node) rather than pay
-    /// for whole records nothing keeps.
+    /// Through a cache with a tier, every entity's. Through one with none (<c>"cache": {}</c>), a context entity's
+    /// alone: a request reads one record of it, which its runs share.
     /// </summary>
     internal static bool Caches(FeatureSourceBinding binding, EntityDefinition entity) =>
         binding.Cache is { } cache && (CacheSettings.HasTier(cache) || entity.IsContextScoped);
 
-    /// <summary>A cache group: its table, its connector's support of the key, and where a miss's record takes each table
-    /// field from.</summary>
     private GroupSupply? CacheGroup(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members)
     {
         if (LocalTable(supply, entity, members) is not { } table || !SupportsKey(supply, entity))
@@ -407,8 +366,7 @@ internal sealed class FeatureSourceResolver
             return null;
         }
 
-        // One update source per table: a source may be stateful (a stream consumer), so tables never share one. The spec
-        // creates it, with the base directory it pins for the identity too. A cache table's source is its writer.
+        // One update source per table: a source may be stateful (a stream consumer), so tables never share one.
         LocalTableSpec spec;
         try
         {
@@ -429,7 +387,6 @@ internal sealed class FeatureSourceResolver
         }
         catch (ArgumentOutOfRangeException ex)
         {
-            // max_bytes below what an empty table takes.
             var cache = tableMode == LocalTableMode.Cache;
             _diagnostics.Error(cache ? "CACHE_MAX_BYTES" : "LOCAL_MAX_BYTES", _artifact, pointer + (cache ? "/cache/memory/max_bytes" : "/max_bytes"),
                 FirstLine(ex.Message), "raise max_bytes");
@@ -466,7 +423,6 @@ internal sealed class FeatureSourceResolver
             return null;
         }
 
-        // Every problem of the binding at once: settings of the other mode, and what the mode itself requires.
         var settingsOk = CheckModeSettings(sourceName, binding, mode, pointer);
         var supply = mode switch
         {
@@ -478,10 +434,6 @@ internal sealed class FeatureSourceResolver
         return settingsOk ? supply : null;
     }
 
-    /// <summary>
-    /// How a binding supplies its features: the mode its <c>mode</c> names (none is <c>fetch</c>), and for a <c>fetch</c>
-    /// binding with a <c>cache</c>, <see cref="SupplyMode.Cache"/>. False when <c>mode</c> names none.
-    /// </summary>
     internal static bool TryMode(FeatureSourceBinding binding, out SupplyMode mode)
     {
         mode = SupplyMode.Fetch;
@@ -499,7 +451,6 @@ internal sealed class FeatureSourceResolver
 
     private static string ModeNames() => string.Join(" or ", QuotedNames(Enum.GetValues<SupplyMode>()));
 
-    /// <summary>The names of <paramref name="modes"/> as a binding writes them, quoted, each once.</summary>
     private static List<string> QuotedNames(SupplyMode[] modes)
     {
         var names = new List<string>(modes.Length);
@@ -515,14 +466,12 @@ internal sealed class FeatureSourceResolver
         return names;
     }
 
-    /// <summary>Whether the binding's undeclared members (connector settings) belong to the mode: the modes with a connector.</summary>
     private static bool TakesConnectorSettings(SupplyMode mode) => mode switch
     {
         SupplyMode.Fetch or SupplyMode.Cache => true,
         SupplyMode.Local or SupplyMode.Service => false,
     };
 
-    /// <summary>Reports every setting of a mode the binding is not in; true when there is none.</summary>
     private bool CheckModeSettings(string sourceName, FeatureSourceBinding binding, SupplyMode mode, string pointer)
     {
         var ok = true;
@@ -559,7 +508,6 @@ internal sealed class FeatureSourceResolver
         return ok;
     }
 
-    /// <summary>A service binding: the service it names, as the plan resolves it; null (diagnosed) without one.</summary>
     private SourceSupply? ResolveService(string sourceName, FeatureSourceBinding binding, string pointer)
     {
         if (binding.Service is not { } service)
@@ -591,14 +539,9 @@ internal sealed class FeatureSourceResolver
             }
             : null;
 
-    /// <summary>The binding's connector, shared by identity; null (diagnosed) when its type is unknown or its settings are wrong.</summary>
     private IFeatureSourceConnector? ResolveConnector(string sourceName, FeatureSourceBinding binding) =>
         _resolver.Acquire<IFeatureSourceConnector>(BindingKind.Connector, sourceName, binding.Connector, binding.Settings);
 
-    /// <summary>
-    /// A fetch binding with a cache: the connector it is in front of and its <c>cache</c> settings, the tiers included.
-    /// Every problem of the binding is reported at once.
-    /// </summary>
     private SourceSupply? ResolveCache(string sourceName, FeatureSourceBinding binding, string pointer)
     {
         var connector = ResolveConnector(sourceName, binding);
@@ -624,10 +567,9 @@ internal sealed class FeatureSourceResolver
     }
 
     /// <summary>
-    /// What a cached source's values come from when its cache names no <c>version</c>: its connector and the connector's
-    /// settings, canonical, as the first 16 hex digits of their content id. Not <c>timeout_ms</c>, <c>max_batch</c> or
-    /// <c>cache</c>, which decide when a value arrives and how long it is kept, not what it is: a release that only tunes
-    /// those keeps both tiers' values (a service's cache follows the same rule, <c>ClientResolver.AnswerIdentity</c>).
+    /// What a cached source's values come from when its cache names no <c>version</c>: its connector and the
+    /// connector's settings, canonical, as the first 16 hex digits of their content id. Not <c>timeout_ms</c>,
+    /// <c>max_batch</c> or <c>cache</c>, which decide when a value arrives and how long it is kept, not what it is.
     /// </summary>
     internal static string OriginIdentity(FeatureSourceBinding binding)
     {
@@ -641,13 +583,11 @@ internal sealed class FeatureSourceResolver
     }
 
     /// <summary>
-    /// What a source's values come from, cached or not: its cache's <c>version</c> when it names one, otherwise
-    /// <see cref="OriginIdentity"/>. What a cache of something computed from the source (a pipeline's results) follows.
+    /// What a cache of something computed from the source (a pipeline's results) follows.
     /// </summary>
     internal static string ValuesIdentity(FeatureSourceBinding binding) =>
         binding.Cache?.Version is { } version ? "v." + version : OriginIdentity(binding);
 
-    /// <summary>The binding's <c>max_bytes</c> (required in mode local); false (diagnosed) when missing or not a positive size.</summary>
     private bool TryMaxBytes(string sourceName, FeatureSourceBinding binding, string pointer, SupplyMode mode, out long maxBytes)
     {
         maxBytes = 0;
@@ -701,12 +641,8 @@ internal sealed class FeatureSourceResolver
     }
 
     /// <summary>
-    /// The features a table of <paramref name="supply"/>'s source and <paramref name="entity"/> holds, in name order. A
-    /// <c>local</c> table holds every physical feature the catalog binds there, whichever of them the plan reads: its
-    /// source loads whole records, so its layout, and with it the table's identity (<see cref="LocalTableSpec.Identity"/>),
-    /// is the catalog's. Plans that read different features of it share one table, and a pipeline or an experiment that
-    /// starts reading another of them does not reload it. A <c>cache</c> table holds the group's members, which are the
-    /// whole table already (<see cref="FeaturePlan.NeedsWholeTable"/>), as is every table laid out without a catalog.
+    /// A <c>cache</c> table holds the group's members, which are the whole table already
+    /// (<see cref="FeaturePlan.NeedsWholeTable"/>).
     /// </summary>
     private FeatureDefinition[] TableFeatures(SourceSupply supply, EntityDefinition entity, FeatureRuntimeInfo[] members)
     {
@@ -762,16 +698,14 @@ internal sealed class FeatureSourceResolver
         return parameter < 0 ? line : line[..parameter];
     }
 
-    /// <summary>The mode's name in a binding (<c>"mode"</c>); <see cref="TryMode"/> reads it back.</summary>
     internal static string ModeName(SupplyMode mode) => mode switch
     {
         SupplyMode.Fetch => "fetch",
         SupplyMode.Local => "local",
-        SupplyMode.Cache => "fetch", // a fetch binding with a cache
+        SupplyMode.Cache => "fetch",
         SupplyMode.Service => "service",
     };
 
-    /// <summary>The declared settings of <paramref name="mode"/>, quoted, from <see cref="ModeSettings"/>.</summary>
     private static string SettingsOf(SupplyMode mode)
     {
         var names = new List<string>();
@@ -787,12 +721,10 @@ internal sealed class FeatureSourceResolver
     }
 }
 
-/// <summary>A resolved feature source binding: its mode and what that mode needs.</summary>
 internal sealed class SourceSupply(string name, string pointer, FeatureSourceBinding binding, SupplyMode mode)
 {
     public string Name { get; } = name;
 
-    /// <summary>The binding's pointer, e.g. <c>/sources/item_store</c>.</summary>
     public string Pointer { get; } = pointer;
 
     public FeatureSourceBinding Binding { get; } = binding;
@@ -812,15 +744,12 @@ internal sealed class SourceSupply(string name, string pointer, FeatureSourceBin
     /// <summary>Mode local, and a fetch binding with a cache: the options of every table of the source.</summary>
     public LocalFeatureTableOptions? Options { get; init; }
 
-    /// <summary>A fetch binding with a cache: its times.</summary>
     public CachePolicy? Policy { get; init; }
 
     /// <summary>A fetch binding with a cache: the distributed tier, if the binding has one.</summary>
     public DistributedCacheTier? Distributed { get; init; }
 
-    /// <summary>A fetch binding with a cache: <c>cache.distributed.timeout_ms</c>.</summary>
     public int? DistributedTimeoutMs { get; init; }
 
-    /// <summary>Mode service: the service.</summary>
     public IServiceSupply? Service { get; init; }
 }

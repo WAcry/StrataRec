@@ -13,18 +13,12 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// <c>PairwiseRanker@1</c> and <c>ListwiseReranker@1</c>: the pair and list tensors they send for each kind
-/// of input, how they turn the model's answers into a new order of the window, what fails the node (leaving the order as
-/// it was), and the load-time checks of their config and of every model version's signature.
-/// </summary>
 public sealed class ModelRankerTests
 {
     private const long Big = 9007199254740993L;
 
     private static readonly float[] UserEmb = { 0.5f, -0.25f, 8f };
 
-    /// <summary>The fixture's items: an int64 (some beyond 2^53), a float64 and a 3-vector each.</summary>
     internal static readonly Dictionary<long, (long Code, double Ctr, float[] Emb)> Items = new()
     {
         [10] = (Big, 0.1, new[] { 1f, 2f, 3f }),
@@ -36,7 +30,6 @@ public sealed class ModelRankerTests
         [70] = (7, 0.7, new[] { 3f, 3f, 3f }),
     };
 
-    /// <summary>The order the recall leaves the rows in: what the rankers see.</summary>
     private static readonly long[] Incoming = { 30, 10, 50, 20, 40, 70, 60 };
 
     /// <summary>The pairs of the first four rows, in the order they are sent: i ascending, then j, the higher-ranked first.</summary>
@@ -63,7 +56,6 @@ public sealed class ModelRankerTests
 
     private static readonly ServiceSignature ListIds = Signature(("id", TensorElementType.Int64, [1, -1]), ("s", TensorElementType.Float32, [1, -1]));
 
-    /// <summary>Strengths giving the window of five a known result: 10 first, 20 and 50 tied, 30 and 40 tied.</summary>
     private static readonly Dictionary<long, int> Strengths = new() { [30] = 0, [10] = 3, [50] = 1, [20] = 1, [40] = 0, [60] = 0, [70] = 0 };
 
     [Theory]
@@ -86,7 +78,7 @@ public sealed class ModelRankerTests
         foreach (var call in calls)
         {
             var n = call.BatchSize;
-            Assert.Equal(PairAll.Inputs.Select(s => s.Name).Order(StringComparer.Ordinal), call.Inputs.Select(i => i.Name)); // in ordinal order
+            Assert.Equal(PairAll.Inputs.Select(s => s.Name).Order(StringComparer.Ordinal), call.Inputs.Select(i => i.Name));
             AssertTensor(call["id"], TensorElementType.Int64, n, 2);
             AssertTensor(call["code"], TensorElementType.Int64, n, 2);
             AssertTensor(call["ctr"], TensorElementType.Float64, n, 2);
@@ -100,17 +92,17 @@ public sealed class ModelRankerTests
             {
                 sent.Add(first + p);
                 var (a, b) = PairsOf4[first + p];
-                Assert.Equal(new[] { a, b }, call["id"].Int64.AsSpan(2 * p, 2).ToArray()); // the batch is a contiguous run of the pairs
-                Assert.Equal(new[] { Items[a].Code, Items[b].Code }, call["code"].Int64.AsSpan(2 * p, 2).ToArray()); // exact
-                Assert.Equal(new[] { Items[a].Ctr, Items[b].Ctr }, call["ctr"].Float64.AsSpan(2 * p, 2).ToArray()); // a float64 as is
-                Assert.Equal(Items[a].Emb.Concat(Items[b].Emb), call["emb"].Float32.AsSpan(6 * p, 6).ToArray()); // row-major [pair, row, N]
-                Assert.Equal(UserEmb, call["user_emb"].Float32.AsSpan(3 * p, 3).ToArray()); // the request's vector in every pair
+                Assert.Equal(new[] { a, b }, call["id"].Int64.AsSpan(2 * p, 2).ToArray());
+                Assert.Equal(new[] { Items[a].Code, Items[b].Code }, call["code"].Int64.AsSpan(2 * p, 2).ToArray());
+                Assert.Equal(new[] { Items[a].Ctr, Items[b].Ctr }, call["ctr"].Float64.AsSpan(2 * p, 2).ToArray());
+                Assert.Equal(Items[a].Emb.Concat(Items[b].Emb), call["emb"].Float32.AsSpan(6 * p, 6).ToArray());
+                Assert.Equal(UserEmb, call["user_emb"].Float32.AsSpan(3 * p, 3).ToArray());
                 Assert.Equal(Big, call["user_id"].Int64[p]);
                 Assert.Equal(0.75, call["weight"].Float64[p]);
             }
         }
 
-        Assert.Equal(Enumerable.Range(0, 6), sent.Order()); // every pair once
+        Assert.Equal(Enumerable.Range(0, 6), sent.Order());
     }
 
     [Theory]
@@ -134,7 +126,7 @@ public sealed class ModelRankerTests
         AssertTensor(call["user_id"], TensorElementType.Int64, 1);
         AssertTensor(call["weight"], TensorElementType.Float64, 1);
         var list = Incoming[..n];
-        Assert.Equal(list, call["id"].Int64); // in rank order
+        Assert.Equal(list, call["id"].Int64);
         Assert.Equal(list.Select(id => Items[id].Code), call["code"].Int64);
         Assert.Equal(list.Select(id => Items[id].Ctr), call["ctr"].Float64);
         Assert.Equal(list.SelectMany(id => Items[id].Emb), call["emb"].Float32);
@@ -148,7 +140,7 @@ public sealed class ModelRankerTests
     [InlineData(3)]
     [InlineData(10)]
     [InlineData(256)]
-    [InlineData(int.MaxValue)] // one call: the batch count overflowed and no call was sent
+    [InlineData(int.MaxValue)]
     public async Task Pairwise_RanksTheWindowByExpectedWins_TiesByEntityId_RowsAfterTheWindowKeepTheirOrder(int batchSize)
     {
         var models = new TestModels(_ => PairIds, Prefer(Strengths));
@@ -176,11 +168,10 @@ public sealed class ModelRankerTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(new long[] { 20, 50, 30, 40, 10, 70, 60 }, IdsOf(result));
-        Assert.Equal(new double?[] { 2, 2, 1, null, null, null, null }, ScoresOf(result)); // non-finite scores are missing in the column
+        Assert.Equal(new double?[] { 2, 2, 1, null, null, null, null }, ScoresOf(result));
         Assert.Equal(2, result.NonFiniteValues);
     }
 
-    /// <summary>A score the model returns as float64, as its signature may declare: both rankers read it, and rank the same.</summary>
     [Fact]
     public async Task AFloat64Score_IsRead_AndRanksAsTheFloat32One()
     {
@@ -212,7 +203,7 @@ public sealed class ModelRankerTests
         var result = await Run(Compile(models, "ListwiseReranker@1", """{ "model": "m", "inputs": { "id": "col.entity_id" }, "output": "s", "window": 5 }"""));
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal(new long[] { 10, 30, 40, 50, 20, 70, 60 }, IdsOf(result)); // the ties at 1 by entity_id
+        Assert.Equal(new long[] { 10, 30, 40, 50, 20, 70, 60 }, IdsOf(result));
     }
 
     /// <summary>
@@ -274,7 +265,7 @@ public sealed class ModelRankerTests
 
         Assert.True(one.Succeeded, one.Error);
         Assert.Equal(new long[] { 30 }, IdsOf(one));
-        Assert.Equal(new double?[] { 0 }, ScoresOf(one)); // no other row to win against: the empty sum
+        Assert.Equal(new double?[] { 0 }, ScoresOf(one));
         Assert.True(none.Succeeded, none.Error);
         Assert.Empty(none.Items);
         Assert.Empty(models.Calls);
@@ -304,7 +295,6 @@ public sealed class ModelRankerTests
     [InlineData(4)]
     public async Task Pairwise_AFailedCall_InAnyBatch_FailsTheNode_AndLeavesTheOrderAsItWas(int failing)
     {
-        // Window 5: ten pairs in five batches of two; batch `failing` starts at pair 2 * failing.
         var pairs = PairsOfIncoming(5);
         var prefer = Prefer(Strengths);
         var models = new TestModels(_ => PairIds, call => (call["id"].Int64[0], call["id"].Int64[1]) == pairs[2 * failing] ? null : prefer(call));
@@ -315,10 +305,10 @@ public sealed class ModelRankerTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(Incoming, IdsOf(result));
-        Assert.All(ScoresOf(result), s => Assert.Null(s)); // a failed node commits nothing
+        Assert.All(ScoresOf(result), s => Assert.Null(s));
         var outcome = Assert.Single(result.Outcomes, o => o.NodeId == "rank");
         Assert.Equal((NodeOutcomeKind.Failed, "model 'm' failed: refused (skipped)"), (outcome.Kind, outcome.Detail));
-        Assert.Equal(5, models.Calls.Count); // every batch was sent
+        Assert.Equal(5, models.Calls.Count);
     }
 
     [Theory]
@@ -363,7 +353,7 @@ public sealed class ModelRankerTests
         var result = await Run(plan);
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal(Incoming.Order(), IdsOf(result)); // the lower id always wins
+        Assert.Equal(Incoming.Order(), IdsOf(result));
     }
 
     [Fact]
@@ -411,7 +401,7 @@ public sealed class ModelRankerTests
     [Theory]
     [InlineData("PairwiseRanker@1", """ "window": 1 """, "/window", "RANKER_WINDOW")]
     [InlineData("PairwiseRanker@1", """ "max_pairs": 0 """, "/max_pairs", "RANKER_MAX_PAIRS")]
-    [InlineData("PairwiseRanker@1", """ "max_pairs": 2147483647, "window": 46342 """, "/max_pairs", "RANKER_MAX_PAIRS")] // 2 · pairs overflowed at run time
+    [InlineData("PairwiseRanker@1", """ "max_pairs": 2147483647, "window": 46342 """, "/max_pairs", "RANKER_MAX_PAIRS")]
     [InlineData("PairwiseRanker@1", """ "batch_size": 0 """, "/batch_size", "MODEL_BAD_BATCH")]
     [InlineData("ListwiseReranker@1", """ "window": 0 """, "/window", "RANKER_WINDOW")]
     [InlineData("ListwiseReranker@1", """ "output": "" """, "/output", "MODEL_OUTPUT")]
@@ -430,10 +420,6 @@ public sealed class ModelRankerTests
         Assert.Equal(("/nodes/rank/config" + key, code), (error.Pointer, error.Code));
     }
 
-    /// <summary>
-    /// Every version the node may use is checked against the operator's layout, in both directions of the dimension rule:
-    /// the dynamic dimension only as -1, the fixed ones as their size or -1.
-    /// </summary>
     [Theory]
     [InlineData("PairwiseRanker@1", new[] { -1, 2 }, null)]
     [InlineData("PairwiseRanker@1", new[] { -1, -1 }, null)]
@@ -511,7 +497,6 @@ public sealed class ModelRankerTests
         Assert.Equal(new double?[] { 3.25, 2, 2, 1.375, 1.375, null, null }, ScoresOf(result));
     }
 
-    /// <summary>The pairs of the first <paramref name="n"/> incoming rows, in the order they are sent.</summary>
     internal static (long, long)[] PairsOfIncoming(int n) =>
         (from i in Enumerable.Range(0, n) from j in Enumerable.Range(i + 1, n - i - 1) select (Incoming[i], Incoming[j])).ToArray();
 
@@ -522,7 +507,6 @@ public sealed class ModelRankerTests
         return Enumerable.Range(0, call.BatchSize).Select(p => 0.5f + ((strengths[ids[2 * p]] - strengths[ids[(2 * p) + 1]]) / 8f)).ToArray();
     };
 
-    /// <summary>A listwise model: each row's score from the table (0 for the others).</summary>
     private static Func<CapturedCall, float[]?> Score(IReadOnlyDictionary<long, float> scores) =>
         call => call["id"].Int64.Select(id => scores.GetValueOrDefault(id)).ToArray();
 
@@ -561,9 +545,7 @@ public sealed class ModelRankerTests
     }
 
     /// <summary>
-    /// A workspace of one pipeline in a temp directory: the recall of <paramref name="recall"/> (the incoming order by
-    /// default), then the node <c>rank</c> running <paramref name="op"/>. Values beyond 2^53 live in the data file:
-    /// artifacts are RFC 8785 JSON, which cannot hold them.
+    /// Values beyond 2^53 live in the data file: artifacts are RFC 8785 JSON, which cannot hold them.
     /// </summary>
     private static PlanCompilation TryCompile(
         TestModels models, string op, string config, long[]? recall = null, string onFailure = "fail_request", string columns = "", string outputColumns = "")
@@ -621,13 +603,8 @@ public sealed class ModelRankerTests
         public CapturedInput this[string name] => Inputs.Single(i => i.Name == name);
     }
 
-    /// <summary>
-    /// <c>ranker_test@1</c>: declares a signature per version, keeps a copy of every call, and answers its output (the
-    /// signature's only one) with what <c>answer</c> computes from the call, or refuses the call when it returns null.
-    /// </summary>
     /// <param name="answerType">The element type the answer is written as: float32, float64 (a model whose signature declares a
     /// float64 score), or int64 (a client that breaks its signature).</param>
-    /// <param name="exact">The float64 answer itself, for scores a float cannot hold (with <paramref name="answerType"/> float64).</param>
     /// <param name="extra">Elements written beyond the answer: a client that writes more than the output's shape holds.</param>
     internal sealed class TestModels(
         Func<string?, ServiceSignature> signature, Func<CapturedCall, float[]?> answer, TensorElementType answerType = TensorElementType.Float32,
@@ -703,11 +680,6 @@ public sealed class ModelRankerTests
     }
 }
 
-/// <summary>
-/// The pairs a pairwise node sends are the rows of its calls: <c>stratarec.io.keys</c> of the model counts each call's,
-/// failed calls too, as every service call's rows (they replaced <c>stratarec.model.pairs</c>, which counted the node's
-/// pairs once a run, those a cache answered included).
-/// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class ModelPairsMetricTests
 {
@@ -745,11 +717,10 @@ public sealed class ModelPairsMetricTests
         });
         listener.Start();
 
-        await ModelRankerTests.Run(plan); // the model refuses: the pairs were sent all the same
+        await ModelRankerTests.Run(plan);
 
         lock (measured)
         {
-            // Ten pairs of a window of five, in the fewest calls of at most three.
             Assert.Equal(new[] { (3L, (string?)"m"), (3L, "m"), (3L, "m"), (1L, "m") }, measured.OrderByDescending(m => m.Value));
         }
     }

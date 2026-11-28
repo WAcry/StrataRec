@@ -15,11 +15,7 @@ namespace StrataRec.Features.Connectors;
 /// for a shared part (<see cref="IsShared"/>), whose value every key of the batch has: a context part of a
 /// candidate-scoped entity (the country of a request's <c>(item, country)</c> keys). A store keyed by it can read one
 /// partition for the whole batch. <see cref="Keys"/> is the one-part key's keys; <see cref="Key"/> one part of one key.</para>
-/// <para>A struct: each <c>max_batch</c> chunk of a fetch is one connector call and a request makes hundreds of them, so
-/// an object per call was a measurable share of the request's allocation. It is a view: the parts are one part-major
-/// buffer (each varying part a run of <c>stride</c> keys, then one entry per shared part), and a chunk is a window of
-/// it. Pass it on by <c>in</c> where the signature allows (async methods cannot take <c>in</c> parameters); a copy is four
-/// words.</para>
+/// <para>Pass it on by <c>in</c> where the signature allows (async methods cannot take <c>in</c> parameters).</para>
 /// <para>The keys live in the request's pooled buffers: they stay valid until the connector call completes,
 /// even past the request's own timeout, and not after. A connector that needs keys later must copy them.</para>
 /// </remarks>
@@ -54,8 +50,8 @@ public readonly struct EntityKeyBatch
 
     /// <summary>
     /// A batch of <paramref name="count"/> keys of <paramref name="layout"/>'s parts, from one memory per part
-    /// (<paramref name="parts"/>[p]: <paramref name="count"/> keys, or one for a shared part), copied into a buffer of its own.
-    /// For a connector that calls another, and for tests; the engine builds its batches without copying.
+    /// (<paramref name="parts"/>[p]: <paramref name="count"/> keys, or one for a shared part), copied into a buffer of
+    /// its own. For a connector that calls another, and for tests.
     /// </summary>
     public static EntityKeyBatch Create(EntityKeyLayout layout, int count, params ReadOnlyMemory<EntityKey>[] parts)
     {
@@ -140,12 +136,11 @@ public readonly struct EntityKeyBatch
         return keys.Length == 1 && IsShared(part) ? keys[0] : keys[index];
     }
 
-    /// <summary>The part-major buffer the batch is a view of (see <see cref="PartAt"/>).</summary>
     internal ReadOnlySpan<EntityKey> Buffer => _buffer.Span;
 
     /// <summary>
-    /// Where part <paramref name="part"/> of key 0 is in <see cref="Buffer"/>, and how far apart the part's keys are: key i's
-    /// at <c>Offset + Step * i</c>, the step 0 for a shared part. For a reader that walks every key's parts in a loop.
+    /// Where part <paramref name="part"/> of key 0 is in <see cref="Buffer"/>, and how far apart the part's keys are:
+    /// key i's at <c>Offset + Step * i</c>, the step 0 for a shared part.
     /// </summary>
     internal (int Offset, int Step) PartAt(int part)
     {
@@ -160,7 +155,6 @@ public readonly struct EntityKeyBatch
         return ((BitOperations.PopCount((uint)(~_shared & below)) * _stride) + _start, 1);
     }
 
-    /// <summary>The window of <paramref name="count"/> keys from <paramref name="start"/>: one <c>max_batch</c> chunk.</summary>
     internal EntityKeyBatch Slice(int start, int count)
     {
         if ((uint)start > (uint)_count || (uint)count > (uint)(_count - start))
@@ -182,7 +176,7 @@ public readonly struct EntityKeyBatch
 
     /// <summary>
     /// The keys <paramref name="keys"/> of this batch, in that order, laid out in <paramref name="buffer"/> (at least
-    /// <c>varying parts × keys + shared parts</c> long): a cache read's misses, sent on to the next tier.
+    /// <c>varying parts × keys + shared parts</c> long).
     /// </summary>
     internal EntityKeyBatch Select(ReadOnlySpan<int> keys, EntityKey[] buffer)
     {
@@ -272,23 +266,19 @@ public interface IFeatureBatchWriter
     /// </summary>
     /// <remarks>
     /// <para>For a field whose values repeat across the keys of a call: a category, a brand, the tags of a
-    /// <c>list&lt;string&gt;</c>. A connector that decodes each key's value into a string of its own makes 5,000 strings for
-    /// 5,000 keys of three categories; through Intern it makes three. A value that differs per key (a title, an id) gains
-    /// nothing from it: decode that one directly.</para>
-    /// <para>The scope is the call: the table goes away with the writer, and nothing is kept process-wide, unlike
-    /// <c>string.Intern</c>, which never releases a string (it is banned in the engine for that reason). At
-    /// most 4,096 distinct values are kept; past that each call returns a new string. A lookup allocates nothing, and a
-    /// value seen before costs no string. A connector that wants reuse across requests holds its own pool, sized for its
-    /// data (for example CommunityToolkit.HighPerformance's <c>StringPool</c>), and passes its strings to
-    /// <see cref="SetString"/>: the engine has no process-wide string pool on purpose, since what is worth keeping, and
-    /// how much of it, depends on data only the connector knows.</para>
+    /// <c>list&lt;string&gt;</c>. A value that differs per key (a title, an id) gains nothing from it: decode that one
+    /// directly.</para>
+    /// <para>The scope is the call: the table goes away with the writer, and nothing is kept process-wide. At most
+    /// 4,096 distinct values are kept; past that each call returns a new string. A lookup allocates nothing, and a
+    /// value seen before costs no string. A connector that wants reuse across requests holds its own pool, sized for
+    /// its data, and passes its strings to <see cref="SetString"/>.</para>
     /// </remarks>
     string Intern(ReadOnlySpan<char> value);
 
     /// <summary>
     /// <see cref="Intern"/> for a value as UTF-8 bytes, as most stores return them: decoded without a string of its own
-    /// when the value was seen before (on the stack up to 256 bytes, into a rented buffer beyond). Invalid UTF-8 becomes
-    /// U+FFFD, as <see cref="System.Text.Encoding.UTF8"/> decodes it.
+    /// when the value was seen before. Invalid UTF-8 becomes U+FFFD, as <see cref="System.Text.Encoding.UTF8"/> decodes
+    /// it.
     /// </summary>
     string InternUtf8(ReadOnlySpan<byte> utf8);
 

@@ -5,11 +5,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Each definition of a node is compiled at its own place on the timeline. All of a node's definitions were compiled at
-/// the lowest order any of them has: an arm that moves a node after an implicit writer and reads its column was compiled
-/// before the writer had declared the column, and the unified plan rejected what the arm's own compile accepts.
-/// </summary>
 public sealed class MovedNodeOrderTests
 {
     [Fact]
@@ -34,10 +29,6 @@ public sealed class MovedNodeOrderTests
         Assert.True(unified.Succeeded, string.Join("\n", unified.Diagnostics));
     }
 
-    /// <summary>
-    /// The order is the JSON number, however the tree holds it: one built in code holds a CLR int, not the parsed tree's
-    /// JSON element, and only a long was read, so the moved writer was compiled last, after the reader.
-    /// </summary>
     [Theory]
     [InlineData("parsed")]
     [InlineData("int")]

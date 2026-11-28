@@ -4,10 +4,8 @@ using System.Text.Json.Nodes;
 
 namespace StrataRec.Artifacts.Json;
 
-/// <summary>Small helpers shared by the JSON standards implementations in this namespace.</summary>
 internal static class JsonNodeUtilities
 {
-    /// <summary>UTF-8 without BOM that throws on unpaired surrogates instead of silently writing U+FFFD.</summary>
     internal static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     /// <summary>
@@ -18,12 +16,10 @@ internal static class JsonNodeUtilities
         node is null || (node is JsonValue value && value.GetValueKind() == JsonValueKind.Null);
 
     /// <summary>
-    /// Whether <paramref name="value"/> holds a CLR number JSON cannot write, NaN or an infinity, of any binary floating
-    /// type <see cref="JsonValue"/> holds (<see cref="double"/>, <see cref="float"/>, <see cref="Half"/>, boxed or not);
-    /// <paramref name="number"/> is it as a double. Asked of the CLR value, not by writing it: writing throws, and not
-    /// alike (an <see cref="ArgumentException"/> for a double, a <see cref="JsonException"/> for a Half), and
-    /// <see cref="JsonNode.GetValueKind"/> says Number for it. A value read from text holds none: its number is text, and
-    /// converting it would make a finite binary64 number such as <c>1e100</c> an infinite float.
+    /// Asked of the CLR value, not by writing it: writing throws, and not alike (an <see cref="ArgumentException"/> for
+    /// a double, a <see cref="JsonException"/> for a Half), and <see cref="JsonNode.GetValueKind"/> says Number for it.
+    /// A value read from text holds none: its number is text, and converting it would make a finite binary64 number
+    /// such as <c>1e100</c> an infinite float.
     /// </summary>
     internal static bool IsNonFiniteNumber(JsonValue value, out double number)
     {
@@ -77,7 +73,6 @@ internal static class JsonNodeUtilities
         return false;
     }
 
-    /// <summary>Describes the JSON kind of a node for error messages, e.g. "an array" or "a string".</summary>
     internal static string DescribeKind(JsonNode? node) => node switch
     {
         null => "null",
@@ -94,7 +89,6 @@ internal static class JsonNodeUtilities
         _ => "a value",
     };
 
-    /// <summary>Formats a pointer for messages; the root pointer is the empty string, which reads badly in quotes.</summary>
     internal static string Display(JsonPointer pointer) =>
         pointer.IsRoot ? "the document root" : $"'{pointer}'";
 }

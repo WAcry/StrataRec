@@ -15,16 +15,7 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.Pipeline.Replay;
 
-/// <summary>
-/// Replays one recorded pipeline run: answers feature and service calls from the recording and
-/// supplies the recorded timing facts (time left, budget timeouts) in place of the clock, so the run makes the same
-/// decisions without calling or waiting for anything.
-/// </summary>
 /// <remarks>
-/// <para>Calls are matched exactly first (same source and keys, in recorded order), which replays the recorded status:
-/// a timeout times out again. A call the recording does not have exactly (a modified configuration asks for other keys,
-/// fields, batches or sources) is answered value by value from everything the recording fetched successfully; what it
-/// lacks is missing and reported as a <see cref="ReplayGap"/>.</para>
 /// <para>One instance per replayed run; not reusable.</para>
 /// </remarks>
 internal sealed class RunReplay : IFeatureCallHook
@@ -54,7 +45,6 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>A replay of a run the bundle does not contain (a fallback pipeline that did not run): every call is a gap.</summary>
     public static RunReplay Empty() => new(null);
 
-    /// <summary>Indexes a recorded run, decoding every value with its recorded type.</summary>
     /// <param name="pointer">Pointer of <paramref name="run"/> in its bundle, for errors.</param>
     /// <exception cref="ReplayBundleException">A value, key, type or status in the run is malformed.</exception>
     public static RunReplay Create(ReplayRunRecord run, string pointer)
@@ -67,7 +57,6 @@ internal sealed class RunReplay : IFeatureCallHook
         return replay;
     }
 
-    /// <summary>The recorded calls of other pipelines, by node, place among its calls and pipeline, decoded.</summary>
     private readonly Dictionary<(string Node, int Seq, string Pipeline), (Dictionary<string, ReplayTypedValue> Inputs, Operators.PipelineCallResult Result)> _pipelineCalls = new();
 
     private void IndexPipelineCalls(ReplayRunRecord run, string pointer)
@@ -93,9 +82,8 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// What the recorded call of <paramref name="pipelineId"/> returned: the node's call at the same place, with the same
-    /// inputs. A call the recording does not have, or has with other inputs, is a gap and fails: the replay does not run
-    /// the pipeline.
+    /// A call the recording does not have, or has with other inputs, is a gap and fails: the replay does not run the
+    /// pipeline.
     /// </summary>
     internal Operators.PipelineCallResult PipelineCall(string node, int sequence, string pipelineId, RequestInputs? given)
     {
@@ -161,7 +149,6 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>Requested and missing values per feature field (the feature-missing rate).</summary>
     public IReadOnlyList<ReplayFieldStats> FieldStats
     {
         get
@@ -200,7 +187,6 @@ internal sealed class RunReplay : IFeatureCallHook
                 return ReplayExact(entry, batch, fields, writer);
             }
 
-            // Not in the recording as such: answer value by value from what the recording fetched successfully.
             _featureValues.TryGetValue((source, group.Entity.Name), out var store);
             for (var f = 0; f < fields.Length; f++)
             {
@@ -237,33 +223,6 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>
-    /// Answers a service call from the recording, by the digest of its inputs: a call about no items by that of its whole
-    /// input, a call about items by each item's. The node's own next recorded call with the same inputs (and the same items)
-    /// is consumed, of the call's limit, or of another that answers it (<see cref="TakeOwn"/>), and replayed as recorded
-    /// when it failed or answers the call: it has every output the call reads and, unless the service had no more, as many
-    /// items as it asks for. Otherwise the successful recorded call with the same
-    /// inputs that answers it best does, whichever node made it, and nothing is consumed (a node the configuration added
-    /// asks what another node asked; the order nodes ask in changes nothing). A call about items the recording has in no
-    /// such call is synthesized item by item (<see cref="Synthesize"/>). What the recording cannot answer is a gap:
-    /// <c>inputs_changed</c> when it has the node's call of the service only with other inputs, <c>limit_changed</c> when
-    /// only at other limits (failures: a success there answers the list), else <c>not_recorded</c>;
-    /// an output the call reads and the answer lacks is a <c>not_recorded</c> gap of that output (only the outputs a call
-    /// asked for are recorded, so a configuration that reads another one finds none). A recorded call the budget or the
-    /// caller cut off throws <see cref="OperationCanceledException"/> again, as the operator saw it.
-    /// </summary>
-    /// <remarks>
-    /// A recorded failure answers only the call it was: the same node, entities, inputs and limit. Taken by entities alone, the
-    /// failure of another call of the same model and entity (another node, another prompt) answered this one, and hid the
-    /// success the recording has for its own inputs. A node's own answer of the call's limit is consumed even
-    /// when another answers the call better, so its later calls still meet their own recorded calls in order.
-    /// </remarks>
-    /// <param name="caller">The calling node, or the feature source: its own recorded calls answer it first,
-    /// and a synthesized call whose items all changed takes its outputs' widths from them before another caller's.</param>
-    /// <param name="degraded">
-    /// Why the recorded call that answers left its node Degraded (its cache answered with stale values), which the node
-    /// reports again; null for a synthesized call, whose values come from many calls.
-    /// </param>
     internal ServiceStatus Call(in ServiceCaller caller, IoTarget target, ServiceCall call, ServiceResponse response, out string? degraded)
     {
         var node = caller.Key;
@@ -271,10 +230,9 @@ internal sealed class RunReplay : IFeatureCallHook
         degraded = null;
         lock (_gate)
         {
-            // What an entry remembers of a call is of this one only (ServiceEntry.AskedFor): each call has an epoch of its
-            // own, never one used before, and one made while it is answered (an operator's code may call again, from a
-            // getter of what it hands over) ends with it, the epoch of the call it interrupted active again
-            // (one counter, the interrupted call went on with the epoch of the one inside it, and answers that one's).
+            // What an entry remembers of a call is of this one only (ServiceEntry.AskedFor): each call has an epoch of
+            // its own, never one used before, and one made while it is answered (an operator's code may call again,
+            // from a getter of what it hands over) ends with it, the epoch of the call it interrupted active again.
             var interrupted = _epoch.Active;
             _epoch.Active = ++_epoch.Last;
             try
@@ -342,10 +300,6 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>
-    /// Whether a recorded call answers <paramref name="call"/> in full: it has every output the call reads, and the items it
-    /// asks for, unless the recorded call stopped short of its own limit (the service had no more).
-    /// </summary>
     private static bool Answers(ServiceEntry entry, ServiceCall call)
     {
         foreach (var name in call.Outputs.Span)
@@ -360,34 +314,29 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Whether a recorded call has output <paramref name="name"/> for <paramref name="call"/>, at the call's limit (an output
-    /// or a text may say how many items it was asked for): recorded, or asked for and left unwritten
-    /// by the service, which is its answer too (such an output was a gap, or borrowed from
-    /// another call that had it).
+    /// Whether a recorded call has output <paramref name="name"/> for <paramref name="call"/>, at the call's limit (an
+    /// output or a text may say how many items it was asked for): recorded, or asked for and left unwritten by the
+    /// service, which is its answer too.
     /// </summary>
     private static bool Has(ServiceEntry entry, ServiceCall call, string name) =>
         entry.Limit == call.Limit && (entry.Outputs.ContainsKey(name) || entry.Texts.ContainsKey(name) || LeftUnwritten(entry, call, name));
 
     /// <summary>
-    /// Whether the service left output <paramref name="name"/> unwritten in a recorded call that is <paramref name="call"/>:
-    /// the same limit and outputs, which an answer may depend on. One that asked for other outputs says nothing of it
-    /// (such an omission answered before a call of these outputs that had the value).
+    /// Whether the service left output <paramref name="name"/> unwritten in a recorded call that is
+    /// <paramref name="call"/>: the same limit and outputs, which an answer may depend on. One that asked for other
+    /// outputs says nothing of it.
     /// </summary>
     private static bool LeftUnwritten(ServiceEntry entry, ServiceCall call, string name) =>
         entry.Limit == call.Limit && entry.AskedFor(call) && !entry.Outputs.ContainsKey(name) && !entry.Texts.ContainsKey(name);
 
     /// <summary>
-    /// How many more items <paramref name="call"/> asks for than the recorded call can tell: 0 when it has as many, or it
-    /// stopped short of a positive limit of its own (the service had no more). A call that asked for none (a limit of 0)
-    /// says nothing about the items the service has.
+    /// A call that asked for none (a limit of 0) says nothing about the items the service has.
     /// </summary>
     private static int Shortfall(ServiceEntry entry, ServiceCall call) =>
         call.Limit <= entry.Ids.Length || (entry.Limit > 0 && entry.Ids.Length < entry.Limit) ? 0 : call.Limit - entry.Ids.Length;
 
     /// <summary>
-    /// The matching recorded call that answers <paramref name="call"/> (<see cref="Answers"/>), else the one with the most
-    /// of what it reads (outputs, then items, then the fewest items it cannot tell: <see cref="Shortfall"/>); null when none
-    /// matches. Nothing is consumed.
+    /// Nothing is consumed.
     /// </summary>
     private static ServiceEntry? Best(List<ServiceEntry>? calls, Predicate<ServiceEntry> match, ServiceCall call)
     {
@@ -426,18 +375,13 @@ internal sealed class RunReplay : IFeatureCallHook
         return best;
     }
 
-    /// <summary>
-    /// Reports each output the call reads that its successful answer lacks, as a gap of that output, with the node (a call
-    /// about no items) or the items as examples: <c>limit_changed</c> when <paramref name="from"/> recorded it for another
-    /// limit, <c>not_recorded</c> otherwise.
-    /// </summary>
     private ServiceStatus Unanswered(ServiceCall call, ServiceResponse response, ServiceStatus status, string kind, string node, EntityKey[]? keys, ServiceEntry from)
     {
         if (status.Succeeded)
         {
             foreach (var name in call.Outputs.Span)
             {
-                if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _) && !LeftUnwritten(from, call, name)) // left unwritten, as recorded
+                if (!response.TryGetValues(name, out _) && !response.TryGetText(name, out _) && !LeftUnwritten(from, call, name))
                 {
                     // Asked for at another limit with the same outputs is recorded there, written or not (one
                     // asking for other outputs says nothing of it).
@@ -450,7 +394,6 @@ internal sealed class RunReplay : IFeatureCallHook
         return status;
     }
 
-    /// <summary>A gap of one output: for the node's call, or for <paramref name="keys"/> (those <paramref name="only"/> marks, when given).</summary>
     private void AddOutputGap(string kind, string service, string output, string node, EntityKey[]? keys, bool[]? only, string reason = "not_recorded")
     {
         if (keys is null)
@@ -472,7 +415,6 @@ internal sealed class RunReplay : IFeatureCallHook
     /// <summary>Time left when the node passed its <c>when</c> in the recording; infinite for a node the recording lacks.</summary>
     internal double RemainingMs(string node) => _remaining.TryGetValue(node, out var ms) ? ms : double.PositiveInfinity;
 
-    /// <summary>The next recorded attempt of <paramref name="node"/>, or null when the recording has none left.</summary>
     internal ReplayAttemptRecord? NextAttempt(string node) =>
         _attempts.TryGetValue(node, out var attempts) && attempts.Count > 0 ? attempts.Dequeue() : null;
 
@@ -528,8 +470,7 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// The first unconsumed recorded call with the same source, entity and keys (tuple by tuple) that carries every requested
-    /// field. A call carrying only some is not this call: its other fields may well be in other successful calls (the
+    /// A call carrying only some is not this call: its other fields may well be in other successful calls (the
     /// configuration regrouped the fetch), so the call is synthesized value by value instead, and nothing is consumed.
     /// </summary>
     private FeatureEntry? TakeFeatureCall(string source, string entity, int partCount, ReadOnlySpan<EntityKey> keys, ImmutableArray<CompiledFieldBinding> fields)
@@ -568,10 +509,9 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Replays a recorded call as it was: its failure, or every output, text and item it returned (items up to the call's
-    /// limit), with the generation details its status had (tokens, truncation), so the operator decides and reports as the
-    /// request did; a recording of another limit, only the start of its list. Asking for more items than the recording holds is a shortfall only when the recorded call stopped at
-    /// its own limit (the service might have had more); one that returned fewer had none.
+    /// Replays a recorded call as it was: its failure, or every output, text and item it returned (items up to the
+    /// call's limit), with the generation details its status had (tokens, truncation), so the operator decides and
+    /// reports as the request did; a recording of another limit, only the start of its list.
     /// </summary>
     private ServiceStatus Answer(ServiceEntry entry, ServiceCall call, ServiceResponse response, string kind, string node, out string? degraded)
     {
@@ -626,7 +566,6 @@ internal sealed class RunReplay : IFeatureCallHook
         return sameLimit ? ServiceStatus.Ok with { OutputTokens = entry.OutputTokens, Truncated = entry.Truncated } : ServiceStatus.Ok;
     }
 
-    /// <summary>Writes a recorded tensor output into the operator's writer, as the client wrote it.</summary>
     private static void Write(ServiceResponse outputs, string name, in ReplayTensor tensor)
     {
         switch (tensor.Values)
@@ -652,28 +591,6 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>
-    /// A keyed call the recording does not have as such (other batches, or changed inputs): each row's value of each output
-    /// it reads comes from a successful recorded call that had the same entity with the same inputs and that output,
-    /// whichever call and row that was. An entity the recording has only with other inputs is an <c>inputs_changed</c> gap,
-    /// one it never had is <c>not_recorded</c>, and a row the recording has without an output the call reads is a
-    /// <c>not_recorded</c> gap of that output, unless the service left it unwritten in a recorded call of the row asking
-    /// for the same outputs: that is the row's answer, and an output no row has is left unwritten (it
-    /// was a gap, and the call failed with no recorded output). A response holds an output for all its rows or none, so
-    /// a row whose output was left unwritten, in a call where another row has it, gets the gap value and is a gap.
-    /// </summary>
-    /// <remarks>
-    /// Tensor outputs are split by row; a row the recording cannot answer gets NaN in a float output (which the column
-    /// writer replaces with its default, as any non-finite value) and the type's zero (false, 0, an empty string) in
-    /// another, and is reported as a gap either way. Text outputs are not split: a text belongs to its whole call, so it is
-    /// replayed only with a recorded call of the same items (<see cref="Call"/>), and is a gap of that output here.
-    /// </remarks>
-    /// <summary>
-    /// The recorded rows by (entity, input digest), from the successful keyed calls of a service and version, and the
-    /// entities they have; an entity can be scored several times with different inputs. Built once per service and
-    /// version, at its first synthesized call: a recording is read, never changed, and one consumed still has its rows
-    /// (built at every call, a request rebatched into 64 calls allocated 93 MB).
-    /// </summary>
     private (Dictionary<(EntityKey Key, string Digest), List<(ServiceEntry Entry, int Row)>> Rows, HashSet<EntityKey> Scored) RowsOf(List<ServiceEntry>? calls)
     {
         if (calls is null)
@@ -718,10 +635,9 @@ internal sealed class RunReplay : IFeatureCallHook
         var (rows, scored) = RowsOf(calls);
         var layout = new List<(string Name, TensorElementType Type, int PerRow)>();
 
-        // The output layout (each output's type and values per row): as the recorded rows this call matches have it, since
-        // another node of the same model may write the same output at another width (a list<int32,2> column and a
-        // list<int32,3> one); an output none of them has (every row's inputs changed), as this node's calls have it, then
-        // as any call has it. Each recorded call is looked at once.
+        // The output layout (each output's type and values per row): as the recorded rows this call matches have it,
+        // since another node of the same model may write the same output at another width; an output none of them has
+        // (every row's inputs changed), as this node's calls have it, then as any call has it.
         var seen = new HashSet<ServiceEntry>(ReferenceEqualityComparer.Instance);
         for (var r = 0; r < keys.Length; r++)
         {
@@ -750,7 +666,6 @@ internal sealed class RunReplay : IFeatureCallHook
             }
         }
 
-        // A row the recording has with these inputs; one it has not is a gap of the row, whatever the outputs.
         var matched = new bool[keys.Length];
         for (var r = 0; r < keys.Length; r++)
         {
@@ -773,10 +688,9 @@ internal sealed class RunReplay : IFeatureCallHook
 
         ReportUnmatched(kind, call.Service, keys, matched, scored);
 
-        // An output the call reads that no recorded row of it has (a text, which belongs to a whole call, or one no call
-        // was asked for): a gap of that output for every row the recording has, but one whose recorded value was not of
-        // whole rows (the node failed on it when recorded, and fails on its absence now), or that the service left
-        // unwritten (its answer).
+        // An output the call reads that no recorded row of it has: a gap of that output for every row the recording
+        // has, but one whose recorded value was not of whole rows (the node failed on it when recorded, and fails on
+        // its absence now), or that the service left unwritten (its answer).
         var lacking = new bool[keys.Length];
         var omitted = false;
         foreach (var name in call.Outputs.Span)
@@ -798,7 +712,7 @@ internal sealed class RunReplay : IFeatureCallHook
         }
 
         // A call that reads no output answers by its status alone: with none of its items recorded with these inputs,
-        // nothing vouches for it. (One that reads outputs gives each such row the gap value, which says so.)
+        // nothing vouches for it.
         if (call.Outputs.IsEmpty && Array.IndexOf(matched, true) < 0)
         {
             return ServiceStatus.Failed($"{kind} '{call.Service}': none of the call's items is in the replay bundle with these inputs");
@@ -833,7 +747,6 @@ internal sealed class RunReplay : IFeatureCallHook
                     break;
             }
 
-            // Each row from its recorded row, or the gap value.
             void Fill<T>(Span<T> destination, T gap)
             {
                 Array.Clear(lacking);
@@ -862,12 +775,9 @@ internal sealed class RunReplay : IFeatureCallHook
 
         static int PerRow(ServiceEntry entry, Array values) => entry.BatchSize > 0 ? values.Length / entry.BatchSize : 1;
 
-        // Only an output of whole rows splits by row. One of no whole number a row is not synthesized: one the operator
-        // reads was longer than its shape (the node failed on it when recorded, and fails on its absence now), and one it
-        // does not read (a call-level value such as a loss) is not needed.
+        // Only an output of whole rows splits by row.
         static bool ByRow(ServiceEntry entry, Array values) => entry.BatchSize > 0 && values.Length % entry.BatchSize == 0;
 
-        // Only the outputs the call reads (a call-level value such as a loss is not needed), of whole rows.
         static void AddLayout(List<(string Name, TensorElementType Type, int PerRow)> layout, ServiceEntry entry, ReadOnlySpan<string> read)
         {
             foreach (var (name, values) in entry.Outputs)
@@ -879,7 +789,6 @@ internal sealed class RunReplay : IFeatureCallHook
             }
         }
 
-        // A recorded call of the item, asking for the same outputs, that the service left the output unwritten in.
         static bool Omitted(List<(ServiceEntry Entry, int Row)> recorded, ServiceCall call, string name)
         {
             foreach (var (entry, _) in recorded)
@@ -893,7 +802,6 @@ internal sealed class RunReplay : IFeatureCallHook
             return false;
         }
 
-        // A recorded row of the item had the output, not of whole rows: the node failed on it when recorded.
         static bool Unsplit(List<(ServiceEntry Entry, int Row)> recorded, string name)
         {
             foreach (var (entry, _) in recorded)
@@ -920,7 +828,6 @@ internal sealed class RunReplay : IFeatureCallHook
             return false;
         }
 
-        // The first recorded row of the entity with these inputs that has the output in the same layout and element type.
         static (Array Values, int Start)? Recorded(
             Dictionary<(EntityKey, string), List<(ServiceEntry Entry, int Row)>> rows, EntityKey key, string digest, string name, TensorElementType type, int perRow)
         {
@@ -942,10 +849,6 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>
-    /// The gaps of the rows of a synthesized call the recording has not with these inputs: <c>inputs_changed</c> for an
-    /// entity the recording had only with other inputs, otherwise <c>not_recorded</c>.
-    /// </summary>
     private void ReportUnmatched(string kind, string service, EntityKey[] keys, bool[] matched, HashSet<EntityKey> scored)
     {
         GapCounter? missing = null;
@@ -968,7 +871,6 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>The first recorded call that matches, consumed or not; nothing is consumed.</summary>
     private static ServiceEntry? Find(List<ServiceEntry>? calls, Predicate<ServiceEntry> match)
     {
         if (calls is not null)
@@ -985,16 +887,6 @@ internal sealed class RunReplay : IFeatureCallHook
         return null;
     }
 
-    /// <summary>
-    /// The node's next recorded call that matches, for <paramref name="call"/>: one of the call's limit first, so a recording
-    /// of another limit taken first does not stand in for the call's own (a failure recorded at
-    /// another limit ended the call that had a full answer) asking for the same outputs; else a success that answers it (a
-    /// list long enough, or all the service had; the outputs it reads). Consumed. A failure or a cut-off recorded at another
-    /// limit, or asking for other outputs, answers nothing: a service may fail only past some limit, or for some output (one
-    /// it does not know), so it says nothing of this call, and a success another caller recorded answers instead;
-    /// nor is a recording consumed that does not answer, which a later call of its own
-    /// would then miss.
-    /// </summary>
     private static ServiceEntry? TakeOwn(List<ServiceEntry>? calls, Predicate<ServiceEntry> match, ServiceCall call) =>
         Take(calls, entry => entry.Limit == call.Limit && entry.AskedFor(call) && match(entry))
         ?? Take(calls, entry => entry.Outcome == IoOutcome.Ok && match(entry) && Answers(entry, call));
@@ -1019,11 +911,10 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Writes a recorded value into a staging field; false (nothing written) when it does not fit. The value was decoded
-    /// with its recorded type; a field whose type changed takes it only when it converts without loss of meaning: numeric
-    /// widening, rounding to float32 as the source itself would. A value outside the new type's range (an integer beyond
-    /// int32, a finite number beyond float32) does not fit: storing it would publish a wrapped value or an
-    /// infinity the recording never had. Exact and synthesized calls both write through here, so they apply one rule.
+    /// Writes a recorded value into a staging field; false (nothing written) when it does not fit. The value was
+    /// decoded with its recorded type; a field whose type changed takes it only when it converts without loss of
+    /// meaning: numeric widening, rounding to float32 as the source itself would. Exact and synthesized calls both
+    /// write through here, so they apply one rule.
     /// </summary>
     private static bool TryWrite(IFeatureBatchWriter writer, int field, int key, ColumnType type, in ScalarValue value)
     {
@@ -1057,7 +948,6 @@ internal sealed class RunReplay : IFeatureCallHook
         return true;
     }
 
-    /// <summary>A recorded list into a list field, element by element under the scalar rule of <see cref="TryWrite"/>.</summary>
     private static bool TryWriteList(IFeatureBatchWriter writer, int field, int key, StorageKind element, in ScalarValue value)
     {
         var recorded = value.ListElement;
@@ -1112,7 +1002,6 @@ internal sealed class RunReplay : IFeatureCallHook
 
     private static RowKey RowKeyOf(int partCount, EntityKey[] keys, int row) => new(keys.AsSpan(row * partCount, partCount));
 
-    /// <summary>A batch's keys flattened, key r's parts at <c>r * PartCount</c>: as a recording holds them.</summary>
     private static EntityKey[] Flatten(in EntityKeyBatch batch)
     {
         var keys = new EntityKey[batch.Count * batch.PartCount];
@@ -1175,10 +1064,6 @@ internal sealed class RunReplay : IFeatureCallHook
     private void AddGap(string kind, string source, string? field, string reason, int count, string? example) =>
         Gap(kind, source, field, reason).Add(count, example);
 
-    /// <summary>
-    /// Counts the fields a feature source in mode <c>service</c> served in <see cref="FieldStats"/>, as a
-    /// fetch's: each read once, missing when the call failed or the value is missing.
-    /// </summary>
     internal void CountServed(string source, ReadOnlySpan<CompiledFieldBinding> fields, ReadOnlySpan<ScalarValue> values, bool failed)
     {
         lock (_gate)
@@ -1340,8 +1225,6 @@ internal sealed class RunReplay : IFeatureCallHook
                 throw new ReplayBundleException(at + "/scores", $"{call.Scores.Count} score(s) for {ids.Length} id(s)", "record one score per id");
             }
 
-            // A service drops items only past a full list it answered with (ServiceResponse.Dropped), and a recording has the
-            // count only when it is positive: any other count is no answer a service gave.
             if (call.Dropped is { } dropped && (dropped <= 0 || outcome != IoOutcome.Ok || ids.Length != call.Limit))
             {
                 throw new ReplayBundleException(at + "/dropped", $"{dropped} item(s) dropped by a call ({call.Status}) that returned {ids.Length} of its limit of {call.Limit}",
@@ -1366,8 +1249,6 @@ internal sealed class RunReplay : IFeatureCallHook
                     "a feature source's call names its source and the entity it computed; a node's names neither");
             }
 
-            // The outputs it asked for, each once, and what it returned of them only: what the recorder writes
-            // (any other list would answer a call it was not, or leave out what the service did write).
             for (var r = 0; r < call.Requested.Count; r++)
             {
                 if (call.Requested.IndexOf(call.Requested[r]) != r)
@@ -1404,7 +1285,6 @@ internal sealed class RunReplay : IFeatureCallHook
         }
     }
 
-    /// <summary>The staging row a recorded value belongs to: its key's parts, compared part by part.</summary>
     private readonly struct RowKey : IEquatable<RowKey>
     {
         private readonly EntityKey[] _parts;
@@ -1429,7 +1309,6 @@ internal sealed class RunReplay : IFeatureCallHook
             return hash.ToHashCode();
         }
 
-        /// <summary>A one-part key's value, or the parts joined by <c>/</c>.</summary>
         public override string ToString() => string.Join('/', _parts);
     }
 
@@ -1441,7 +1320,6 @@ internal sealed class RunReplay : IFeatureCallHook
 
         public string Entity { get; } = entity;
 
-        /// <summary>Parts of every key.</summary>
         public int PartCount { get; } = partCount;
 
         /// <summary>The keys flattened: key r's parts at <c>r * PartCount</c>.</summary>
@@ -1461,13 +1339,10 @@ internal sealed class RunReplay : IFeatureCallHook
         public bool Consumed { get; set; }
     }
 
-    /// <summary>Which replayed call is being answered: each <see cref="Call"/> one of its own (see there).</summary>
     private sealed class CallEpoch
     {
-        /// <summary>The epoch of the call being answered.</summary>
         public int Active;
 
-        /// <summary>The last epoch given out.</summary>
         public int Last;
     }
 
@@ -1485,12 +1360,8 @@ internal sealed class RunReplay : IFeatureCallHook
         private bool _asked;
 
         /// <summary>
-        /// Whether the call asked for the outputs <paramref name="call"/> asks for, no more and no fewer. Kept for the
-        /// replay's call being answered, under its lock: a replay asks once an output it looks at (a
-        /// call of many outputs the service left unwritten compared the two lists once an output, and a rebatched one once
-        /// a row and output too). Not kept past it: a call's contents are its caller's, which may reuse the object and its
-        /// arrays for its next call (kept by the call object, a reused one with other outputs
-        /// took the answer of the call before).
+        /// Kept for the replay's call being answered, under its lock. Not kept past it: a call's contents are its
+        /// caller's, which may reuse the object and its arrays for its next call.
         /// </summary>
         public bool AskedFor(ServiceCall call)
         {
@@ -1526,14 +1397,12 @@ internal sealed class RunReplay : IFeatureCallHook
 
         public bool FromSource { get; } = fromSource;
 
-        /// <summary>Whether the call was made by the caller of <paramref name="key"/>, a source's or a node's.</summary>
         public bool Is(string key, bool source) => FromSource == source && string.Equals(Node, key, StringComparison.Ordinal);
 
         public string Service { get; } = service;
 
         public int BatchSize { get; } = batchSize;
 
-        /// <summary>The most items the call could add.</summary>
         public int Limit { get; } = limit;
 
         public IoOutcome Outcome { get; } = outcome;
@@ -1550,7 +1419,6 @@ internal sealed class RunReplay : IFeatureCallHook
 
         public Dictionary<string, string> Texts { get; } = texts;
 
-        /// <summary>The items the call added, in rank order, and their scores.</summary>
         public EntityKey[] Ids { get; } = ids;
 
         public double[] Scores { get; } = scores;
@@ -1559,10 +1427,8 @@ internal sealed class RunReplay : IFeatureCallHook
 
         public bool Truncated { get; } = truncated;
 
-        /// <summary>Why the call left its node Degraded when it was recorded; null when it did not.</summary>
         public string? Degraded { get; } = degraded;
 
-        /// <summary>The items its service added past the call's limit (<see cref="ServiceResponse.Dropped"/>).</summary>
         public int Dropped { get; } = dropped;
 
         public bool Consumed { get; set; }

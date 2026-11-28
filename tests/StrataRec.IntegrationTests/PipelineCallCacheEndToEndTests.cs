@@ -16,10 +16,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A node's cache of its calls of a pipeline (<c>cache</c> of <c>PipelineSource@1</c>, with the tiers bound under
-/// <c>pipelines.&lt;id&gt;.cache</c>): pipeline <c>feed</c> appends the rows of <c>promoted</c>, which counts its runs
-/// (<see cref="Probe"/>). A hit is a call for which the pipeline did not run; what it returns says which request's run
-/// computed it. Write-backs run in the background, so the tests wait for the table to hold a record, never for a time.
+/// Write-backs run in the background, so the tests wait for the table to hold a record, never for a time.
 /// </summary>
 public sealed class PipelineCallCacheEndToEndTests
 {
@@ -29,7 +26,6 @@ public sealed class PipelineCallCacheEndToEndTests
 
     private const string Hour = """{ "ttl_ms": 3600000 }""";
 
-    /// <summary>The calling pipeline: a few rows of its own, then the called pipeline's, with where they come from.</summary>
     private const string Feed = """
         {
           "pipeline_id": "feed",
@@ -51,7 +47,6 @@ public sealed class PipelineCallCacheEndToEndTests
         }
         """;
 
-    /// <summary>The called pipeline of <see cref="PipelineCallEndToEndTests"/> with a node that counts its runs, and a log tap.</summary>
     private static readonly string Called = PipelineCallEndToEndTests.Promoted
         .Replace("\"nodes\": {", "\"nodes\": {\n \"probe\": { \"order\": 50, \"op\": \"Probe@1\" },", StringComparison.Ordinal)
         .Replace("\"output\": {", """
@@ -84,11 +79,8 @@ public sealed class PipelineCallCacheEndToEndTests
             more?.Invoke(root);
         });
 
-    /// <summary>An engine serving <c>promoted</c> and <c>feed</c>, with what the tests move and read.</summary>
     internal sealed class Rig : IAsyncDisposable
     {
-        /// <param name="bind">Adds the test's own connectors and clients.</param>
-        /// <param name="operators">The test's own operators, beside the probe.</param>
         public Rig(
             HomeFeedTestHost host, Probe? probe = null, SharedStores? stores = null, IAssignmentProvider? provider = null, Action<BindingRegistry>? bind = null,
             IOperatorFactory[]? operators = null, bool alone = false, params string[] pipelines)
@@ -136,7 +128,6 @@ public sealed class PipelineCallCacheEndToEndTests
 
         public LogPipeline Logs { get; }
 
-        /// <summary>Loads the workspace's pipeline as it is now on disk.</summary>
         public void Load(string pipelineId)
         {
             var load = Engine.Load(Compile(Host.Root, pipelineId));
@@ -170,14 +161,12 @@ public sealed class PipelineCallCacheEndToEndTests
                 Debug = debug ?? new DebugOptions { Trace = true },
             }, TestContext.Current.CancellationToken);
 
-        /// <summary>The table of the results of <paramref name="pipelineId"/>'s calls.</summary>
         public LocalFeatureTable Results(string pipelineId = "promoted", string holder = "feed")
         {
             Assert.True(Engine.TryGetPipeline(holder, out var pipeline));
             return Assert.Single(pipeline.Bindings.Tables, t => t.Schema.Source == pipelineId && t.Schema.Entity == "results");
         }
 
-        /// <summary>Waits until the table holds <paramref name="records"/> results: the write-backs so far have landed.</summary>
         public Task Cached(int records, string pipelineId = "promoted", string holder = "feed") =>
             CacheEngineTests.Eventually(() => Results(pipelineId, holder).Pin().RecordCount == records,
                 () => $"{records} cached results of '{pipelineId}' (it holds {Results(pipelineId, holder).Pin().RecordCount})");
@@ -199,20 +188,13 @@ public sealed class PipelineCallCacheEndToEndTests
 
     private static List<RankedItem> Promoted(RecResult result) => result.Items.Where(i => i.Columns["promoted"].AsBool()).ToList();
 
-    /// <summary>The called pipeline's rows as the feed returned them: ids and bids, in order.</summary>
     private static List<(long Id, double Bid)> Rows(RecResult result) => Promoted(result).Select(i => (i.Id.Int64Value, i.Columns["promo_bid"].AsFloat64())).ToList();
 
     private static List<(string From, long At)> Origins(RecResult result) =>
         Promoted(result).Select(i => (i.Columns["from"].AsString(), i.Columns["at"].AsInt64())).Distinct().ToList();
 
-    /// <summary>The call that computed the called pipeline's rows, as the feed returned it.</summary>
     private static List<string> Calls(RecResult result) => Promoted(result).Select(i => i.Columns["by"].AsString()).Distinct().ToList();
 
-    /// <summary>
-    /// <c>promoted</c> has no rows of its own: it calls <c>other</c> for them and adds what other bids to its own bid, so
-    /// what other returns shows in what promoted returns; other has a probe of its own, <c>other</c>.
-    /// </summary>
-    /// <param name="otherCache">The cache of promoted's call of other, with the in-process tier bound for it; none when null.</param>
     private static HomeFeedTestHost Nested(string cache = Hour, string? otherCache = null, string when = "") =>
         Host(cache, more: root => WriteNested(root, otherCache, when));
 
@@ -233,7 +215,6 @@ public sealed class PipelineCallCacheEndToEndTests
         }
     }
 
-    /// <summary>The pipeline <c>other</c>, with a probe of its own name, its release and its experiment.</summary>
     private static void WriteOther(string root)
     {
         File.WriteAllText(Path.Combine(root, "pipelines", "other.jsonc"), PipelineCallEndToEndTests.Promoted
@@ -245,7 +226,6 @@ public sealed class PipelineCallCacheEndToEndTests
         File.WriteAllText(Path.Combine(root, "experiments", "exp_other.jsonc"), PipelineCallEndToEndTests.Experiments.Replace("PIPELINE", "other", StringComparison.Ordinal));
     }
 
-    /// <summary>What <c>other</c> adds to an item's clicks for its bid, and what a release of it that bids more does.</summary>
     private const string OtherBids = "+ (ctx.request.slots ?? 0)", OtherBidsMore = "+ (ctx.request.slots ?? 0) + 100";
 
     private static readonly string[] NestedPipelines = ["other", "promoted", "feed"];
@@ -253,7 +233,6 @@ public sealed class PipelineCallCacheEndToEndTests
     /// <summary>Another call than the tests' usual one: its result is written after theirs, so once it is there, theirs would be.</summary>
     private static RequestInputs Elsewhere => new RequestInputs().Set("user_id", 1001).Set("country", "nz");
 
-    /// <summary>A page whose rows each call <c>promoted</c> with <paramref name="slots"/>, and say which run computed their lists.</summary>
     internal static HomeFeedTestHost PageHost(string slots = "col.entity_id", string? content = null, Action<string>? more = null) => Host(more: root =>
     {
         var page = content is null ? Page : Page.Replace(PageContent, content, StringComparison.Ordinal);
@@ -309,14 +288,12 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.NotEmpty(Rows(first));
         Assert.Equal(Rows(first), Rows(second));
 
-        // The rows say whose run computed them, a run of this request or of an earlier one; the feed's own rows say nothing.
         Assert.Equal([("req-1", T0)], Origins(first));
         Assert.Equal([("req-1", T0)], Origins(second));
         Assert.Equal(["feed/promoted#0"], Calls(first));
         Assert.Equal(["feed/promoted#0"], Calls(second));
         Assert.All(second.Items.Where(i => !i.Columns["promoted"].AsBool()), i => Assert.True(i.Columns["from"].IsMissing && i.Columns["at"].IsMissing));
 
-        // The trace has the run with its nodes, and the hit with where its result comes from and no nodes: nothing ran.
         var ran = Assert.Single(first.Calls!);
         Assert.Null(ran.Cached);
         Assert.Contains(ran.Trace, n => n.NodeId == "probe");
@@ -330,16 +307,11 @@ public sealed class PipelineCallCacheEndToEndTests
             """.Trim(), Json(second));
         Assert.DoesNotContain("cached_from", Json(first));
 
-        // The text of a run says it too, with the call and the time: the id alone is not one run of a pipeline called per row.
         var text = new StringWriter();
         StrataRec.CommandLine.Commands.ResultText.Write(text, second);
         Assert.Contains("  call      feed/promoted#0 -> promoted: not run, served the cached result of request req-1 (feed/promoted#0, 2026-01-01T00:00:00.000Z), ", text.ToString());
     }
 
-    /// <summary>
-    /// A result is found again by what the called pipeline would compute and from what: its inputs and the request's arms
-    /// in it. Not by the request's id or time, nor by the arms of the pipeline that calls.
-    /// </summary>
     [Fact]
     public async Task OnlyACallThatWouldComputeTheSame_IsAnsweredFromTheCache()
     {
@@ -353,13 +325,11 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal([("req-1", T0)], Origins(again));
         Assert.Equal([("req-1", T0)], Origins(callerArm));
 
-        // Another user: the called pipeline declares user_id and gets the request's.
         var otherUser = await rig.Run("req-user", inputs: new RequestInputs().Set("user_id", 1002));
         Assert.Equal(2, rig.Probe.Runs);
         Assert.Equal([("req-user", T0)], Origins(otherUser));
         await rig.Cached(2);
 
-        // An arm of the called pipeline: its result is its own, and the next request in the arm gets it.
         var inArm = await rig.Run("req-arm", assignment: ["exp_promoted/few"]);
         Assert.Equal(3, rig.Probe.Runs);
         Assert.InRange(Rows(inArm).Count, 1, 2);
@@ -369,16 +339,10 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(Rows(inArm), Rows(inArmAgain));
         Assert.Equal(new[] { "exp_promoted/few" }, Assert.Single(inArmAgain.Calls!).Arms);
 
-        // The first result is still there for a request outside the arm.
         Assert.Equal([("req-1", T0)], Origins(await rig.Run("req-last")));
         Assert.Equal(3, rig.Probe.Runs);
     }
 
-    /// <summary>
-    /// A request served a cached result was exposed to the arms that computed it: its result has them, and it logs that
-    /// exposure with where the result comes from. Nothing else of the called pipeline is logged for it: its taps wrote
-    /// under the request whose run computed the rows.
-    /// </summary>
     [Fact]
     public async Task AHit_ExposesTheRequestToTheArmsThatComputedTheResult_AndLogsOnlyThat_WithWhereItComesFrom()
     {
@@ -412,10 +376,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.DoesNotContain("cached_from", LogBatchJson.Encode(ran, indented: false));
     }
 
-    /// <summary>
-    /// Past its <c>ttl_ms</c> a result is computed anew; when that fails, the old one serves for <c>stale_if_error_ms</c>
-    /// more and the node is degraded; after that the call fails as the pipeline did.
-    /// </summary>
     [Fact]
     public async Task WhenThePipelineFails_AResultPastItsTtl_IsServedWithinStaleIfError_AndTheNodeIsDegraded()
     {
@@ -428,17 +388,17 @@ public sealed class PipelineCallCacheEndToEndTests
         var stale = await rig.Run("req-2", T0 + 70_000);
 
         Assert.True(stale.Succeeded, stale.Error);
-        Assert.Equal(2, rig.Probe.Runs); // it ran, and failed
+        Assert.Equal(2, rig.Probe.Runs);
         Assert.Equal(Rows(first), Rows(stale));
         Assert.Equal([("req-1", T0)], Origins(stale));
         Assert.Equal("degraded", NodeOutcomeNames.Name(stale.Trace!.Single(n => n.NodeId == "promoted").Kind));
         var call = Assert.Single(stale.Calls!);
         Assert.Equal(new CachedFrom("req-1", T0, "feed/promoted#0", Stale: true), call.Cached);
         Assert.Contains("probe outage", call.Error);
-        Assert.Contains(call.Trace, n => n.NodeId == "probe"); // the run that failed
+        Assert.Contains(call.Trace, n => n.NodeId == "probe");
         Assert.Contains("\"stale\":true", Json(stale));
 
-        rig.Clock.Advance(600_000); // past the stale window too
+        rig.Clock.Advance(600_000);
         var failed = await rig.Run("req-3", T0 + 670_000);
         Assert.False(failed.Succeeded);
         Assert.Contains("probe outage", failed.Error);
@@ -451,11 +411,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Null(Assert.Single(fresh.Calls!).Cached);
     }
 
-    /// <summary>
-    /// What is kept is what a run computed whole, for a request whose runs write their logs: not a degraded result, which
-    /// would be served for the whole ttl, nor one of a request that captures its logs or runs a configuration of its own,
-    /// under which nothing the run logged would be found.
-    /// </summary>
     [Fact]
     public async Task OnlyAWholeRunOfARequestThatWritesItsLogs_IsKept()
     {
@@ -475,14 +430,12 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(4, rig.Probe.Runs);
         Assert.Equal(new CachedFrom("req-kept", T0, "feed/promoted#0"), Assert.Single(served.Calls!).Cached);
 
-        // A request that captures its logs reads the cache as any other, and gets the exposure it would have written.
         var captured = await rig.Run("req-captured-2", assignment: [], debug: new DebugOptions { Trace = true, CaptureLogs = true });
         Assert.Equal(4, rig.Probe.Runs);
         Assert.Equal(new CachedFrom("req-kept", T0, "feed/promoted#0"), Assert.Single(captured.Calls!).Cached);
         var exposure = Assert.Single(captured.LogBatches!, b => b.PipelineId == "promoted");
         Assert.Equal(("$experiments", "req-captured-2", "req-kept"), (exposure.TapId, exposure.RequestId, exposure.CachedFromRequestId));
 
-        // One that runs a configuration of its own does neither: what it computes is not what is served.
         var patch = new System.Text.Json.Nodes.JsonObject { ["params"] = new System.Text.Json.Nodes.JsonObject { ["promoted_k"] = 9 } };
         var overridden = await rig.Run("req-override", debug: new DebugOptions { Trace = true, ConfigOverride = patch });
         Assert.True(overridden.Succeeded, overridden.Error);
@@ -490,10 +443,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Null(Assert.Single(overridden.Calls!).Cached);
     }
 
-    /// <summary>
-    /// Without a <c>version</c> the cache follows what the called pipeline would run: a release that changes it computes
-    /// anew, one that changes an experiment only for the requests in it, and one of the pipeline that calls for nobody.
-    /// </summary>
     [Fact]
     public async Task AReleaseOfTheCalledPipeline_ComputesAnew_ForTheRequestsItChangesTheResultOf()
     {
@@ -506,14 +455,11 @@ public sealed class PipelineCallCacheEndToEndTests
         await rig.Cached(2);
         Assert.Equal(2, rig.Probe.Runs);
 
-        // The pipeline that calls is released with another limit of its own: the results are still there, in the table
-        // its new plan took over.
         Edit(host, "pipelines/feed.jsonc", "\"promoted_k\": 10", "\"promoted_k\": 9");
         rig.Load("feed");
         Assert.Equal([("req-1", T0)], Origins(await rig.Run("req-2")));
         Assert.Equal(2, rig.Probe.Runs);
 
-        // An experiment of the called pipeline changes: only the requests in it compute anew.
         Edit(host, "experiments/exp_promoted.jsonc", "\"top_k\": 2", "\"top_k\": 3");
         rig.Load("promoted");
         Assert.Equal([("req-1", T0)], Origins(await rig.Run("req-3")));
@@ -523,7 +469,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal([("req-arm-2", T0)], Origins(inArm));
         await rig.Cached(3);
 
-        // The called pipeline itself changes: everyone computes anew.
         Edit(host, "pipelines/promoted.jsonc", "\"top_k\": 5", "\"top_k\": 4");
         rig.Load("promoted");
         var after = await rig.Run("req-4");
@@ -531,10 +476,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal([("req-4", T0)], Origins(after));
     }
 
-    /// <summary>
-    /// With a <c>version</c> the results are kept across releases of the called pipeline, until the name changes: for
-    /// results that cost much to compute again and change little with a release.
-    /// </summary>
     [Fact]
     public async Task ACacheWithAVersion_KeepsItsResultsAcrossReleasesOfTheCalledPipeline_UntilTheVersionChanges()
     {
@@ -557,10 +498,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.True(Rows(anew).Count <= 4);
     }
 
-    /// <summary>
-    /// The distributed tier is every instance's: a result one instance computed answers the call on another, which says
-    /// where it comes from all the same. With no in-process tier bound, nothing is kept in process.
-    /// </summary>
     [Theory]
     [InlineData("""{ "cache": { "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""", false)]
     [InlineData("""{ "cache": { "memory": { "max_bytes": "1MiB" }, "distributed": { "store": "shared_memory@1", "timeout_ms": 5000 } } }""", true)]
@@ -581,7 +518,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal([("req-1", T0)], Origins(served));
         Assert.Equal(new CachedFrom("req-1", T0, "feed/promoted#0"), Assert.Single(served.Calls!).Cached);
 
-        // The instance that read it keeps a copy in process, when it has that tier.
         if (memory)
         {
             await other.Cached(1);
@@ -593,10 +529,6 @@ public sealed class PipelineCallCacheEndToEndTests
         }
     }
 
-    /// <summary>
-    /// A recorded request whose call the cache answered replays without the cache and without the pipeline: the recording
-    /// has the result with where it comes from, a stale one included.
-    /// </summary>
     [Fact]
     public async Task ARecordedRequestTheCacheAnswered_ReplaysIdentically_OnAnEngineWhoseCacheIsEmpty()
     {
@@ -626,7 +558,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(0, fresh.Results().Pin().RecordCount);
         Assert.Equal("degraded", Assert.Single(stale.Recording!.Runs[0].Nodes, n => n.Node == "promoted").Outcome);
 
-        // What a result comes from is recorded whole, or the bundle is not one: without its time it replayed as computed at 0.
         foreach (var member in new[] { "time_ms", "called_by" })
         {
             var bundle = System.Text.Json.Nodes.JsonNode.Parse(ReplayBundleFile.Serialize(hit.Recording!))!;
@@ -636,11 +567,6 @@ public sealed class PipelineCallCacheEndToEndTests
         }
     }
 
-    /// <summary>
-    /// What a cached result is of includes the pipelines its run called: the request's arms in them are part of what it
-    /// is found by, a hit exposes the request to them and logs each with the calls that led to it, and the platform is
-    /// asked for a pipeline's arms once a request, whether the run or the lookup needs them.
-    /// </summary>
     [Fact]
     public async Task AHitOfAPipelineThatCallsAnother_ExposesTheRequestToBothRuns_AndTheArmsOfBothAreWhatItIsFoundBy()
     {
@@ -677,7 +603,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(2, first.Calls!.Count);
         Assert.Equal(new CachedFrom("req-1", T0, "feed/promoted#0"), Assert.Single(second.Calls!).Cached);
 
-        // Each run that computed the result is logged for the request served it, where the run was.
         var exposures = rig.Sink.Snapshot().Where(b => b.RequestId == "req-2" && b.PipelineId != "feed").OrderBy(b => b.PipelineId, StringComparer.Ordinal).ToList();
         Assert.Equal(new[] { ("other", "feed/promoted#0 > promoted/more#0", "exp_other/few"), ("promoted", "feed/promoted#0", "exp_promoted/control") },
             exposures.Select(b => (b.PipelineId, b.CalledBy!, Assert.Single(b.AssignedArms))));
@@ -685,16 +610,13 @@ public sealed class PipelineCallCacheEndToEndTests
         var ran = rig.Sink.Snapshot().Where(b => b.RequestId == "req-1" && b.TapId == "$experiments" && b.PipelineId != "feed").OrderBy(b => b.PipelineId, StringComparer.Ordinal).ToList();
         Assert.Equal(ran.Select(b => (b.PipelineId, b.CalledBy, b.ManifestId)), exposures.Select(b => (b.PipelineId, b.CalledBy, b.ManifestId)));
 
-        // The platform was asked for each pipeline's arms once a request.
         Assert.Equal(new[] { "req-1:feed", "req-1:other", "req-1:promoted", "req-2:feed", "req-2:other", "req-2:promoted" }, asked.Order(StringComparer.Ordinal));
 
-        // In another arm of the pipeline the called one calls, the result is another.
         var otherArm = await rig.Run("req-other-arm", ask: true);
         Assert.Equal(2, rig.Probe.Runs);
         Assert.Contains("exp_other/control", otherArm.Experiments.Assigned);
     }
 
-    /// <summary><c>PipelineColumns@1</c> caches each row's call by what the row passes, and says where each row's lists come from.</summary>
     [Fact]
     public async Task ARowsCall_IsCachedByItsInputs_AndTheRowSaysWhichRequestComputedItsLists()
     {
@@ -707,17 +629,16 @@ public sealed class PipelineCallCacheEndToEndTests
 
         Assert.True(first.Succeeded && second.Succeeded, first.Error ?? second.Error);
         Assert.Equal(3, first.Items.Count);
-        Assert.Equal(3, rig.Probe.Runs); // a run for each row, each with its own input
+        Assert.Equal(3, rig.Probe.Runs);
         Assert.Equal(first.Items.Select(i => (i.Id, string.Join(",", i.Columns["games"].AsInt64List().ToArray()), string.Join(",", i.Columns["bids"].AsFloat64List().ToArray()))),
             second.Items.Select(i => (i.Id, string.Join(",", i.Columns["games"].AsInt64List().ToArray()), string.Join(",", i.Columns["bids"].AsFloat64List().ToArray()))));
         Assert.All(first.Items.Concat(second.Items), i => Assert.Equal(("req-1", T0), (i.Columns["from"].AsString(), i.Columns["at"].AsInt64())));
-        Assert.All(second.Calls!, c => Assert.Equal(new CachedFrom("req-1", T0, c.CalledBy), c.Cached)); // each row by the call that computed it
+        Assert.All(second.Calls!, c => Assert.Equal(new CachedFrom("req-1", T0, c.CalledBy), c.Cached));
 
         // The request's id is the same for its three runs of the pipeline: the call tells which of them computed a row.
         Assert.Equal(["page/content#0", "page/content#1", "page/content#2"], first.Items.Select(i => i.Columns["by"].AsString()));
         Assert.Equal(first.Items.Select(i => i.Columns["by"].AsString()), second.Items.Select(i => i.Columns["by"].AsString()));
 
-        // The rows now pass one input between them: one result answers them all, computed once more.
         Edit(host, "pipelines/page.jsonc", "col.entity_id", "col.entity_id * 0 + 7");
         rig.Load("page");
         var shared = await rig.Run("req-3", T0 + 9_000, pipeline: "page");
@@ -729,11 +650,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(runs, rig.Probe.Runs);
     }
 
-    /// <summary>
-    /// A result is kept only when the pipelines under the called one were, to the end of its run, the plans its key was
-    /// built with: one replaced while the run was under way may have run as the new one. The result was kept under the
-    /// old one's key, for every instance that shares the record, and answered again once the old release was back.
-    /// </summary>
     [Fact]
     public async Task AResultComputedWhileAPipelineUnderItWasReplaced_IsNotKept()
     {
@@ -755,14 +671,9 @@ public sealed class PipelineCallCacheEndToEndTests
 
         Assert.True(during.Succeeded && elsewhere.Succeeded && after.Succeeded, during.Error ?? elsewhere.Error ?? after.Error);
         Assert.Null(Assert.Single(after.Calls!, c => c.PipelineId == "promoted").Cached);
-        Assert.NotEqual(Rows(during), Rows(after)); // the run under way did run the release that came in
+        Assert.NotEqual(Rows(during), Rows(after));
     }
 
-    /// <summary>
-    /// Nor when a pipeline under the called one came to be served while the run was under way: the key was built without
-    /// it, as on an instance that does not serve it, and the run called it. The result was kept under that key, and an
-    /// instance the release had not reached returned rows of a pipeline it does not serve.
-    /// </summary>
     [Fact]
     public async Task AResultComputedWhileAPipelineUnderItCameToBeServed_IsNotKept()
     {
@@ -771,7 +682,7 @@ public sealed class PipelineCallCacheEndToEndTests
         var stores = new SharedStores();
         string[] before = ["promoted", "feed"];
         await using var rolling = new Rig(host, stores: stores, pipelines: before);
-        await using var behind = new Rig(host, stores: stores, pipelines: before); // the release of other has not reached it
+        await using var behind = new Rig(host, stores: stores, pipelines: before);
         rolling.Probe.OnRun = () =>
         {
             rolling.Probe.OnRun = null; // once: promoted runs, and has not called other yet
@@ -779,24 +690,17 @@ public sealed class PipelineCallCacheEndToEndTests
         };
 
         var during = await rolling.Run("req-during");
-        var elsewhere = await rolling.Run("req-elsewhere", inputs: Elsewhere); // written after the first: once it is in the store, that would be
+        var elsewhere = await rolling.Run("req-elsewhere", inputs: Elsewhere);
         await CacheEngineTests.Eventually(() => stores.Records >= 1, () => "the result of req-elsewhere in the store");
         var after = await behind.Run("req-after");
 
         Assert.True(during.Succeeded && elsewhere.Succeeded, during.Error ?? elsewhere.Error);
-        Assert.NotEmpty(Rows(during)); // the run under way did call other
+        Assert.NotEmpty(Rows(during));
         Assert.Equal(1, behind.Probe.Runs);
         Assert.DoesNotContain(after.Calls ?? [], c => c.Cached is not null);
         Assert.Empty(Rows(after));
     }
 
-    /// <summary>
-    /// A <c>when</c> is decided on the features it got. One that reads a feature whose source failed and that cannot be
-    /// missing cannot be decided: its node goes on as one whose <c>when</c> holds and fails by its own fill of that
-    /// feature, so <c>on_failure</c> says what then (evaluated, it threw out of the run). A failed feature that can be
-    /// missing is missing, and a <c>when</c> that says what then is decided: its node is skipped as it was before the
-    /// source failed, and says on what. Either way the run is not one computed whole, and no cache keeps its result.
-    /// </summary>
     [Theory]
     [InlineData("ctx.user.ctr_30d > 0.03", "", "failed", "feature fetch failed: user store outage", false)]
     [InlineData("ctx.user.ctr_30d > 0.03", " \"on_failure\": \"skip\",", "failed", "feature fetch failed: user store outage (skipped)", true)]
@@ -819,7 +723,7 @@ public sealed class PipelineCallCacheEndToEndTests
 
         var outage = await rig.Run("req-1", pipeline: "page");
         connectors.Fail = false;
-        var elsewhere = await rig.Run("req-elsewhere", inputs: Elsewhere, pipeline: "page"); // written after the first: once kept, that would be
+        var elsewhere = await rig.Run("req-elsewhere", inputs: Elsewhere, pipeline: "page");
         await CacheEngineTests.Eventually(() => rig.Results(holder: "page").Pin().RecordCount >= 3, () => "the results of req-elsewhere");
         var runs = rig.Probe.Runs;
         var after = await rig.Run("req-2", T0 + 5_000, pipeline: "page");
@@ -835,20 +739,13 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(succeeds, outage.Succeeded);
         if (succeeds)
         {
-            Assert.Equal("degraded", NodeOutcomeNames.Name(Assert.Single(outage.Trace!, n => n.NodeId == "content").Kind)); // the runs were, and say so upward
+            Assert.Equal("degraded", NodeOutcomeNames.Name(Assert.Single(outage.Trace!, n => n.NodeId == "content").Kind));
         }
 
-        // The source is back: the pipeline runs again, for the same calls.
         Assert.Equal(runs + 3, rig.Probe.Runs);
         Assert.All(after.Calls!, c => Assert.Null(c.Cached));
     }
 
-    /// <summary>
-    /// Whether an experiment triggers at a node is asked of every arm's <c>when</c>, so that it is the same for all of
-    /// them. What an arm the request is not in reads says nothing of the run: a feature that failed for it does not
-    /// degrade a run none of whose own nodes read it. Marked there, a run in control was degraded or not by the other
-    /// arm's name: the arms are looked at in name order, up to the first that triggers.
-    /// </summary>
     [Theory]
     [InlineData("aaa")]
     [InlineData("zzz")]
@@ -874,10 +771,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.All(result.Calls!, c => Assert.All(c.Trace, n => Assert.Equal("succeeded", NodeOutcomeNames.Name(n.Kind))));
     }
 
-    /// <summary>
-    /// A <c>when</c> that reads a feature served stale, its source having failed, is decided on it, and its node says so,
-    /// skipped or run: the run is degraded, as it is when a node reads such a feature.
-    /// </summary>
     [Theory]
     [InlineData("ctx.user.ctr_30d > 0.03", "degraded", "degraded features: user store outage")] // its own fill covers what its when reads
     [InlineData("ctx.user.ctr_30d > 0.05", "skipped_when", "when is false, on degraded features: user store outage")]
@@ -899,7 +792,7 @@ public sealed class PipelineCallCacheEndToEndTests
 
         var fresh = await rig.Run("req-1", pipeline: "page");
         await CacheEngineTests.Eventually(() => users.Pin().RecordCount >= 1, () => "the user's record");
-        rig.Clock.Advance(120_000); // past the ttl, within stale_if_error_ms
+        rig.Clock.Advance(120_000);
         connectors.Fail = true;
         var stale = await rig.Run("req-2", T0 + 120_000, inputs: Elsewhere, pipeline: "page"); // calls no request made: the pipeline runs
 
@@ -912,14 +805,9 @@ public sealed class PipelineCallCacheEndToEndTests
             Assert.Equal(outcome, NodeOutcomeNames.Name(recall.Kind));
             Assert.StartsWith(detail, recall.Detail);
         });
-        Assert.Equal("degraded", NodeOutcomeNames.Name(Assert.Single(stale.Trace!, n => n.NodeId == "content").Kind)); // the runs were, and say so upward
+        Assert.Equal("degraded", NodeOutcomeNames.Name(Assert.Single(stale.Trace!, n => n.NodeId == "content").Kind));
     }
 
-    /// <summary>
-    /// A request has one answer for its arms in a called pipeline, whichever of its calls asked: calls that start together
-    /// each ask, and all run the answer that came first. A provider that answered them differently had the rows of one
-    /// request in different arms, and a cached call's key built with arms the runs under it did not run.
-    /// </summary>
     [Fact]
     public async Task CallsOfOneRequestThatAskForItsArmsAtOnce_AllRunTheAnswerThatCameFirst()
     {
@@ -935,11 +823,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Single(result.Experiments.Assigned, arm => arm.StartsWith("exp_promoted/", StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// A node that calls a pipeline whose run was degraded is degraded with it, and so is its own run: a cache of a call
-    /// further up does not keep what was built on an incomplete answer. The node said nothing of it, and the result of
-    /// the pipeline between was served for its ttl after the one below had recovered.
-    /// </summary>
     [Fact]
     public async Task ADegradedRunOfACalledPipeline_DegradesTheNodeThatCalled_AndNoCacheAboveKeepsWhatItReturned()
     {
@@ -960,9 +843,8 @@ public sealed class PipelineCallCacheEndToEndTests
     }
 
     /// <summary>
-    /// A read of the distributed tier that outlives its wait holds the request, as every abandoned call does: the plan's
-    /// bindings, the store among them, are released when it has ended. The read held nothing, and a plan replaced while a
-    /// slow store was still reading for one of its requests disposed the store under the read.
+    /// A read of the distributed tier that outlives its wait holds the request, as every abandoned call does: the
+    /// plan's bindings, the store among them, are released when it has ended.
     /// </summary>
     [Fact]
     public async Task AStoreStillReadingForARequest_IsNotDisposedWhenItsPlanIsReplaced()
@@ -973,10 +855,10 @@ public sealed class PipelineCallCacheEndToEndTests
         await using var rig = new Rig(host, stores: stores);
         stores.BeforeGet = () => reading.Task;
 
-        var result = await rig.Run("req-1"); // the read is given up after its 20 ms, and the pipeline runs
+        var result = await rig.Run("req-1");
         var store = Assert.Single(stores.Created);
         SampleBindings.BindPipeline(host.Root, "promoted", Memory);
-        rig.Load("feed"); // a plan that keeps the results in process: the plan before it, and its store, are let go
+        rig.Load("feed");
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(1, rig.Probe.Runs);
@@ -986,11 +868,6 @@ public sealed class PipelineCallCacheEndToEndTests
         await store.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
     }
 
-    /// <summary>
-    /// Each run a hit stands for is logged with the run that computed it: a pipeline under the called one whose own call
-    /// a cache answered when the result was computed comes from an earlier request still, under whose id and call its
-    /// taps wrote. It was logged as the computing request's, which has no run of it.
-    /// </summary>
     [Fact]
     public async Task AHitOfAResultWhoseOwnCallACacheAnswered_SaysOfEachRunWhichRequestsCallComputedIt()
     {
@@ -1004,7 +881,7 @@ public sealed class PipelineCallCacheEndToEndTests
         await rig.Logs.FlushAsync(TestContext.Current.CancellationToken);
 
         Assert.True(below.Succeeded && between.Succeeded && served.Succeeded, below.Error ?? between.Error ?? served.Error);
-        Assert.Equal(2, rig.Probe.Runs); // promoted ran for the first two
+        Assert.Equal(2, rig.Probe.Runs);
         var exposures = rig.Sink.Snapshot().Where(b => b.RequestId == "req-served" && b.PipelineId != "feed").OrderBy(b => b.PipelineId, StringComparer.Ordinal).ToList();
         Assert.Equal(
             new[]
@@ -1015,11 +892,6 @@ public sealed class PipelineCallCacheEndToEndTests
             exposures.Select(b => (b.PipelineId, b.CalledBy!, b.CachedFromRequestId!, b.CachedFromTimeMs, b.CachedFromCalledBy!)));
     }
 
-    /// <summary>
-    /// A pipeline is loaded whatever its configuration holds: what a cached call of it is found by is a digest every
-    /// configuration has. An int64 parameter of 2^53 + 1, which a typed host passes and a content id cannot hold, threw
-    /// out of the load of a pipeline that cached nothing.
-    /// </summary>
     [Fact]
     public async Task APipelineWithAnIntegerNoContentIdHolds_IsLoaded()
     {
@@ -1034,23 +906,18 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.True(load.Applied, string.Join("\n", load.Diagnostics));
     }
 
-    /// <summary>
-    /// With a version, a pipeline the request is in no arm of is no part of the key: a release that adds a call of it to
-    /// the called pipeline, in an arm the request is not in or one that does not run, leaves the results where they are.
-    /// Every pipeline a run could call was part of it, and such a release computed every result anew.
-    /// </summary>
     [Fact]
     public async Task WithAVersion_ACallAddedUnderTheCalledPipeline_KeepsTheResultsOfTheRequestsInNoArmOfIt()
     {
         var host = Nested(cache: """{ "ttl_ms": 3600000, "version": "v1" }""", when: " \"when\": \"false\",");
         var promoted = Path.Combine(host.Root, "pipelines", "promoted.jsonc");
         var calling = File.ReadAllText(promoted);
-        File.WriteAllText(promoted, Called); // promoted calls nothing yet
+        File.WriteAllText(promoted, Called);
         await using var rig = new Rig(host, pipelines: NestedPipelines);
         var first = await rig.Run("req-1");
         await rig.Cached(1);
 
-        File.WriteAllText(promoted, calling); // a release with a call of other, in a node that does not run
+        File.WriteAllText(promoted, calling);
         rig.Load("promoted");
         var second = await rig.Run("req-2", T0 + 5_000);
 
@@ -1059,10 +926,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(new CachedFrom("req-1", T0, "feed/promoted#0"), Assert.Single(second.Calls!).Cached);
     }
 
-    /// <summary>
-    /// What the provider gives for a pipeline under a cached call that the pipeline does not have is reported for a
-    /// request the cache answered as for one that ran it: it is of the request's assignment, not of a run.
-    /// </summary>
     [Fact]
     public async Task AnArmAPipelineUnderACachedCallDoesNotHave_IsReportedForARequestTheCacheAnswered()
     {
@@ -1084,11 +947,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(first.Experiments.Ignored, second.Experiments.Ignored);
     }
 
-    /// <summary>
-    /// A cache that names a version does not follow the called pipeline's configuration, and still is of what a result
-    /// holds: an output column renamed, the output as long as before, computes anew. Read as the new output, the old
-    /// record's first column would be the bid.
-    /// </summary>
     [Fact]
     public async Task ACacheWithAVersion_IsStillOfWhatAResultHolds()
     {
@@ -1107,7 +965,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(Rows(first), Rows(second));
     }
 
-    /// <summary>A release of a pipeline under the called one computes anew, as a release of the called one does: what it returns is part of the result.</summary>
     [Fact]
     public async Task AReleaseOfAPipelineUnderTheCalledOne_ComputesAnew()
     {
@@ -1125,10 +982,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.NotEqual(Rows(first), Rows(second));
     }
 
-    /// <summary>
-    /// A result past its ttl serves for a failed run only while it is within the stale window when the run has failed,
-    /// not when it was read: a run that took the rest of the window fails its call.
-    /// </summary>
     [Fact]
     public async Task AStaleResult_IsJudgedWhenTheRunHasFailed_NotWhenItWasRead()
     {
@@ -1136,9 +989,9 @@ public sealed class PipelineCallCacheEndToEndTests
         var first = await rig.Run("req-1");
         await rig.Cached(1);
 
-        rig.Clock.Advance(2_000); // past the ttl, within the window
+        rig.Clock.Advance(2_000);
         rig.Probe.Fail = true;
-        rig.Probe.OnRun = () => rig.Clock.Advance(6_000); // the run takes the rest of the window, and fails
+        rig.Probe.OnRun = () => rig.Clock.Advance(6_000);
         var late = await rig.Run("req-2", T0 + 2_000);
 
         Assert.True(first.Succeeded, first.Error);
@@ -1146,10 +999,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Contains("probe outage", late.Error);
     }
 
-    /// <summary>
-    /// A node that dispatches its rows among <c>pipelines</c> has no calls of its own to cache: a <c>cache</c> on it is
-    /// said to be in the wrong place, as its <c>inputs</c> are. It was read by nothing, wrong or not.
-    /// </summary>
     [Fact]
     public void ACacheOnANodeThatOnlyDispatchesItsRows_IsAnErrorAtTheCache()
     {
@@ -1168,11 +1017,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Contains("under the entry", error.Hint);
     }
 
-    /// <summary>
-    /// Each wrong setting of a node's cache is said in one load, and what a hint says to do works: a version that is no
-    /// name hid a ttl the distributed tier cannot hold until it was corrected, and a timeout of 0 was told it could be
-    /// left out, which a pipeline's cache, with no timeout to take half of, then refused.
-    /// </summary>
     [Fact]
     public void EveryWrongSettingOfACache_IsSaidAtOnce_AndItsHintWorks()
     {
@@ -1196,12 +1040,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Contains("\"timeout_ms\": 10", timeout.Hint);
     }
 
-    /// <summary>
-    /// The calls of one request for the same result run the pipeline once: the first runs it, the others wait for what
-    /// it returns and say which call computed it, as a call the cache answers does. The in-process tier does not have a
-    /// result while it is computed, nor at once after (it is written off the request path), so every row of a page that
-    /// asked for the same list ran the pipeline.
-    /// </summary>
     [Fact]
     public async Task CallsOfOneRequestForTheSameResult_RunThePipelineOnce_AndSayWhichCallComputedIt()
     {
@@ -1226,11 +1064,9 @@ public sealed class PipelineCallCacheEndToEndTests
     }
 
     /// <summary>
-    /// Starts a request for the page whose first call's run the probe holds, and returns with its calls under way. The
-    /// engine runs on its caller's thread until something it waits for does not answer at once: when the request's task
-    /// comes back here the first run is held, and the other calls have gone as far as they go without it, so what the
-    /// test lets go next it lets go to calls that wait. That the one run got there on this thread is checked: were the
-    /// engine to leave the thread earlier, the test fails here and not by its timing.
+    /// The engine runs on its caller's thread until something it waits for does not answer at once: when the request's
+    /// task comes back here the first run is held, and the other calls have gone as far as they go without it, so what
+    /// the test lets go next it lets go to calls that wait.
     /// </summary>
     private static Task<RecResult> Start(Rig rig, string requestId)
     {
@@ -1240,12 +1076,6 @@ public sealed class PipelineCallCacheEndToEndTests
         return running;
     }
 
-    /// <summary>
-    /// Only a whole result is shared. A run that failed, or returned a degraded result, is its call's own: the calls of
-    /// the request waiting for it run the pipeline themselves (they waited for one run and wait for no other), and
-    /// get what their own runs come to. A failure given to them as theirs failed calls whose own run, in their own
-    /// time and of their own plan, succeeds.
-    /// </summary>
     [Theory]
     [InlineData("fails")]
     [InlineData("fails once")]
@@ -1265,18 +1095,13 @@ public sealed class PipelineCallCacheEndToEndTests
 
         Assert.Equal(3, rig.Probe.Runs);
         Assert.Equal(3, result.Calls!.Count);
-        Assert.All(result.Calls, c => Assert.True(c.Cached is null && c.Trace.Count > 0)); // each ran
+        Assert.All(result.Calls, c => Assert.True(c.Cached is null && c.Trace.Count > 0));
         const string Outage = "pipeline 'promoted' failed: node 'probe' failed: probe outage";
         Assert.Equal(
             run switch { "fails" => [Outage, Outage, Outage], "fails once" => [Outage, null, null], _ => new string?[] { null, null, null } },
             result.Calls.OrderBy(c => c.CalledBy, StringComparer.Ordinal).Select(c => c.Error));
     }
 
-    /// <summary>
-    /// A result computed for the request is taken by its other calls as a tier's is: while it is fresh by the node's
-    /// times. A run that returns after its result's ttl leaves the calls that waited to run the pipeline, as each would
-    /// have found the record expired; taken as it came, a result was served as fresh however long its run took.
-    /// </summary>
     [Fact]
     public async Task AResultComputedForTheRequest_IsTakenOnlyWhileItIsFresh()
     {
@@ -1285,7 +1110,7 @@ public sealed class PipelineCallCacheEndToEndTests
         rig.Probe.Hold = release.Task;
 
         var running = Start(rig, "req-1");
-        rig.Clock.Advance(7_200_000); // the run returns two hours after it started: its result is past the node's hour
+        rig.Clock.Advance(7_200_000);
         release.SetResult();
         var result = await running;
 
@@ -1294,14 +1119,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.All(result.Calls!, c => Assert.True(c.Succeeded && c.Cached is null));
     }
 
-    /// <summary>
-    /// A result is kept only when every call made under its run was answered. An operator may go on without a call that
-    /// was not (its pipeline is not served, the calls nest too deep or lead back, its run failed, no time was left for
-    /// it, it threw), and its node is then as the operator says; but what the run returns lacks what the call was for,
-    /// and why depends on where and when the run was made, which the key does not say. Kept, a list without its
-    /// sponsored rows was served for the cache's hour to requests whose own run would have got them. Whatever left the
-    /// call unanswered, and wherever that was decided: a call refused before it reached the engine was not counted.
-    /// </summary>
     [Theory]
     [InlineData("not served")]
     [InlineData("no time")]
@@ -1312,7 +1129,6 @@ public sealed class PipelineCallCacheEndToEndTests
     /// <summary>
     /// A call its operator did not wait for goes on after its request has returned, and holds the request's memory
     /// until it ends: it reads it after waits of its own (for its cache's distributed tier, after its assignment).
-    /// The memory went back with the request, and such a call then threw on it.
     /// </summary>
     [Fact]
     public async Task ACallItsOperatorDidNotWaitFor_HoldsItsRequestsMemory_UntilItEnds()
@@ -1346,16 +1162,10 @@ public sealed class PipelineCallCacheEndToEndTests
         await CacheEngineTests.Eventually(() => left.Memory!.IsReturned, () => "the memory of req-1, given back once its call has ended");
     }
 
-    /// <param name="how">
-    /// <c>not served</c>: the engine does not serve the pipeline. <c>no time</c>: the operator gives the call no time.
-    /// <c>throws</c>: the call throws (the caller arranges that) and the operator catches it. <c>in a called run</c>:
-    /// promoted's own call is answered, by a run that made the call that was not. <c>not waited for</c>: the operator
-    /// makes the call and ends its node while the called run is under way.
-    /// </param>
+    /// <param name="how"><c>throws</c>: the call throws (the caller arranges that) and the operator catches it. <c>in a
+    /// called run</c>: promoted's own call is answered, by a run that made the call that was not.</param>
     internal static async Task ARunWithACallThatWasNotAnswered(string how)
     {
-        // promoted asks another pipeline for more, and goes on without it; or other does, which promoted calls. Not for
-        // a request from nz, whose run of promoted makes no call and is whole.
         var optional = new OptionalCall();
         var below = how == "in a called run";
         var config = how switch { "no time" => ", \"no_time\": true", "throws" => ", \"catches\": true", "not waited for" => ", \"leaves\": true", _ => "" };
@@ -1380,13 +1190,13 @@ public sealed class PipelineCallCacheEndToEndTests
             rig.Probe.Hold = release.Task;
             rig.Probe.HoldNamed = how == "not waited for" ? letGo.Task : null; // the runs of other stay under way to the end
 
-            var running = Start(rig, "req-1"); // the page's other rows wait for the first one's result
+            var running = Start(rig, "req-1");
             release.SetResult();
             var result = await running;
 
             Assert.True(result.Succeeded, result.Error);
             Assert.Equal(how == "not waited for" ? 0 : 3, optional.Unanswered);
-            Assert.Equal(3, rig.Probe.Runs); // what the first run returned was not given to the calls that waited for it
+            Assert.Equal(3, rig.Probe.Runs);
             var runs = result.Calls!.Where(c => c.PipelineId == "promoted").ToList();
             Assert.Equal(3, runs.Count);
             Assert.All(runs, c =>
@@ -1395,8 +1205,8 @@ public sealed class PipelineCallCacheEndToEndTests
                 Assert.Equal("succeeded", NodeOutcomeNames.Name(Assert.Single(c.Trace, n => n.NodeId == "more").Kind));
             });
 
-            // Nor was it kept for the requests after. One whose run is whole is kept, after it in the cache's queue:
-            // once that is there, the first one's would be.
+            // One whose run is whole is kept, after it in the cache's queue: once that is there, the first one's would
+            // be.
             var whole = await rig.Run("req-elsewhere", inputs: Elsewhere, pipeline: "page");
             await CacheEngineTests.Eventually(() => rig.Results(holder: "page").Pin().RecordCount >= 1, () => "the result of req-elsewhere");
             var after = await rig.Run("req-2", pipeline: "page");
@@ -1412,12 +1222,6 @@ public sealed class PipelineCallCacheEndToEndTests
         }
     }
 
-    /// <summary>
-    /// The request's read of a call's result is of the plan that would run. Two pipelines that called each other were
-    /// each published again without that call while a request's runs of the plans before were under way: each run's
-    /// call was then of a plan that calls nothing, joined the other branch's run of the plan before for the same result
-    /// (with a version, the key is the same), and the two waited for each other until their nodes' time was up.
-    /// </summary>
     [Fact]
     public async Task ACallOfAPlanPublishedSince_DoesNotWaitForARunOfThePlanBefore()
     {
@@ -1461,19 +1265,12 @@ public sealed class PipelineCallCacheEndToEndTests
 
         Assert.All(result.Calls!, c => Assert.True(c.Succeeded, c.CalledBy + ": " + c.Error));
         Assert.Equal(4, result.Calls!.Count);
-        Assert.Equal(4, rig.Probe.Runs); // each run of a plan before ran the other's new plan itself
+        Assert.Equal(4, rig.Probe.Runs);
     }
 
-    /// <summary>
-    /// The request's read of a call's result is of one cache's record. A caller that keeps the pipeline's results in
-    /// a cache of its own (another environment's tiers) runs the pipeline and keeps its own: taking the result another
-    /// caller's run computed, it wrote nothing to its cache, and had no record to fall back to when the pipeline failed.
-    /// </summary>
     [Fact]
     public async Task CallsOfOnePipelineThroughTwoCaches_EachRunIt_AndKeepTheirOwn()
     {
-        // The page calls promoted for one row, with the cache its bindings give it (in process), and second for
-        // another; second calls promoted with the same inputs, and its release binds another cache (the shared store).
         var stores = new SharedStores();
         var host = PageHost(content: """
             "config": { "by": "col.entity_id", "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
@@ -1500,14 +1297,9 @@ public sealed class PipelineCallCacheEndToEndTests
         await CacheEngineTests.Eventually(() => stores.Records == 1 && rig.Results(holder: "page").Pin().RecordCount == 1, () => "the result in each caller's cache");
     }
 
-    /// <summary>
-    /// A call that leads back has no cache, and that is told before the request's arms in the pipelines its run may reach
-    /// are asked for: asked first, the platform was asked about a pipeline no run got to, for a key that was not built.
-    /// </summary>
     [Fact]
     public async Task ACallThatLeadsBack_AsksForNoArmsOfAPipelineItsRunDoesNotGetTo()
     {
-        // other calls promoted, with a cache. promoted may call other and one more pipeline, and here calls neither.
         static string Never(string node, string pipeline, int order) =>
             $"\n \"{node}\": {{ \"order\": {order}, \"op\": \"PipelineSource@1\", \"when\": \"false\", \"config\": {{ \"pipeline\": \"{pipeline}\", \"limit_param\": \"top_k\" }} }},";
         var host = Host(more: root =>
@@ -1527,7 +1319,7 @@ public sealed class PipelineCallCacheEndToEndTests
             return [];
         });
         await using var rig = new Rig(host, provider: provider, alone: true, pipelines: ["promoted", "other"]);
-        rig.Load("unused"); // with its experiment: the request's arms in it are the platform's to say
+        rig.Load("unused");
 
         var result = await rig.Run("req-1", pipeline: "other", ask: true, inputs: new RequestInputs().Set("user_id", 1001).Set("slots", 3));
 
@@ -1536,12 +1328,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(["other"], asked); // the request's own pipeline; promoted, loaded alone, has no experiment to ask about
     }
 
-    /// <summary>
-    /// Pipelines published on their own may call each other, which nothing sees until a request runs into it: the call
-    /// that leads back is refused, at once. With caches, the calls under two branches of a page each waited for the
-    /// result the other branch was computing, around the circle, until their time was up. A call whose pipeline may call
-    /// one that led to it has no cache and waits for no other call, so the circle ends where it closes.
-    /// </summary>
     [Fact]
     public async Task PipelinesThatCallEachOther_AreRefusedAtTheCallThatLeadsBack_WhenTheirCallsAreCached()
     {
@@ -1554,8 +1340,6 @@ public sealed class PipelineCallCacheEndToEndTests
                         "computed_by": { "request_id": "games.from", "time_ms": "games.at", "called_by": "games.by" } }
             """, more: root =>
             {
-                // A called run takes its caller's inputs that it declares: with the same slots, every call of one
-                // pipeline here has the same inputs, whoever makes it.
                 WriteNested(root, otherCache: Hour);
                 ReplayTests.Edit(root, "pipelines/other.jsonc", "\"config\": { \"name\": \"other\" } },", "},\n \"back\": { \"order\": 150, \"op\": \"PipelineSource@1\","
                     + " \"config\": { \"pipeline\": \"promoted\", \"limit_param\": \"top_k\", \"inputs\": { \"slots\": \"3\" }, \"cache\": " + Hour + " } },");
@@ -1574,7 +1358,6 @@ public sealed class PipelineCallCacheEndToEndTests
         release.SetResult();
         var result = await running;
 
-        // Each branch ran the other's pipeline itself, and that run's call back was refused: every other call failed of that.
         Assert.Equal(
             [
                 "page/content#0 > promoted/more#0 > other/back#0: pipeline 'promoted' was not called: the calls lead back to it (promoted → other → promoted)",
@@ -1586,10 +1369,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.Equal(4, rig.Probe.Runs);
     }
 
-    /// <summary>
-    /// A cache that is wrong is an error where it is written: the node's times and version at the node, the tiers at the
-    /// binding; and a node that asks for a cache the environment binds no tier for does not compile.
-    /// </summary>
     [Theory]
     [InlineData(Hour, null, "PIPELINE_CALL_CACHE_UNBOUND", "/nodes/promoted/config/cache")]
     [InlineData("""{ "version": "3" }""", Memory, "CACHE_TTL", "/nodes/promoted/config/cache")]
@@ -1616,10 +1395,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.False(string.IsNullOrEmpty(error.Hint));
     }
 
-    /// <summary>
-    /// A node's cache with no settings keeps nothing, so it asks the environment for no tier: the pipeline loads where
-    /// one whose cache gives a time does not (<c>PIPELINE_CALL_CACHE_UNBOUND</c>).
-    /// </summary>
     [Fact]
     public async Task ANodesCacheWithNoSettings_NeedsNoTierOfTheEnvironment()
     {
@@ -1632,7 +1407,6 @@ public sealed class PipelineCallCacheEndToEndTests
         Assert.DoesNotContain(load.Diagnostics, d => d.Severity != DiagnosticSeverity.Info);
     }
 
-    /// <summary>The columns that say where a result comes from are a string and an integer, declared or not; any other type is an error at the column.</summary>
     [Theory]
     [InlineData("""{ }""", "", "COMPUTED_BY_CONFIG", "/nodes/promoted/config/computed_by")]
     [InlineData(ComputedBy, """, "promo.from": { "type": "int64?" }""", "COLUMN_TYPE_MISMATCH", "/nodes/promoted/config/computed_by/request_id")]
@@ -1657,14 +1431,12 @@ public sealed class PipelineCallCacheEndToEndTests
         File.WriteAllText(path, text.Replace(from, to, StringComparison.Ordinal));
     }
 
-    /// <summary>A provider that answers with what the test says, and notes each question.</summary>
     private sealed class Asked(Func<string, string, IReadOnlyList<string>> answer) : IAssignmentProvider
     {
         public ValueTask<IReadOnlyList<string>> AssignAsync(AssignmentContext context, CancellationToken cancellationToken) =>
             new(answer(context.PipelineId, context.RequestId));
     }
 
-    /// <summary>A wall clock the test moves.</summary>
     internal sealed class MovableClock : TimeProvider
     {
         private long _timeMs = 1_720_000_000_000L;
@@ -1675,8 +1447,7 @@ public sealed class PipelineCallCacheEndToEndTests
     }
 
     /// <summary>
-    /// <c>Probe@1</c>: counts its runs, and fails or degrades its node when told. One with a <c>name</c> is another
-    /// pipeline's: it is told by its name, and not counted.
+    /// One with a <c>name</c> is another pipeline's: it is told by its name, and not counted.
     /// </summary>
     internal sealed class Probe : IOperatorFactory
     {
@@ -1697,7 +1468,6 @@ public sealed class PipelineCallCacheEndToEndTests
             set => _fail = value;
         }
 
-        /// <summary>The first this many runs of the probe without a name fail.</summary>
         public int FailFirst
         {
             get => Volatile.Read(ref _failFirst);
@@ -1710,7 +1480,6 @@ public sealed class PipelineCallCacheEndToEndTests
             set => _degrade = value;
         }
 
-        /// <summary>The name of the probe that degrades its node.</summary>
         public string? DegradeAt
         {
             get => _degradeAt;
@@ -1785,10 +1554,6 @@ public sealed class PipelineCallCacheEndToEndTests
         public string? Name { get; init; }
     }
 
-    /// <summary>
-    /// <c>OptionalCall@1</c>: calls a pipeline and goes on without its result when the call is not answered, as an
-    /// operator may.
-    /// </summary>
     internal sealed class OptionalCall : IOperatorFactory
     {
         private int _unanswered;
@@ -1819,7 +1584,6 @@ public sealed class PipelineCallCacheEndToEndTests
                 }
                 catch (InvalidOperationException) when (config.Catches)
                 {
-                    // gone on without, as after a failed result
                 }
 
                 Interlocked.Increment(ref owner._unanswered);
@@ -1827,16 +1591,13 @@ public sealed class PipelineCallCacheEndToEndTests
         }
     }
 
-    /// <summary><c>LeftCall@1</c>: calls <c>other</c> and ends its node without waiting for the call.</summary>
     internal sealed class LeftCall : IOperatorFactory
     {
         private volatile Task<PipelineCallResult>? _call;
         private volatile Core.Memory.RequestMemory? _memory;
 
-        /// <summary>The call the node made last.</summary>
         public Task<PipelineCallResult>? Call => _call;
 
-        /// <summary>The memory of the request that made it.</summary>
         public Core.Memory.RequestMemory? Memory => _memory;
 
         public OperatorDescriptor Descriptor { get; } = new("LeftCall", 1, Effects.None, typeof(ProbeConfig), "Calls a pipeline, and does not wait for it.");

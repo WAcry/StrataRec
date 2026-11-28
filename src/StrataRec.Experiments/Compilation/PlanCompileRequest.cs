@@ -19,9 +19,8 @@ public sealed class PlanCompileRequest
 
     /// <summary>
     /// The pipelines this one's nodes may call, when the loader knows them (a workspace's): calls are then checked at
-    /// compile time. Null, as when an engine loads one pipeline's release, checks them when they are made. Not part of the
-    /// configuration: the engine's copy of what a plan was compiled from (for a configuration override) has none, so an
-    /// override's calls are checked when they are made.
+    /// compile time. Null, as when an engine loads one pipeline's release, checks them when they are made. Not part of
+    /// the configuration: an override's calls are checked when they are made.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public IPipelineDirectory? Pipelines { get; init; }

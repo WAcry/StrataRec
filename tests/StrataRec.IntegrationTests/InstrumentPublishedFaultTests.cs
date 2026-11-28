@@ -7,11 +7,8 @@ using StrataRec.Logging;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The engine's instruments are created when they are first read, and creating one tells every
-/// <see cref="MeterListener"/> of it. A host's listener that threw there failed that initializer, for the whole process:
-/// each log submission threw <see cref="TypeInitializationException"/> after it had reserved the batch's bytes, so nothing
-/// reached the sink and a flush never completed, and a plan load threw as well. The first read happens once per process,
-/// so the test runs in a child process (<see cref="TimerFaultChild.Start"/>'s way).
+/// The first read happens once per process, so the test runs in a child process (<see cref="TimerFaultChild.Start"/>'s
+/// way).
 /// </summary>
 public sealed class InstrumentPublishedFaultTests
 {
@@ -45,11 +42,6 @@ public sealed class InstrumentPublishedFaultTests
     }
 }
 
-/// <summary>
-/// The child process of <see cref="InstrumentPublishedFaultTests"/>: registers a listener that throws when it is told of an
-/// instrument of the engine's meter before anything reads one, then submits two batches, flushes, and serves a request of
-/// the home_feed sample with its logs. Prints what the parent checks, one <c>key=value</c> a line.
-/// </summary>
 internal static class InstrumentPublishedFaultChild
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);

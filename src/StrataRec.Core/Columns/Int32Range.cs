@@ -5,9 +5,8 @@ namespace StrataRec.Core.Columns;
 /// (<c>int32</c>, <c>list&lt;int32&gt;</c>).
 /// </summary>
 /// <remarks>
-/// Narrowing never wraps: a writer first checks that the value fits and otherwise applies the out-of-range rule
-/// (the column's default, or missing, and a count). The checks are branch-free OR reductions so the in-range path of a
-/// whole column or list costs one compare per element.
+/// Narrowing never wraps: a writer first checks that the value fits and otherwise applies the out-of-range rule (the
+/// column's default, or missing, and a count).
 /// </remarks>
 public static class Int32Range
 {

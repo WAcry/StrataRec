@@ -5,27 +5,13 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Features.Cache;
 
-/// <summary>
-/// Whose cache a binding's <c>cache</c> settings are, as messages name it: a feature source in front of its connector, or a
-/// service.
-/// </summary>
-/// <param name="StoreKind">The binding kind of the distributed store.</param>
-/// <param name="Name">The source's or the service's name.</param>
-/// <param name="Noun"><c>source</c> or <c>service</c>.</param>
-/// <param name="Origin">What the cache is in front of: <c>connector</c>, <c>service</c>.</param>
 internal readonly record struct CacheOwner(BindingKind StoreKind, string Name, string Noun, string Origin);
 
-/// <summary>What <see cref="CacheSettings.TryRead"/> read of a <c>cache</c> binding.</summary>
-/// <param name="Policy">Its times.</param>
-/// <param name="Version"><c>version</c>; null when the cache follows the configuration.</param>
-/// <param name="MemoryBytes"><c>memory.max_bytes</c>; null without an in-process tier.</param>
-/// <param name="Distributed">The distributed tier; null without one.</param>
-/// <param name="DistributedTimeoutMs">The tier's own <c>timeout_ms</c>; null takes half the owner's.</param>
 internal readonly record struct CacheSpec(CachePolicy Policy, string? Version, long? MemoryBytes, DistributedCacheTier? Distributed, int? DistributedTimeoutMs)
 {
     /// <summary>
-    /// Whether a tier keeps the cache's records. A cache with no tier (<c>"cache": {}</c>) has the reads of one request
-    /// share what one of them got from the origin, and nothing more.
+    /// A cache with no tier (<c>"cache": {}</c>) has the reads of one request share what one of them got from the
+    /// origin, and nothing more.
     /// </summary>
     public bool Kept => MemoryBytes is not null || Distributed is not null;
 
@@ -47,18 +33,11 @@ internal readonly record struct CacheSpec(CachePolicy Policy, string? Version, l
     };
 }
 
-/// <summary>
-/// The one reading of a cache's settings: its times, its version and its tiers, each problem reported at its setting.
-/// Feature sources, services and pipeline calls read their caches here, so they say the same about the same mistake.
-/// A cache with tiers says how long they serve a value; one with no setting at all keeps nothing, and only has the
-/// reads of one request share a value (<see cref="CacheSpec.Kept"/>); anything between is a mistake.
-/// </summary>
 internal static class CacheSettings
 {
     /// <summary>The longest <c>ttl_ms</c> and <c>stale_if_error_ms</c>: 2^61 ms, so their sums cannot overflow.</summary>
     public const long MaxMs = 1L << 61;
 
-    /// <param name="pointer">The <c>cache</c> member's pointer.</param>
     /// <param name="ownerTimeoutMs">The owner's <c>timeout_ms</c>: the distributed tier's default is half of it; with none,
     /// the tier must give its own.</param>
     public static bool TryRead(CacheBinding cache, CacheOwner owner, BindingResolver resolver, string pointer, int? ownerTimeoutMs, out CacheSpec spec)
@@ -112,13 +91,8 @@ internal static class CacheSettings
         return ok;
     }
 
-    /// <summary>Whether the binding names a tier that keeps the cache's records, right or wrong (<see cref="CacheSpec.Kept"/> of what it compiles to).</summary>
     public static bool HasTier(CacheBinding cache) => cache.Memory is not null || cache.Distributed is not null;
 
-    /// <summary>
-    /// The settings a cache that keeps nothing gives all the same, as a message names them (<c>'ttl_ms' and 'version'</c>);
-    /// null when it gives none, which is the cache of a request's reads alone.
-    /// </summary>
     public static string? Unkept(long? ttlMs, long? staleIfErrorMs, string? version)
     {
         string? given = null;
@@ -136,11 +110,6 @@ internal static class CacheSettings
         }
     }
 
-    /// <summary>
-    /// The tiers of a cache: <c>memory</c>, <c>distributed</c> or both, at least one; each problem reported at its setting.
-    /// </summary>
-    /// <param name="pointer">The <c>cache</c> member's pointer.</param>
-    /// <param name="ownerTimeoutMs">As for <see cref="TryRead"/>.</param>
     public static bool TryTiers(
         MemoryCacheBinding? memory, DistributedCacheBinding? shared, CacheOwner owner, BindingResolver resolver, string pointer, int? ownerTimeoutMs,
         out long? memoryBytes, out DistributedCacheTier? distributed, out int? distributedTimeoutMs)
@@ -204,7 +173,6 @@ internal static class CacheSettings
         return ok;
     }
 
-    /// <summary><c>ttl_ms</c> within what a policy takes; false (diagnosed at <paramref name="pointer"/><c>/ttl_ms</c>) otherwise.</summary>
     public static bool TryTtl(long ttl, DiagnosticBag diagnostics, string artifact, string pointer)
     {
         if (ttl is > 0 and <= MaxMs)
@@ -217,8 +185,6 @@ internal static class CacheSettings
         return false;
     }
 
-    /// <summary><c>stale_if_error_ms</c> (none is 0) within what a policy takes; false (diagnosed) otherwise.</summary>
-    /// <param name="origin">What the cache is in front of, for the hint: <c>connector</c>, <c>service</c>, <c>pipeline</c>.</param>
     public static bool TryStale(long? stale, string origin, DiagnosticBag diagnostics, string artifact, string pointer, out long staleMs)
     {
         staleMs = stale ?? 0;
@@ -234,7 +200,6 @@ internal static class CacheSettings
         return false;
     }
 
-    /// <summary><c>version</c>, when given, in its form; false (diagnosed) otherwise.</summary>
     public static bool TryVersion(string? version, DiagnosticBag diagnostics, string artifact, string pointer)
     {
         if (version is null || IsVersion(version))
@@ -266,11 +231,6 @@ internal static class CacheSettings
         return true;
     }
 
-    /// <summary>
-    /// Whether the distributed tier can be given the longest time to live a record of this cache needs (the TTL with all
-    /// its jitter, plus the stale window): a <see cref="TimeSpan"/>. Diagnosed at the setting that takes it past, of the
-    /// <c>cache</c> member at <paramref name="pointer"/>: a binding's, or for a pipeline's results the calling node's.
-    /// </summary>
     /// <param name="ttlMs">0 for one that is missing or wrong: diagnosed already, and nothing more is said of it here.</param>
     public static bool TryRetention(string noun, string name, long ttlMs, long staleMs, DiagnosticBag diagnostics, string artifact, string pointer)
     {
@@ -287,7 +247,6 @@ internal static class CacheSettings
         return false;
     }
 
-    /// <summary>What to do about a store type the binary does not have, besides the types it has: where <c>redis@1</c> comes from.</summary>
     private static string StoreHint(string? type) =>
         type is not null && type.StartsWith("redis@", StringComparison.Ordinal)
             ? "redis@1 is in the package StrataRec.Redis: the host adds it with PlanEnvironment.Bindings.AddRedis()"

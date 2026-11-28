@@ -17,10 +17,8 @@ using StrataRec.Core.Services;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A recall source's query: the sample's two_tower searches with the user's embedding from the catalog
-/// (<c>"queries": { "two_tower": { "user_embedding": "ctx.user.embedding" } }</c>). Each source waits for the context
-/// features its own query reads and for nothing else, a feature that failed fails only the source that reads it, a
-/// missing value is sent as missing, and a recording keeps the values a replay compares.
+/// A recall source's query: the sample's two_tower searches with the user's embedding from the catalog (<c>"queries": {
+/// "two_tower": { "user_embedding": "ctx.user.embedding" } }</c>).
 /// </summary>
 /// <remarks>
 /// user_store's fetch is held by a gate the test opens, so whether a source was sent before the user's features were
@@ -43,7 +41,6 @@ public sealed class RecallQueryTests
         await sources.Called("popular").WaitAsync(Patience, TestContext.Current.CancellationToken);
         await users.Started.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        // popular was sent while the user's features were still being fetched; two_tower waits for its embedding.
         Assert.False(sources.Called("two_tower").IsCompleted);
         Assert.False(running.IsCompleted);
         users.Open();
@@ -51,7 +48,6 @@ public sealed class RecallQueryTests
 
         Assert.True(result.Succeeded, result.Error);
         var embedding = Assert.Single(sources.Query("two_tower"));
-        // A reference is sent at its declared type: the catalog's list<float32,3>.
         Assert.Equal(("user_embedding", TensorElementType.Float32, "3"), (embedding.Name, embedding.Type, string.Join(",", embedding.Shape)));
         Assert.Equal([1.0, 0.0, 0.0], embedding.Floats); // users.json: 1001
         Assert.Empty(sources.Query("popular"));
@@ -77,10 +73,9 @@ public sealed class RecallQueryTests
         var running = engine.ExecuteAsync(Request("req-regional"), TestContext.Current.CancellationToken).AsTask();
         await sources.Called("regional").WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        // regional's features were stored while user_store's fetch was held: it did not wait for two_tower's.
         Assert.False(sources.Called("two_tower").IsCompleted);
         var regional = sources.Query("regional");
-        Assert.Equal(("boost", "surface"), (regional[0].Name, regional[1].Name)); // in name order, whatever the JSON's
+        Assert.Equal(("boost", "surface"), (regional[0].Name, regional[1].Name));
         Assert.False(regional["boost"].IsMissing);
         Assert.Equal("home", regional["surface"].String);
         users.Open();
@@ -106,9 +101,8 @@ public sealed class RecallQueryTests
         Assert.Equal(NodeOutcomeKind.Degraded, recall.Kind);
         Assert.StartsWith("recall sources failed: two_tower: its query reads a context feature that failed (", recall.Detail, StringComparison.Ordinal);
         Assert.All(result.Items, item => Assert.Equal("popular", item.Columns["primary_source"].AsString()));
-        Assert.Equal(new[] { "popular" }, result.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").Select(c => c.Service)); // nothing sent, nothing recorded
+        Assert.Equal(new[] { "popular" }, result.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").Select(c => c.Service));
 
-        // With popular failing too, every source failed: the node fails, naming both.
         var none = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"user_store\":   { \"connector\": \"memory@1\",", "\"user_store\":   { \"connector\": \"memory@1\", \"fail\": true,");
@@ -140,8 +134,6 @@ public sealed class RecallQueryTests
     [Fact]
     public async Task TheWaitForAQuerysFeatures_IsWithinTheNodesBudget_AndAFeatureSourceTimeoutBelowItDegradesInstead()
     {
-        // user_store answers after 2 s; the recall node has 300 ms. Waiting for the embedding times the node out, as a call
-        // still in flight at the deadline does: popular's answer is not merged.
         var slow = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"user_store\":   { \"connector\": \"memory@1\",", "\"user_store\":   { \"connector\": \"memory@1\", \"latency_ms\": 2000,");
@@ -156,7 +148,6 @@ public sealed class RecallQueryTests
         Assert.False(sources.Called("two_tower").IsCompleted);
         Assert.Equal(new[] { "popular" }, timedOut.Recording!.Runs[0].ServiceCalls.FindAll(c => c.Role == "recall").Select(c => c.Service));
 
-        // With user_store's own timeout below the node's budget, the feature fails in time: only two_tower fails.
         var bounded = HomeFeedTestHost.LoadModified(root =>
         {
             SampleBindings.Rebind(root, "user_store", """{ "connector": "memory@1", "data_file": "fixtures/users.json", "latency_ms": 2000, "timeout_ms": 50 }""");
@@ -174,7 +165,6 @@ public sealed class RecallQueryTests
     [Fact]
     public async Task AMissingValue_IsSentAsMissing_AndTheVectorIndexReturnsNothingForIt()
     {
-        // An anonymous request, and an embedding without a default: nothing to search with.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "catalog/home_feed.jsonc",
             "{ \"type\": \"list<float32,3>\", \"source\": \"user_store\", \"field\": \"u_emb\", \"default\": [0.0, 0.0, 1.0] }",
             "{ \"type\": \"list<float32,3>\", \"source\": \"user_store\", \"field\": \"u_emb\" }"));
@@ -184,13 +174,13 @@ public sealed class RecallQueryTests
 
         Assert.True(result.Succeeded, result.Error);
         var query = sources.Query("two_tower");
-        Assert.True(query.TryGet("user_embedding", out var sent)); // sent as missing, with its declared element type and length
+        Assert.True(query.TryGet("user_embedding", out var sent));
         Assert.Equal((TensorElementType.Float32, "3", true), (sent.Type, string.Join(",", sent.Shape), sent.IsMissing));
         Assert.False(query.TryGet("no_such_value", out _));
         Assert.Equal(NodeOutcomeKind.Succeeded, result.Trace!.Single(n => n.NodeId == "recall").Kind);
         Assert.All(result.Items, item => Assert.Equal("popular", item.Columns["primary_source"].AsString()));
         var call = result.Recording!.Runs[0].ServiceCalls.Single(c => c.Service == "two_tower");
-        Assert.Equal(("recall", "ok", 1), (call.Role, call.Status, call.InputDigests.Count)); // the query is recorded as its digest
+        Assert.Equal(("recall", "ok", 1), (call.Role, call.Status, call.InputDigests.Count));
     }
 
     [Fact]
@@ -199,14 +189,11 @@ public sealed class RecallQueryTests
         var recorded = await Engine(HomeFeedTestHost.Load(), new ProbeSources()).ExecuteAsync(Request("req-recorded"), TestContext.Current.CancellationToken);
         Assert.Single(recorded.Recording!.Runs[0].ServiceCalls, c => c.Service == "two_tower");
 
-        // The same configuration replays the same query: no gap.
         var (same, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var replayed = await same.ReplayAsync(recorded.Recording, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Empty(replayed.Report.Gaps);
         Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
 
-        // The query now reads another user feature: the recording has no answer to it, so two_tower is not answered (the
-        // node degrades on popular alone), and the replay says why. A recorded answer answers only the inputs it was for.
         var changed = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "{ \"user_embedding\": \"ctx.user.embedding\" }",
@@ -257,8 +244,6 @@ public sealed class RecallQueryTests
     [Fact]
     public async Task AFeatureThatFailed_RefusesTheSourceAtOnce_WhateverItsOtherFeaturesDo()
     {
-        // two_tower reads the user's embedding, whose store fails, and the country's region, whose store is held past the
-        // node's budget: the source is refused when the embedding fails, not timed out with the region.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"user_store\":   { \"connector\": \"memory@1\",", "\"user_store\":   { \"connector\": \"memory@1\", \"fail\": true,");
@@ -344,7 +329,7 @@ public sealed class RecallQueryTests
             });
             await entered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-            var result = await running.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken); // the callback still runs
+            var result = await running.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
             Assert.Equal("timed out after 1000 ms", result.Trace!.Single(n => n.NodeId == "recall").Detail);
             Assert.False(sources.Called("two_tower").IsCompleted);
@@ -363,12 +348,6 @@ public sealed class RecallQueryTests
     [InlineData(true)]
     public async Task AFeatureStoredWhileTheSourcesAreChecked_StartsTheNextRound_AndSourcesStoredTogetherGoInSourceOrder(bool together)
     {
-        // Source order two_tower, popular, regional. two_tower reads the user's embedding and the country's region (geo_store,
-        // held); popular the user's tenure, stored at once; regional the region's boost (region_store, keyed by the region and
-        // held) or, together, the country's region as two_tower does. popular's call opens geo_store and waits until
-        // region_store has started, so the country's region is stored after two_tower was checked and before the round
-        // waits. Each source observed the tasks on its own: that store was missed until region_store answered,
-        // and with together, regional, checked after the store, was sent before two_tower.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"two_tower\": 40, \"popular\": 20", "\"two_tower\": 40, \"popular\": 20, \"regional\": 5");
@@ -400,7 +379,7 @@ public sealed class RecallQueryTests
         {
             await sources.Called("two_tower").WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-            Assert.False(connectors.OpenRegion.Task.IsCompleted); // sent while region_store is still held
+            Assert.False(connectors.OpenRegion.Task.IsCompleted);
             if (together)
             {
                 await sources.Called("regional").WaitAsync(Patience, TestContext.Current.CancellationToken);
@@ -456,11 +435,9 @@ public sealed class RecallQueryTests
     }
 
     /// <summary>
-    /// Once the node's budget has run out, no read is settled, even when a settled callback ran past it and the
-    /// read was stored meanwhile. The first callback (the user's features, stored at once) holds on until the 500 ms budget
-    /// cancels the node token, then lets geo_store answer and waits until the country's region is stored (region_store,
-    /// keyed by it, has started). The next round found the region stored, Task.WhenAny of a completed task returned at once
-    /// and the timed wait never timed out, so the second read was settled after the deadline.
+    /// The first callback (the user's features, stored at once) holds on until the 500 ms budget cancels the node
+    /// token, then lets geo_store answer and waits until the country's region is stored (region_store, keyed by it, has
+    /// started).
     /// </summary>
     [Fact]
     public async Task AReadStoredAfterTheDeadline_IsNeverSettled_HoweverLongACallbackRan()
@@ -494,7 +471,6 @@ public sealed class RecallQueryTests
         Assert.Equal([0], probe.Settled);
     }
 
-    /// <summary><c>LateReads@1</c>: waits for the user's embedding, then the country's region, noting each read settled.</summary>
     private sealed class LateReadsFactory(TwoGateConnectors connectors) : IOperatorFactory
     {
         public TwoGateConnectors Connectors { get; } = connectors;
@@ -518,7 +494,7 @@ public sealed class RecallQueryTests
                     owner.Settled.Enqueue(index);
                     if (index == 0)
                     {
-                        Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience)); // the budget runs out
+                        Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience));
                         owner.Connectors.OpenGeo.TrySetResult();
                         owner.Connectors.RegionStarted.Task.WaitAsync(Patience).GetAwaiter().GetResult(); // the region is stored
                     }
@@ -526,11 +502,6 @@ public sealed class RecallQueryTests
         }
     }
 
-    /// <summary>
-    /// A float32 request field in a query is sent as float32, its declared type: <c>memory_list@1</c> picks the list of
-    /// "0.1", as it did reading the request field before queries. The query was sent at the expression's promoted type,
-    /// float64, the value printed as 0.10000000149011612 and picked another list.
-    /// </summary>
     [Fact]
     public async Task AFloat32RequestFieldInAQuery_IsSentAsFloat32_AndPicksTheListOfItsValue()
     {
@@ -566,10 +537,6 @@ public sealed class RecallQueryTests
         return request;
     }
 
-    /// <summary>
-    /// A recall reads only the items a service adds: what else it writes is not recorded. An empty list of outputs read
-    /// meant "all", so a service's extra tensor and text went into the recording.
-    /// </summary>
     [Fact]
     public async Task ARecall_RecordsTheItems_NotOutputsTheServiceWroteBesides()
     {
@@ -614,7 +581,6 @@ public sealed class RecallQueryTests
 
     private static List<(long, int)> Items(RecResult result) => result.Items.Select(i => (i.Id.Int64Value, i.Rank)).ToList();
 
-    /// <summary>memory@1 connectors where geo_store waits for <see cref="OpenGeo"/> and region_store for <see cref="OpenRegion"/>.</summary>
     internal sealed class TwoGateConnectors : IBindingFactory<IFeatureSourceConnector>, IDisposable
     {
         private readonly MemoryFeatureConnectorFactory _inner = new();
@@ -659,7 +625,6 @@ public sealed class RecallQueryTests
         }
     }
 
-    /// <summary>The built-in lists and vector index, noting each call's query when it is sent.</summary>
     internal sealed class ProbeSources
     {
         private readonly ConcurrentDictionary<string, (TaskCompletionSource Called, SentQuery? Query)> _calls = new(StringComparer.Ordinal);
@@ -677,10 +642,8 @@ public sealed class RecallQueryTests
         /// <summary>Runs when a source is sent, before it answers, with the call's token.</summary>
         public Func<ServiceCall, CancellationToken, ValueTask>? BeforeRetrieve { get; init; }
 
-        /// <summary>Writes into the response too, before the source answers.</summary>
         public Action<ServiceCall, IServiceResponse>? AlsoWrites { get; init; }
 
-        /// <summary>Completes when <paramref name="source"/> is sent.</summary>
         public Task Called(string source) => Entry(source).Called.Task;
 
         /// <summary>The inputs <paramref name="source"/> was sent, copied when it was (their buffers are the request's).</summary>
@@ -722,14 +685,12 @@ public sealed class RecallQueryTests
         }
     }
 
-    /// <summary>One input a source was sent, copied.</summary>
     /// <summary>A value as sent; <see cref="Floats"/> holds a float32 or float64 tensor's elements, widened.</summary>
     internal sealed record SentValue(string Name, TensorElementType Type, int[] Shape, bool IsMissing, double[] Floats, string[] Strings)
     {
         public string String => Strings[0];
     }
 
-    /// <summary>The inputs a source was sent, in the order it got them.</summary>
     internal sealed class SentQuery : List<SentValue>
     {
         public SentQuery(ReadOnlySpan<NamedInput> inputs)
@@ -799,9 +760,7 @@ public sealed class RecallQueryTests
 }
 
 /// <summary>
-/// A prefetch that faults while a recall source waits for it (here a host's metric listener throwing a TimeoutException as
-/// it measures user_store's values) is the node's exception, the same whether it faulted before the wait or during it: the
-/// wait took a fault of the one task it waited for for the node's deadline. Process-wide: a MeterListener.
+/// Process-wide: a MeterListener.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class RecallQueryListenerTests
@@ -853,8 +812,7 @@ public sealed class RecallQueryListenerTests
     public async Task AFeatureStoredAfterTheDeadline_IsNotSettled_NorIsItsFaultTheNodes(bool fault)
     {
         // The first read is settled at once; its callback runs past the node's budget, and the second read's feature is
-        // stored (or its store faults) before the callback returns. The wait had already seen it done, so the second read
-        // was settled after the deadline, or the late fault was the node's exception.
+        // stored (or its store faults) before the callback returns.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"recall\": {", "\"late\": { \"order\": 50, \"op\": \"LateSettle@1\", \"timeout_ms\": 300, \"config\": {} }, \"recall\": {"));
         using var listener = new MeterListener();
@@ -902,7 +860,6 @@ public sealed class RecallQueryListenerTests
         Assert.Equal("timed out after 300 ms", result.Trace!.Single(n => n.NodeId == "late").Detail);
     }
 
-    /// <summary>Awaits the user's embedding, then the country's region (held by geo_store's gate).</summary>
     private sealed class LateSettleFactory(RecallQueryTests.TwoGateConnectors connectors) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("LateSettle", 1, Effects.None, typeof(NoSettings), "Settles a read past its budget.");

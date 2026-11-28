@@ -22,7 +22,8 @@ public sealed class LocalFeatureTableOptions
     /// <summary>Keys the index holds before it first grows (a snapshot's record count, when known).</summary>
     public int InitialCapacity { get; init; }
 
-    /// <summary>The hash of a hashed key (<see cref="TableKeys"/>); tests inject a weak one to force collisions. Defaults to XXH3-64 of the key's canonical bytes.</summary>
+    /// <summary>The hash of a hashed key (<see cref="TableKeys"/>); tests inject a weak one to force
+    /// collisions.</summary>
     internal KeyHasher? KeyHasher { get; init; }
 
     /// <summary>The cache policy of a table in mode <see cref="LocalTableMode.Cache"/> (required there, and only there).</summary>
@@ -47,44 +48,23 @@ public sealed class LocalFeatureTableOptions
 }
 
 /// <summary>
-/// The in-process feature table behind the <c>cache</c> and <c>local</c> modes: one per (source, entity),
-/// holding one fixed-size record of native values per entity, written by one background writer and read by requests
-/// without locks.
+/// The in-process feature table behind the <c>cache</c> and <c>local</c> modes: one per (source, entity), one
+/// fixed-size record of native values per entity (<see cref="RecordLayout"/>), written by one background writer and
+/// read by requests without locks.
 /// </summary>
 /// <remarks>
-/// <para><b>Layout</b> (<see cref="RecordLayout"/>). Records are entity-major so that reading 30 features of a candidate
-/// touches two or three cache lines. Pages are large <c>byte[]</c>s and records are appended at their end; the index is
-/// one <c>long[]</c>; strings are codes into one dictionary. Millions of records are a few dozen arrays to the garbage
-/// collector, which does not scan their contents.</para>
-/// <para><b>Concurrency protocol.</b> One writer (<see cref="LocalTableWriter"/>), any number of readers, no locks.
-/// Readers acquire complete record values through the following publication rules.</para>
+/// <para>The publication rules readers rely on:</para>
 /// <list type="number">
-/// <item><b>Published record values are immutable.</b> Cache readers can set a hit flag used only for eviction.
-/// The writer builds a record in private buffers, copies it into free space past
-/// the end of a page's used part, and only then publishes its position into the index slot with
-/// <c>Volatile.Write</c> (release). An update writes a new record and repoints the slot.</item>
-/// <item><b>Index slots.</b> A slot is a (key, position) pair; position 0 means empty. A new key's slot gets its key with
-/// a plain write and then its position with the release write, so a reader that sees the position (read with
-/// <c>Volatile.Read</c>, acquire) also sees the key, and the record bytes behind it. A slot's key never
-/// changes once set; entries are never removed (deletes are tombstone records).</item>
-/// <item><b>Growth publishes a complete copy.</b> The index, the page directory and the string dictionary each grow by
-/// copying into a larger array that is filled completely and then published with one release write of the reference.
-/// The old array is never written again, so a reader holding it sees a consistent, frozen snapshot. Within an array that
-/// has room, a new page or string is stored into the next element before any record using it is published.</item>
-/// <item><b>Readers re-load on out-of-range.</b> A reader loads the index reference once per batch, reads each position
-/// (acquire), and only afterwards resolves its page through the directory. A directory loaded earlier may be older than
-/// the position: if the page number is past its end, the page was added in a grown directory published before the
-/// position, so loading the directory again (acquire) finds it. If the page number is inside it, the element was stored
-/// before the position was published. String codes are resolved the same way. A reader therefore never sees a torn
-/// record, an unpublished page or an out-of-range position.</item>
-/// <item><b>Versions.</b> Pages, index and dictionary belong to a <see cref="TableVersion"/>. A request pins the current
-/// version (<see cref="Pin"/>, acquire) and reads only from it. Compaction and reload build a new version privately and
-/// publish it with one release write of <c>_current</c>. Cache versions may share sealed pages: only eviction hints
-/// can change there. The GC frees unreferenced pages. Pinning is for memory safety only: keys read in one request
-/// may reflect updates from different moments, as with a remote fetch.</item>
+/// <item>A record is built privately, copied past the used end of a page, and only then published by a release write of
+/// its position into the index slot; published values never change (a cache reader sets only a hit flag).</item>
+/// <item>A new slot gets its key by a plain write, then its position by the release write; a key never changes, and
+/// entries are never removed (deletes are tombstones).</item>
+/// <item>The index, the page directory and the string dictionary grow by filling a larger copy and publishing its
+/// reference; the old array is never written again.</item>
+/// <item>A reader reads a position (acquire) before its page or string code, and loads the directory or dictionary
+/// again when the number is past the end of the one it holds.</item>
+/// <item>A request reads one pinned <see cref="TableVersion"/>; compaction and reload publish a new one whole.</item>
 /// </list>
-/// <para>On x64 every plain store is a release and every plain load an acquire, so the volatile accesses only stop the JIT
-/// from reordering; on ARM64 they are the barriers the protocol needs.</para>
 /// </remarks>
 public sealed class LocalFeatureTable
 {
@@ -139,8 +119,7 @@ public sealed class LocalFeatureTable
     /// <summary>
     /// A plan that holds the table, created for an earlier one, now serves with other limits: the table keeps its
     /// records and takes the plan's <c>max_bytes</c> and, for a cache, its times. A cache's writer meets a lower limit
-    /// at once, evicting down to it (<see cref="LocalTableWriter.ShrinkToLimit"/>). Plans that share a table share one
-    /// limit, that of the one served last.
+    /// at once, evicting down to it. Plans that share a table share one limit, that of the one served last.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The options are not ones the table can take
     /// (<see cref="CheckRetune"/>); nothing of the table has changed.</exception>
@@ -163,7 +142,6 @@ public sealed class LocalFeatureTable
     /// <exception cref="ArgumentOutOfRangeException"><c>max_bytes</c> cannot hold even the empty table, or a cache's times are not ones a policy takes.</exception>
     public void CheckRetune(LocalFeatureTableOptions options) => Checked(options);
 
-    /// <summary>The limit and, when a cache's times differ from the table's, the policy <paramref name="options"/> ask for: all of it checked before any of it is applied.</summary>
     private (long MaxBytes, Cache.CachePolicy? Policy) Checked(LocalFeatureTableOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -174,7 +152,6 @@ public sealed class LocalFeatureTable
         return (maxBytes, policy);
     }
 
-    /// <summary>Every write checks the limit, so the empty table must be within it too.</summary>
     private long CheckedMaxBytes(long maxBytes)
     {
         if (maxBytes <= 0 || _emptyBytes > maxBytes)
@@ -216,11 +193,10 @@ public sealed class LocalFeatureTable
     /// <summary>Completes when <see cref="IsLoaded"/> becomes true (never faults; a failed load is the source's error).</summary>
     public Task WhenLoaded => _loaded.Task;
 
-    /// <summary>Metric tags of the table: <c>stratarec.source</c>, <c>stratarec.entity</c>; built once with the
-    /// table, so recording a measurement allocates nothing. Also for whoever runs the table's source (its failures).</summary>
+    /// <summary>Metric tags of the table: <c>stratarec.source</c>, <c>stratarec.entity</c>; recording a measurement
+    /// allocates nothing. Also for whoever runs the table's source (its failures).</summary>
     public ReadOnlySpan<KeyValuePair<string, object?>> MetricTags => _tags;
 
-    /// <summary><see cref="MetricTags"/> with <c>stratarec.outcome</c> <c>hit</c> or <c>miss</c>, for <see cref="StrataRecMetrics.LocalKeys"/>.</summary>
     internal KeyValuePair<string, object?>[] HitTags { get; }
 
     internal KeyValuePair<string, object?>[] MissTags { get; }
@@ -234,11 +210,6 @@ public sealed class LocalFeatureTable
     /// <summary>Makes a fully built version current (release: its arrays are complete before a reader can pin it).</summary>
     internal void Publish(TableVersion version) => Volatile.Write(ref _current, version);
 
-    /// <summary>
-    /// A checkpoint or a completed reload: every update before <paramref name="position"/> is visible. The table counts
-    /// as loaded from the first one; its size and the time are recorded at each, so the age of the data is
-    /// the time since the last one.
-    /// </summary>
     internal void SetPosition(UpdatePosition position)
     {
         Volatile.Write(ref _position, position);
@@ -253,13 +224,12 @@ public sealed class LocalFeatureTable
     }
 
     /// <summary>
-    /// Whether the table reports its size and its loads. Not a cache's without an in-process tier: it holds nothing and
-    /// loads nothing, and its zeros and the time its writer started would be recorded over those of the table another
-    /// plan's bindings keep of the same source and entity, whose instruments have the same tags.
+    /// Whether the table reports its size and its loads. Not a cache's without an in-process tier: its zeros and the
+    /// time its writer started would be recorded over those of the table another plan's bindings keep of the same
+    /// source and entity, whose instruments have the same tags.
     /// </summary>
     private bool Reports => Cache is not { Memory: false };
 
-    /// <summary>Records the current version's bytes and records: at each checkpoint, and after a cache's writes.</summary>
     internal void RecordSize()
     {
         if (!Reports)
@@ -272,7 +242,6 @@ public sealed class LocalFeatureTable
         StrataRecMetrics.LocalRecords.Record(version.RecordCount, _tags);
     }
 
-    /// <summary>A reload completed and was published after <paramref name="duration"/>.</summary>
     internal void CountLoad(TimeSpan duration) => StrataRecMetrics.LocalLoadDuration.Record(duration.TotalSeconds, _tags);
 
     internal void CountCompaction()

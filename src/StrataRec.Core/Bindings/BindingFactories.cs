@@ -4,9 +4,8 @@ namespace StrataRec.Core.Bindings;
 
 /// <summary>
 /// Creates the instances a binding of one type names: a binding's selector (<c>client</c>, <c>connector</c>,
-/// <c>store</c>, <c>source</c>) names <see cref="Type"/>, and the factory turns the binding's own settings into an instance
-/// of <typeparamref name="TInstance"/>, the contract its section serves. Every kind of binding has this one factory shape,
-/// so adding a kind adds no factory interface, base class or registry.
+/// <c>store</c>, <c>source</c>) names <see cref="Type"/>, and the factory turns the binding's own settings into an
+/// instance of <typeparamref name="TInstance"/>, the contract its section serves.
 /// </summary>
 /// <remarks>
 /// <para>The engine creates one instance per binding identity and shares it across plans and their concurrent requests, so

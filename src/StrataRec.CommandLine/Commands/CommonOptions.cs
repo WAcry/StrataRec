@@ -8,7 +8,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>Options shared by commands that read a workspace.</summary>
 internal static class CommonOptions
 {
     public static Option<string> Config() => new("--config", "-c")
@@ -28,10 +27,6 @@ internal static class CommonOptions
         Description = "Pipeline id; defaults to every pipeline (or the only one).",
     };
 
-    /// <summary>
-    /// The bundles a command replays: paths given as arguments (<c>stratarec replay -c feed b.json</c>, a shell glob, a
-    /// directory) or with <c>-b</c>, at least one in all.
-    /// </summary>
     public static (Argument<string[]> Arguments, Option<string[]> Option) Bundles(Command command, string description)
     {
         var arguments = new Argument<string[]>("bundles") { Description = description, Arity = ArgumentArity.ZeroOrMore };
@@ -49,14 +44,12 @@ internal static class CommonOptions
         return (arguments, option);
     }
 
-    /// <summary>The bundle paths of <see cref="Bundles"/>: the arguments, then those of <c>-b</c>.</summary>
     public static string[] BundlePaths(ParseResult parse, (Argument<string[]> Arguments, Option<string[]> Option) bundles) =>
         [.. parse.GetValue(bundles.Arguments) ?? [], .. parse.GetValue(bundles.Option) ?? []];
 
     /// <summary>
     /// The value an option's token converted to, for a validator that checks its range; null when it did not convert,
-    /// which System.CommandLine reports as a usage error of its own. Reading a failed conversion throws, out of the parse,
-    /// which ended the process (<c>--seq abc</c> exited 134 instead of 2).
+    /// which System.CommandLine reports as a usage error of its own.
     /// </summary>
     public static T? Converted<T>(OptionResult result)
         where T : struct
@@ -67,7 +60,7 @@ internal static class CommonOptions
         }
         catch (InvalidOperationException)
         {
-            return null; // the conversion error is the parse's already
+            return null;
         }
     }
 
@@ -78,8 +71,8 @@ internal static class CommonOptions
     }.AcceptOnlyFromAmong("text", "json");
 
     /// <summary>
-    /// The CLI's JSON output: indented, and with quotes, '&lt;' and non-ASCII text as written, since it goes to a terminal or a
-    /// program, never into HTML (the default encoder writes <c>'</c> as <c>\u0027</c>).
+    /// The CLI's JSON output: indented, and with quotes, '&lt;' and non-ASCII text as written, since it goes to a
+    /// terminal or a program, never into HTML.
     /// </summary>
     public static JsonWriterOptions JsonWriterOptions => new() { Indented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
@@ -104,16 +97,9 @@ internal static class CommonOptions
         Description = "Artifact store directory (blobs/sha256/...) that 'stratarec build --store' uploaded manifests and artifacts to.",
     };
 
-    /// <summary>
-    /// What the binary provides (<paramref name="provided"/>, <see cref="StrataRecCommandLine"/>) placed in a config root:
-    /// relative paths in its bindings resolve against the root. A manifest has no root (null): its relative paths resolve
-    /// against the current directory, as for a host that sets no base directory (<see cref="ConfigRef"/>).
-    /// </summary>
     public static PlanEnvironment ForRoot(PlanEnvironment provided, string? configRoot) =>
         provided with { BaseDirectory = configRoot is null ? null : Path.GetFullPath(configRoot) };
 
-    /// <summary>Loads a workspace and compiles one pipeline (with its experiments).</summary>
-    /// <param name="today">Checks experiments' <c>expires_at</c> against this date (<c>build</c>); see <see cref="CreateRequest"/>.</param>
     public static (ConfigWorkspace Workspace, PlanCompileRequest? Request, PlanCompilation? Compilation) Compile(
         PlanEnvironment provided, string config, string environment, string? pipeline, DiagnosticBag diagnostics, DateOnly? today = null)
     {
@@ -135,9 +121,8 @@ internal static class CommonOptions
     }
 
     /// <summary>
-    /// The compile request of <paramref name="pipeline"/> (or the workspace's only pipeline); null after reporting errors.
-    /// Without an expiry check: <c>run</c>, <c>explain-plan</c>, <c>diff</c>, <c>replay</c> and <c>compare</c>
-    /// look at configurations as they are, including last week's; only <c>validate</c> and <c>build</c> decide releases.
+    /// Without an expiry check: <c>run</c>, <c>explain-plan</c>, <c>diff</c>, <c>replay</c> and <c>compare</c> look at
+    /// configurations as they are, including last week's; only <c>validate</c> and <c>build</c> decide releases.
     /// </summary>
     public static PlanCompileRequest? CreateRequest(ConfigWorkspace workspace, string environment, string? pipeline, DiagnosticBag diagnostics, DateOnly? today = null)
     {

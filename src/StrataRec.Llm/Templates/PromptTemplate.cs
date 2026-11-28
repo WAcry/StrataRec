@@ -26,37 +26,16 @@ public enum PromptScope : byte
     Request,
 }
 
-/// <summary>
-/// A prompt template of one node: a <see cref="MustacheTemplate"/> whose names are StrataRec
-/// references, resolved and type-checked once, when the node is compiled, and rendered per request.
-/// </summary>
 /// <remarks>
-/// <para><b>Names.</b> <c>ctx.*</c> and <c>param.*</c> anywhere. The rest depends on the <see cref="PromptScope"/>: over a
-/// window, <c>rows</c> is the section over the window's rows (in rank order), and inside it <c>col.*</c> is the current
-/// row's value and <c>rank</c> its 1-based position in the window, what an answer of window ranks refers to; for one row,
-/// <c>col.*</c> is that row's value anywhere; for the request, there are no columns. A name only another scope has is an
-/// error that says so (<c>MUSTACHE_SCOPE</c>), so a template copied from another operator fails at load, not in the
-/// model's answers. Every name is resolved in the node's compile scope, so an unknown one is a load error with a
-/// did-you-mean, and recorded as a read of the node, so the fetch planner fetches its features before the node runs.
-/// Mustache has no logic: a value the prompt needs computed is a derived feature, one definition for training and
-/// serving, not a second expression language.</para>
-/// <para><b>Values.</b> Strings verbatim; integers in invariant culture; floats in their shortest round-trip
-/// form (a <c>float32</c> as float32, so 0.1 renders as <c>0.1</c>); bools as <c>true</c> / <c>false</c>. A list renders
-/// only as a section, one item at a time (<c>{{#ctx.tags}}{{.}}, {{/ctx.tags}}</c>), a fixed-length one too.</para>
-/// <para><b>Sections.</b> Over <c>rows</c> and lists: once per item. Over a bool: once when true. Over a nullable value:
-/// once when present, and inside it <c>{{name}}</c> (or <c>{{.}}</c>) renders the value. An inverted section renders when
-/// the list is empty, the bool false or the value missing. A section over a value that always has one (a non-nullable
-/// string or number) is a load error: it would always render.</para>
-/// <para><b>Missing is explicit</b> (docs/development.md section 5): <c>{{x}}</c> of a nullable reference must be inside a <c>{{#x}}</c>
-/// section on the same name, or it is a load error (<c>MUSTACHE_NULLABLE</c>): a missing value is never rendered as empty
-/// text silently.</para>
+/// <para>A name only another scope has is an error that says so (<c>MUSTACHE_SCOPE</c>). Every name is resolved in the
+/// node's compile scope.</para>
+/// <para>A list renders only as a section, one item at a time (<c>{{#ctx.tags}}{{.}}, {{/ctx.tags}}</c>).</para>
+/// <para>An inverted section renders when the list is empty, the bool false or the value missing. A section over a
+/// value that always has one (a non-nullable string or number) is a load error.</para>
+/// <para><b>Missing is explicit</b>: <c>{{x}}</c> of a nullable reference must be inside a <c>{{#x}}</c> section on the
+/// same name, or it is a load error (<c>MUSTACHE_NULLABLE</c>).</para>
 /// <para><b>Errors</b> are reported at the template's config pointer with the character offset of the tag at fault and a
 /// hint.</para>
-/// <para><b>Cost.</b> Rendering walks the compiled template and reads each value straight from its column or the request:
-/// it writes into a builder kept per thread and formats numbers on the stack, so once a thread has rendered, the prompt
-/// string it returns is its only allocation. A builder that grew beyond 256 Ki characters is not kept, so a prompt that
-/// long also allocates its builder each time: keeping that much memory for every thread's life is the worse cost
-///.</para>
 /// </remarks>
 public sealed class PromptTemplate
 {
@@ -66,7 +45,6 @@ public sealed class PromptTemplate
     /// <summary>Inside <c>rows</c>: the row's 1-based position in the window.</summary>
     public const string RankName = "rank";
 
-    /// <summary>List sections whose current item fits on the stack while rendering; a template with more rents from the pool.</summary>
     private const int StackFrames = 16;
 
     private readonly MustacheTemplate _template;
@@ -120,8 +98,8 @@ public sealed class PromptTemplate
     }
 
     /// <summary>
-    /// Renders a <see cref="PromptScope.Window"/> prompt for this request: <paramref name="window"/> are the physical rows
-    /// the <c>rows</c> section iterates, in rank order. Synchronous, so the pooled builder never crosses an await.
+    /// Renders a <see cref="PromptScope.Window"/> prompt for this request: <paramref name="window"/> are the physical
+    /// rows the <c>rows</c> section iterates, in rank order.
     /// </summary>
     public string Render(OperatorContext context, ReadOnlySpan<int> window) => Render(context, PromptScope.Window, window, -1);
 
@@ -162,28 +140,20 @@ public sealed class PromptTemplate
 
     private enum BindingKind : byte
     {
-        /// <summary>The section over the window's rows.</summary>
         Rows = 1,
 
-        /// <summary>The current row's 1-based position in the window.</summary>
         Rank,
 
-        /// <summary>A reference: a variable, or a section over a list, a bool or a nullable value.</summary>
         Value,
 
-        /// <summary><c>{{.}}</c> in a list section: the current item of the list.</summary>
         Item,
 
-        /// <summary><c>{{.}}</c> in a section over a bool or a nullable value: that value.</summary>
         SectionValue,
     }
 
-    /// <summary>A resolved <c>col.*</c>, <c>ctx.*</c> or <c>param.*</c> name, ready to read per request.</summary>
-    /// <param name="float32">
-    /// Declared float32 (or a list of float32), so rendered as float32: a request input's symbol has the promoted type
-    /// (float64), but its value has float32 precision, and its float64 digits would only show the rounding (0.1 as
-    /// 0.10000000149011612).
-    /// </param>
+    /// <param name="float32">Declared float32 (or a list of float32), so rendered as float32: a request input's symbol
+    /// has the promoted type (float64), but its value has float32 precision, and its float64 digits would only show the
+    /// rounding.</param>
     private readonly struct Reference(in Symbol symbol, bool float32)
     {
         public Symbol Symbol { get; } = symbol;
@@ -199,11 +169,9 @@ public sealed class PromptTemplate
         public bool IsList => Type.IsList;
     }
 
-    /// <summary>What a tag does per request, by <see cref="MustacheTag.Id"/>.</summary>
     /// <param name="Frame">For a list section and the <c>{{.}}</c> inside it: the slot holding the current item's index.</param>
     private readonly record struct Binding(BindingKind Kind, Reference Reference = default, int Frame = -1);
 
-    /// <summary>Resolves and checks every tag once, at compile time.</summary>
     private sealed class Binder(OperatorCompileContext context, MustacheTemplate template, string configKey, PromptScope scope)
     {
         private readonly List<(MustacheTag Tag, Binding Binding)> _open = new();
@@ -287,7 +255,6 @@ public sealed class PromptTemplate
             Bindings[tag.Id] = new Binding(BindingKind.Value, reference);
         }
 
-        /// <summary><c>{{.}}</c>: the item or value of the innermost (non-inverted) section around it.</summary>
         private void BindImplicit(MustacheTag tag)
         {
             for (var i = _open.Count - 1; i >= 0; i--)
@@ -442,7 +409,6 @@ public sealed class PromptTemplate
             return false;
         }
 
-        /// <summary>Inside a (non-inverted) section on the same name, which renders only when the value is present.</summary>
         private bool Guarded(string name)
         {
             foreach (var (tag, _) in _open)
@@ -456,7 +422,6 @@ public sealed class PromptTemplate
             return false;
         }
 
-        /// <summary>A name only another scope has: <c>rows</c> and <c>rank</c> outside a window, <c>col.*</c> in a per-request prompt.</summary>
         private void ScopeError(MustacheTag tag)
         {
             var op = context.Descriptor.Id;
@@ -492,7 +457,6 @@ public sealed class PromptTemplate
         }
     }
 
-    /// <summary>The values a request renders: the window, the current row, and the current item of each list section.</summary>
     /// <param name="row">The row a per-row prompt shows; otherwise -1, until a <c>rows</c> section enters one.</param>
     private ref struct PromptData(Binding[] bindings, OperatorContext context, ReadOnlySpan<int> window, Span<int> frames, int row) : IMustacheData
     {
@@ -552,8 +516,8 @@ public sealed class PromptTemplate
         }
 
         /// <summary>
-        /// The column's buffer: null for a nullable column nothing wrote in this request (every row missing). A non-nullable
-        /// one always has data; its validity is not read, as the expression evaluator does not read it.
+        /// The column's buffer: null for a nullable column nothing wrote in this request (every row missing). A
+        /// non-nullable one always has data; its validity is not read.
         /// </summary>
         private readonly ColumnBuffer? Column(in Reference reference) =>
             context.Read(reference.Column) is { } buffer ? buffer
@@ -569,7 +533,6 @@ public sealed class PromptTemplate
         private readonly ScalarValue Scalar(in Reference reference) =>
             reference.Symbol.Kind == SymbolKind.Context ? context.ContextValue(reference.Symbol.Id) : context.Param(reference.Param);
 
-        /// <summary>Present and, for a bool, true.</summary>
         private readonly bool Truthy(in Reference reference)
         {
             if (reference.Symbol.Kind == SymbolKind.Column)
@@ -597,7 +560,6 @@ public sealed class PromptTemplate
             };
         }
 
-        /// <summary>Item <paramref name="index"/> of a list, rendered as a value of its element type is.</summary>
         private readonly void WriteItem(in Reference reference, int index, StringBuilder output)
         {
             if (reference.Symbol.Kind == SymbolKind.Column)
@@ -627,7 +589,6 @@ public sealed class PromptTemplate
                 }
             }
 
-            // Request-level values are stored promoted, as in WriteValue.
             var value = Scalar(reference);
             switch (value.ListElement)
             {
@@ -680,7 +641,6 @@ public sealed class PromptTemplate
                 }
             }
 
-            // Request-level values are stored promoted: a float32 one is a float64 holding a float32's value.
             var value = Scalar(reference);
             switch (value.Kind)
             {
@@ -709,7 +669,6 @@ public sealed class PromptTemplate
     }
 }
 
-/// <summary>Formats prompt values without allocating: on the stack, in invariant culture.</summary>
 internal static class PromptValues
 {
     public static void Append(StringBuilder output, bool value) => output.Append(value ? "true" : "false");
@@ -721,7 +680,6 @@ internal static class PromptValues
         output.Append(buffer[..written]);
     }
 
-    /// <summary>The shortest text that reads back as the same float32.</summary>
     public static void Append(StringBuilder output, float value)
     {
         Span<char> buffer = stackalloc char[32];
@@ -729,7 +687,6 @@ internal static class PromptValues
         output.Append(buffer[..written]);
     }
 
-    /// <summary>The shortest text that reads back as the same float64.</summary>
     public static void Append(StringBuilder output, double value)
     {
         Span<char> buffer = stackalloc char[32];
@@ -739,9 +696,7 @@ internal static class PromptValues
 }
 
 /// <summary>
-/// One builder per thread for rendering prompts: after the first renders it has grown to the prompts' size, so a render
-/// appends without allocating and only the result string is new. Rendering is synchronous, so a builder never crosses an
-/// await; one that grew beyond <see cref="MaxCachedCapacity"/> characters is dropped rather than kept for the thread's life.
+/// Rendering is synchronous, so a builder never crosses an await.
 /// </summary>
 internal static class PromptBuilder
 {

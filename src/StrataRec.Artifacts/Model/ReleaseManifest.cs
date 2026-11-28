@@ -29,17 +29,15 @@ public sealed class ReleaseManifest
     public Dictionary<string, ManifestExperiment> Experiments { get; init; } = new();
 
     /// <summary>
-    /// Experiments <c>stratarec revoke</c> removed, by name: <c>stratarec build</c> refuses to release one of them again
-    /// unchanged, so the next build from a repository that still lists it does not undo the stop. A
-    /// revocation keeps what the one before it listed; a build lists nothing (it released nothing revoked unchanged, and
-    /// what it left out it left out on purpose). Nodes do not read it.
+    /// Experiments <c>stratarec revoke</c> removed, by name: <c>stratarec build</c> refuses to release one of them
+    /// again unchanged, so the next build from a repository that still lists it does not undo the stop. A revocation
+    /// keeps what the one before it listed; a build lists nothing. Nodes do not read it.
     /// </summary>
     public Dictionary<string, RevokedExperiment> Revoked { get; init; } = new();
 
     /// <summary>
-    /// The stop in force on <paramref name="experiment"/>: its <see cref="Revoked"/> entry, unless this manifest releases
-    /// the experiment again. One released again was brought back, and a controller that publishes it may have kept the
-    /// entry; <c>build</c>, <c>revoke</c> and <c>status</c> all read stops through this.
+    /// The stop in force on <paramref name="experiment"/>: its <see cref="Revoked"/> entry, unless this manifest
+    /// releases the experiment again.
     /// </summary>
     public bool TryGetStop(string experiment, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out RevokedExperiment? stop)
     {

@@ -47,11 +47,10 @@ public sealed class RequestAggregateValue
 /// number of candidates), taps log them in <c>context</c>, and <c>output.values</c> returns them to the caller.
 /// </summary>
 /// <remarks>
-/// It aggregates the rows alive when it runs, in their order, so floating-point sums are deterministic. Each value
-/// evaluates its expressions once over the live rows into buffers rented from the request's memory, one of each kind
-/// for the node, which its values share; nothing is allocated per row. Integer sums and means are exact until the end: a sum outside int64 fails the node, whatever the order of
-/// the rows. A float sum adds the rows in order, so it may overflow before the end where the exact one would not; a float
-/// result the request column cannot hold (NaN, ±∞) is replaced when the node commits, as any request column's value is.
+/// It aggregates the rows alive when it runs, in their order, so floating-point sums are deterministic. Integer sums
+/// and means are exact until the end: a sum outside int64 fails the node, whatever the order of the rows. A float sum
+/// adds the rows in order, so it may overflow before the end where the exact one would not; a float result the request
+/// column cannot hold (NaN, ±∞) is replaced when the node commits, as any request column's value is.
 /// </remarks>
 public sealed class RequestAggregateFactory : IOperatorFactory
 {
@@ -134,7 +133,6 @@ public sealed class RequestAggregateFactory : IOperatorFactory
             return null;
         }
 
-        // The request column is declared; it must hold what the function writes, and be nullable where it can be missing.
         if (integer ? !output.Type.IsInteger : !output.Type.IsFloat)
         {
             context.Error(at, "COLUMN_TYPE_MISMATCH",
@@ -178,7 +176,7 @@ public sealed class RequestAggregateFactory : IOperatorFactory
             {
                 if (Aggregate(context, value, ref buffers) is not { } result)
                 {
-                    return ValueTask.CompletedTask; // the node failed (Fail)
+                    return ValueTask.CompletedTask;
                 }
 
                 context.SetRequestValue(value.Output, result);
@@ -189,8 +187,7 @@ public sealed class RequestAggregateFactory : IOperatorFactory
 
         /// <summary>
         /// The buffers the values evaluate their expressions into, made the first time one needs them and shared by the
-        /// values after it: each evaluation writes every live row, value and validity, so the node holds at most one of
-        /// each kind of the request's memory, however many values it computes.
+        /// values after it: each evaluation writes every live row, value and validity.
         /// </summary>
         private struct Buffers
         {
@@ -227,8 +224,8 @@ public sealed class RequestAggregateFactory : IOperatorFactory
 
             long count = 0;
             Int128 sum = 0; // of integer values: exact, so the order of the rows never decides whether it fits
-            long extreme = 0; // the min or max of integer values
-            double real = 0; // the sum, min, max or running mean of float values
+            long extreme = 0;
+            double real = 0;
             var integers = of as ScalarColumn<long>;
             var floats = of as ScalarColumn<double>;
             foreach (var row in live)

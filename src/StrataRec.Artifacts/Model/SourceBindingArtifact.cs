@@ -27,9 +27,9 @@ public sealed class SourceBindingArtifact
     public Dictionary<string, PipelineBinding> Pipelines { get; init; } = new();
 
     /// <summary>
-    /// Adds to <paramref name="types"/> the client, connector, update-source and cache-store types the named bindings use:
-    /// a binary that lacks one cannot serve them. The one place that knows which binding settings name a
-    /// type, so a new kind of setting is added here. A name without a binding adds nothing (it is an error where it is used).
+    /// Adds to <paramref name="types"/> the client, connector, update-source and cache-store types the named bindings
+    /// use: a binary that lacks one cannot serve them. A name without a binding adds nothing (it is an error where it
+    /// is used).
     /// </summary>
     /// <param name="featureSources">Feature sources a plan reads: their connector, bootstrap source and distributed store.</param>
     /// <param name="services">Services a plan binds: their client and distributed store.</param>
@@ -87,8 +87,8 @@ public sealed class SourceBindingArtifact
 /// <c>mode</c> says where the values come from and selects which of the other settings apply: <c>fetch</c> uses
 /// <c>connector</c>, <c>timeout_ms</c>, <c>max_batch</c>, connector settings and optionally <c>cache</c>; <c>local</c>
 /// uses <c>max_bytes</c> and <c>bootstrap</c>; <c>service</c> uses <c>service</c> and <c>timeout_ms</c>. A setting the
-/// binding's mode does not take is an error (the Features runtime checks it, with the pointer of the setting), so a
-/// binding switched from one mode to another cannot keep a setting that silently does nothing.
+/// binding's mode does not take is an error, so a binding switched from one mode to another cannot keep a setting that
+/// silently does nothing.
 /// </remarks>
 public sealed class FeatureSourceBinding
 {

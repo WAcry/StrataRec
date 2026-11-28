@@ -8,7 +8,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>What a binary's registered binding types are to the schema, the capabilities and a compile.</summary>
 public sealed class BindingRegistrationTests
 {
     [Fact]
@@ -21,7 +20,7 @@ public sealed class BindingRegistrationTests
         Assert.Equal(
             new[] { new BindingSchemaSource(BindingKind.Service, "dual@1", typeof(ServiceSettings)), new BindingSchemaSource(BindingKind.Connector, "dual@1", typeof(ConnectorSettings)) },
             sources);
-        Assert.Equal(["dual@1"], environment.Capabilities().FindAll(c => c == "dual@1")); // one capability
+        Assert.Equal(["dual@1"], environment.Capabilities().FindAll(c => c == "dual@1"));
     }
 
     [Fact]
@@ -68,7 +67,7 @@ public sealed class BindingRegistrationTests
         for (var node = 0; node < 3; node++)
         {
             Assert.False(resolver.TryGetService("ctr_model", out _, out _, out _, out var error, out _));
-            Assert.Null(error); // reported at the binding, not again at the node
+            Assert.Null(error);
         }
 
         Assert.Equal(1, factory.Created);
@@ -100,7 +99,6 @@ public sealed class BindingRegistrationTests
         public required string StoreEndpoint { get; init; }
     }
 
-    /// <summary>One type of two kinds, each bound with settings of its own.</summary>
     private sealed class Dual : IBindingFactory<IServiceClient>, IBindingFactory<IFeatureSourceConnector>
     {
         public string Type => "dual@1";

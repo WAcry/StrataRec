@@ -4,17 +4,9 @@ using StrataRec.Expressions.Runtime;
 
 namespace StrataRec.Expressions.Ir;
 
-/// <summary>
-/// IR optimizer: constant folding, value-preserving algebraic simplification and common subexpression
-/// elimination by hash-consing. Loop-invariant hoisting needs no rewrite: <see cref="IrNode.IsInvariant"/> marks every
-/// subtree that depends only on <c>ctx.*</c>, <c>param.*</c> and constants, and the backend evaluates those once per
-/// call.
-/// </summary>
 /// <remarks>Every rewrite is exact for all inputs, including NaN, ±∞, ±0 and missing values, so the optimized program
-/// is bit-identical to the unoptimized one (the differential tests run the reference interpreter on the
-/// unoptimized IR) — except for the sign and payload of a NaN, which IEEE 754 does not pin down for domain errors
-/// and which no expression can observe: comparisons treat every NaN alike, columns store NaN as non-finite, and
-/// <c>hash01</c> hashes every NaN as one canonical NaN (<see cref="Core.Hashing.StableHash.CanonicalFloat64Bits"/>).
+/// is bit-identical to the unoptimized one — except for the sign and payload of a NaN, which IEEE 754 does not pin down
+/// for domain errors and which no expression can observe.
 /// </remarks>
 internal sealed class Optimizer
 {
@@ -78,7 +70,6 @@ internal sealed class Optimizer
             case IrOp.Has when !args[0].Type.Nullable:
                 return IrNode.Const(ScalarValue.FromBool(true), ExprType.Bool, node.Start, node.Length);
             case IrOp.And:
-                // Kleene: false && x = false, true && x = x.
                 if (IsBool(args[0], out var a))
                 {
                     return a ? args[1] : args[0];
@@ -146,7 +137,7 @@ internal sealed class Optimizer
     /// <summary>
     /// <c>(-a) * s</c> → <c>a * (-s)</c> and <c>(-a) / s</c> → <c>a / (-s)</c> when <c>s</c> is invariant: IEEE
     /// multiplication and division are sign-symmetric, so the result is identical (up to the sign of a NaN, see the
-    /// class remarks) while the negation moves out of the per-row loop (e.g. <c>exp(-age / param.half_life)</c>).
+    /// class remarks) while the negation moves out of the per-row loop.
     /// </summary>
     private IrNode MoveNegationToInvariant(IrNode node)
     {

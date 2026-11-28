@@ -14,7 +14,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Recording requests into replay bundles and replaying them on the home_feed sample.</summary>
 public sealed class ReplayTests
 {
     internal static readonly string[] ControlArms = { "exp_freshness_calibration/control", "exp_mmr_diversity/control", "exp_quality_weight/control" };
@@ -31,7 +30,6 @@ public sealed class ReplayTests
         var recorded = await engine.ExecuteAsync(Request("req-rt", userId, surface, treatment ? TreatmentArms : null), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
-        // Through JSON, and on a fresh engine: the bundle alone carries everything the replay needs.
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
         var (fresh, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var outcome = await fresh.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
@@ -80,7 +78,7 @@ public sealed class ReplayTests
         // popular is sent at once; two_tower once the user's embedding its query reads is stored, with it.
         var recalls = run.ServiceCalls.FindAll(c => c.Role == "recall");
         Assert.Equal(new[] { ("popular", 19), ("two_tower", 40) }, recalls.Select(c => (c.Service, c.Ids!.Value.GetArrayLength())));
-        Assert.All(recalls, c => Assert.Equal(("ok", 1, null), (c.Status, c.InputDigests.Count, c.Keys))); // a query is its digest; no items sent
+        Assert.All(recalls, c => Assert.Equal(("ok", 1, null), (c.Status, c.InputDigests.Count, c.Keys)));
         var items = run.FeatureCalls.Where(c => c.Source == "item_store").ToList();
         Assert.True(items.Count >= 3, "max_batch 25 splits the 59 recalled items into chunks");
         Assert.All(items, c => Assert.InRange(c.Keys.GetArrayLength(), 1, 25));
@@ -96,7 +94,6 @@ public sealed class ReplayTests
         Assert.Contains(run.Sampling.Taps, t => t is { Tap: "served", Active: true });
 
         Assert.Equal(10, bundle.Result.Items.Count);
-        // score is col.score.final, a float32 column: an output that is a column keeps the column's float32 type.
         Assert.Equal(("float32", "string"), (bundle.Result.ColumnTypes["score"], bundle.Result.ColumnTypes["category"]));
         Assert.Equal(recorded.Items[0].Id.Int64Value, bundle.Result.Items[0].Id.GetInt64());
     }
@@ -116,7 +113,7 @@ public sealed class ReplayTests
             Debug = new DebugOptions { Record = true },
         }, TestContext.Current.CancellationToken);
         (string, string)[] ignored = { ("exp_mmr_diversity/control", "layer_conflict"), ("exp_mmr_diversity/mmr", "layer_conflict"), ("not_real/unknown", "unknown") };
-        Assert.Equal(new[] { "exp_quality_weight/strong" }, recorded.Experiments.Assigned); // the conflicting layer ran its baseline
+        Assert.Equal(new[] { "exp_quality_weight/strong" }, recorded.Experiments.Assigned);
         Assert.Equal(ignored, recorded.Experiments.Ignored.Select(i => (i.Id, IgnoredArm.Name(i.Reason))));
         Assert.Equal(ignored, recorded.Recording!.Request.Assignment.Ignored.Select(i => (i.Id, i.Reason)));
 
@@ -126,14 +123,9 @@ public sealed class ReplayTests
         Assert.True(outcome.Report.Diff.Identical, Describe(outcome.Report));
         Assert.Equal(recorded.Experiments.Assigned, outcome.Result.Experiments.Assigned);
         Assert.Equal(recorded.Experiments.Ignored, outcome.Result.Experiments.Ignored);
-        Assert.Empty(withArms.Result.Experiments.Ignored); // arms given to the replay replace the external assignment
+        Assert.Empty(withArms.Result.Experiments.Ignored);
     }
 
-    /// <summary>
-    /// A bundle a host deserialized itself (from its own store, say), not read by <see cref="ReplayBundleFile"/>,
-    /// is refused at its format all the same, a finished request's as an aborted one's: the layout of 2026-11-20.1 is
-    /// this build's, so deserializing it succeeds, and its calls were batched at other boundaries.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -158,7 +150,6 @@ public sealed class ReplayTests
         Assert.Contains("record the request again", replay.Hint, StringComparison.Ordinal);
     }
 
-    /// <summary>the schema of a bundle names this build's format, not any string.</summary>
     [Fact]
     public void TheBundleSchema_RequiresThisBuildsFormat()
     {
@@ -224,7 +215,6 @@ public sealed class ReplayTests
         Assert.Empty(outcome.Report.Gaps);
         Assert.False(outcome.Result.Items.Single(i => i.Id.Int64Value == 1).Columns["embedding_present"].AsBool());
 
-        // A NaN score column: the comparison ends, leaves the NaNs out of the distributions and counts them.
         var report = ResultComparisonBound.Run(() => ReplayComparison.Compare(new[] { new ReplayPair("a", "a", outcome, outcome) }, 10, "undefined", "base", "base"));
         Assert.Equal((10, 0, 0.0), (report.Baseline.NonFiniteScores, report.Baseline.Scores.Count, report.ScoreKs));
         Assert.Equal(1, report.Identical);
@@ -244,9 +234,6 @@ public sealed class ReplayTests
     [Fact]
     public async Task RecordedTimeouts_ReplayAsTimeouts_WithTheSameDecisions_WithoutWaiting()
     {
-        // popular and the CTR model would take a minute; the source's 20 ms timeout and the sample's own 50 ms node
-        // timeout cut them off, ctr_ranker falls back to ctr_backup, and diversity_cap is skipped for want of 10 s
-        // (deadline 5 s).
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             Edit(root, "bindings/local.jsonc", "\"data_file\": \"fixtures/recall_popular.json\"",
@@ -291,7 +278,6 @@ public sealed class ReplayTests
         var recorded = await engine.ExecuteAsync(Request("req-fail", 1001, "home", ControlArms), TestContext.Current.CancellationToken);
         Assert.Contains(recorded.Recording!.Runs[0].FeatureCalls, c => c.Source == "author_store" && c.Status == "error" && c.Values is null);
 
-        // Replayed on the healthy sample: the recorded failure is replayed, not the healthy source.
         var (healthy, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var outcome = await healthy.ReplayAsync(recorded.Recording, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -332,8 +318,6 @@ public sealed class ReplayTests
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
         var recorded = await engine.ExecuteAsync(Request("req-mod", 1001, "home", ControlArms), TestContext.Current.CancellationToken);
 
-        // More candidates from two_tower than the recording holds, 10 more rows for the model, and an output column
-        // reading a feature the recorded request never fetched.
         var modified = HomeFeedTestHost.LoadModified(root =>
         {
             Edit(root, "pipelines/home_feed.jsonc", "\"two_tower\": 40, \"popular\": 20", "\"two_tower\": 50, \"popular\": 20");
@@ -357,7 +341,6 @@ public sealed class ReplayTests
         Assert.True(age.Count >= outcome.Result.Items.Count);
         Assert.NotEmpty(age.Examples);
 
-        // Never invented: the field the bundle lacks is missing in every item, and its missing rate is 100%.
         Assert.All(outcome.Result.Items, i => Assert.True(i.Columns["age"].IsMissing));
         Assert.Equal(1.0, report.FieldStats.Single(s => s is { Source: "item_store", Field: "i_age_h" }).MissingRate);
         Assert.Equal(0.0, report.FieldStats.Single(s => s is { Source: "item_store", Field: "i_clk_7d" }).MissingRate);
@@ -419,14 +402,12 @@ public sealed class ReplayTests
         Assert.True(report.ScoreDelta.Count > 0);
         Assert.Empty(report.Baseline.Gaps);
 
-        // coarse_k 35 sends rows to the model and to later stages that the recordings never fetched for.
         Assert.Contains(report.Candidate.Gaps, g => g is { Kind: "model", Source: "ctr_model", Reason: "not_recorded" });
         Assert.Contains(report.Candidate.Gaps, g => g is { Kind: "feature", Source: "item_store", Field: "i_author_id", Reason: "not_recorded" });
         Assert.True(report.Candidate.FeatureMissingRate > report.Baseline.FeatureMissingRate);
         Assert.Contains(report.FeatureMissing, f => f is { Source: "item_store", Field: "i_author_id", Baseline: 0.0, Candidate: > 0.0 });
         Assert.Equal(3, report.Requests.Count);
 
-        // Comparing a configuration with itself: everything identical.
         var same = ReplayComparison.Compare(pairs.Select(p => p with { Candidate = p.Baseline }).ToList(), 10, "score", "base", "base");
         Assert.Equal((3, 1.0, 1.0, 0.0), (same.Identical, same.Overlap.Mean!.Value, same.KendallTau.Mean!.Value, same.ScoreKs));
         Assert.Empty(same.FeatureMissing);
@@ -481,7 +462,6 @@ internal static class ResultComparisonBound
     }
 }
 
-/// <summary>A replay is not traffic: it leaves metrics, spans and event logs (and so dependency health) untouched.</summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class ReplayTelemetryTests
 {
@@ -497,7 +477,7 @@ public sealed class ReplayTelemetryTests
         {
             var recorded = await engine.ExecuteAsync(ReplayTests.Request("req-telemetry", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
             bundle = recorded.Recording!;
-            Assert.NotEmpty(recording.Of(StrataRecMetrics.Names.IoErrors)); // recording a request does not hide it
+            Assert.NotEmpty(recording.Of(StrataRecMetrics.Names.IoErrors));
         }
 
         events.Flush();
@@ -517,8 +497,8 @@ public sealed class ReplayTelemetryTests
         var outcome = await engine.ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Report.Diff.Identical, ReplayTests.Describe(outcome.Report));
-        Assert.Equal("fallback", outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker").Replayed); // the failure was replayed...
-        Assert.Empty(metrics.Measurements); // ...without counting against author_store or the node
+        Assert.Equal("fallback", outcome.Report.Nodes.Single(n => n.Node == "ctr_ranker").Replayed);
+        Assert.Empty(metrics.Measurements);
         Assert.Empty(spans);
         events.Flush();
         Assert.Empty(logging.Entries);

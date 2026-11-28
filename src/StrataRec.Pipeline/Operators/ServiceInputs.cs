@@ -7,16 +7,15 @@ namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
 /// Request-level values as a service call's inputs: what an operator sends from expressions over <c>ctx.*</c> and
-/// <c>param.*</c> (a recall's query; a filter's user segment). One conversion, so every operator sends a
-/// value the same way and a recording digests it the same way.
+/// <c>param.*</c> (a recall's query; a filter's user segment).
 /// </summary>
 public static class ServiceInputs
 {
     /// <summary>
-    /// <paramref name="value"/>, of <paramref name="type"/>, as the input <paramref name="name"/>: a scalar as a tensor of
-    /// shape <c>[]</c>, a list as one of shape <c>[n]</c>, each element at the width of the type's element kind (a
-    /// <c>float32</c> as a float, exactly: it was checked against its type where it entered). A missing value
-    /// is sent as missing (<see cref="NamedInput.IsMissing"/>), with the type's element type and shape.
+    /// <paramref name="value"/>, of <paramref name="type"/>, as the input <paramref name="name"/>: a scalar as a tensor
+    /// of shape <c>[]</c>, a list as one of shape <c>[n]</c>, each element at the width of the type's element kind (a
+    /// <c>float32</c> as a float, exactly). A missing value is sent as missing (<see cref="NamedInput.IsMissing"/>),
+    /// with the type's element type and shape.
     /// </summary>
     /// <param name="memory">The request's memory, which the input's elements are rented from.</param>
     public static NamedInput Create(string name, ColumnType type, in ScalarValue value, RequestMemory memory)

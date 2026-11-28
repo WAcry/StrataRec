@@ -16,12 +16,10 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A tap logs a candidate feature only where its column is written whatever runs. A node's fill writes the
-/// features it reads and the key features they are fetched by; a fallback's fill writes its candidate features only when
-/// it runs, and the prefetch for it never backfills the table. The tap checks counted a fallback's reads, and the key
-/// <c>col.item.base</c> of the <c>col.creator.pop</c> only the fallback reads, as fetched: the request succeeded without log
-/// consumers and threw once a sampled tap read the column nobody had written, captured or written to a sink. A fallback's
-/// context features count: the context prefetch stores them for every request.
+/// A tap logs a candidate feature only where its column is written whatever runs. A node's fill writes the features it
+/// reads and the key features they are fetched by; a fallback's fill writes its candidate features only when it runs,
+/// and the prefetch for it never backfills the table. A fallback's context features count: the context prefetch stores
+/// them for every request.
 /// </summary>
 public sealed class TapCandidateKeyTests
 {
@@ -36,7 +34,7 @@ public sealed class TapCandidateKeyTests
 
     /// <summary>
     /// The same compiled plan serves the request whether the fallback runs or not, and whether the tap is sampled: the
-    /// check is the only place to stop it. The hint says where the feature can be logged.
+    /// check is the only place to stop it.
     /// </summary>
     [Theory]
     [InlineData("col.creator.pop", """{ "after": "next" }""", null)]
@@ -59,11 +57,6 @@ public sealed class TapCandidateKeyTests
             error.Hint);
     }
 
-    /// <summary>
-    /// A node that reads <c>col.creator.pop</c> runs before the tap: its fill wrote the feature and its key, which the tap
-    /// logs with no log consumers, captured, and written to a sink (rejected by a first fix, which followed
-    /// only context keys).
-    /// </summary>
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -83,11 +76,6 @@ public sealed class TapCandidateKeyTests
         }
     }
 
-    /// <summary>
-    /// A node its <c>when</c> or <c>min_remaining_ms</c> skips fills nothing, and its fallback does not run
-    /// either. The checks counted what it reads as fetched at every later point: the plan compiled, and the request threw
-    /// once the output's tap was sampled after a skip. The hint names the node and why a later point cannot count on it.
-    /// </summary>
     [Theory]
     [InlineData("col.creator.pop", "\"when\": \"false\",")]
     [InlineData("col.item.base", "\"when\": \"false\",")]
@@ -104,10 +92,6 @@ public sealed class TapCandidateKeyTests
             error.Hint);
     }
 
-    /// <summary>
-    /// A tap attached to a node that may be skipped is captured only when the node ran: it logs what the node reads then,
-    /// and nothing when the node is skipped.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -131,7 +115,6 @@ public sealed class TapCandidateKeyTests
         }
     }
 
-    /// <summary>A node that may be skipped still counts for the context features it reads: the prefetch stores them for every request.</summary>
     [Fact]
     public async Task ATapAfterANodeThatMayBeSkipped_LogsTheContextFeaturesItReads()
     {
@@ -145,10 +128,6 @@ public sealed class TapCandidateKeyTests
         Assert.Equal(3L, Assert.Single(Assert.Single(result.LogBatches, b => b.TapId == "key").Context, c => c.Name == "w").Value.AsInt64());
     }
 
-    /// <summary>
-    /// The output reads the features of its columns for every row it returns, so a tap there can log them; the
-    /// hint named only nodes.
-    /// </summary>
     [Fact]
     public async Task ATapLoggingACandidateFeatureOnlyTheOutputReads_IsToldToAttachThere_WhereItLogsIt()
     {
@@ -164,12 +143,6 @@ public sealed class TapCandidateKeyTests
         Assert.Equal(10L, ((long[])Assert.Single(Assert.Single(result.LogBatches, b => b.TapId == "key").Columns).Values)[0]);
     }
 
-    /// <summary>
-    /// A fill writes the rows live when it runs, and a tap never fills. A node read <c>col.item.base</c> and
-    /// failed; its fallback, a row source, appended candidate 2, and a tap after the node logged candidate 2's value from
-    /// storage nobody wrote, as a valid value. After a position that may append rows, a candidate feature filled before is
-    /// fetched again only by a later node that reads it, which fills every live row.
-    /// </summary>
     [Theory]
     [InlineData("")]
     [InlineData("\"when\": \"true\",")]
@@ -194,10 +167,6 @@ public sealed class TapCandidateKeyTests
         Assert.Equal(new long[] { 10, 0 }, (long[])column.Values); // candidate 2 has no record: the default, as filled by 'later'
     }
 
-    /// <summary>
-    /// A tap of entered or dropped rows logs rows that were live when the node filled, none that its position
-    /// appends. The rule refused it as it refuses a tap of survived rows there.
-    /// </summary>
     [Theory]
     [InlineData("entered")]
     [InlineData("dropped")]
@@ -225,9 +194,9 @@ public sealed class TapCandidateKeyTests
     }
 
     /// <summary>
-    /// A node takes its non-nullable column and drops every row without writing it (a filter that writes only the rows it
-    /// keeps, and keeps none). A tap of the dropped rows logs that column missing, as a reference and as a computation reading it: an expression reads a
-    /// non-nullable column without its validity, and the dropped rows' slots hold what the pool left there.
+    /// A tap of the dropped rows logs that column missing, as a reference and as a computation reading it: an
+    /// expression reads a non-nullable column without its validity, and the dropped rows' slots hold what the pool left
+    /// there.
     /// </summary>
     [Fact]
     public async Task ATapOfDroppedRows_LogsAComputationOverAColumnTheNodeDidNotWriteThere_AsMissing()
@@ -257,7 +226,6 @@ public sealed class TapCandidateKeyTests
         Assert.All(batch.Columns, column => Assert.True(column.IsMissing(0), column.Name));
     }
 
-    /// <summary>Takes its column's storage and drops every row, writing no value.</summary>
     private sealed class DropsAllFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("DropsAll", 1, Effects.ColumnWriter | Effects.RowFilter, typeof(AppendingConfig), "Drops every row.");
@@ -279,7 +247,6 @@ public sealed class TapCandidateKeyTests
         }
     }
 
-    /// <summary>A row source after the node that read the feature: the hint names both.</summary>
     [Fact]
     public void RowsALaterRowSourceAppends_HaveNoValueForWhatAnEarlierNodeFilled()
     {
@@ -309,7 +276,6 @@ public sealed class TapCandidateKeyTests
     }
 
     /// <summary>
-    /// <c>next</c> runs <c>FailsAfterReading@1</c>, whose fallback <c>backup</c> is <c>AppendsOne@1</c>, a row source;
     /// <c>score.t</c> is nullable, as the appended row is the only one the fallback writes.
     /// </summary>
     private static string Appending(string pipeline) => pipeline
@@ -336,7 +302,6 @@ public sealed class TapCandidateKeyTests
         public bool DropEntered { get; init; }
     }
 
-    /// <summary>Reads a column (its node fills the feature), then fails.</summary>
     private sealed class FailsAfterReadingFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("FailsAfterReading", 1, Effects.ColumnWriter, typeof(ReadingConfig), "Reads a column, then fails.");
@@ -359,7 +324,6 @@ public sealed class TapCandidateKeyTests
         }
     }
 
-    /// <summary>Appends candidate 2 and writes its column for that row only.</summary>
     private sealed class AppendsOneFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("AppendsOne", 1, Effects.RowSource | Effects.RowFilter, typeof(AppendingConfig), "Appends candidate 2.");
@@ -388,7 +352,6 @@ public sealed class TapCandidateKeyTests
         }
     }
 
-    /// <summary>A context feature only the fallback reads is prefetched for every request: the tap logs it.</summary>
     [Fact]
     public async Task ATapLoggingAContextFeatureOnlyAFallbackReads_LogsIt()
     {
@@ -401,12 +364,6 @@ public sealed class TapCandidateKeyTests
         Assert.Equal(3L, Assert.Single(Assert.Single(result.LogBatches, b => b.TapId == "key").Context, c => c.Name == "w").Value.AsInt64());
     }
 
-    /// <summary>
-    /// Past the combination limit, the compiler checks each rule's scope. A tap's candidate feature was decided
-    /// by the tap, its attach point and the feature's readers; a layer adding a row source (or a row-source fallback)
-    /// between two readers was in no scope, so three layers together (skip the later reader, add the row source, log the
-    /// feature at the output) compiled, and the tap logged the appended row's storage. Each row source is in a scope.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -459,14 +416,6 @@ public sealed class TapCandidateKeyTests
         Assert.Contains(scoped.Diagnostics, d => d.IsError && d.Code == "TAP_FEATURE_NOT_FETCHED");
     }
 
-    /// <summary>
-    /// A row source that runs only after the tap is captured appends no row it logs, but was in a scope of the
-    /// tap's candidate feature: with the layers changing the tap and its reader, that scope was past the combination limit,
-    /// and a plan every combination of which is valid was rejected. Only a row source that may run before the tap counts.
-    /// One at the largest order (taken for no order, and so for the first), a row-source fallback of a node
-    /// there, one nothing falls back to, a node a row source only in an arm (its order as a scorer counted), and a tap an
-    /// arm moves to the output to log other things (every row source counted for the feature) were still counted.
-    /// </summary>
     [Theory]
     [InlineData("later")]
     [InlineData("max_order")]
@@ -521,10 +470,6 @@ public sealed class TapCandidateKeyTests
         Assert.True(scoped.Succeeded, string.Join("\n", scoped.Diagnostics));
     }
 
-    /// <summary>
-    /// The hint named the first later node that reads the feature, though rows its position appends (by it or
-    /// its fallback) have no value for it: moved there, the tap was refused again. It names the first that keeps it.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -550,11 +495,6 @@ public sealed class TapCandidateKeyTests
         Assert.True(accepted.Succeeded, string.Join("\n", accepted.Diagnostics));
     }
 
-    /// <summary>
-    /// When every later reader's position appends rows (by it or its fallback) and the output does not read the
-    /// feature, the hint asked for "a node that reads" it and named none; moved after the only reader, the tap was refused
-    /// again. It names the last such reader, after which a node must read it.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -578,11 +518,6 @@ public sealed class TapCandidateKeyTests
         Assert.Equal("attach the tap after a node after 'next' that reads 'item.base': the rows 'next' or its fallback appends have no value for it", error.Hint);
     }
 
-    /// <summary>
-    /// The reader before the tap may be skipped and its position does not append, and the only later reader
-    /// appends rows: attached after the reader, the tap runs only when it does. The hint went to the later reader and named
-    /// a node after it that does not exist.
-    /// </summary>
     [Fact]
     public void TheHint_NamesASkippableEarlierReader_BeforeLaterReadersThatAppend()
     {
@@ -604,10 +539,6 @@ public sealed class TapCandidateKeyTests
         Assert.True(moved.Succeeded, string.Join("\n", moved.Diagnostics));
     }
 
-    /// <summary>
-    /// A tap of entered or dropped rows after a later node, where the reader's fallback appended rows, was told
-    /// to look for a later reader; attached after the reader it logs rows that were live when it filled them.
-    /// </summary>
     [Theory]
     [InlineData("entered")]
     [InlineData("dropped")]
@@ -629,7 +560,6 @@ public sealed class TapCandidateKeyTests
         Assert.True(moved.Succeeded, string.Join("\n", moved.Diagnostics));
     }
 
-    /// <summary>each of two row sources needs a later reader to fill its rows; context features are not affected.</summary>
     [Fact]
     public async Task TwoRowSources_EachNeedALaterReaderToFillTheirRows_AndContextFeaturesStay()
     {
@@ -752,13 +682,6 @@ public sealed class TapCandidateKeyTests
         }, TestContext.Current.CancellationToken);
     }
 
-    /// <summary>
-    /// Candidate 1, then <c>next</c> (a constant score unless <paramref name="primary"/> reads a feature) whose fallback
-    /// reads <paramref name="backup"/>, by default <c>col.creator.pop</c>, keyed by <c>col.item.base</c>; with
-    /// <paramref name="laterReader"/>, a node <c>later</c> after it reads <c>col.creator.pop</c>. The tap <c>key</c> logs
-    /// <paramref name="logged"/>, and <paramref name="context"/> as a context field. <paramref name="next"/> adds members to
-    /// <c>next</c>; <paramref name="output"/> is the output's column.
-    /// </summary>
     private static string Pipeline(
         string attach, string logged, string primary, string backup = "double(col.creator.pop)", bool laterReader = false, string? context = null,
         string next = "", string output = "col.score.t") => $$"""

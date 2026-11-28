@@ -10,7 +10,6 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>The in-process tier's write side (<see cref="LocalTableCache"/>) and the record codec (<see cref="CacheRecord"/>).</summary>
 [Collection(MetricMeasurement.Name)]
 public class CacheTableTests
 {
@@ -96,12 +95,12 @@ public class CacheTableTests
     public void AWriteBackPastTheQueuesBytes_IsDropped_AndCounted_AndTheQueueTakesBatchesAgainOnceDrained()
     {
         var record = Batch(Table(maxBytes: 1 << 20).Cache, 0, 1).Bytes; // 66 B: a 34-byte record, its key and its slots
-        var (table, cache, clock) = Table(maxBytes: 1 << 20, writeQueueBytes: (record * 7) / 2); // room for three and a half
+        var (table, cache, clock) = Table(maxBytes: 1 << 20, writeQueueBytes: (record * 7) / 2);
         using var dropped = new Counted(StrataRecMetrics.Names.CacheWrites, "dropped");
 
         Assert.True(cache.TryWriteBack(Batch(cache, clock.NowMs, 1, 2)));
         Assert.True(cache.TryWriteBack(Batch(cache, clock.NowMs, 3)));
-        Assert.False(cache.TryWriteBack(Batch(cache, clock.NowMs, 4, 5))); // five would wait
+        Assert.False(cache.TryWriteBack(Batch(cache, clock.NowMs, 4, 5)));
         Assert.Equal(2, dropped.Total);
         Assert.Equal(3 * record, cache.QueuedBytes);
 
@@ -113,9 +112,7 @@ public class CacheTableTests
     }
 
     /// <summary>
-    /// A write-back is charged what it holds while it waits, its keys' strings with its records.
-    /// A 10,000-char key with an 18-byte record held 20 KB against a queue that counted 18 B, in either tier. Each queue
-    /// holds a small batch here, since an empty one takes even a batch over its limit.
+    /// Each queue holds a small batch here, since an empty one takes even a batch over its limit.
     /// </summary>
     [Fact]
     public async Task AWriteBack_IsChargedItsKeys_NotOnlyItsRecords_InEitherTier()
@@ -152,12 +149,6 @@ public class CacheTableTests
         store.Release();
     }
 
-    /// <summary>
-    /// A key part several keys share, the same string object (a request input's or a context feature's part
-    /// of a composite key), is one string held, charged once. 4,096 candidates sharing a 128-char part were charged that
-    /// string 4,096 times, about 1.44 MiB, and an empty 1 MiB queue dropped the batch. An equal string that is another
-    /// object for each key is held, and charged, once per key.
-    /// </summary>
     [Fact]
     public void AKeyPartTheKeysShare_IsChargedOnce()
     {
@@ -182,12 +173,6 @@ public class CacheTableTests
             Enumerable.Range(0, Count).SelectMany(i => new[] { EntityKey.FromInt64(i), EntityKey.FromString(part(i)) }).ToArray();
     }
 
-    /// <summary>
-    /// One request's misses make one write-back, whatever max_batch split its calls into, so a batch larger
-    /// than the whole queue limit was dropped by an idle queue on every request. An empty queue takes it (as the log
-    /// pipeline takes a batch larger than its budget); one that holds some takes nothing over its limit, so it holds at
-    /// most that one batch over it.
-    /// </summary>
     [Fact]
     public void AWriteBackLargerThanTheQueue_GoesIntoAnEmptyQueue_AndNotIntoOneThatHoldsSome()
     {
@@ -198,11 +183,11 @@ public class CacheTableTests
 
         Assert.True(cache.TryWriteBack(large));
         Assert.Equal(large.Bytes, cache.QueuedBytes);
-        Assert.False(cache.TryWriteBack(Batch(cache, clock.NowMs, 2))); // the queue is past its limit
+        Assert.False(cache.TryWriteBack(Batch(cache, clock.NowMs, 2)));
         Assert.Equal(1, cache.WriteQueued(table.Writer));
 
         Assert.True(cache.TryWriteBack(Batch(cache, clock.NowMs, 2)));
-        Assert.False(cache.TryWriteBack(Batch(cache, clock.NowMs, new string('n', 5_000), 3))); // the queue holds some
+        Assert.False(cache.TryWriteBack(Batch(cache, clock.NowMs, new string('n', 5_000), 3)));
         Assert.Equal(1, cache.WriteQueued(table.Writer));
         Assert.Equal(0, cache.QueuedBytes);
         Assert.Equal(2, dropped.Total);
@@ -214,9 +199,6 @@ public class CacheTableTests
     [InlineData(1L)] // eviction drops the old record of the very key being replaced
     public void Eviction_CountsASharedStringAsFreed_OnlyWhenItsLastRecordGoes(long writtenKey)
     {
-        // Ten records share one 25,000-char string. Each record's share of it was counted as freed, so the
-        // eviction for a 10,000-char write-back dropped one record, the shared string stayed whole, and the write-back
-        // still did not fit and was dropped.
         var schema = new LocalTableSchema("s", "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("name", ColumnType.String)]);
         var clock = new StrataRec.UnitTests.Features.ManualClock();
         var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
@@ -293,7 +275,7 @@ public class CacheTableTests
         }
 
         var version = table.Pin();
-        Assert.InRange(evicted.Total, 1, key / 2); // freeing a quarter of the table does not cost its whole batch
+        Assert.InRange(evicted.Total, 1, key / 2);
         Assert.Equal(key - evicted.Total, version.RecordCount);
         Assert.True(version.Find(key - 1).Found);
         Assert.True(version.Bytes <= MaxBytes);
@@ -315,7 +297,6 @@ public class CacheTableTests
             clock.AdvanceMs(2_000);
         }
 
-        // Older records make room first. Once eviction reaches this pair, the hit should protect 20 over 21.
         Write(table, cache, clock.NowMs, 20);
         table.Pin().Find(20L).MarkCacheHit();
         long key = 21;
@@ -343,7 +324,7 @@ public class CacheTableTests
         long key = 1;
         while (table.Compactions == 0 && key < 100)
         {
-            Write(table, cache, clock.NowMs, key++); // every insertion has the same fetch timestamp
+            Write(table, cache, clock.NowMs, key++);
         }
 
         var first = table.Pin();
@@ -352,7 +333,7 @@ public class CacheTableTests
         if (refreshNext)
         {
             clock.AdvanceMs(1);
-            Write(table, cache, clock.NowMs, next); // the replacement is now the newest insertion
+            Write(table, cache, clock.NowMs, next);
         }
 
         table.Writer.Compact();
@@ -368,7 +349,7 @@ public class CacheTableTests
         Assert.Equal(refreshNext, after.Find((long)next).Found);
         Assert.False(after.Find((long)next + 1).Found);
         Assert.True(before.Find((long)next + 1).Found);
-        Write(table, cache, deletedAt, -1); // pressure must preserve the deletion watermark
+        Write(table, cache, deletedAt, -1);
         Assert.False(table.Pin().Find(-1L).Found);
     }
 
@@ -382,7 +363,6 @@ public class CacheTableTests
         using var expired = new Counted(StrataRecMetrics.Names.CacheEvictions, "expired");
         using var evicted = new Counted(StrataRecMetrics.Names.CacheEvictions, "capacity");
 
-        // Records of about 4 KiB, written 10 ms apart: the first 20 expire (and pass their stale window) by the end.
         var key = 0L;
         for (; key < 20; key++)
         {
@@ -401,12 +381,11 @@ public class CacheTableTests
 
         var version = table.Pin();
         Assert.Equal(20, expired.Total);
-        Assert.Equal(0, evicted.Total); // the expired ones made room
+        Assert.Equal(0, evicted.Total);
         Assert.Equal(bytesPerRecord * version.RecordCount, version.RecordBytes);
         Assert.All(Enumerable.Range(0, 20), k => Assert.False(version.Find(Id(k)).Found));
         Assert.True(version.Find(Id(key - 1)).Found);
 
-        // The hand has not moved yet: the oldest cold insertions now leave first.
         var first = key;
         while (evicted.Total == 0 && key < first + 120)
         {
@@ -456,7 +435,7 @@ public class CacheTableTests
 
         var version = table.Pin();
         Assert.Equal(replacement, version.Read(1, version.Find(100L)).AsString());
-        Assert.Equal(39, version.RecordCount); // all the other fresh keys still fit alongside the replacement
+        Assert.Equal(39, version.RecordCount);
         Assert.Equal(0, evicted.Total);
 
         void Set(long key, string value)
@@ -533,7 +512,7 @@ public class CacheTableTests
         writer.StringList(7, ["", "zé", "✓"]);
         writer.String(8, "music");
         writer.String(9, "");
-        writer.List<float>(10, [1, 2, 3]); // a fixed-length list is encoded as every list is
+        writer.List<float>(10, [1, 2, 3]);
         var (offset, length) = writer.End();
         var record = writer.Bytes.AsSpan(offset, length);
 
@@ -547,9 +526,8 @@ public class CacheTableTests
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(record, layout.FieldCount, layout.Fingerprint + 1, out _, out _));
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(record, layout.FieldCount - 1, layout.Fingerprint, out _, out _));
         var otherFormat = record.ToArray();
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(otherFormat, 2026010101); // 2026-01-01.1
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(otherFormat, 2026010101);
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(otherFormat, layout.FieldCount, layout.Fingerprint, out _, out _));
-        // 2026-11-14.1 encoded a vector as N float32s without a count: such a record is another format, not this one's list.
         Assert.Equal(2026111601u, CacheRecord.Format);
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(otherFormat, 2026111401);
         Assert.Equal(CacheRecordHeader.Mismatch, CacheRecord.ReadHeader(otherFormat, layout.FieldCount, layout.Fingerprint, out _, out _));
@@ -584,7 +562,6 @@ public class CacheTableTests
         record[CacheRecord.PrefixSize(layout.FieldCount) + 4] = 2;
         Assert.False(CacheRecord.IsWellFormed(record, layout));
 
-        // A writer refuses a list of another element type than the field's.
         writer.Begin(1, layout.Fingerprint, absent: false);
         Assert.Throws<ArgumentException>(() => writer.List<double>(1, [1.0]));
     }
@@ -620,7 +597,7 @@ public class CacheTableTests
             random.NextBytes(bytes);
             if (bytes.Length >= CacheRecord.PrefixSize(layout.FieldCount))
             {
-                CacheRecord.WriteHeader(bytes, (ushort)layout.FieldCount, random.NextInt64(), layout.Fingerprint, absent: false); // random values after it
+                CacheRecord.WriteHeader(bytes, (ushort)layout.FieldCount, random.NextInt64(), layout.Fingerprint, absent: false);
             }
 
             if (CacheRecord.ReadHeader(bytes, layout.FieldCount, layout.Fingerprint, out _, out _) == CacheRecordHeader.Ok)
@@ -630,12 +607,6 @@ public class CacheTableTests
         }
     }
 
-    /// <summary>
-    /// A limit lowered under what the table holds is met at once, by evicting the share of the records that is over it:
-    /// what is left is about what a table created with the lower limit holds after an eviction. The excess was of the
-    /// table's whole size and was taken as payload to free, which for small records is more than all of them: the next
-    /// write of a new key evicted every other record.
-    /// </summary>
     [Fact]
     public void ALimitLoweredUnderWhatTheTableHolds_EvictsTheShareOverIt_AndKeepsTheRest()
     {
@@ -649,9 +620,8 @@ public class CacheTableTests
         var kept = table.Pin();
         Assert.InRange(kept.Bytes, 1, 512 << 10);
         Assert.InRange(kept.RecordCount, 3_000, 8_999);
-        Assert.Equal(9_000 - kept.RecordCount, evicted.Total); // counted, as the records a write makes room with are
+        Assert.Equal(9_000 - kept.RecordCount, evicted.Total);
 
-        // None was read, so what went is the oldest, as when a write needs room; and writes go on within the limit.
         Assert.True(kept.Find(EntityKey.FromInt64(8_999)).Found);
         Assert.False(kept.Find(EntityKey.FromInt64(0)).Found);
         WriteScores(table, clock.NowMs, from: 9_000, count: 100);
@@ -660,11 +630,6 @@ public class CacheTableTests
         Assert.InRange(table.Pin().Bytes, 1, 512 << 10);
     }
 
-    /// <summary>
-    /// What a table is over a lowered limit may be the records its keys were written over since: those go first, and
-    /// no key with them when that is enough. The share to evict was taken of the size with them, and keys went from a
-    /// table that, compacted, was within the limit with every one of them.
-    /// </summary>
     [Fact]
     public void ALimitLoweredToWhatTheKeysHold_FreesTheRecordsWrittenOver_AndKeepsEveryKey()
     {
@@ -687,9 +652,8 @@ public class CacheTableTests
     }
 
     /// <summary>
-    /// A cache's table without an in-process tier holds nothing and loads nothing, and reports neither a size nor a
-    /// load. Its zeros, and the time its writer started, would be recorded over those of the table another plan's
-    /// bindings keep of the same source and entity: the instruments' tags are the same.
+    /// Its zeros, and the time its writer started, would be recorded over those of the table another plan's bindings
+    /// keep of the same source and entity: the instruments' tags are the same.
     /// </summary>
     [Theory]
     [InlineData(true, 1)]
@@ -712,10 +676,9 @@ public class CacheTableTests
     }
 
     /// <summary>
-    /// A record that fits the table is written while records can still go for it: an eviction whose estimate falls short
-    /// (a table of a few pages, where the room a record needs is a page and not its own size) frees more, as a lowered
-    /// limit does. It was tried once: of three records much larger than those the table held, two were refused, and a
-    /// key refused is one its source is asked for again at every read.
+    /// A record that fits the table is written while records can still go for it: an eviction whose estimate falls
+    /// short (a table of a few pages, where the room a record needs is a page and not its own size) frees more, as a
+    /// lowered limit does.
     /// </summary>
     [Fact]
     public void ARecordLargerThanThoseHeld_IsWritten_WhenOneEvictionDoesNotMakeRoomForIt()
@@ -726,7 +689,7 @@ public class CacheTableTests
         var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions { MaxBytes = Max, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock } });
         for (var key = 0; key < 300; key++)
         {
-            WriteVector(table, clock.NowMs, key, length: 1 + (key % 24)); // more than it holds: it is at its limit
+            WriteVector(table, clock.NowMs, key, length: 1 + (key % 24));
         }
 
         Assert.InRange(table.Pin().RecordCount, 50, 299);
@@ -737,7 +700,7 @@ public class CacheTableTests
             Assert.InRange(table.Pin().Bytes, 1, Max);
         }
 
-        Assert.InRange(table.Pin().RecordCount, 4, 299); // and not by emptying the table
+        Assert.InRange(table.Pin().RecordCount, 4, 299);
     }
 
     private static void WriteVector(LocalFeatureTable table, long writtenMs, long key, int length)
@@ -767,11 +730,6 @@ public class CacheTableTests
         cache.WriteQueued(table.Writer);
     }
 
-    /// <summary>
-    /// A table a byte over a lowered limit loses a share of its keys, not all of them. Packed, a table can be larger
-    /// than it was (a record that does not fit the end of a page starts the next), and the share to evict was taken of
-    /// that size: the estimate fell short of a limit the packed copy was far over, and the retries ended with nothing.
-    /// </summary>
     [Fact]
     public void ALimitLoweredJustUnderWhatTheTableHolds_EvictsAShare_WhenAPackedCopyWouldBeLarger()
     {
@@ -799,10 +757,6 @@ public class CacheTableTests
         Assert.True(kept.Find(EntityKey.FromInt64(10_000)).Found, "the record that was read since is kept");
     }
 
-    /// <summary>
-    /// A table over a lowered limit only by the unused ends of its pages keeps every key: a packed copy fits. With no
-    /// record written over, the copy was not tried, and keys were evicted from a table that fit the limit with all of them.
-    /// </summary>
     [Fact]
     public void ALimitLoweredToWhatAPackedTableTakes_KeepsEveryKey_WhenNoRecordWasWrittenOver()
     {
@@ -824,11 +778,6 @@ public class CacheTableTests
         Assert.InRange(table.Pin().Bytes, 1, max);
     }
 
-    /// <summary>
-    /// A limit too low to write under still brings the table within it: the limit comes before the next write. The old
-    /// records stayed, all of them, over the limit for good: every write failed, and only a write that fit installed a
-    /// smaller table. Under a limit only the empty table fits, the table is left empty, as one created with it stays.
-    /// </summary>
     [Theory]
     [InlineData(4 << 10)]
     [InlineData(0)]
@@ -847,10 +796,6 @@ public class CacheTableTests
         Assert.InRange(table.Pin().Bytes, 1, max);
     }
 
-    /// <summary>
-    /// Options the table cannot take are refused whole: nothing of them is applied. The limit was written before the
-    /// times were checked, and a refused plan left its limit on the table another plan served from.
-    /// </summary>
     [Fact]
     public void OptionsTheTableCannotTake_AreRefusedWhole()
     {
@@ -860,7 +805,7 @@ public class CacheTableTests
         Assert.Throws<ArgumentOutOfRangeException>(() => table.Retune(wrongTimes));
         Assert.Throws<ArgumentOutOfRangeException>(() => table.CheckRetune(wrongTimes));
         Assert.Throws<ArgumentOutOfRangeException>(() => table.Retune(ScoreOptions(1, clock)));
-        table.CheckRetune(ScoreOptions(256 << 10, clock)); // could be taken: checked, not applied
+        table.CheckRetune(ScoreOptions(256 << 10, clock));
 
         Assert.Equal((1L << 20, 60_000L, 10), (table.MaxBytes, cache.Policy.TtlMs, table.Pin().RecordCount));
     }
@@ -868,7 +813,6 @@ public class CacheTableTests
     private static LocalFeatureTableOptions ScoreOptions(long maxBytes, ManualClock clock, int pageSize = 1 << 20) =>
         new() { MaxBytes = maxBytes, PageSize = pageSize, Cache = new CacheTableOptions { TtlMs = 60_000, Clock = clock } };
 
-    /// <summary>A cache of scores (an int64 key, one float64) holding <paramref name="records"/> of them, written at the clock's time.</summary>
     private static (LocalFeatureTable Table, LocalTableCache Cache, ManualClock Clock) Scores(long maxBytes, int records, int pageSize = 1 << 20)
     {
         var clock = new ManualClock();
@@ -929,12 +873,10 @@ public class CacheTableTests
 
     private static void Write(LocalFeatureTable table, LocalTableCache cache, long writtenMs, long key)
     {
-        // About 4 KiB of string per record, distinct per key: what the table's dictionary holds for it alone.
         Assert.True(cache.TryWriteBack(Batch(cache, writtenMs, key + new string('n', 2_000), key)));
         cache.WriteQueued(table.Writer);
     }
 
-    /// <summary>A store whose writes wait for <see cref="Release"/>, saying when the first began.</summary>
     private sealed class HeldStore : ICacheStore
     {
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -955,7 +897,6 @@ public class CacheTableTests
         }
     }
 
-    /// <summary>Sums a counter's measurements with one <c>stratarec.outcome</c> while alive.</summary>
     private sealed class Counted : IDisposable
     {
         private readonly MeterListener _listener = new();

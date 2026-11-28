@@ -12,18 +12,16 @@ using static StrataRec.IntegrationTests.CombinationLimitTests;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// Pinned versions (<c>col.x@node</c>) are judged per arm combination, against the nodes that run together,
-/// so the unified plan accepts exactly the combinations a compile of each alone accepts. They used to be
-/// judged once over the union of every node's variants: an arm that can never meet the reader could reject the plan, and
-/// a combination that removes the version could pass.
+/// Pinned versions (<c>col.x@node</c>) are judged per arm combination, against the nodes that run together, so the
+/// unified plan accepts exactly the combinations a compile of each alone accepts.
 /// </summary>
 public sealed class VersionReferenceTests
 {
     [Fact]
     public async Task APinOnlyInAnArmThatExcludesTheRowSourceVariant_IsAccepted_AndEachArmServesItsOwnPlan()
     {
-        // In one layer, 'rows' makes producer a row source and 'pin' adds a reader of its version. They never
-        // run together, and each configuration alone is legal; the union of producer's variants rejected the plan.
+        // In one layer, 'rows' makes producer a row source and 'pin' adds a reader of its version. They never run
+        // together, and each configuration alone is legal.
         var (request, environment) = Exclusive(sameLayer: true);
         foreach (var arms in new[] { Array.Empty<string>(), new[] { "choice/rows" }, new[] { "choice/pin" } })
         {
@@ -37,13 +35,12 @@ public sealed class VersionReferenceTests
         var plan = unified.Plan!;
         Assert.Equal(new[] { (1L, 1.0, -1.0) }, await Serve(plan));
         Assert.Equal(new[] { (1L, -1.0, -1.0), (2L, 1.0, -1.0) }, await Serve(plan, "choice/rows"));
-        Assert.Equal(new[] { (1L, 1.0, 1.0) }, await Serve(plan, "choice/pin")); // the reader sees producer's version
+        Assert.Equal(new[] { (1L, 1.0, 1.0) }, await Serve(plan, "choice/pin"));
     }
 
     [Fact]
     public void TheSameArmsInTwoLayers_CanRunTogether_AndThePinOfTheRowSourceIsRejected()
     {
-        // The control: once the arms can meet, the combination that has both is what a plain compile rejects.
         var (request, environment) = Exclusive(sameLayer: false);
 
         var both = PlanCompiler.CompileMerged(request, new[] { "pin/t", "rows/t" }, environment);
@@ -59,8 +56,6 @@ public sealed class VersionReferenceTests
     [Fact]
     public void PastTheLimit_AVersionThatOnlyThreeArmsTogetherRemove_IsRejected_AsTheirCompileRejectsIt()
     {
-        // Producer stops writing x only when a, b and c are all on, and a baseline node reads its version.
-        // With 13 layers the unified compile checks scope by scope; it used to accept and serve this plan.
         var (request, environment) = Fading(stopAt: 3, readerArm: null, extraLayers: 10);
         foreach (var pair in new[] { new[] { "a/t", "b/t" }, new[] { "a/t", "c/t" }, new[] { "b/t", "c/t" } })
         {
@@ -138,10 +133,6 @@ public sealed class VersionReferenceTests
         Assert.NotNull(error.Hint);
     }
 
-    /// <summary>
-    /// A pipeline of its own: seed appends row 1, producer writes x = 1. Arm <c>rows</c> makes producer a row source that
-    /// appends row 2 with x = 1; arm <c>pin</c> adds reader, writing z from producer's version of x. The output shows both.
-    /// </summary>
     private static (PlanCompileRequest Request, PlanEnvironment Environment) Exclusive(bool sameLayer)
     {
         var host = HomeFeedTestHost.Load();
@@ -206,7 +197,6 @@ public sealed class VersionReferenceTests
         return (With(host.Request, placements, maxCombinationsChecked), environment);
     }
 
-    /// <summary>Runs the plan with <paramref name="arms"/>: each item's id, x and z, by id.</summary>
     private static async Task<(long, double, double)[]> Serve(ExecutionPlan plan, params string[] arms)
     {
         var result = await new PipelineExecutor().ExecuteAsync(plan, HomeFeedTestHost.NewRequest(arms: plan.ArmsFromIds(arms)));
@@ -279,8 +269,7 @@ public sealed class VersionReferenceTests
     }
 
     /// <summary>
-    /// <c>Fading@1</c>: writes 1 into its output until <c>stop_at</c> of its options are on, then writes nothing. Arms in
-    /// different layers that each turn one on remove the node's version only together.
+    /// Arms in different layers that each turn one on remove the node's version only together.
     /// </summary>
     private sealed class FadingFactory : IOperatorFactory
     {

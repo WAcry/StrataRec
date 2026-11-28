@@ -7,10 +7,6 @@ using StrataRec.Hosting.Manifests;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>
-/// <see cref="RecEngine.LoadManifestAsync"/>: a node's rules for a release manifest, each status, what
-/// is downloaded for it, and that whatever is not applied leaves the current plan serving.
-/// </summary>
 public sealed class ManifestLoadTests : IDisposable
 {
     private readonly ReleaseFixture _fixture = new();
@@ -62,7 +58,7 @@ public sealed class ManifestLoadTests : IDisposable
             Assert.Equal((2L, secondId), (result.ServedSequence, result.ServedManifestId));
         }
 
-        Assert.Equal(reads, store.Reads); // known before any download
+        Assert.Equal(reads, store.Reads);
     }
 
     [Fact]
@@ -86,14 +82,13 @@ public sealed class ManifestLoadTests : IDisposable
         Assert.Equal(("MANIFEST_INCOMPATIBLE", "manifest:" + incompatibleId, "/requires"), (error.Code, error.Artifact, error.Pointer));
         Assert.Equal("The manifest requires capabilities this binary does not provide: Alpaca@2, Zebra@1.", error.Message);
         Assert.Contains("'stratarec operators' lists what a binary provides", error.Hint);
-        Assert.Equal(reads, store.Reads); // nothing downloaded
+        Assert.Equal(reads, store.Reads);
 
         Assert.Equal((1L, currentId), (result.ServedSequence, result.ServedManifestId));
         var response = await engine.ExecuteAsync(ReleaseFixture.Request("p"), TestContext.Current.CancellationToken);
         Assert.True(response.Succeeded, response.Error);
         Assert.Equal(currentId, response.ManifestId);
 
-        // The same check, from the shared helper the command line uses.
         Assert.Equal(new[] { "Alpaca@2", "Zebra@1" }, ManifestBuilder.MissingCapabilities(incompatible, engine.Environment));
         Assert.Empty(ManifestBuilder.MissingCapabilities(current, engine.Environment));
     }
@@ -172,10 +167,6 @@ public sealed class ManifestLoadTests : IDisposable
         Assert.Equal($"Manifest '{incompatibleId}' (sequence 3) for pipeline '{Pipeline}' is incompatible: this binary lacks Missing@1; the current plan stays", incompatibleEvent);
     }
 
-    /// <summary>
-    /// The download is part of the load, so disposing the engine cancels it, as it cancels a load waiting
-    /// for its tables; the store did not use to get any cancellation but the caller's.
-    /// </summary>
     [Fact]
     public async Task DisposingTheEngine_CancelsADownloadInProgress()
     {
@@ -194,11 +185,6 @@ public sealed class ManifestLoadTests : IDisposable
         Assert.IsAssignableFrom<OperationCanceledException>(thrown.InnerException);
     }
 
-    /// <summary>
-    /// The store gets the load's token, not the caller's. A callback the store registered that throws used to
-    /// come out of the caller's cancellation (out of its <c>CancelAfter</c> timer, that ends the process); it runs on the
-    /// pool now, and the load ends as cancelled with the current plan serving.
-    /// </summary>
     [Fact]
     public async Task AStoreCallbackThatThrows_DoesNotComeOutOfTheCallersCancellation()
     {
@@ -211,7 +197,7 @@ public sealed class ManifestLoadTests : IDisposable
 
         var load = engine.LoadManifestAsync(next, nextId, store, caller.Token);
         await store.HeldReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
-        caller.Cancel(); // threw the store's AggregateException here
+        caller.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => load.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
         await store.HeldReadCancelled.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
@@ -219,10 +205,6 @@ public sealed class ManifestLoadTests : IDisposable
         Assert.Equal(currentId, served.Plan.ManifestId);
     }
 
-    /// <summary>
-    /// A metric listener or a logger that throws loses its record, and nothing else: the plan is applied and the outcome
-    /// reported as it is (a load used to throw after it had published its plan).
-    /// </summary>
     [Fact]
     public async Task ALoggerThatThrows_DoesNotChangeTheOutcome()
     {

@@ -9,27 +9,23 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Samples.Host.Components;
 
 /// <summary>
-/// <c>kv_store@1</c>: an in-process key-value feature store standing in for a remote one (a Redis hash, a feature service).
-/// Each line of a JSON Lines file is one record keyed by an int64, e.g. <c>{"id": 7, "ctr_7d": 0.04, "category": "sports"}</c>.
+/// <c>kv_store@1</c>: an in-process key-value feature store standing in for a remote one (a Redis hash, a feature
+/// service). Each line of a JSON Lines file is one record keyed by an int64, e.g. <c>{"id": 7, "ctr_7d": 0.04,
+/// "category": "sports"}</c>.
 /// </summary>
 /// <remarks>
-/// <para>Binding settings: <see cref="KeyValueSettings"/>, which the factory declares as its type argument (everything else
-/// in the binding, such as <c>timeout_ms</c> and <c>max_batch</c>, is the framework's). Its <c>data_file</c> is a
-/// <see cref="LocalFile"/>: resolved against the configuration directory when the settings are bound.</para>
-/// <para>The rules of the contract, and how this connector keeps them:</para>
+/// <para>Binding settings: <see cref="KeyValueSettings"/>, the factory's type argument; everything else in the binding
+/// (<c>timeout_ms</c>, <c>max_batch</c>) is the framework's.</para>
 /// <list type="bullet">
-/// <item>The factory only reads the settings; the file is read in <see cref="LoadAsync"/>, which the engine calls once, off
-/// the request path, before any plan using this connector serves. A compile that does not serve (<c>validate</c>) creates
-/// the connector and never loads it.</item>
-/// <item>One instance serves every request of every plan with this binding, concurrently. It is immutable once loaded,
-/// so reads need no lock.</item>
-/// <item>No per-row allocation: the file is decoded once into one typed array per field, and a fetch copies values from
-/// those arrays into the writer's buffers. The only buffer a fetch needs (the record of each key) is pooled.</item>
-/// <item>Missing values are never written: every (field, key) starts missing, and only values the store has are marked
-/// present. The catalog then applies the feature's <c>default</c>, or the feature reads as missing (<c>T?</c>). A value
-/// of the wrong kind is a failed fetch, never a silent 0.</item>
-/// <item>Cancellation: the token is passed to every await. The engine stops waiting at the source's timeout or the
-/// request's deadline whether or not the connector honours it, and discards what it writes afterwards.</item>
+/// <item>The file is read in <see cref="LoadAsync"/>, once, off the request path; <c>validate</c> never loads
+/// it.</item>
+/// <item>One instance serves every request of every plan with this binding, concurrently: it is immutable once
+/// loaded.</item>
+/// <item>No per-row allocation: a fetch copies values from typed arrays into the writer's buffers.</item>
+/// <item>Only values the store has are marked present; a value of the wrong kind is a failed fetch, never a silent
+/// 0.</item>
+/// <item>The token is passed to every await; the engine stops waiting at the timeout whether or not it is
+/// honoured.</item>
 /// </list>
 /// </remarks>
 public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadable
@@ -78,7 +74,6 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
             return FetchRemoteAsync(keys, fields, writer, cancellationToken);
         }
 
-        // In-process data answers in microseconds: synchronously, so the call allocates no task.
         return new ValueTask<FetchStatus>(Serve(keys, fields.Span, writer));
     }
 
@@ -95,7 +90,7 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
         var store = _store ?? throw new InvalidOperationException("kv_store@1 was called before it was loaded.");
         var batch = keys.Keys.Span; // one int64 part (Supports): one key per staging row
 
-        // The record of each key, looked up once and shared by every field. Rented, not allocated: a request makes many calls.
+        // The record of each key, looked up once and shared by every field.
         var records = ArrayPool<int>.Shared.Rent(Math.Max(1, batch.Length));
         try
         {
@@ -106,7 +101,6 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
 
             foreach (var field in fields)
             {
-                // A field the store does not have leaves every key missing, as a remote store answers for an absent field.
                 if (store.Fields.TryGetValue(field.Field, out var column)
                     && !Write(column, field, records.AsSpan(0, batch.Length), writer))
                 {
@@ -178,7 +172,7 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
                 {
                     if (records[i] >= 0 && column.Present[records[i]])
                     {
-                        writer.SetString(index, i, strings[records[i]]); // decoded at load: no string per fetch
+                        writer.SetString(index, i, strings[records[i]]);
                     }
                 }
 
@@ -189,7 +183,6 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
         }
     }
 
-    /// <summary>The loaded data: record index by key, and one typed column per field.</summary>
     private sealed class Store(Dictionary<long, int> records, Dictionary<string, Column> fields)
     {
         public Dictionary<long, int> Records { get; } = records;
@@ -243,7 +236,7 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
                 {
                     if (property.Name == keyField || property.Value.ValueKind == JsonValueKind.Null)
                     {
-                        continue; // null is a missing value: it stays missing
+                        continue;
                     }
 
                     if (!fields.TryGetValue(property.Name, out var column))
@@ -265,7 +258,6 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
             new("/data_file", $"Line {line}: {reason}.", "each line is one JSON object with an int64 key and fields of one kind each (number, string or bool)");
     }
 
-    /// <summary>One field of every record, in the array of its kind; <see cref="Present"/> says which records have it.</summary>
     private sealed class Column(int count)
     {
         public bool[] Present { get; } = new bool[count];

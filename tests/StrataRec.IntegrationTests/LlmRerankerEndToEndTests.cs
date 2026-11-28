@@ -10,17 +10,13 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The sample with an <c>LlmReranker@1</c> after the diversity cap, its model bound to <c>fixed_text@1</c> by the
-/// bindings alone: the prompts render request context, row features (a derived one included) and a nullable feature,
-/// the fixed answer reorders the window, and a recording replays it without the client. Runs alone: it counts
-/// <c>stratarec.model.answer_ids</c>.
+/// Runs alone: it counts <c>stratarec.model.answer_ids</c>.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class LlmRerankerEndToEndTests
 {
     private const string Pipeline = "pipelines/home_feed.jsonc";
 
-    /// <summary>Ranks 3 and 1 first; 9 names no row, and the second 3 repeats one.</summary>
     private const string Answer = "```json\n[3, 1, 9, 3]\n```";
 
     [Fact]
@@ -39,12 +35,11 @@ public sealed class LlmRerankerEndToEndTests
         var run = Assert.Single(recorded.Recording!.Runs);
         Assert.Equal("succeeded", Assert.Single(run.Nodes, n => n.Node == "llm_rerank").Outcome);
         var call = Assert.Single(run.ServiceCalls.FindAll(c => c.Role == "model"), c => c.Service == "llm_ranker");
-        Assert.Equal(("ok", 1, false, 1), (call.Status, call.BatchSize, call.Keys.HasValue, call.InputDigests.Count)); // one digest for the whole call
+        Assert.Equal(("ok", 1, false, 1), (call.Status, call.BatchSize, call.Keys.HasValue, call.InputDigests.Count));
         Assert.Equal(new Dictionary<string, string> { ["answer"] = Answer }, call.Texts);
-        Assert.Equal((null, null), (call.OutputTokens, call.Truncated)); // fixed_text@1 counts no tokens
+        Assert.Equal((null, null), (call.OutputTokens, call.Truncated));
         Assert.Equal(new[] { ("repeated", 1.0), ("unknown", 1.0), ("used", 2.0) }, AnswerIds(metrics));
 
-        // Through JSON, on a fresh engine whose stand-in would answer the identity order: the text must come from the recording.
         metrics.Measurements.Clear();
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
         var identity = HomeFeedTestHost.LoadModified(root => AddLlm(root, "[1, 2, 3, 4]"));
@@ -55,7 +50,7 @@ public sealed class LlmRerankerEndToEndTests
         Assert.Equal(recorded.Items.Select(i => (i.Id.Int64Value, i.Rank)), outcome.Result.Items.Select(i => (i.Id.Int64Value, i.Rank)));
         Assert.Empty(report.Gaps);
         Assert.All(report.Nodes, n => Assert.False(n.Changed, $"{n.Node}: {n.Recorded} -> {n.Replayed}"));
-        Assert.Empty(AnswerIds(metrics)); // a replay is not traffic
+        Assert.Empty(AnswerIds(metrics));
     }
 
     [Theory]
@@ -68,7 +63,6 @@ public sealed class LlmRerankerEndToEndTests
             .ExecuteAsync(ReplayTests.Request("req-llm-changed", 1001, "home", ReplayTests.ControlArms), TestContext.Current.CancellationToken);
         Assert.True(recorded.Succeeded, recorded.Error);
 
-        // The instruction is worded differently, or the derived feature the rows show is scaled differently.
         var modified = HomeFeedTestHost.LoadModified(root =>
         {
             AddLlm(root, Answer);
@@ -84,13 +78,13 @@ public sealed class LlmRerankerEndToEndTests
         var outcome = await NewEngine(modified).ReplayAsync(recorded.Recording!, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
-        Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip
+        Assert.True(outcome.Result.Succeeded, outcome.Result.Error);
         Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "llm_ranker", Reason: "inputs_changed" });
-        Assert.DoesNotContain(report.Gaps, g => g.Source == "ctr_model"); // its inputs did not change
+        Assert.DoesNotContain(report.Gaps, g => g.Source == "ctr_model");
         var node = Assert.Single(report.Nodes, n => n.Node == "llm_rerank");
         Assert.Equal(("succeeded", "failed"), (node.Recorded, node.Replayed));
         Assert.StartsWith("model 'llm_ranker' failed: ", node.ReplayedDetail);
-        Assert.Equal(baseline.Items.Select(i => i.Id.Int64Value), outcome.Result.Items.Select(i => i.Id.Int64Value)); // the order left as it was
+        Assert.Equal(baseline.Items.Select(i => i.Id.Int64Value), outcome.Result.Items.Select(i => i.Id.Int64Value));
     }
 
     [Fact]
@@ -120,8 +114,7 @@ public sealed class LlmRerankerEndToEndTests
     }
 
     /// <summary>
-    /// After <c>diversity_cap</c>: an LLM rerank of the top 4, skipped when it fails, whose model is <c>fixed_text@1</c>
-    /// answering <paramref name="answer"/>; the rows show a derived feature only the prompt reads.
+    /// After <c>diversity_cap</c>: an LLM rerank of the top 4; the rows show a derived feature only the prompt reads.
     /// </summary>
     private static void AddLlm(string root, string answer)
     {

@@ -11,41 +11,25 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// Keys read from context features: a request carries a login key, one source resolves it to a
-/// user id, another is keyed by the user id. The context prefetch starts each group once what its key reads is stored, and
-/// waits for nothing else; a missing key part is no key, a failed one fails the features as a foreign key does, and the
-/// request memory is held until every group started is stored.
-/// </summary>
 public class ChainedContextKeyTests
 {
     private static readonly long[] TwoItems = [1, 2];
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
-    /// <summary>Keyed by the request's login key.</summary>
     internal static readonly EntityDefinition Identity = EntityDefinition.Of("identity", EntityKeyPartDefinition.RequestInput("user_key", EntityKeyType.String));
 
-    /// <summary>Keyed by the user id the identity source resolved: the chain's second level.</summary>
     private static readonly EntityDefinition Account = EntityDefinition.Of("account", EntityKeyPartDefinition.ContextFeature("identity.user_id", EntityKeyType.Int64));
 
-    /// <summary>The third level: keyed by the account's household.</summary>
     private static readonly EntityDefinition Household = EntityDefinition.Of("household", EntityKeyPartDefinition.ContextFeature("account.household_id", EntityKeyType.Int64));
 
-    /// <summary>The fourth: keyed by the household's region (a string).</summary>
     private static readonly EntityDefinition Region = EntityDefinition.Of("region", EntityKeyPartDefinition.ContextFeature("household.region", EntityKeyType.String));
 
-    /// <summary>Keyed by the login key too, but read by no key: an unrelated source.</summary>
     private static readonly EntityDefinition Session = EntityDefinition.Of("session", EntityKeyPartDefinition.RequestInput("user_key", EntityKeyType.String));
 
-    /// <summary>A candidate-scoped entity with a shared context-feature part: the item in the user's segment.</summary>
     private static readonly EntityDefinition ItemSegment = EntityDefinition.Of(
         "item_segment", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.ContextFeature("user.segment", EntityKeyType.String));
 
-    /// <summary>
-    /// A connector that writes <paramref name="valueOf"/>(key part 0, field) for each key, after <paramref name="gate"/>
-    /// when given (asynchronously then), and answers <paramref name="status"/>.
-    /// </summary>
     internal static ScriptedConnector Answering(Func<EntityKey, string, object?> valueOf, Task? gate = null, FetchStatus? status = null) =>
         new(async (keys, fields, writer, _) =>
         {
@@ -65,12 +49,10 @@ public class ChainedContextKeyTests
             return status ?? FetchStatus.Ok;
         });
 
-    /// <summary>Resolves login key k-&lt;n&gt; to user id n; any other key to nothing.</summary>
     internal static object? UserIdOf(EntityKey key, string field) =>
         key.StringValue is { } text && text.StartsWith("k-", StringComparison.Ordinal)
             && long.TryParse(text.AsSpan(2), System.Globalization.CultureInfo.InvariantCulture, out var id) ? id : null;
 
-    /// <summary>The rig of a two-level chain: identity (login key → user id), then account (user id → tier = id / 1000).</summary>
     private static (FeatureTestRig Rig, int UserKey, int UserId, int Tier) Chain(
         IFeatureSourceConnector identity, IFeatureSourceConnector accounts, ScalarValue? tierDefault = null, ScalarValue? userIdDefault = null)
     {
@@ -105,7 +87,7 @@ public class ChainedContextKeyTests
 
         request.Fetcher.StartContextFetch([tier], CancellationToken.None);
         var read = request.Fetcher.EnsureAsync([tier], CancellationToken.None).AsTask();
-        Assert.Empty(accounts.Calls); // the key is not stored yet
+        Assert.Empty(accounts.Calls);
         Assert.False(read.IsCompleted);
 
         gate.SetResult();
@@ -118,7 +100,6 @@ public class ChainedContextKeyTests
         await request.Fetcher.WhenIoCompleteAsync();
     }
 
-    /// <summary>A chained group waits for the group it reads, not for a slower one it does not.</summary>
     [Fact]
     public async Task AChainedGroup_DoesNotWaitForAnUnrelatedSlowGroup()
     {
@@ -141,7 +122,7 @@ public class ChainedContextKeyTests
 
         Assert.Equal(0.007, request.ContextValue(tier).AsFloat64());
         Assert.Single(accounts.Calls);
-        Assert.False(sessionRead.IsCompleted); // the slow group is still out
+        Assert.False(sessionRead.IsCompleted);
 
         slow.SetResult();
         await sessionRead.WaitAsync(Timeout, TestContext.Current.CancellationToken);
@@ -154,13 +135,12 @@ public class ChainedContextKeyTests
     [InlineData(true)]
     public async Task ThreeLevelsOfChain_EachStartWithTheKeyTheLevelBeforeStored(bool asynchronous)
     {
-        // identity (login key → user 1001) → account (1001 → household 77) → household (77 → region "eu") → region ("eu" → 1.25).
         var order = new ConcurrentQueue<string>();
         ScriptedConnector Level(string name, Func<EntityKey, object?> value) => new(async (keys, fields, writer, _) =>
         {
             if (asynchronous)
             {
-                await Task.Yield(); // answers on another thread
+                await Task.Yield();
             }
 
             order.Enqueue(name + ":" + keys.Key(0, 0));
@@ -183,7 +163,6 @@ public class ChainedContextKeyTests
         request.Fetcher.StartContextFetch([boost], CancellationToken.None);
         if (!asynchronous)
         {
-            // Synchronous sources: the whole chain is stored before the start returns, with nothing scheduled.
             Assert.True(request.Fetcher.WhenIoCompleteAsync().IsCompletedSuccessfully);
         }
 
@@ -196,10 +175,6 @@ public class ChainedContextKeyTests
         await request.Fetcher.WhenIoCompleteAsync();
     }
 
-    /// <summary>
-    /// Fourteen levels, each keyed by eight features of the level before (as context keys): each group
-    /// starts once, after its parent, with its parent's eight values as its key.
-    /// </summary>
     [Fact]
     public async Task AChainOfEightPartKeys_StartsEachGroupOnce()
     {
@@ -216,7 +191,7 @@ public class ChainedContextKeyTests
             calls.Enqueue((name, key));
             for (var f = 0; f < fields.Length; f++)
             {
-                ScriptedConnector.Write(writer, fields[f], 0, key.Sum() + f); // the next level's key parts
+                ScriptedConnector.Write(writer, fields[f], 0, key.Sum() + f);
             }
 
             return FetchStatus.Ok;
@@ -249,16 +224,12 @@ public class ChainedContextKeyTests
         var result = await request.Fetcher.EnsureAsync([last], CancellationToken.None).AsTask().WaitAsync(Timeout, TestContext.Current.CancellationToken);
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal(Enumerable.Range(0, 14).Select(l => $"l{l:D2}_store"), calls.Select(c => c.Source)); // once each, in order
+        Assert.Equal(Enumerable.Range(0, 14).Select(l => $"l{l:D2}_store"), calls.Select(c => c.Source));
         Assert.Equal(1, Assert.Single(calls.First().Key));
-        Assert.Equal([1L, 2, 3, 4, 5, 6, 7, 8], calls.ElementAt(1).Key); // level 0 answered 1 + f for its eight fields
+        Assert.Equal([1L, 2, 3, 4, 5, 6, 7, 8], calls.ElementAt(1).Key);
         await request.Fetcher.WhenIoCompleteAsync();
     }
 
-    /// <summary>
-    /// A key read through a derived context feature: computed as soon as its inputs are stored, so the group keyed by it
-    /// does not wait for the whole prefetch; a derived context feature no key reads still does.
-    /// </summary>
     [Fact]
     public async Task AKeyThroughADerivedContextFeature_IsComputedAsSoonAsItsInputsAreStored()
     {
@@ -291,18 +262,13 @@ public class ChainedContextKeyTests
         Assert.Equal(10, request.ContextValue(shard).AsInt64());
         Assert.Equal(15.0, request.ContextValue(weight).AsFloat64());
         Assert.Equal(EntityKey.FromInt64(10), Assert.Single(shards.Calls).ContextKey);
-        Assert.False(lateRead.IsCompleted); // computed with the whole prefetch, which waits for the slow session
+        Assert.False(lateRead.IsCompleted);
 
         slow.SetResult();
         await lateRead.WaitAsync(Timeout, TestContext.Current.CancellationToken);
         Assert.Equal(2002.0, request.ContextValue(late).AsFloat64());
     }
 
-    /// <summary>
-    /// A candidate-scoped entity with a shared context-feature part: fetched once the candidates and the
-    /// context feature are there, the part carried once per batch; its fetch waits for the group that stores the part, not
-    /// for the whole prefetch, and a prefetch before the part is stored does not start it.
-    /// </summary>
     [Fact]
     public async Task ASharedContextFeaturePart_IsReadOnceTheGroupThatStoresItIs()
     {
@@ -331,13 +297,13 @@ public class ChainedContextKeyTests
         var group = rig.Plan.Groups.Single(g => g.SourceName == "is_store");
         Assert.Equal([segment], group.KeyFeatures);
         Assert.Equal([segment], group.ContextKeyFeatures);
-        Assert.Equal(0, group.Wave); // a context part is there before any candidate wave
+        Assert.Equal(0, group.Wave);
         var request = rig.NewRequest([3, 1, 3], userId: 7);
         request.Context[userKey] = ScalarValue.FromString("k-7");
 
         request.Fetcher.StartContextFetch([segment, session], CancellationToken.None);
         request.Fetcher.Prefetch([boost], CancellationToken.None);
-        Assert.Empty(boosts.Calls); // the shared part is not stored yet: nothing to prefetch with
+        Assert.Empty(boosts.Calls);
         var read = request.Fetcher.EnsureAsync([boost], CancellationToken.None).AsTask();
         Assert.False(read.IsCompleted);
 
@@ -349,7 +315,7 @@ public class ChainedContextKeyTests
         Assert.Equal(new EntityKey[][] { [EntityKey.FromInt64(3), EntityKey.FromString("a")], [EntityKey.FromInt64(1), EntityKey.FromString("a")] }, call.Tuples);
         Assert.Equal([(true, 1)], seen);
         Assert.Equal([31.0, 11.0, 31.0], Enumerable.Range(0, 3).Select(row => request.Value(boost, row).AsFloat64()));
-        Assert.Equal(FeatureState.Unrequested, request.Fetcher.GetState(session)); // still out: the fetch did not wait for it
+        Assert.Equal(FeatureState.Unrequested, request.Fetcher.GetState(session));
 
         slow.SetResult();
         await request.Fetcher.WhenIoCompleteAsync();
@@ -366,23 +332,22 @@ public class ChainedContextKeyTests
 
         var known = rig.NewRequest([3, 1], userId: 7);
         known.Fetcher.StartContextFetch([segment], CancellationToken.None);
-        known.Fetcher.Prefetch([boost], CancellationToken.None); // the segment is stored (a synchronous source): prefetched
+        known.Fetcher.Prefetch([boost], CancellationToken.None);
         Assert.Single(boosts.Calls);
         await known.EnsureAsync(boost);
         Assert.Single(boosts.Calls);
         Assert.Equal(30.0, known.Value(boost, 0).AsFloat64());
 
-        var unknown = rig.NewRequest([3, 1], userId: 8); // no segment for user 8: no key, the default
+        var unknown = rig.NewRequest([3, 1], userId: 8);
         unknown.Fetcher.StartContextFetch([segment], CancellationToken.None);
         Assert.Equal(FeatureState.Ok, (await unknown.EnsureAsync(boost)).State);
         Assert.Single(boosts.Calls);
         Assert.Equal([1.0, 1.0], Enumerable.Range(0, 2).Select(row => unknown.Value(boost, row).AsFloat64()));
     }
 
-    /// <summary>A key part whose feature is missing is no key: nothing is called and the features are absent, ok.</summary>
     [Theory]
-    [InlineData("k-unknown")] // the identity source has no user for it
-    [InlineData(null)] // no login key: the identity is not looked up either
+    [InlineData("k-unknown")]
+    [InlineData(null)]
     public async Task AMissingKeyFeature_IsNoKey_NothingIsCalled_AndTheFeaturesAreAbsent(string? key)
     {
         var identity = Answering(UserIdOf);
@@ -395,7 +360,7 @@ public class ChainedContextKeyTests
 
         Assert.Equal(FeatureState.Ok, result.State);
         Assert.True(request.ContextValue(userId).IsMissing);
-        Assert.Equal(0.5, request.ContextValue(tier).AsFloat64()); // the default, as for a missing request input
+        Assert.Equal(0.5, request.ContextValue(tier).AsFloat64());
         Assert.Empty(accounts.Calls);
         Assert.Equal(key is null ? 0 : 1, identity.Calls.Count);
     }
@@ -410,14 +375,10 @@ public class ChainedContextKeyTests
         request.Fetcher.StartContextFetch([tier], CancellationToken.None);
         await request.EnsureAsync(tier);
 
-        Assert.Equal(EntityKey.FromInt64(0), Assert.Single(accounts.Calls).ContextKey); // absent is the default: a value
+        Assert.Equal(EntityKey.FromInt64(0), Assert.Single(accounts.Calls).ContextKey);
         Assert.Equal(0.5, request.ContextValue(tier).AsFloat64());
     }
 
-    /// <summary>
-    /// The foreign-key rule: a failed key feature fails the features keyed by it, without a call, and a reader
-    /// fails; a degraded one degrades them.
-    /// </summary>
     [Theory]
     [InlineData(FetchOutcome.Failed)]
     [InlineData(FetchOutcome.Partial)]
@@ -449,12 +410,6 @@ public class ChainedContextKeyTests
         Assert.Equal(upstream == FetchOutcome.Failed ? FeatureState.Failed : FeatureState.Degraded, request.Fetcher.GetState(userId));
     }
 
-    /// <summary>
-    /// A group whose key reads two context features fails as soon as one of them failed, without waiting for the other:
-    /// it cannot change that, and what waits for the group's task (a recall's query values) learns it at once (an
-    /// entity whose argument had failed used to wait for its other one). A fill waits for its whole closure,
-    /// whose worst state it returns, as for a derived feature computed early.
-    /// </summary>
     [Fact]
     public async Task AGroupWhoseKeyPartFailed_FailsAtOnce_WithoutWaitingForItsOtherPart()
     {
@@ -511,10 +466,6 @@ public class ChainedContextKeyTests
         Assert.Empty(boosts.Calls);
     }
 
-    /// <summary>
-    /// For chains: a group started once its key was stored, after the request let go of its memory, holds it
-    /// until it is stored: it reads its staging and writes its value before the buffers go back.
-    /// </summary>
     [Fact]
     public async Task AChainedGroupStartedAfterTheRequestReturned_IsStoredBeforeTheMemoryGoesBack()
     {
@@ -525,9 +476,9 @@ public class ChainedContextKeyTests
         var request = Request(rig, userKey, "k-1001", new PoisoningPool());
 
         request.Fetcher.StartContextFetch([tier], CancellationToken.None);
-        request.Memory.Release(); // the request fails, or never reads the feature, and returns first
+        request.Memory.Release();
         identityGate.SetResult();
-        Assert.True(SpinWait.SpinUntil(() => !accounts.Calls.IsEmpty, Timeout)); // started with the stored key
+        Assert.True(SpinWait.SpinUntil(() => !accounts.Calls.IsEmpty, Timeout));
         Assert.False(request.Memory.IsReturned);
 
         accountGate.SetResult();
@@ -535,13 +486,9 @@ public class ChainedContextKeyTests
 
         Assert.True(request.Memory.IsReturned);
         Assert.Equal(FeatureState.Ok, request.Fetcher.GetState(tier));
-        Assert.Equal(1.001, request.ContextValue(tier).AsFloat64()); // read from the staging before it went back
+        Assert.Equal(1.001, request.ContextValue(tier).AsFloat64());
     }
 
-    /// <summary>
-    /// For chains: when a later start throws (here a recording hook, as a second chained group is sent), the
-    /// chained group already sent is still stored before the memory goes back, and the prefetch still fails.
-    /// </summary>
     [Fact]
     public async Task AChainedGroupSentBeforeALaterStartThrew_IsStoredBeforeTheMemoryGoesBack()
     {
@@ -571,10 +518,6 @@ public class ChainedContextKeyTests
         Assert.Equal(["identity_store", "account_store"], hook.Begun);
     }
 
-    /// <summary>
-    /// A group whose key feature's store failed with an exception (here recording its call) is not started: nothing is left
-    /// running, the memory goes back and the prefetch fails.
-    /// </summary>
     [Fact]
     public async Task AGroupWhoseKeyFailedWithAnException_IsNotStarted()
     {
@@ -589,12 +532,11 @@ public class ChainedContextKeyTests
         identityGate.SetResult();
 
         await Assert.ThrowsAsync<IOException>(() => request.Fetcher.WhenIoCompleteAsync().WaitAsync(Timeout, TestContext.Current.CancellationToken));
-        await Assert.ThrowsAsync<IOException>(() => read.WaitAsync(Timeout, TestContext.Current.CancellationToken)); // the reader sees the failure
+        await Assert.ThrowsAsync<IOException>(() => read.WaitAsync(Timeout, TestContext.Current.CancellationToken));
         Assert.Empty(accounts.Calls);
         Assert.True(request.Memory.IsReturned);
     }
 
-    /// <summary>A key stored after the request ended is not sent: nothing can read it any more.</summary>
     [Fact]
     public async Task AKeyStoredAfterTheRequestEnded_IsNotSent()
     {
@@ -611,7 +553,7 @@ public class ChainedContextKeyTests
 
         Assert.True(request.Memory.IsReturned);
         Assert.Empty(accounts.Calls);
-        Assert.Equal(FeatureState.Ok, request.Fetcher.GetState(userId)); // what was sent before the end is stored
+        Assert.Equal(FeatureState.Ok, request.Fetcher.GetState(userId));
         Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(tier));
     }
 
@@ -639,7 +581,6 @@ public class ChainedContextKeyTests
         Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(tier));
     }
 
-    /// <summary>Local and cache supply of a chained entity: read once the key is stored, by the same rules.</summary>
     [Fact]
     public async Task AChainedEntity_ReadsItsLocalTable_OnceItsKeyIsStored()
     {
@@ -682,7 +623,7 @@ public class ChainedContextKeyTests
         var request = Request(rig, userKey, "k-1001");
 
         request.Fetcher.StartContextFetch([tier], CancellationToken.None);
-        Assert.Single(accounts.Calls); // the local read stored the key at once
+        Assert.Single(accounts.Calls);
 
         await request.EnsureAsync(tier);
         Assert.Equal(1.001, request.ContextValue(tier).AsFloat64());
@@ -712,7 +653,6 @@ public class ChainedContextKeyTests
         Assert.Equal(EntityKey.FromInt64(1001), Assert.Single(accounts.Calls).ContextKey);
     }
 
-    /// <summary>A recording sees a chained call with the key its upstream stored, begun after the upstream's.</summary>
     [Fact]
     public async Task AChainedCall_IsRecordedWithItsStoredKey()
     {
@@ -734,12 +674,6 @@ public class ChainedContextKeyTests
         builder.Commit();
     }
 
-    /// <summary>
-    /// The drain is a promise that every operation has really finished. A chained group whose key was stored
-    /// before the request ended registers its connector call on another thread, possibly after the drain was asked for;
-    /// the drain took one snapshot, completed while that call still ran (it ignores cancellation), and the memory was
-    /// still held. The drain now waits until a round finds nothing new.
-    /// </summary>
     [Fact]
     public async Task TheDrain_WaitsForAChainedCallRegisteredAfterItWasAskedFor()
     {
@@ -774,7 +708,7 @@ public class ChainedContextKeyTests
         try
         {
             upstream.SetResult();
-            await pool.Entered.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken); // the chained group is starting
+            await pool.Entered.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
             request.Fetcher.EndRequest();
             var drain = request.Fetcher.WhenIoCompleteAsync();
             request.Memory.Release();
@@ -782,9 +716,9 @@ public class ChainedContextKeyTests
             pool.Resume.Set();
             await started.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
 
-            await Task.WhenAny(drain, Task.Delay(400, TestContext.Current.CancellationToken)); // past the 150 ms budget
+            await Task.WhenAny(drain, Task.Delay(400, TestContext.Current.CancellationToken));
             Assert.False(drain.IsCompleted);
-            Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(value)); // timed out
+            Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(value));
             Assert.False(request.Memory.IsReturned);
 
             actual.SetResult();
@@ -836,10 +770,6 @@ public class ChainedContextKeyTests
         public void Return<T>(T[] value, bool clear) => Inner.Return(value, clear);
     }
 
-    /// <summary>
-    /// Records which sources were begun and their keys, and throws an <see cref="IOException"/> when call number
-    /// <paramref name="begin"/> is about to be sent, or when a call of <paramref name="recordSource"/> is recorded.
-    /// </summary>
     private sealed class ThrowingHook(int begin = 0, string? recordSource = null) : IFeatureCallHook
     {
         private int _begun;

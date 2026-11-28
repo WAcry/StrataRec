@@ -38,36 +38,6 @@ public sealed class SlotBlendConfig
     public required string SponsoredCol { get; init; }
 }
 
-/// <summary>
-/// <c>SlotBlend@1</c>: a page made of two other pipelines. It calls both for the request, takes the organic one's rows in
-/// their order, and places a sponsored row after every few of them. The placement rule is this operator's own; the
-/// framework's part is calling a pipeline.
-/// </summary>
-/// <remarks>
-/// <para>How an operator calls a pipeline:</para>
-/// <list type="bullet">
-/// <item>Compile declares each call (<see cref="OperatorCompileContext.TryCallPipeline"/>) and what it needs of the
-/// pipeline: that its rows are appended (<see cref="OperatorCompileContext.CallAppendsRows"/>, so its keys must be of
-/// this pipeline's type) and the output column it reads (<see cref="OperatorCompileContext.TryCallColumn"/>). In a
-/// workspace, a pipeline that does not exist, an output column it does not have or calls that lead back here are errors
-/// at the config key, when the configuration is validated.</item>
-/// <item>Run calls with the handle (<see cref="OperatorContext.CallPipelineAsync"/>). The called run is the same request:
-/// its id, its time, its experiment assignment (each pipeline runs the arms it has), and what is left of this node's
-/// budget. Both calls are started before either is awaited, so the two pipelines run at once.</item>
-/// <item>A call never throws for a pipeline that failed: its result says so. Here a page without the organic list is no
-/// page (the node fails, and its <c>on_failure</c> decides), while one without sponsored rows is served as it is
-/// (<see cref="OperatorContext.ReportDegraded"/>). A call the node can do without gets a time limit of its own
-/// (<c>sponsored_timeout_ms</c>): a called run otherwise has all that is left of the node's budget, and a slow one would
-/// time the node out.</item>
-/// <item>It is a row source like any other: it appends only keys the request has not seen
-/// (<c>context.Table.ContainsKey</c>), and says how many rows it may append.</item>
-/// <item>Each called pipeline writes its own logs, and a recording of this request holds what each call returned, so a
-/// replay needs neither pipeline served.</item>
-/// </list>
-/// <para>The structure of the page is this node's configuration, so an experiment changes it as it changes anything
-/// else: how dense the sponsored rows are is a parameter (<c>experiments/exp_home_slots.jsonc</c>), and another arm
-/// could name another pipeline, or replace the node.</para>
-/// </remarks>
 public sealed class SlotBlendFactory : IOperatorFactory
 {
     public OperatorDescriptor Descriptor { get; } = new("SlotBlend", 1, Effects.RowSource, typeof(SlotBlendConfig),
@@ -118,7 +88,6 @@ public sealed class SlotBlendFactory : IOperatorFactory
             ok = false;
         }
 
-        // What each call needs of its pipeline: the keys' type, and the column read as this pipeline's score.
         ok &= context.CallAppendsRows(organic!, "/organic") & context.CallAppendsRows(sponsored!, "/sponsored");
         ok = ok && context.TryCallColumn(organic!, config.OrganicScore, "/organic_score", score.Type)
             & context.TryCallColumn(sponsored!, config.SponsoredScore, "/sponsored_score", score.Type);
@@ -131,7 +100,6 @@ public sealed class SlotBlendFactory : IOperatorFactory
         TimeSpan? sponsoredTimeout)
         : Operator
     {
-        /// <summary>A row source says how many rows it may append: the request's memory is sized by it.</summary>
         public override int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => Count(parameters[limit.Id]);
 
         /// <summary>A parameter's count; none for one without a value (a map's key set to null).</summary>
@@ -139,8 +107,6 @@ public sealed class SlotBlendFactory : IOperatorFactory
 
         public override async ValueTask ExecuteAsync(OperatorContext context)
         {
-            // What the page can hold is known before anything is called: a page without a place for a sponsored row (none
-            // asked for, or a page no longer than the gap) does not call the sponsored pipeline, and an empty one calls none.
             var table = context.Table;
             var most = Math.Min(Count(context.Param(limit)), table.FreeRows);
             var gap = Count(context.Param(every));
@@ -163,7 +129,7 @@ public sealed class SlotBlendFactory : IOperatorFactory
 
             if (ads is { Succeeded: false })
             {
-                context.ReportDegraded(ads.Error ?? $"pipeline '{sponsored.PipelineId}' failed"); // the page is served without sponsored rows
+                context.ReportDegraded(ads.Error ?? $"pipeline '{sponsored.PipelineId}' failed");
                 ads = null;
             }
 
@@ -175,8 +141,8 @@ public sealed class SlotBlendFactory : IOperatorFactory
                 return;
             }
 
-            // The placement: organic rows in their order, a sponsored one after every `gap` of them. A row source appends
-            // only keys the request has not seen: one already there (an earlier node's) is passed over, and takes no place.
+            // A row source appends only keys the request has not seen: one already there (an earlier node's) is passed
+            // over, and takes no place.
             var keys = new List<long>(most);
             var scores = new List<ScalarValue>(most);
             var flags = new List<bool>(most);
@@ -236,7 +202,6 @@ public sealed class SlotBlendFactory : IOperatorFactory
             markColumn.SetValid(first, keys.Count);
         }
 
-        /// <summary>Whether the organic list has the id: a sponsored row is not one the page shows anyway.</summary>
         private static bool Contains(PipelineCallResult list, long id)
         {
             foreach (var key in list.Columns.Ids)

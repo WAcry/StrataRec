@@ -11,7 +11,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>The request read path of <c>cache</c> sources: tiers, expiry, failures, write-back.</summary>
 public class CacheReadTests
 {
     private static readonly long[] Three = [1, 2, 3];
@@ -36,7 +35,7 @@ public class CacheReadTests
 
         Assert.Equal(FeatureState.Ok, hit.State);
         Assert.Equal(new[] { 3.0, 2, 4 }, Values(second, clicks, 3));
-        Assert.Equal(new long[] { 4 }, connector.Calls.Last().Keys.Select(k => k.Int64Value)); // only the miss
+        Assert.Equal(new long[] { 4 }, connector.Calls.Last().Keys.Select(k => k.Int64Value));
         Assert.Equal(2, connector.Calls.Count);
     }
 
@@ -50,7 +49,7 @@ public class CacheReadTests
         rig.Build();
 
         await rig.NewRequest(Three).EnsureAsync(clicks);
-        Assert.Equal(new[] { "age", "clicks" }, Assert.Single(connector.Calls).Fields); // the whole record, not just clicks
+        Assert.Equal(new[] { "age", "clicks" }, Assert.Single(connector.Calls).Fields);
         rig.WriteBack("item_store");
         var request = rig.NewRequest(Three);
         await request.EnsureAsync(age);
@@ -100,15 +99,14 @@ public class CacheReadTests
         {
             if (readEveryResident && table.Compactions == firstEviction)
             {
-                // Exercise one capacity eviction with every resident visited, then switch the reads to new keys.
                 var current = table.Pin();
                 var keys = Enumerable.Range(1, (int)next - 1).Select(k => (long)k).Where(k => current.Find(k).Found);
                 await Read(keys.ToArray());
             }
 
             await Read(next);
-            Assert.True(table.Pin().Find(next).Found); // a cache full of visited records still admits a new key
-            await Read(next++); // new keys that are actually reused earn a chance too
+            Assert.True(table.Pin().Find(next).Found);
+            await Read(next++);
         }
 
         Assert.False(table.Pin().Find(1L).Found);
@@ -116,8 +114,7 @@ public class CacheReadTests
 
     /// <summary>
     /// A plan judges a record by its own times, whatever times the table has: the plans of an engine share a cache's
-    /// table when only their times differ, and the table has those of the plan served last. A reader whose ttl_ms is
-    /// 100 is not served a record 2 s old because another plan keeps its records for a minute.
+    /// table when only their times differ, and the table has those of the plan served last.
     /// </summary>
     [Fact]
     public async Task APlanJudgesARecordByItsOwnTimes_NotByThoseTheTableTookFromAnotherPlan()
@@ -153,11 +150,11 @@ public class CacheReadTests
         await rig.NewRequest(keys).EnsureAsync(clicks);
         rig.WriteBack("item_store");
 
-        rig.Clock.AdvanceMs(9_000); // within every key's lifetime (at least 9 s)
+        rig.Clock.AdvanceMs(9_000);
         await rig.NewRequest(keys).EnsureAsync(clicks);
         Assert.Single(connector.Calls);
 
-        rig.Clock.AdvanceMs(1_000); // 10 s: about half the keys have expired
+        rig.Clock.AdvanceMs(1_000);
         await rig.NewRequest(keys).EnsureAsync(clicks);
         var refetched = connector.Calls.Last().Keys.Select(k => k.Int64Value).ToArray();
         Assert.InRange(refetched.Length, Keys / 4, Keys * 3 / 4);
@@ -166,7 +163,7 @@ public class CacheReadTests
         Assert.All(keys.Except(refetched), key => Assert.True(cache.Policy.LifetimeMs(EntityKey.FromInt64(key)) >= 10_000));
         rig.WriteBack("item_store");
 
-        rig.Clock.AdvanceMs(1_001); // past the longest lifetime: every key that was not refetched just now
+        rig.Clock.AdvanceMs(1_001);
         await rig.NewRequest(keys).EnsureAsync(clicks);
         Assert.Equal(keys.Except(refetched), connector.Calls.Last().Keys.Select(k => k.Int64Value));
     }
@@ -226,7 +223,7 @@ public class CacheReadTests
         var result = await request.EnsureAsync(clicks);
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Single(connector.Calls); // negative caching: key 2 is not asked again
+        Assert.Single(connector.Calls);
         Assert.Equal(-1.0, request.Value(clicks, 0).AsFloat64());
         var version = rig.Tables["item_store"].Pin();
         var record = version.Find(2L);
@@ -255,8 +252,8 @@ public class CacheReadTests
         rig.WriteBack("item_store");
         fail = true;
 
-        rig.Clock.AdvanceMs(5_000); // expired, within the stale window
-        var stale = rig.NewRequest([1, 2, 3]); // 3 was never fetched
+        rig.Clock.AdvanceMs(5_000);
+        var stale = rig.NewRequest([1, 2, 3]);
         var degraded = await stale.EnsureAsync(clicks);
 
         Assert.Equal(FeatureState.Degraded, degraded.State);
@@ -264,17 +261,17 @@ public class CacheReadTests
         Assert.Contains("2 key(s) served stale", degraded.Error);
         Assert.Equal(new[] { 1.0, 2, -1 }, Values(stale, clicks, 3));
 
-        rig.Clock.AdvanceMs(10_000); // past the window too
+        rig.Clock.AdvanceMs(10_000);
         var expired = rig.NewRequest([1, 2]);
         var failed = await expired.EnsureAsync(clicks);
-        Assert.Equal(FeatureState.Failed, failed.State); // no key got a value
+        Assert.Equal(FeatureState.Failed, failed.State);
         Assert.Equal("item_store is down", failed.Error);
     }
 
     /// <summary>
-    /// The window is judged when the fallback is chosen, after the connector failed. TTL 1000 ms within 10%
-    /// and a 1000 ms window: a record 1200 ms old is stale for between 700 and 900 ms more. The connector fails after
-    /// 100 ms (still in the window: served) or after 10 s (past it: not served, though it was stale when the read began).
+    /// TTL 1000 ms within 10% and a 1000 ms window: a record 1200 ms old is stale for between 700 and 900 ms more. The
+    /// connector fails after 100 ms (still in the window: served) or after 10 s (past it: not served, though it was
+    /// stale when the read began).
     /// </summary>
     [Theory]
     [InlineData(false, 100, true)]
@@ -286,7 +283,6 @@ public class CacheReadTests
         var store = new FakeCacheStore();
         if (distributed)
         {
-            // Another instance wrote the record to the distributed tier; this one's table never had it.
             var warm = new FeatureTestRig().CacheSource("item_store", ScriptedConnector.Values((_, _) => 1.0), ttlMs: 1_000, staleIfErrorMs: 1_000, distributed: store);
             var warmClicks = warm.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store", ScalarValue.FromFloat64(-1));
             warm.Build();
@@ -300,7 +296,7 @@ public class CacheReadTests
         {
             if (fail)
             {
-                rig.Clock.AdvanceMs(failingForMs); // the time the failing call took
+                rig.Clock.AdvanceMs(failingForMs);
                 return ValueTask.FromResult(FetchStatus.Failed("item_store is down"));
             }
 
@@ -329,7 +325,7 @@ public class CacheReadTests
         }
         else
         {
-            Assert.Equal(FeatureState.Failed, result.State); // its one key got no value
+            Assert.Equal(FeatureState.Failed, result.State);
             Assert.Equal("item_store is down", result.Error);
         }
     }
@@ -354,9 +350,9 @@ public class CacheReadTests
         var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
 
-        var early = rig.NewRequest([7]).EnsureAsync(clicks).AsTask(); // waits for the slow call
+        var early = rig.NewRequest([7]).EnsureAsync(clicks).AsTask();
         rig.Clock.AdvanceMs(10);
-        await rig.NewRequest([7]).EnsureAsync(clicks); // starts later, answers first
+        await rig.NewRequest([7]).EnsureAsync(clicks);
         Assert.Equal(1, rig.WriteBack("item_store"));
         slow.SetResult();
         await early;
@@ -375,14 +371,13 @@ public class CacheReadTests
         var (writer, writerConnector, writerClicks) = DistributedRig(store);
         await writer.NewRequest(Three).EnsureAsync(writerClicks);
         await store.WhenWrittenAsync(3);
-        // The keys say the source, the entity and where the source's values come from (its connector and settings).
         var cache = writer.Tables["item_store"].Cache!;
         var keys = cache.Keyspace.Prefix;
         Assert.Matches("^item_store:item:[0-9a-f]{16}:$", keys);
         Assert.True(store.TryGet(keys + "2", out _, out var timeToLive));
         Assert.Equal(TimeSpan.FromMilliseconds(cache.Policy.RetentionMs), timeToLive);
 
-        var (reader, readerConnector, readerClicks) = DistributedRig(store); // another instance: an empty table
+        var (reader, readerConnector, readerClicks) = DistributedRig(store);
         var request = reader.NewRequest([3, 1, 4]);
         var result = await request.EnsureAsync(readerClicks);
 
@@ -439,7 +434,6 @@ public class CacheReadTests
         await writer.NewRequest(Three).EnsureAsync(writerClicks);
         await store.WhenWrittenAsync(3);
 
-        // Another catalog version reads one more field of the source: its records have another fingerprint.
         var connector = Clicks();
         var reader = new FeatureTestRig().CacheSource("item_store", connector, distributed: store);
         var clicks = reader.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
@@ -474,7 +468,7 @@ public class CacheReadTests
         var result = await request.EnsureAsync(left, right);
 
         Assert.Equal(FeatureState.Ok, result.State);
-        Assert.Equal((999.0, 999.0), (request.Value(left, 0).AsFloat64(), request.Value(right, 0).AsFloat64())); // not 11 and 22
+        Assert.Equal((999.0, 999.0), (request.Value(left, 0).AsFloat64(), request.Value(right, 0).AsFloat64()));
         Assert.Single(connector.Calls);
         Assert.NotEqual(writer.Tables["item_store"].Cache!.Fingerprint, reader.Tables["item_store"].Cache!.Fingerprint);
     }
@@ -504,9 +498,6 @@ public class CacheReadTests
     [Fact]
     public async Task EveryFieldType_ReadsTheSameThroughEachTier_AsAFetch()
     {
-        // The connector's answer is encoded for the tiers and decoded into the slots: a miss, an L1 hit and an L2 hit give
-        // a fetch's values, types and absences for every storage type. Item 2's embedding has 2 elements, not 4: the tiers
-        // keep what the connector wrote, and every read replaces it and counts it out of range, as a fetch does.
         var store = new FakeCacheStore();
         var fetched = TypesRig(cache: false, store);
         var missed = TypesRig(cache: true, store);
@@ -533,12 +524,6 @@ public class CacheReadTests
         }
     }
 
-    /// <summary>
-    /// A cache read is recorded as the connector call it made would be without the cache: a timeout is a timeout and
-    /// not an error, an answer in part says how many keys the connector could not answer, a failure that came without
-    /// words is given the words a replay of the recording gives it (the request fails with the same words in both),
-    /// and a read that had no time to send its call says it sent none.
-    /// </summary>
     [Theory]
     [InlineData("partial", IoOutcome.Partial, 1, true)]
     [InlineData("timeout", IoOutcome.Timeout, 0, true)]
@@ -571,19 +556,15 @@ public class CacheReadTests
 
             var call = Assert.Single(recorder.Calls);
             Assert.NotNull(call.Status.Error);
-            Assert.Contains(call.Status.Error, fill.Error); // what the request is told is what the recording has
+            Assert.Contains(call.Status.Error, fill.Error);
             recorded.Add((call.Outcome, call.Status.FailedKeys, call.Sent, how == "failed without words" ? call.Status.Error : null));
-            Assert.Equal(sent ? 1 : 0, connector.Calls.Count); // a call that was not sent is one the connector did not get
+            Assert.Equal(sent ? 1 : 0, connector.Calls.Count);
         }
 
         Assert.Equal((outcome, failedKeys, sent, how == "failed without words" ? "source 'item_store' failed" : null), recorded[0]);
         Assert.Equal(recorded[0], recorded[1]);
     }
 
-    /// <summary>
-    /// A read of several chunks reports its first failure, whether or not that one came with words: a chunk that failed
-    /// without any is not passed over for the next one's timeout.
-    /// </summary>
     [Fact]
     public async Task ACacheReadOfSeveralChunks_ReportsItsFirstFailure()
     {
@@ -601,10 +582,6 @@ public class CacheReadTests
         Assert.Equal(2, connector.Calls.Count);
     }
 
-    /// <summary>
-    /// A read whose time ran out between its chunks sent a call, and its recording says so: the chunks it could not
-    /// send are its failed keys, not what "sent" is about. (It said what its first chunk to fail said: not sent.)
-    /// </summary>
     [Fact]
     public async Task ACacheReadWhoseTimeRanOutBetweenItsChunks_IsRecordedAsHavingSentACall()
     {
@@ -612,7 +589,7 @@ public class CacheReadTests
         var bound = default(CancellationToken);
         var connector = new ScriptedConnector((keys, fields, writer, cancellation) =>
         {
-            bound = cancellation; // cancelled when the read's time is up
+            bound = cancellation;
             ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
             return ValueTask.FromResult(FetchStatus.Ok);
         });
@@ -626,20 +603,15 @@ public class CacheReadTests
         var waited = false;
         using var counted = new MeasurementHook(
             StrataRecMetrics.Names.IoKeys, () => waited |= bound.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)), (StrataRecTags.IoTarget, Store));
-        // Long enough that the first chunk is sent before the time is up, on a stalled runner too.
         var fill = await rig.NewRequest([1, 2, 3], hook: recorder, deadlineMs: 250).EnsureAsync(clicks);
 
         var call = Assert.Single(recorder.Calls);
         Assert.True(waited);
-        Assert.Equal(2, connector.Calls.Count); // the one before, and the first chunk's
+        Assert.Equal(2, connector.Calls.Count);
         Assert.Equal(FeatureState.Degraded, fill.State);
         Assert.Equal((IoOutcome.Partial, true, 2), (call.Outcome, call.Sent, call.Status.FailedKeys));
     }
 
-    /// <summary>
-    /// A read that had no time to ask its origin and served what the cache had past its time says it sent no call,
-    /// though it gave values: the recording's "sent" is about the call, not about what the read could still give.
-    /// </summary>
     [Fact]
     public async Task ACacheReadThatServedStaleWithNoTimeToAsk_IsRecordedAsHavingSentNoCall()
     {
@@ -649,7 +621,7 @@ public class CacheReadTests
         rig.Build();
         await rig.NewRequest([1, 2]).EnsureAsync(clicks);
         rig.WriteBack("item_store");
-        rig.Clock.AdvanceMs(5_000); // expired, within the stale window
+        rig.Clock.AdvanceMs(5_000);
         var recorder = new RecordingHook();
 
         var fill = await rig.NewRequest([1, 2], hook: recorder, deadlineMs: 0).EnsureAsync(clicks);
@@ -658,7 +630,7 @@ public class CacheReadTests
         Assert.Equal(FeatureState.Degraded, fill.State);
         Assert.Equal((IoOutcome.Partial, false), (call.Outcome, call.Sent));
         Assert.Equal(new double?[] { 1.5, 3.0 }, call.Values);
-        Assert.Single(connector.Calls); // the first request's
+        Assert.Single(connector.Calls);
     }
 
     [Fact]
@@ -681,9 +653,9 @@ public class CacheReadTests
         await rig.NewRequest([1, 2]).EnsureAsync(clicks);
         rig.WriteBack("item_store");
         rig.Clock.AdvanceMs(500);
-        await rig.NewRequest([3, 5]).EnsureAsync(clicks); // fresh 3, absent 5
+        await rig.NewRequest([3, 5]).EnsureAsync(clicks);
         rig.WriteBack("item_store");
-        rig.Clock.AdvanceMs(700); // 1 and 2 expired (within the stale window); 3 and 5 fresh
+        rig.Clock.AdvanceMs(700);
         fail = true;
 
         var recorder = new RecordingHook();
@@ -693,14 +665,14 @@ public class CacheReadTests
         var replayResult = await replayed.EnsureAsync(clicks);
 
         var call = Assert.Single(recorder.Calls);
-        Assert.Equal(new long[] { 1, 3, 5, 2, 8 }, call.Keys); // the read's distinct keys, in row order
+        Assert.Equal(new long[] { 1, 3, 5, 2, 8 }, call.Keys);
         Assert.Equal(IoOutcome.Partial, call.Outcome);
-        Assert.Equal(new double?[] { 1.5, 4.5, null, 3.0, null }, call.Values); // stale, fresh, absent, stale, failed
+        Assert.Equal(new double?[] { 1.5, 4.5, null, 3.0, null }, call.Values);
         Assert.Equal(FeatureState.Degraded, liveResult.State);
         Assert.Equal(liveResult, replayResult);
         Assert.Equal(Values(live, clicks, 6), Values(replayed, clicks, 6));
         Assert.Equal(new[] { 1.5, 4.5, -1, 3.0, -1, 4.5 }, Values(live, clicks, 6));
-        Assert.Equal(3, connector.Calls.Count); // the replay called nothing
+        Assert.Equal(3, connector.Calls.Count);
     }
 
     [Fact]
@@ -759,7 +731,6 @@ public class CacheReadTests
         Assert.Equal(1, rig.WriteBack("item_store"));
     }
 
-    /// <summary>A distributed tier with nothing in it, which says what its first write held: record bytes, and the bytes of the arrays under them.</summary>
     private sealed class CapturingStore : ICacheStore
     {
         public string StoreType => TestCacheStoreFactory.TypeName;
@@ -790,11 +761,6 @@ public class CacheReadTests
 
     private static ScriptedConnector Clicks() => ScriptedConnector.Values((key, _) => key * 1.0);
 
-    /// <summary>
-    /// A connector's answer is encoded into records and decoded into the slots, as a distributed hit is; each read decodes
-    /// a distinct string once, so a value that repeats across keys (a category, a tag) is one instance in the column, not
-    /// one string per key.
-    /// </summary>
     [Fact]
     public async Task StringsDecodedFromRecords_AreOneInstancePerValue_AcrossTheKeysOfARead()
     {
@@ -832,10 +798,10 @@ public class CacheReadTests
         }
 
         var missed = Setup();
-        await Check(missed); // a miss: the connector's answer, through its records
+        await Check(missed);
         missed.Rig.WriteBack("item_store");
         await store.WhenWrittenAsync(4);
-        await Check(Setup()); // another instance's distributed hit
+        await Check(Setup());
     }
 
     private static double[] Values(TestRequest request, int feature, int rows) =>
@@ -850,7 +816,6 @@ public class CacheReadTests
         return (rig, connector, clicks);
     }
 
-    /// <summary>A source of every storage type: items 1–3 have records (2 without some fields), 9 has none.</summary>
     private static (FeatureTestRig Rig, int[] Features) TypesRig(bool cache, FakeCacheStore store)
     {
         const string Json = """
@@ -884,13 +849,12 @@ public class CacheReadTests
             rig.Physical("item.li32", FeatureTestRig.Item, ColumnType.List(StorageKind.Int32), "item_store"),
             rig.Physical("item.li64", FeatureTestRig.Item, ColumnType.List(StorageKind.Int64), "item_store"),
             rig.Physical("item.ls", FeatureTestRig.Item, ColumnType.List(StorageKind.String), "item_store"),
-            rig.Physical("item.s_again", FeatureTestRig.Item, ColumnType.String, "item_store", field: "s"), // two features, one field
+            rig.Physical("item.s_again", FeatureTestRig.Item, ColumnType.String, "item_store", field: "s"),
         };
         rig.Build();
         return (rig, features);
     }
 
-    /// <summary>Records each call's keys, first field's values and status; its replayer answers a call with the same keys.</summary>
     private sealed class RecordingHook : IFeatureCallHook
     {
         private int _sequence;

@@ -112,18 +112,15 @@ public sealed class LogBatch
     public long Seq { get; set; }
 
     /// <summary>
-    /// About how much memory the batch holds: arrays, column values and what they point to (strings, lists), and
-    /// the envelope's lists and maps. What the log queues are bounded by (<see cref="LogPipelineOptions.DurableMaxBytes"/>):
-    /// batches differ in size by orders of magnitude (a request-level tap is one row, a candidate tap thousands of rows of
-    /// lists), so a count of batches bounds nothing. Computed once, when the batch is first queued; the batch does not
-    /// change afterwards.
+    /// About how much memory the batch holds: arrays, column values and what they point to (strings, lists), and the
+    /// envelope's lists and maps. What the log queues are bounded by
+    /// (<see cref="LogPipelineOptions.DurableMaxBytes"/>). Computed once, when the batch is first queued; the batch
+    /// does not change afterwards.
     /// </summary>
     /// <remarks>
-    /// <para>A string is counted once per batch however many values point to it: a local table's values, a category a
-    /// connector interned or a constant give many rows the same string object, and counting it per row overstated a batch
-    /// of 1,024 rows sharing a 4 KB string 158 times. Sharing is found by identity in a small direct-mapped table of recent strings, so a
-    /// string evicted by another that maps to the same slot is counted again: an overstatement, never an understatement.
-    /// A column's values are one array (<see cref="LogColumn"/>), counted by its length.</para>
+    /// <para>A string is counted once per batch however many values point to it. Sharing is found by identity in a
+    /// small direct-mapped table of recent strings, so a string evicted by another that maps to the same slot is
+    /// counted again: an overstatement, never an understatement.</para>
     /// <para>Strings of the plan (tap, pipeline, manifest and schema ids, node, arm, column and outcome names) are shared by every
     /// request and not counted; the envelope's lists and maps are, per entry. The maps of a request are shared by its
     /// batches and counted in each, a bounded overstatement (taps per request).</para>
@@ -179,7 +176,7 @@ public sealed class LogBatch
                         bytes += column.Values.LongLength * 4;
                         break;
                     default:
-                        bytes += column.Values.LongLength * 8; // long[] or double[]
+                        bytes += column.Values.LongLength * 8;
                         break;
                 }
             }
@@ -197,7 +194,6 @@ public sealed class LogBatch
         }
     }
 
-    /// <summary>The heap memory a value points to, beyond the value itself; strings already counted in the batch are free.</summary>
     private static long PayloadBytes(string?[] seen, in ScalarValue value)
     {
         switch (value.Kind)
@@ -227,7 +223,6 @@ public sealed class LogBatch
         }
     }
 
-    /// <summary>A string's bytes the first time the batch's estimate meets it, 0 when it was the last one in its slot.</summary>
     private static long Once(string?[] seen, string? s)
     {
         if (s is null)

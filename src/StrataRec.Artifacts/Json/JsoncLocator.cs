@@ -17,9 +17,7 @@ public readonly record struct JsoncLocation(int Line, int Column, bool Exact);
 /// the root at their value. With an offset into a string value (an expression or a template), the position is that
 /// character's, counting escapes as written (<c>\"</c> is two columns, one character).</para>
 /// <para>A pointer into a merged or patched view may not exist in the file (a node an arm adds, an entry a patch
-/// changes): the position is then its nearest ancestor that exists, never a guess. Locating reads the text once with a
-/// forward-only reader and skips every member off the path; it runs when a diagnostic is printed, not when one is
-/// found.</para>
+/// changes): the position is then its nearest ancestor that exists, never a guess.</para>
 /// </remarks>
 public static class JsoncLocator
 {
@@ -111,7 +109,7 @@ public static class JsoncLocator
         }
 
         var exact = matched == depth;
-        var within = 0; // UTF-16 units into the character at 'at': 1 for the low surrogate of a raw non-BMP character
+        var within = 0;
         if (exact && stringOffset is { } offset && value < json.Length && json[(int)value] == (byte)'"')
         {
             (at, within) = CharacterInString(json, (int)value, offset);
@@ -147,7 +145,6 @@ public static class JsoncLocator
             }
             else if (b >= 0xF0)
             {
-                // A 4-byte sequence is a surrogate pair in UTF-16: an offset at its second unit is inside it.
                 if (units + 1 == offset)
                 {
                     return (position, 1);

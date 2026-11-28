@@ -9,20 +9,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Benchmarks;
 
-/// <summary>
-/// One home_feed request end to end (recall → filter → coarse score → top-k → model → fusion → sort → diversity) over
-/// a synthetic catalog of <see cref="Candidates"/> recalled items. Measures engine overhead per request: feature
-/// fetches from in-memory connectors, expression scoring, selection and the experiment variant switch.
-/// </summary>
-/// <remarks>
-/// <para>The sample workspace is copied to a temp directory and its fixtures are regenerated at the requested size
-/// (<see cref="HomeFeedBenchWorkspace"/>), with the sample's bindings: items fetched, authors a local table.</para>
-/// <para><c>Baseline</c> runs without experiments; <c>AllArms</c> forces every treatment arm (MMR re-rank, an extra
-/// calibration node, parameter overrides); <c>AllArmsWithLogs</c> also captures the funnel log taps.
-/// <c>BaselineMetered</c> attaches a <see cref="MeterListener"/> to every StrataRec instrument;
-/// <c>BaselineTraced</c> records the request span and its node and I/O spans.</para>
-/// <para>Run: <c>dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*PipelineBenchmarks*'</c>.</para>
-/// </remarks>
 [MemoryDiagnoser]
 public class PipelineBenchmarks
 {
@@ -48,7 +34,6 @@ public class PipelineBenchmarks
         _executor = new PipelineExecutor();
         _inputs = new RequestInputs().Set("user_id", 1001L).Set("session_id", "s-1001").Set("surface", "home");
 
-        // Fail fast on a broken setup instead of measuring an error path.
         var check = Run(_allArms, captureLogs: true);
         if (!check.Succeeded || check.Items.Count == 0)
         {

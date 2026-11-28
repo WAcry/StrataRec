@@ -145,7 +145,7 @@ public sealed class LlmRerankerFactory : IOperatorFactory
         BoundModel model, (string Name, PromptTemplate Template)[] prompts, string output, int window, AnswerKind answer, bool drop, int maxOutputTokens)
         : Operator
     {
-        private readonly string[] _read = [output]; // the one output it reads, recorded and replayed
+        private readonly string[] _read = [output];
 
         private readonly KeyValuePair<string, object?>[] _used = LlmNode.Tags(model, "used");
         private readonly KeyValuePair<string, object?>[] _unknown = LlmNode.Tags(model, "unknown");
@@ -188,7 +188,6 @@ public sealed class LlmRerankerFactory : IOperatorFactory
             Apply(context, rows.AsSpan(0, total), n, text, status);
         }
 
-        /// <summary>Parses the answer and sets the new order; fails the node, changing nothing, when the answer names no window row.</summary>
         /// <param name="rows">The live rows as of the call, in rank order; the first <paramref name="n"/> are the window.</param>
         private void Apply(OperatorContext context, ReadOnlySpan<int> rows, int n, string text, in ServiceStatus status)
         {
@@ -234,12 +233,10 @@ public sealed class LlmRerankerFactory : IOperatorFactory
             context.SetOrder(order.AsSpan(0, count));
         }
 
-        /// <summary>What the answer must list, for messages.</summary>
         private string What(int n) => answer == AnswerKind.Rank
             ? $"window ranks (1 to {n.ToString(CultureInfo.InvariantCulture)})"
             : "entity ids of the window's rows";
 
-        /// <summary>The hint for an answer the client says it cut at the limit; empty otherwise.</summary>
         private string Cut(in ServiceStatus status) => LlmNode.Cut(status, maxOutputTokens, "shorten the window");
 
         private void Count(OperatorContext context, in AnswerCounts counts)

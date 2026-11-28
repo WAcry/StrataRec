@@ -14,36 +14,26 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.Features.Local;
 
 /// <summary>
-/// <c>snapshot_files@1</c>: loads a table snapshot from local files, and with
-/// <c>reload</c> loads it again periodically, swapping each complete load in whole.
+/// <c>snapshot_files@1</c>: loads a table snapshot from local files, and with <c>reload</c> loads it again
+/// periodically, swapping each complete load in whole; a load that fails leaves the previous version in place and
+/// throws.
 /// </summary>
 /// <remarks>
-/// <para><b>Layout.</b> The snapshot is a manifest, <c>snapshot.json</c>, next to (or naming) its data files:</para>
+/// <para>The manifest, <c>snapshot.json</c>, names its data files relative to itself and the update-stream position
+/// they cover (<see cref="UpdatePosition"/>; omit it for a source without a stream). Publish a snapshot by writing its
+/// data files, then replacing the manifest (write and rename).</para>
 /// <code>
 /// { "format": "jsonl", "position": { "0": 1200, "1": 980 }, "files": ["part-0000.jsonl", "part-0001.jsonl"] }
 /// </code>
-/// <para><c>position</c> is the update-stream position the data covers (<see cref="UpdatePosition"/>; omit it for a
-/// source without a stream). <c>files</c> are paths relative to the manifest. A job publishes a new snapshot by writing
-/// new data files and then replacing the manifest (write and rename), so a reader never sees half a snapshot.</para>
-/// <para><b>Data files</b> are JSON Lines (one JSON object per line, UTF-8):</para>
+/// <para>Data files are JSON Lines. <c>key</c> is a number or a string for a one-part key, an array in the entity's
+/// declared order otherwise; <c>fields</c> uses physical field names, <c>null</c> is missing, an absent field keeps the
+/// earlier value, and floats also accept <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>.</para>
 /// <code>
-/// {"key": 10042, "version": 17, "fields": {"i_clk_7d": 12.0, "i_title": "…", "i_emb_v3": [0.1, …], "i_age_h": null}}
-/// {"key": 10043, "version": 18, "deleted": true}
-/// {"key": [10042, "US"], "version": 3, "fields": {"boost": 1.2}}     // a table keyed by (item, country)
-/// {"key": [10042, "DE"], "version": 4, "deleted": true}
+/// {"key": 10042, "version": 17, "fields": {"i_clk_7d": 12.0, "i_emb_v3": [0.1, 0.2], "i_age_h": null}}
+/// {"key": [10042, "US"], "version": 3, "deleted": true}
 /// </code>
-/// <para><c>key</c> is the entity's key: for a one-part key a JSON number (int64 part) or string (string part); for a key
-/// of several parts an array of exactly that many, in the entity's declared order, each a number or string as its part's
-/// type says (a wrong count or type is a load error at the key's pointer). <c>version</c> is an int64.
-/// <c>fields</c> uses the store's physical field names; fields the table does not hold are skipped, <c>null</c> is
-/// missing, and an absent field is not written (a later line of the same key keeps the earlier value). Values have the
-/// field's type; floats and float list elements also accept <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, which
-/// are stored as such and replaced on read like any non-finite value. A line with <c>"deleted": true</c> is a tombstone.</para>
-/// <para><b>Settings.</b> <c>uri</c>: the snapshot directory (holding <c>snapshot.json</c>) or the manifest itself, as a
-/// path (relative to the config root) or a <c>file://</c> URI. <c>reload</c>: an ISO 8601 duration such as <c>PT1H</c>, at most <c>P49D</c>.</para>
-/// <para>Each load is a reload of the table (<see cref="IFeatureTableWriter.BeginReload"/>): readers keep the previous
-/// version until the new one is complete; a load that fails leaves it in place and the error is thrown. A manifest that
-/// has not changed since the last load is not loaded again.</para>
+/// <para><c>uri</c>: the snapshot directory or the manifest, a path relative to the config root or a <c>file://</c>
+/// URI. <c>reload</c>: an ISO 8601 duration such as <c>PT1H</c>, at most <c>P49D</c>.</para>
 /// </remarks>
 public sealed class SnapshotFilesUpdateSource : IFeatureUpdateSource
 {
@@ -60,7 +50,7 @@ public sealed class SnapshotFilesUpdateSource : IFeatureUpdateSource
             throw new ArgumentOutOfRangeException(nameof(reload), reload, "The reload period must be positive.");
         }
 
-        ManifestPath = Path.GetFullPath(manifestPath); // a relative path means the current directory now, not when it runs
+        ManifestPath = Path.GetFullPath(manifestPath);
         Reload = reload;
     }
 
@@ -82,7 +72,6 @@ public sealed class SnapshotFilesUpdateSource : IFeatureUpdateSource
             cancellationToken.ThrowIfCancellationRequested();
             var manifest = SnapshotManifest.Read(ManifestPath);
 
-            // Unchanged since the last load, or (first round) already covered by the table the engine resumes.
             var unchanged = loaded is not null
                 ? manifest.Digest.AsSpan().SequenceEqual(loaded)
                 : !from.IsEmpty && manifest.Position.Equals(from);
@@ -112,9 +101,9 @@ public sealed class SnapshotFilesUpdateSource : IFeatureUpdateSource
     }
 
     /// <remarks>
-    /// Cancellation is checked before the reload starts, before every file and right before the swap, as well as every
-    /// few thousand lines while reading: a cancelled load aborts its reload and never publishes, however small the
-    /// snapshot, so the table keeps its version and its position.
+    /// Cancellation is checked before the reload starts, before every file and right before the swap: a cancelled load
+    /// aborts its reload and never publishes, however small the snapshot, so the table keeps its version and its
+    /// position.
     /// </remarks>
     private static void Load(SnapshotManifest manifest, IFeatureTableWriter writer, CancellationToken cancellationToken)
     {
@@ -179,7 +168,6 @@ public sealed class SnapshotFilesUpdateSourceFactory : BindingFactory<IFeatureUp
         return new SnapshotFilesUpdateSource(manifest, settings.Reload is { } reload ? ParseDuration(reload) : null);
     }
 
-    /// <summary>ISO 8601 duration (the JSON Schema <c>duration</c> format), e.g. <c>PT1H</c> or <c>PT30M</c>.</summary>
     private static TimeSpan ParseDuration(string value)
     {
         const string Hint = "write an ISO 8601 duration such as \"PT1H\" (1 hour), \"PT15M\" or \"P1D\"";
@@ -194,7 +182,7 @@ public sealed class SnapshotFilesUpdateSourceFactory : BindingFactory<IFeatureUp
         }
         catch (OverflowException)
         {
-            period = TimeSpan.MaxValue; // longer than a TimeSpan holds: refused below as too long
+            period = TimeSpan.MaxValue;
         }
 
         if (period <= TimeSpan.Zero)
@@ -213,7 +201,6 @@ public sealed class SnapshotFilesUpdateSourceFactory : BindingFactory<IFeatureUp
     }
 }
 
-/// <summary>A parsed <c>snapshot.json</c>: data files (resolved), the position they cover, and a digest to detect change.</summary>
 internal sealed class SnapshotManifest
 {
     private SnapshotManifest(UpdatePosition position, string[] files, byte[] digest)
@@ -333,11 +320,6 @@ internal sealed class SnapshotManifest
     }
 }
 
-/// <summary>
-/// Decodes JSON Lines snapshot files straight into a table writer: one <see cref="Utf8JsonReader"/> pass per line over a
-/// reused byte buffer, strings copied into a reused char buffer, so a line allocates nothing (only a string value the
-/// table's dictionary does not hold yet becomes a string).
-/// </summary>
 internal sealed class JsonLinesSnapshotReader : IDisposable
 {
     private const int CancellationCheckLines = 4096;
@@ -350,8 +332,8 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
     private byte[] _buffer;
     private char[] _chars = new char[256];
     private char[] _key = new char[64];
-    private readonly EntityKey[] _parts; // a key of several parts, as the line wrote it
-    private readonly StringDedup _keyStrings = new(); // string parts of such keys: a country is one instance per load
+    private readonly EntityKey[] _parts;
+    private readonly StringDedup _keyStrings = new();
     private string _path = string.Empty;
     private long _line;
     private int _cursor;
@@ -371,7 +353,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
         _buffer = ArrayPool<byte>.Shared.Rent(1 << 16);
     }
 
-    /// <summary>Loads every line of one file. Returns the number of lines that held a record.</summary>
+    /// <summary>Returns the number of lines that held a record.</summary>
     public long Load(string path, CancellationToken cancellationToken)
     {
         FileStream stream;
@@ -580,7 +562,6 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
             }
         }
 
-        // The loop ends at the object's end; anything else is a line cut short. Data after the object makes the reader throw.
         if (reader.TokenType != JsonTokenType.EndObject || reader.CurrentDepth != 0 || reader.Read())
         {
             throw Error(string.Empty, "The line is not one complete JSON object.", "write one JSON object per line");
@@ -628,11 +609,6 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
         : _schema.KeyType == EntityKeyType.Int64 ? _writer.Begin(intKey, version)
         : _writer.Begin(_key.AsSpan(0, keyLength), version);
 
-    /// <summary>
-    /// Decodes a key of several parts, an array of them in declared order, into <see cref="_parts"/>: an int64 part a JSON
-    /// number, a string part a JSON string. Another shape is an error at <c>/key</c> (not an array, or another number of
-    /// parts) or <c>/key/&lt;i&gt;</c> (a part of another type), whose hint writes the key the table expects.
-    /// </summary>
     private void KeyParts(ref Utf8JsonReader reader)
     {
         var layout = _schema.Key;
@@ -693,7 +669,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
             reader.Read();
             if (field < 0)
             {
-                reader.Skip(); // a field of the store that no feature of this table reads
+                reader.Skip();
                 continue;
             }
 
@@ -713,8 +689,8 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
         }
     }
 
-    /// <summary>The field a property names, or -1. Lines usually list fields in the same order, so the field after the last
-    /// match is tried first.</summary>
+    /// <summary>Lines usually list fields in the same order, so the field after the last match is tried
+    /// first.</summary>
     private int Match(ref Utf8JsonReader reader)
     {
         var count = _names.Length;
@@ -731,7 +707,6 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
         return -1;
     }
 
-    /// <summary>Decodes one field value into the builder. Pointers for errors are built only when an error is thrown.</summary>
     private void Value(ref Utf8JsonReader reader, int field, RecordBuilder builder)
     {
         var type = _schema.Fields[field].Type;
@@ -804,8 +779,8 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
                     n++;
                 }
 
-                // A list of another length is data the type cannot hold, like an integer beyond int32: a load error at the
-                // line, rather than a record every read would replace.
+                // A list of another length is data the type cannot hold, a load error at the line, rather than a record
+                // every read would replace.
                 if (!ColumnValues.FitsLength(n, type))
                 {
                     throw Error(Pointer(field), $"Expected {type.FixedLength} elements for {type}, got {n}.",
@@ -863,8 +838,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
             throw Mismatch(ref reader, field, element, type);
         }
 
-        // A number beyond the float32 range reads as ±∞, as it does for memory@1 (both use System.Text.Json); the read path
-        // then replaces it like any non-finite value.
+        // A number beyond the float32 range reads as ±∞; the read path then replaces it like any non-finite value.
         if (!reader.TryGetSingle(out var value))
         {
             throw Error(Pointer(field, element), $"{Raw(ref reader)} is not a float32 number.", "write a JSON number");
@@ -893,7 +867,6 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
         return value;
     }
 
-    /// <summary>The spellings of non-finite values, as replay bundles write them.</summary>
     private double NonFinite(ref Utf8JsonReader reader, int field, int element, ColumnType type)
     {
         if (reader.ValueTextEquals("NaN"u8))
@@ -919,7 +892,7 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
     private ReadOnlySpan<char> Chars(ref Utf8JsonReader reader)
     {
         // Decode first, then take the span: CopyString may replace _chars, and a span taken from the field before the
-        // call (as in `_chars.AsSpan(0, CopyString(...))`) would point into the old, smaller buffer.
+        // call would point into the old, smaller buffer.
         var length = CopyString(ref reader, ref _chars);
         return _chars.AsSpan(0, length);
     }
@@ -951,11 +924,9 @@ internal sealed class JsonLinesSnapshotReader : IDisposable
     private FeatureUpdateException Error(string pointer, string message, string? hint = null) =>
         new(_path + ":" + _line.ToString(CultureInfo.InvariantCulture), pointer, message, hint);
 
-    /// <summary><c>/fields/&lt;name&gt;</c>, or <c>/fields/&lt;name&gt;/&lt;element&gt;</c> for a list element.</summary>
     private string Pointer(int field, int element = -1) =>
         "/fields/" + Escape(_schema.Fields[field].Name) + (element < 0 ? string.Empty : "/" + element.ToString(CultureInfo.InvariantCulture));
 
-    /// <summary>The current token as written, shortened, for messages.</summary>
     private static string Raw(ref Utf8JsonReader reader)
     {
         if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)

@@ -5,10 +5,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>
-/// The request document every host reads the same way: the sample host hand-wrote these rules, so another
-/// host would write its own; the transport tests of the sample host cover the same rules end to end.
-/// </summary>
 public sealed class RecRequestJsonTests
 {
     private static readonly RequestSchema Schema = new("feed", new Dictionary<string, ColumnType>

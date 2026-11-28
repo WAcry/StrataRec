@@ -7,10 +7,6 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// A row has no value in a slot until something writes it (<see cref="CandidateTable"/>): rows appended before the slot
-/// existed, rows appended after it, and rows a rollback released are all missing, whatever the pooled arrays held.
-/// </summary>
 public class UnwrittenRowsTests
 {
     [Fact]
@@ -21,7 +17,7 @@ public class UnwrittenRowsTests
         var types = new List<ColumnType> { ColumnType.Int64 };
         types.AddRange(TableWrites.EveryStorageType.Select(ColumnType.Parse));
         var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, types), 8, memory);
-        table.AppendRows(new long[] { 10, 20, 30 }); // an earlier row source that writes none of these columns
+        table.AppendRows(new long[] { 10, 20, 30 });
 
         for (var slot = 1; slot < types.Count; slot++)
         {
@@ -35,14 +31,12 @@ public class UnwrittenRowsTests
             Assert.Equal(3, table.CountMissingLiveRows(slot));
         }
 
-        // A later row source appends its row and writes it: only that row has a value.
         var first = table.AppendRows(new long[] { 40 });
         var score = (ScalarColumn<double>)table.GetOrCreateSlot(5);
         score.Set(first, 0.5);
         Assert.Equal(new[] { false, false, false, true }, Enumerable.Range(0, 4).Select(score.IsValid));
         Assert.Equal(3, table.CountMissingLiveRows(5));
 
-        // Compact keeps the state of each row it keeps.
         table.Rows.Replace(new[] { 3, 0 }, allowDrop: true);
         table.Compact();
         score = (ScalarColumn<double>)table.TryGetSlot(5)!;
@@ -57,7 +51,7 @@ public class UnwrittenRowsTests
         var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, new[] { ColumnType.Int64, ColumnType.Float64 }), 200, memory);
         table.AppendRows(Enumerable.Range(0, 150).Select(i => (long)i).ToArray());
         var slot = (ScalarColumn<double>)table.GetOrCreateSlot(1);
-        var written = new[] { 149, 3, 4, 5, 64, 63, 65, 3, 0 }; // any order, repeats, across word boundaries
+        var written = new[] { 149, 3, 4, 5, 64, 63, 65, 3, 0 };
         foreach (var row in written)
         {
             slot.Values[row] = row;
@@ -72,7 +66,6 @@ public class UnwrittenRowsTests
 
         Assert.Equal(150 - written.Distinct().Count(), table.CountMissingLiveRows(1));
 
-        // The range form, as a row source marks the rows it appended: across a word boundary, nothing outside the range.
         slot.SetValid(60, 70);
         Assert.Equal(150 - written.Union(Enumerable.Range(60, 70)).Count(), table.CountMissingLiveRows(1));
         Assert.True(slot.IsValid(129) && !slot.IsValid(130) && !slot.IsValid(59));
@@ -91,7 +84,7 @@ public class UnwrittenRowsTests
         var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, new[] { ColumnType.Int64, ColumnType.Float64.AsNullable() }), 130, memory);
         table.AppendRows(Enumerable.Range(0, 130).Select(i => (long)i).ToArray());
 
-        Assert.Equal(130, table.CountMissingLiveRows(1)); // never created
+        Assert.Equal(130, table.CountMissingLiveRows(1));
         Assert.Equal(0, table.CountMissingLiveRows(TableSchema.EntityIdSlot));
 
         var slot = (ScalarColumn<double>)table.GetOrCreateSlot(1);
@@ -101,7 +94,7 @@ public class UnwrittenRowsTests
         }
 
         Assert.Equal(65, table.CountMissingLiveRows(1));
-        table.Rows.Retain(Enumerable.Range(0, 130).Select(r => r % 2 == 0 || r == 129).ToArray()); // drop the unwritten odd rows but 129
+        table.Rows.Retain(Enumerable.Range(0, 130).Select(r => r % 2 == 0 || r == 129).ToArray());
         Assert.Equal(1, table.CountMissingLiveRows(1));
         memory.Release();
     }
@@ -109,8 +102,6 @@ public class UnwrittenRowsTests
     [Fact]
     public void ASlotCreatedByAFailedAttempt_HasNoValueOnTheRowsItReleased_OrOnRowsNobodyWrote()
     {
-        // Rows 0 and 1 come from a row source without the column. A row-source attempt appends rows 2 and 3, creates the
-        // shared slot, writes its rows and fails; its fallback appends three rows into the released ones and writes them.
         var memory = new RequestMemory(new DirtyPool());
         var table = new CandidateTable(new TableSchema(EntityKeyType.Int64, new[] { ColumnType.Int64, ColumnType.Float64.AsNullable() }), 5, memory);
         table.AppendRows(new long[] { 1, 2 });
@@ -122,7 +113,7 @@ public class UnwrittenRowsTests
         failed.Set(attempt + 1, 0.8);
         table.Rollback(checkpoint);
 
-        Assert.Null(table.TryGetSlot(1)); // the attempt created it
+        Assert.Null(table.TryGetSlot(1));
         Assert.Equal(2, table.CountMissingLiveRows(1));
 
         var fallback = table.AppendRows(new long[] { 8, 9, 11 });
@@ -130,7 +121,7 @@ public class UnwrittenRowsTests
         var slot = (ScalarColumn<double>)table.GetOrCreateSlot(1);
         for (var row = fallback; row < fallback + 3; row++)
         {
-            Assert.False(slot.IsValid(row)); // reused rows start missing again, not with the failed attempt's 0.7 and 0.8
+            Assert.False(slot.IsValid(row));
             slot.Set(row, row);
         }
 
@@ -142,8 +133,7 @@ public class UnwrittenRowsTests
     [Fact]
     public void Rollback_DropsTheSlotsCreatedSinceTheCheckpoint_AndKeepsTheEarlierRowsOfTheOthers()
     {
-        // Slot 1 is a shared row-source slot an earlier row source wrote; slot 2 a node's own output. The failed attempt
-        // appends a row, writes it into slot 1, creates slots 2 and 3 and writes them.
+        // Slot 1 is a shared row-source slot an earlier row source wrote; slot 2 a node's own output.
         var memory = new RequestMemory(new DirtyPool());
         var schema = new TableSchema(EntityKeyType.Int64, new[] { ColumnType.Int64, ColumnType.Float64, ColumnType.Float64, ColumnType.Float64 });
         var table = new CandidateTable(schema, 4, memory);
@@ -167,12 +157,11 @@ public class UnwrittenRowsTests
 
         Assert.Same(shared, table.TryGetSlot(1));
         Assert.Equal((true, 0.1, true, 0.2, false), (shared.IsValid(0), shared[0], shared.IsValid(1), shared[1], shared.IsValid(2)));
-        Assert.Null(table.TryGetSlot(2)); // reads as never written, as in a run without the attempt
+        Assert.Null(table.TryGetSlot(2));
         Assert.Null(table.TryGetSlot(3));
         Assert.Equal(2, table.CountMissingLiveRows(2));
         Assert.False(Bits.Get(table.GetFilled(2), 0));
 
-        // Created again by the next writer, with every row missing; a second rollback drops only what came after it.
         var again = table.GetOrCreateSlot(2);
         Assert.False(again.IsValid(0));
         var next = table.Checkpoint();

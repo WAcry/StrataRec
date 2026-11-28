@@ -11,17 +11,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// Candidate explanations: each target's state after every node (present, live, rank, the values of the
-/// columns the node read and wrote) through recall, a filter, a skipped node, a score and a truncation, across a
-/// compaction, a rolled-back attempt and a row source's fallback; the reasons of the operators that give one; the bound on
-/// targets; int64 and string keys alike.
-/// </summary>
-/// <remarks>
-/// The fixture recalls items 1–6 in that order. <c>safety</c> drops 4 (unsafe) and compacts the table, <c>promo</c> is
-/// skipped (its <c>when</c> is false), <c>score</c> gives base × (1 + boost) + 0.5: 1 → 1.4, 2 → 1.5, 3 → 1.3, 5 → 0.6,
-/// 6 → 0.8, and <c>top</c> keeps 3 (2, 1, 3), of which the output returns 2.
-/// </remarks>
 public sealed class CandidateExplainerTests
 {
     [Theory]
@@ -62,7 +51,7 @@ public sealed class CandidateExplainerTests
         Assert.Equal((0.5, 1.0, 1.5), (Value(two.Steps[3], "item.quality").AsFloat64(), Value(two.Steps[3], "item.boost").AsFloat64(),
             Value(two.Steps[3], "score.final").AsFloat64()));
         Assert.Equal(1.5, Value(two.Steps[4], "score.final").AsFloat64());
-        Assert.Equal(1L, Value(two.Steps[0], "recall.sources_mask").AsInt64()); // what the row source wrote
+        Assert.Equal(1L, Value(two.Steps[0], "recall.sources_mask").AsInt64());
 
         var one = explanation.Candidates[1];
         Assert.Equal((ExplainVerdict.Returned, (int?)2), (one.Verdict, one.Rank));
@@ -74,7 +63,6 @@ public sealed class CandidateExplainerTests
         var dropped = four.Steps[1];
         Assert.Equal((ExplainStepKind.Ran, ExplainChange.Dropped, (int?)4, (int?)null), (dropped.Kind, dropped.Change, dropped.RankBefore, dropped.Rank));
         Assert.False(Value(dropped, "item.safe").AsBool());
-        // Released by the compaction, it stays what it was: in the table once, and dropped.
         Assert.All(four.Steps.Skip(2), s => Assert.Equal((ExplainChange.Absent, true, false), (s.Change, s.Present, s.Alive)));
         Assert.All(four.Steps.Skip(2), s => Assert.Empty(s.Values));
 
@@ -107,7 +95,7 @@ public sealed class CandidateExplainerTests
 
         var filtered = candidates[1].Steps[1];
         Assert.Equal(("dropped: col.item.safe is false", false), (filtered.Reason, Term(filtered, "predicate").AsBool()));
-        Assert.Null(candidates[1].Steps[3].Reason); // not live when scored: nothing to say
+        Assert.Null(candidates[1].Steps[3].Reason);
 
         var cut = candidates[2].Steps[4];
         Assert.Equal("cut: score.final 0.6 ranks after the last kept 1.3 (k = 3)", cut.Reason);
@@ -117,7 +105,6 @@ public sealed class CandidateExplainerTests
     [Fact]
     public async Task ARowCutOnATie_IsSaidToLoseTheTieByEntityId()
     {
-        // Every score is 1.0 × 1 + 0.5: top keeps the three lowest ids.
         var result = await Run(Compile("int64", baseExpr: "1.0", multiplier: "1.0"), new[] { Key("int64", 3), Key("int64", 5) });
 
         var candidates = result.Explanation!.Candidates;
@@ -126,9 +113,8 @@ public sealed class CandidateExplainerTests
     }
 
     /// <summary>
-    /// A float32 score's reason gives the result at the column's precision, and a term at float32's only
-    /// where float32 holds it. The terms are float64: one outside float32's range used to read as Infinity or 0, which
-    /// made the sum say Infinity × 0 = 1.
+    /// A float32 score's reason gives the result at the column's precision, and a term at float32's only where float32
+    /// holds it.
     /// </summary>
     [Theory]
     [InlineData("1e100", "1e-100", "score.final = 1E+100 × 1E-100 + 0.5 = 1.5")]
@@ -160,7 +146,7 @@ public sealed class CandidateExplainerTests
             var failed = candidate.Steps.Single(s => s.Node == "reorder");
             Assert.Equal(ExplainStepKind.RolledBack, failed.Kind);
             Assert.Equal((ExplainChange.Stayed, before.Rank, before.Rank), (failed.Change, failed.RankBefore, failed.Rank));
-            Assert.Null(failed.Reason); // what the attempt explained went with it
+            Assert.Null(failed.Reason);
             Assert.Empty(failed.Terms);
             Assert.Empty(failed.Values);
             Assert.Equal(before.Rank, candidate.Steps.Single(s => s.Node == "top").RankBefore);
@@ -196,7 +182,6 @@ public sealed class CandidateExplainerTests
     [Fact]
     public async Task AHookThatThrows_AnExceptionWhoseMessageThrowsToo_ChangesOnlyTheReason()
     {
-        // The guard read ex.Message, which threw out of it and failed the node.
         var plan = Compile("int64", reorder: "explain_throws", reorderPolicy: "fail_request");
         var plain = await Run(plan, null);
 
@@ -379,9 +364,8 @@ public sealed class CandidateExplainerTests
     }
 
     /// <summary>
-    /// <c>Reorder@1</c>: reverses the ranking, then fails: <c>fail</c> keeps one row and reports a failure; <c>commit</c>
-    /// writes its non-nullable <c>flag</c> on the first row only, so its commit fails. It explains itself either way, which a
-    /// rolled-back attempt must not keep.
+    /// <c>Reorder@1</c>: reverses the ranking, then fails: <c>fail</c> keeps one row and reports a failure;
+    /// <c>commit</c> writes its non-nullable <c>flag</c> on the first row only, so its commit fails.
     /// </summary>
     private sealed class ReorderFactory : IOperatorFactory
     {
@@ -437,13 +421,11 @@ public sealed class CandidateExplainerTests
         }
     }
 
-    /// <summary>An exception whose message cannot be read: describing it must not throw past the hook's guard.</summary>
     private sealed class UndescribableException : Exception
     {
         public override string Message => throw new InvalidOperationException("cannot describe this exception");
     }
 
-    /// <summary><c>AppendThenFail@1</c>: <c>MultiSourceRecall@1</c> that fails once it has appended its candidates.</summary>
     private sealed class AppendThenFailFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } =

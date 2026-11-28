@@ -6,11 +6,6 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// Two bounded calls in one traced flow, the first answering at once. A host's activity listener that threw
-/// when the first call's span started or stopped left that span current: both calls answered, and the second call's
-/// client was sent under the first call's span, not the request's.
-/// </summary>
 public sealed class BoundedCallSpanTests
 {
     [Theory]
@@ -30,7 +25,7 @@ public sealed class BoundedCallSpanTests
         Assert.Equal((IoOutcome.Ok, IoOutcome.Ok), (firstResult.Outcome, secondResult.Outcome));
         Assert.Equal(1, flow.Thrown);
         var secondSpan = Assert.Single(flow.Named("recall second"));
-        Assert.Same(secondSpan, Assert.Single(second.Sent)); // its client ran under its span
+        Assert.Same(secondSpan, Assert.Single(second.Sent));
         Assert.Same(flow.Request, secondSpan.Parent);
         Assert.Same(flow.Request, Activity.Current);
         budget.Release();
@@ -38,10 +33,6 @@ public sealed class BoundedCallSpanTests
         Assert.True(memory.IsReturned);
     }
 
-    /// <summary>
-    /// Two bounded calls in one traced flow whose clients answer later. A pending call is completed on the flow that awaits
-    /// it, so its span stayed current on the caller's flow and the second call was a child of the first.
-    /// </summary>
     [Fact]
     public async Task TwoCallsWhoseClientsAnswerLater_AreBothUnderTheRequest()
     {
@@ -57,7 +48,7 @@ public sealed class BoundedCallSpanTests
         Assert.Equal((42, 42), (firstResult.Value, secondResult.Value));
         var firstSpan = Assert.Single(flow.Named("recall first"));
         var secondSpan = Assert.Single(flow.Named("recall second"));
-        Assert.Same(firstSpan, Assert.Single(first.Sent)); // each client ran under its own span
+        Assert.Same(firstSpan, Assert.Single(first.Sent));
         Assert.Same(secondSpan, Assert.Single(second.Sent));
         Assert.Same(flow.Request, secondSpan.Parent);
         Assert.Same(flow.Request, Activity.Current);
@@ -66,7 +57,6 @@ public sealed class BoundedCallSpanTests
         Assert.True(SpinWait.SpinUntil(() => memory.IsReturned, TimeSpan.FromSeconds(20)));
     }
 
-    /// <summary>Answers 42, at once or after a yield, and keeps the current activity each send saw.</summary>
     private readonly struct Traced(List<Activity?> sent, bool later = false) : IBoundedCall<int>
     {
         public List<Activity?> Sent { get; } = sent;

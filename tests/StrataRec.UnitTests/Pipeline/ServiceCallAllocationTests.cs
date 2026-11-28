@@ -10,11 +10,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// What a node's service call costs on the path itself, before the service's own allocations: a call answered at once
-/// allocates only the task it returns, one task for the node and the feature source path alike (the
-/// node's entry awaited the shared path, a second task per call).
-/// </summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class ServiceCallAllocationTests
 {
@@ -49,7 +44,6 @@ public sealed class ServiceCallAllocationTests
         }
     }
 
-    /// <summary>A validation error is still a faulted task, not a throw.</summary>
     [Fact]
     public void AWrongCall_IsAFaultedTask()
     {
@@ -72,10 +66,6 @@ public sealed class ServiceCallAllocationTests
         }
     }
 
-    /// <summary>
-    /// A cancellation while the call is checked is a cancelled task that throws it, as an async method's
-    /// (the task was faulted, then cancelled with another exception).
-    /// </summary>
     [Fact]
     public async Task ACancellationWhileTheCallIsChecked_IsACancelledTask_ThatThrowsIt()
     {
@@ -101,12 +91,6 @@ public sealed class ServiceCallAllocationTests
         }
     }
 
-    /// <summary>Output names whose memory throws a cancellation when read (after the memory over it is made).</summary>
-    /// <summary>
-    /// A rebatched replay builds the index of the recorded rows once, not at each call: a call of 32 items allocates for
-    /// its 32, however many rows the recording has (4,096 recorded rows replayed in batches of
-    /// 32 allocated 187 MB).
-    /// </summary>
     [Fact]
     public void ARebatchedReplay_IndexesTheRecordedRowsOnce()
     {

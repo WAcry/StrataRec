@@ -3,11 +3,6 @@ using StrataRec.Hosting.Plans;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <see cref="EffectivePlan.ToDocument"/> is a tree of the caller's own: the plan it is read from is shared by every
-/// request, and its node definitions are read-only elements, so editing a document (as <c>diff</c> and admin pages may)
-/// changes neither the plan nor the next document.
-/// </summary>
 public sealed class EffectivePlanDocumentTests
 {
     [Fact]

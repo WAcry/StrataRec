@@ -8,7 +8,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Defects of experiment compilation and hosting that were fixed, one test each.</summary>
 public sealed class ExperimentRegressionTests
 {
     private static ExperimentArtifact Experiment(string json) => ArtifactSerializer.Deserialize<ExperimentArtifact>(json);
@@ -47,7 +46,6 @@ public sealed class ExperimentRegressionTests
     [Fact]
     public void ArmAdditionsCannotRepairABrokenBaseline()
     {
-        // The baseline reads a feature only an experiment adds: removing the experiment would break it.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
@@ -73,7 +71,6 @@ public sealed class ExperimentRegressionTests
     [Fact]
     public async Task ParameterExposureTriggersEvenWhenTheNodeFails()
     {
-        // Recall reads the overridden quota, then fails; the experiment was still exposed.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             var bindings = Path.Combine(root, "bindings", "local.jsonc");
@@ -88,7 +85,7 @@ public sealed class ExperimentRegressionTests
                   "arms": { "control": {}, "more": { "params": { "recall_quotas": { "two_tower": 80 } } } } }
                 """), "quota"),
         });
-        var plan = host.Compile(request).GetPlanOrThrow(); // with its tables loaded, as the engine serves it
+        var plan = host.Compile(request).GetPlanOrThrow();
 
         foreach (var arm in new[] { "exp_quota/control", "exp_quota/more" })
         {
@@ -98,13 +95,6 @@ public sealed class ExperimentRegressionTests
         }
     }
 
-    /// <summary>
-    /// A trigger follows the node each arm has together with the request's arms in the other layers:
-    /// exp_cap_limit changes author_cap's predicate, exp_cap_search (another layer) moves it
-    /// from the home surface to search. With search's treatment, exp_cap_limit's node runs on search, not home, and its
-    /// trigger says so in both of its arms; it was taken with the other layers unassigned (home), so it was recorded
-    /// where the node was skipped and missed where it ran.
-    /// </summary>
     [Fact]
     public async Task ATriggerFollowsTheNodeEachArmHas_WithTheRequestsArmsInTheOtherLayers()
     {
@@ -120,7 +110,7 @@ public sealed class ExperimentRegressionTests
                   "arms": { "control": {}, "t": { "nodes": { "author_cap": { "when": "ctx.request.surface == 'search'" } } } } }
                 """), "cap_search"),
         });
-        var plan = host.Compile(request).GetPlanOrThrow(); // with its tables loaded, as the engine serves it
+        var plan = host.Compile(request).GetPlanOrThrow();
 
         foreach (var search in new[] { "control", "t" })
         {
@@ -136,16 +126,12 @@ public sealed class ExperimentRegressionTests
                     Assert.True(result.Succeeded, result.Error);
                     Assert.Equal(surface == (search == "t" ? "search" : "home"), ran);
                     Assert.True(ran == result.TriggeredExperiments.Contains("exp_cap_limit"), label);
-                    Assert.True((surface != "other") == result.TriggeredExperiments.Contains("exp_cap_search"), label); // its arms: home or search
+                    Assert.True((surface != "other") == result.TriggeredExperiments.Contains("exp_cap_search"), label);
                 }
             }
         }
     }
 
-    /// <summary>
-    /// explain-plan prints a site's condition as the OR of whole conditions: joined bare, a baseline `when`
-    /// with `?:` read as `a ? b : (c || d)`, the opposite of what the executor decides for the home surface.
-    /// </summary>
     [Fact]
     public async Task ExplainPlan_PrintsASitesConditionAsTheOrOfWholeConditions()
     {
@@ -197,8 +183,6 @@ public sealed class ExperimentRegressionTests
     public void ArmsOfDifferentLayersAreValidatedTogetherAndArmsOfOneLayerNever()
     {
         // Without traffic domains: rerank deletes diversity_cap and another experiment edits one of its fields.
-        // In its own layer the two arms may be assigned together, which is a conflict; experiments the platform keeps
-        // exclusive share a layer, whose arms are never assigned together and so are not checked together.
         ExperimentPlacement Edit(string layer) => new(Experiment("""
             { "experiment_id": "exp_window", "pipeline_id": "home_feed", "owner": "t", "description": "d", "expires_at": "2099-01-01",
               "arms": { "control": {}, "w": { "nodes": { "diversity_cap": { "config": { "window": 4 } } } } } }

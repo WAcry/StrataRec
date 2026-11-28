@@ -8,11 +8,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// Fetches and local reads of entities keyed by several parts: each row's key deduplicated as a tuple, a
-/// request part handed over once per batch, a missing part leaving the row (or, for a request part, the whole fetch)
-/// without a key, and the same values whether the records are fetched or read from a local table.
-/// </summary>
 public class CompositeKeyFetchTests
 {
     private static readonly EntityDefinition ItemCountry = EntityDefinition.Of(
@@ -21,7 +16,6 @@ public class CompositeKeyFetchTests
     private static readonly EntityDefinition ItemCategory = EntityDefinition.Of(
         "item_category", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.Feature("item.category", EntityKeyType.String));
 
-    /// <summary>boost = item × 10 + 1 for US, + 2 for any other country.</summary>
     private static double Boost(long item, string country) => (item * 10) + (country == "US" ? 1 : 2);
 
     private static ScriptedConnector BoostConnector(List<(bool Shared, int SharedLength)>? seen = null) => new((keys, fields, writer, _) =>
@@ -67,7 +61,7 @@ public class CompositeKeyFetchTests
         var boost = rig.Physical("item_country.boost", ItemCountry, ColumnType.Float64, "ic_store", ScalarValue.FromFloat64(1.0), field: "boost");
         var raw = rig.Physical("item_country.raw", ItemCountry, ColumnType.Float64, "ic_store", field: "boost");
         rig.Build();
-        var request = rig.NewRequest([3, 1, 2]); // no country
+        var request = rig.NewRequest([3, 1, 2]);
 
         var result = await request.EnsureAsync(boost, raw);
 
@@ -75,7 +69,7 @@ public class CompositeKeyFetchTests
         Assert.Empty(connector.Calls);
         for (var row = 0; row < 3; row++)
         {
-            Assert.Equal(1.0, request.Value(boost, row).AsFloat64()); // the default, as for a missing one-part key
+            Assert.Equal(1.0, request.Value(boost, row).AsFloat64());
             Assert.True(request.Value(raw, row).IsMissing);
         }
     }
@@ -83,7 +77,6 @@ public class CompositeKeyFetchTests
     [Fact]
     public async Task TwoVaryingParts_DeduplicateAsTuples_AndARowMissingAPartHasNoKey()
     {
-        // item.category is fetched first (the key reads it); item 4 has none, so its row has no key.
         var categories = new Dictionary<long, string?> { [1] = "a", [2] = "b", [3] = "a", [4] = null };
         var items = ScriptedConnector.Values((id, _) => categories[id]);
         var scores = new ScriptedConnector((keys, fields, writer, _) =>
@@ -152,7 +145,6 @@ public class CompositeKeyFetchTests
     [InlineData(null)]
     public async Task ALocalRead_GivesWhatAFetchOfTheSameRecordsGives(string? code)
     {
-        // The same records as a local table keyed by [item, country] and as a fetch.
         var records = new (long Item, string Country, double Boost)[] { (1, "US", 1.5), (1, "DE", 2.5), (2, "DE", 3.5), (4, "US", 4.5) };
         var local = new FeatureTestRig().LocalSource("ic_store", writer =>
         {
@@ -230,7 +222,6 @@ public class CompositeKeyFetchTests
         Assert.Equal(7.5, request.ContextValue(activity).AsFloat64());
         Assert.Equal(new EntityKey[][] { [EntityKey.FromInt64(7), EntityKey.FromString("mon")] }, Assert.Single(connector.Calls).Tuples);
 
-        // Without the day there is no key: no call, the value is missing.
         var anonymous = rig.NewRequest([1], userId: 7);
         anonymous.Fetcher.StartContextFetch([activity], CancellationToken.None);
         await anonymous.EnsureAsync(activity);

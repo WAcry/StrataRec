@@ -58,9 +58,9 @@ public readonly record struct OutputColumn(int LogicalId, int Slot, ColumnType T
 /// published to <c>req.&lt;name&gt;</c> when it commits, dropped when it fails.
 /// </summary>
 /// <param name="ContextId">The request-level value it is (<see cref="Planning.ContextField.Id"/>).</param>
-/// <param name="Index">Its position among the request columns the node writes, in the order it resolved them: where
-/// the attempt stages its value. A handle is only the node's way to name what it resolved: the value is checked against
-/// that, not against the handle's <paramref name="Type"/>.</param>
+/// <param name="Index">Its position among the request columns the node writes, in the order it resolved them. A handle
+/// is only the node's way to name what it resolved: the value is checked against that, not against the handle's
+/// <paramref name="Type"/>.</param>
 /// <param name="Type">Declared type.</param>
 /// <param name="Name">Name without the <c>req.</c> prefix.</param>
 public readonly record struct RequestOutput(int ContextId, int Index, ColumnType Type, string Name);

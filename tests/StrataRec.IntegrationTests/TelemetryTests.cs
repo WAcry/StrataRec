@@ -15,13 +15,11 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Metrics recorded by a home_feed request, read back through a <c>MeterListener</c>.</summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class MetricsTests
 {
     internal static readonly string[] Arms = { "exp_quality_weight/strong", "exp_mmr_diversity/mmr" };
 
-    /// <summary>Every tag key a metric may carry; ids are never among them.</summary>
     private static readonly HashSet<string> BoundedTagKeys = new(StringComparer.Ordinal)
     {
         StrataRecTags.Pipeline, StrataRecTags.Node, StrataRecTags.Source, StrataRecTags.IoRole, StrataRecTags.IoTarget,
@@ -43,13 +41,11 @@ public sealed class MetricsTests
         AssertTagRules(capture.Measurements);
         var pipeline = new Dictionary<string, object?> { [StrataRecTags.Pipeline] = "home_feed" };
 
-        // Plan lifecycle.
         Assert.Contains(capture.Of(StrataRecMetrics.Names.PlanCompileDuration), m => m.Value > 0 && TagsEqual(m, pipeline));
         Assert.Single(capture.Of(StrataRecMetrics.Names.PlanLoads), m => Tag(m, StrataRecTags.Outcome) == "applied");
         Assert.Equal(plan.Nodes.Length, Assert.Single(capture.Of(StrataRecMetrics.Names.PlanVariants)).Value);
         Assert.Equal(1, Assert.Single(capture.Of(StrataRecMetrics.Names.PlanSequence)).Value);
 
-        // Request level: once for the pipeline, once per assigned arm (and nowhere else).
         var request = Assert.Single(capture.Of(StrataRecMetrics.Names.RequestDuration));
         Assert.True(TagsEqual(request, pipeline));
         // In seconds, and measured around the execution: no fixed bound a slow machine could pass.
@@ -59,9 +55,8 @@ public sealed class MetricsTests
         Assert.All(perArm, m => Assert.Equal(request.Value, m.Value));
         Assert.Empty(capture.Of(StrataRecMetrics.Names.RequestErrors));
         Assert.Empty(capture.Of(StrataRecMetrics.Names.ArmRequestErrors));
-        Assert.Empty(capture.Of(StrataRecMetrics.Names.RequestArmsIgnored)); // every arm the platform sent applied
+        Assert.Empty(capture.Of(StrataRecMetrics.Names.RequestArmsIgnored));
 
-        // Nodes: one outcome per position with a node, duration and rows for each that ran, matching the trace.
         var trace = result.Trace!;
         var outcomes = capture.Of(StrataRecMetrics.Names.NodeOutcomes);
         Assert.Equal(trace.Select(t => t.NodeId).Order(), outcomes.Select(m => Tag(m, StrataRecTags.Node)).Order());
@@ -70,13 +65,12 @@ public sealed class MetricsTests
         {
             var tags = new Dictionary<string, object?> { [StrataRecTags.Pipeline] = "home_feed", [StrataRecTags.Node] = node.NodeId };
             var seconds = Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => TagsEqual(m, tags)).Value;
-            Assert.InRange(seconds, (node.DurationMs / 1000) - 1e-9, (node.DurationMs / 1000) + 1e-9); // the trace's time, in seconds
+            Assert.InRange(seconds, (node.DurationMs / 1000) - 1e-9, (node.DurationMs / 1000) + 1e-9);
             Assert.Equal(node.RowsIn, Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsIn), m => TagsEqual(m, tags)).Value);
             Assert.Equal(node.RowsOut, Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsOut), m => TagsEqual(m, tags)).Value);
         }
 
-        // Data sources: both recall services and the fetched feature sources the request reads; key counts respect
-        // max_batch. The local author_store makes no source calls.
+        // The local author_store makes no source calls.
         var sources = capture.Of(StrataRecMetrics.Names.IoDuration)
             .Select(m => (Tag(m, StrataRecTags.IoRole), Tag(m, StrataRecTags.IoTarget))).ToHashSet();
         Assert.Superset(new HashSet<(string?, string?)> { ("recall", "two_tower"), ("recall", "popular"), ("fetch", "item_store") }, sources);
@@ -89,8 +83,8 @@ public sealed class MetricsTests
         Assert.Equal(30, capture.Of(StrataRecMetrics.Names.IoKeys).Where(m => Tag(m, StrataRecTags.IoRole) == "model").Sum(m => m.Value));
         Assert.Empty(capture.Of(StrataRecMetrics.Names.IoErrors));
 
-        // Missing ratio: what each feature source had of the values the request asked for, per feature. Some recalled items
-        // have no i_safe in the fixture, and one recalled item's author (105) has no record in the author snapshot.
+        // Some recalled items have no i_safe in the fixture, and one recalled item's author (105) has no record in the
+        // author snapshot.
         var values = capture.Of(StrataRecMetrics.Names.SourceValues);
         Assert.All(values, m =>
         {
@@ -107,7 +101,6 @@ public sealed class MetricsTests
         Assert.True(Values("author_store", "author.followers", "present") > 0);
         Assert.True(Values("author_store", "author.followers", "missing") > 0);
 
-        // Local table: the load the engine waited for (11 authors in the snapshot) and the keys the request looked up.
         var author = new Dictionary<string, object?> { [StrataRecTags.Source] = "author_store", [StrataRecTags.Entity] = "author" };
         Assert.Contains(capture.Of(StrataRecMetrics.Names.LocalRecords), m => TagsEqual(m, author) && m.Value == 11);
         Assert.Contains(capture.Of(StrataRecMetrics.Names.LocalBytes), m => TagsEqual(m, author) && m.Value > 0);
@@ -120,7 +113,6 @@ public sealed class MetricsTests
         // Model calls: the 30 coarse survivors fit one batch.
         Assert.Single(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model" && Tag(m, StrataRecTags.IoTarget) == "ctr_model");
 
-        // Memory.
         Assert.True(Assert.Single(capture.Of(StrataRecMetrics.Names.RequestMemoryRented)).Value > 0);
     }
 
@@ -151,8 +143,7 @@ public sealed class MetricsTests
     [Fact]
     public async Task ARequestAssignedThenOutOfBudget_ReportsTheArmsAndIgnoredIdsItsMetricsCounted()
     {
-        // The rejection after assignment said nothing was assigned or ignored, while the per-arm error and
-        // the ignored ids were already counted. A zero deadline is spent by the time assignment returns, deterministically.
+        // A zero deadline is spent by the time assignment returns, deterministically.
         using var capture = new MetricCapture();
         var (engine, plan) = LoadEngine(HomeFeedTestHost.Load());
 
@@ -179,9 +170,8 @@ public sealed class MetricsTests
             },
             result.Experiments.Ignored);
         Assert.Equal(plan.ManifestId, result.ManifestId);
-        Assert.Null(result.Recording); // nothing ran: nothing to replay
+        Assert.Null(result.Recording);
 
-        // The metrics say the same.
         AssertTagRules(capture.Measurements);
         var ignored = capture.Of(StrataRecMetrics.Names.RequestArmsIgnored);
         Assert.Equal(1, ignored.Where(m => Tag(m, StrataRecTags.Outcome) == "unknown").Sum(m => m.Value));
@@ -225,7 +215,7 @@ public sealed class MetricsTests
             m => Tag(m, StrataRecTags.IoRole) == "fetch" && Tag(m, StrataRecTags.IoTarget) == "author_store" && Tag(m, StrataRecTags.Outcome) == "error");
         Assert.Single(capture.Of(StrataRecMetrics.Names.NodeOutcomes),
             m => Tag(m, StrataRecTags.Node) == "ctr_ranker" && Tag(m, StrataRecTags.Outcome) == "fallback");
-        Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model"); // the model was never called
+        Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "model");
         Assert.Single(capture.Of(StrataRecMetrics.Names.RequestDegraded));
         Assert.Equal(Arms.Order(), capture.Of(StrataRecMetrics.Names.ArmRequestDegraded).Select(m => Tag(m, StrataRecTags.Arm)).Order());
         Assert.Empty(capture.Of(StrataRecMetrics.Names.RequestErrors));
@@ -236,7 +226,6 @@ public sealed class MetricsTests
     [InlineData("recall")]
     public async Task CallerCancellation_IsNotADependencyTimeout_ButARealTimeoutIs(string slow)
     {
-        // The caller giving up is not the dependency's fault: no error, no latency sample, no health evidence.
         using (var capture = new MetricCapture())
         {
             var (engine, _) = LoadEngine(HomeFeedTestHost.LoadModified(root => SlowDown(root, slow, tightTimeout: false)));
@@ -252,16 +241,14 @@ public sealed class MetricsTests
                 Assert.DoesNotContain(capture.Of(StrataRecMetrics.Names.IoDuration), m => Tag(m, StrataRecTags.IoRole) == "recall");
             }
 
-            Assert.Single(capture.Of(StrataRecMetrics.Names.RequestErrors)); // the request itself failed
+            Assert.Single(capture.Of(StrataRecMetrics.Names.RequestErrors));
 
-            // The node the caller cut off still has its outcome, duration and rows.
             Assert.Single(capture.Of(StrataRecMetrics.Names.NodeOutcomes), m => Tag(m, StrataRecTags.Node) == node && Tag(m, StrataRecTags.Outcome) == "aborted");
             // Cut off 300 ms after its slow call started, in seconds; the upper bound is a generous watchdog.
             Assert.InRange(Assert.Single(capture.Of(StrataRecMetrics.Names.NodeDuration), m => Tag(m, StrataRecTags.Node) == node).Value, 0.2, 30);
             Assert.Single(capture.Of(StrataRecMetrics.Names.NodeRowsIn), m => Tag(m, StrataRecTags.Node) == node);
         }
 
-        // The same dependency cut off by its own timeout (model binding / node budget, source binding) is a timeout.
         using (var capture = new MetricCapture())
         {
             var (engine, _) = LoadEngine(HomeFeedTestHost.LoadModified(root => SlowDown(root, slow, tightTimeout: true)));
@@ -279,7 +266,6 @@ public sealed class MetricsTests
     [InlineData("recall")]
     public async Task ClientTimeoutExceptions_AreTimeouts(string client)
     {
-        // A client's own transport timeout is a timeout, as it already was for feature sources.
         using var capture = new MetricCapture();
         var host = HomeFeedTestHost.Load();
         var environment = new PlanEnvironment
@@ -340,15 +326,10 @@ public sealed class MetricsTests
         }
     }
 
-    /// <summary>
-    /// Makes the model or both recall services take a minute, longer than any test waits for them; with a 50 ms timeout
-    /// of their own (in their bindings), or with none shorter than the request (the untimed sample's).
-    /// </summary>
     internal static void SlowDown(string root, string what, bool tightTimeout)
     {
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         var text = File.ReadAllText(bindings);
-        // The CTR model, or every recall source: the lists and the vector index.
         string[] clients = what == "model" ? [CtrModelClient] : ["\"client\": \"memory_list@1\",", "\"client\": \"memory_vectors@1\","];
         var edited = text;
         foreach (var client in clients)
@@ -378,7 +359,7 @@ public sealed class MetricsTests
         Assert.Equal(sink.Snapshot().GroupBy(b => b.TapId).ToDictionary(g => g.Key, g => (double)g.Count()), delivered);
         foreach (var depth in capture.Of(StrataRecMetrics.Names.LogQueueDepth).GroupBy(m => Tag(m, StrataRecTags.LogDelivery)))
         {
-            Assert.Equal(0, depth.Sum(m => m.Value)); // every queued batch was written
+            Assert.Equal(0, depth.Sum(m => m.Value));
         }
 
         Assert.Empty(capture.Of(StrataRecMetrics.Names.LogDurableOverflow));
@@ -419,7 +400,6 @@ public sealed class MetricsTests
         Debug = new DebugOptions { Trace = true },
     };
 
-    /// <summary>The CTR model's client in the sample bindings, which an edit of it replaces.</summary>
     internal const string CtrModelClient = "\"ctr_model\": {\n      \"client\": \"linear@1\",";
 
     internal static void FailModel(string root)
@@ -432,11 +412,9 @@ public sealed class MetricsTests
         File.WriteAllText(bindings, edited);
     }
 
-    /// <summary>Binds <c>author_store</c> (local in the sample) to a fetched source that fails every call, never by timing out.</summary>
     internal static void FailAuthorStore(string root) =>
         SampleBindings.Rebind(root, "author_store", $$"""{ "connector": "memory@1", "data": {}, "fail": true, "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
 
-    /// <summary>The label rules: bounded string tags only; durations never carry outcomes; arms only on request-level instruments.</summary>
     private static void AssertTagRules(IEnumerable<Measured> measurements)
     {
         foreach (var m in measurements)
@@ -462,7 +440,6 @@ public sealed class MetricsTests
         m.Tags.Count == expected.Count && expected.All(e => m.Tags.TryGetValue(e.Key, out var v) && Equals(v, e.Value));
 }
 
-/// <summary>Spans: node and I/O children exist only for recorded requests.</summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class TracingTests
 {
@@ -492,7 +469,6 @@ public sealed class TracingTests
         Assert.Equal("req-traced", request.GetTagItem(StrataRecTags.RequestId));
         Assert.Equal(MetricsTests.Arms.Order(), ((string[])request.GetTagItem(StrataRecTags.ArmsAssigned)!).Order());
 
-        // One child span per position with a node, tagged with its id, selected variant, outcome and rows.
         var arms = plan.ArmsFromIds(MetricsTests.Arms);
         var nodes = spans.Where(s => s.GetTagItem(StrataRecTags.Node) is not null).ToList();
         Assert.Equal(result.Trace!.Select(t => t.NodeId), nodes.Select(s => s.OperationName));
@@ -512,8 +488,6 @@ public sealed class TracingTests
         Assert.Contains("exp_mmr_diversity", Triggered(nodes.Single(s => s.OperationName == "mmr_diversifier")));
         Assert.Empty(Triggered(nodes.Single(s => s.OperationName == "safety_filter")));
 
-        // External I/O under the node that started it: both recall sources, the prefetch after recall's fetch barrier,
-        // and the model call.
         var recall = nodes.Single(s => s.OperationName == "recall");
         var underRecall = spans.Where(s => s.ParentSpanId == recall.SpanId).Select(s => s.OperationName).ToList();
         Assert.Equal(new[] { "recall popular", "recall two_tower" }, underRecall.Where(n => n.StartsWith("recall ", StringComparison.Ordinal)).Order());
@@ -522,7 +496,6 @@ public sealed class TracingTests
         Assert.Contains(spans, s => s.OperationName == "model ctr_model" && s.ParentSpanId == ranker.SpanId && (string?)s.GetTagItem(StrataRecTags.Outcome) == "ok");
         Assert.Contains(spans, s => s.OperationName == "fetch item_store" && s.Kind == ActivityKind.Client && s.GetTagItem(StrataRecTags.Keys) is int);
 
-        // A request the sampler drops gets its (unrecorded) request span and nothing else.
         record = false;
         started.Clear();
         var dropped = await engine.ExecuteAsync(MetricsTests.Request("req-sampled-out"), TestContext.Current.CancellationToken);
@@ -536,7 +509,6 @@ public sealed class TracingTests
     [Fact]
     public async Task FallbackOnlyArm_IsAttributedOnThePositionSpan_WithTheFallbackVariant()
     {
-        // An arm that changes only the fallback triggers when the fallback runs; the span must say so.
         using var spans = new SpanCapture();
         var host = HomeFeedTestHost.LoadModified(root =>
         {
@@ -557,7 +529,7 @@ public sealed class TracingTests
         var ranker = Assert.Single(spans.Stopped, s => s.OperationName == "ctr_ranker");
         Assert.Equal("fallback", ranker.GetTagItem(StrataRecTags.Outcome));
         Assert.Equal("ctr_backup", ranker.GetTagItem(StrataRecTags.Fallback));
-        Assert.Contains("ctr_model", Assert.IsType<string>(ranker.GetTagItem(StrataRecTags.OutcomeDetail))); // why it fell back: its model failed
+        Assert.Contains("ctr_model", Assert.IsType<string>(ranker.GetTagItem(StrataRecTags.OutcomeDetail)));
         Assert.Equal(ActivityStatusCode.Unset, ranker.Status); // the request succeeded: a fallback is no error
         Assert.Contains("exp_quality_weight", Triggered(ranker));
         var backup = plan.SelectFallback(plan.Timeline.Single(t => t.NodeId == "ctr_ranker").Select(plan.ArmsFromIds(MetricsTests.Arms))!, plan.ArmsFromIds(MetricsTests.Arms))!;
@@ -568,7 +540,6 @@ public sealed class TracingTests
     [Fact]
     public async Task AbortedRequest_RootSpanKeepsTheManifestAndAssignedArms()
     {
-        // The release and the arms are known before execution; an abort must not erase them.
         using var spans = new SpanCapture();
         var (engine, plan) = MetricsTests.LoadEngine(HomeFeedTestHost.LoadModified(root => MetricsTests.SlowDown(root, "model", tightTimeout: false)));
         using var cancel = new CancelOnceCallStarts("model ctr_model", TimeSpan.FromMilliseconds(300));
@@ -585,7 +556,6 @@ public sealed class TracingTests
 
     private static string[] Triggered(Activity span) => span.GetTagItem(StrataRecTags.ExperimentsTriggered) as string[] ?? Array.Empty<string>();
 
-    /// <summary>Records every StrataRec span while alive.</summary>
     private sealed class SpanCapture : IDisposable
     {
         private readonly ActivityListener _listener;
@@ -607,7 +577,6 @@ public sealed class TracingTests
     }
 }
 
-/// <summary>Event logs: request-level failures become one summary per (event, subject) and window.</summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class EventLogTests
 {
@@ -622,10 +591,10 @@ public sealed class EventLogTests
         for (var i = 0; i < 50; i++)
         {
             var result = await executor.ExecuteAsync(plan, Request(i), TestContext.Current.CancellationToken);
-            Assert.True(result.Succeeded, result.Error); // served by ctr_backup
+            Assert.True(result.Succeeded, result.Error);
         }
 
-        Assert.Empty(logging.Entries); // nothing is logged per request
+        Assert.Empty(logging.Entries);
         events.Flush();
         var first = logging.Entries.ToList();
 
@@ -642,7 +611,6 @@ public sealed class EventLogTests
         Assert.Equal(("fetch", "author_store"), (failing.State["Role"], failing.State["Name"]));
         Assert.Equal(3, first.Count);
 
-        // The next window: one more summary per pair, and no new health line while the source keeps failing.
         for (var i = 50; i < 80; i++)
         {
             await executor.ExecuteAsync(plan, Request(i), TestContext.Current.CancellationToken);
@@ -655,7 +623,7 @@ public sealed class EventLogTests
         Assert.All(second, e => Assert.Equal(30L, e.State["Count"]));
 
         events.Flush();
-        Assert.Equal(2, logging.Entries.Count); // an empty window writes nothing
+        Assert.Equal(2, logging.Entries.Count);
     }
 
     [Fact]

@@ -11,12 +11,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// What <c>ModelScorer@1</c> sends: each input as a tensor of the declared type of its column or context
-/// value, nothing converted (int64 values exact beyond 2^53, an int32 as an int32, a float64 as a float64, a bool as a
-/// bool, a string as a string), gathered from the column's storage or broadcast from the request, and sliced into
-/// batches; and which inputs it refuses to compile.
-/// </summary>
 public sealed class ModelScorerTests
 {
     /// <summary>2^53 + 1: the first integer a double (and a float32) cannot hold.</summary>
@@ -28,9 +22,6 @@ public sealed class ModelScorerTests
 
     private static readonly int[] RowsOf2 = { -1, 2 };
 
-    /// <summary>The fixture's items by id: an int64 above 2^53, an int32, a float64, a bool, a list&lt;float32,3&gt;
-    /// (an embedding), a list&lt;bool,2&gt;, a list&lt;int32,2&gt; and a list&lt;float64,2&gt; each (and a string tag
-    /// and a list&lt;string,2&gt; derived from the id).</summary>
     private static readonly Dictionary<long, (long Code, int Rank, double Ctr, bool Safe, float[] Emb, bool[] Flags, int[] Ids, double[] Weights)> Items = new()
     {
         [Big] = (Big + 2, 7, 0.1, true, new[] { 1f, 2f, 3f }, new[] { true, false }, new[] { int.MaxValue, -1 }, new[] { 0.1, 2 }),
@@ -40,7 +31,6 @@ public sealed class ModelScorerTests
         [5] = (0, 0, 0, true, new[] { 0.1f, 0.2f, 0.3f }, new[] { true, false }, new[] { 7, 8 }, new[] { 3.0, 4.0 }),
     };
 
-    /// <summary>The scorer's inputs in the execution tests, and what the model declares for them.</summary>
     private const string AllKinds = """
         { "id": "col.entity_id", "code": "col.item.code", "rank": "col.item.rank", "ctr": "col.item.ctr", "safe": "col.item.safe",
           "emb": "col.item.emb", "flags": "col.item.flags", "ids": "col.item.ids", "weights": "col.item.weights",
@@ -50,7 +40,6 @@ public sealed class ModelScorerTests
           "slots": "ctx.request.slots", "user_emb2": "ctx.request.user_emb" }
         """;
 
-    /// <summary>The mapping: each reference's declared type, a list&lt;E,N&gt; with a trailing N.</summary>
     private static readonly ServiceSignature AllKindsSignature = new(
         new[]
         {
@@ -88,14 +77,14 @@ public sealed class ModelScorerTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(5, result.Items.Count);
-        Assert.All(result.Items, item => Assert.Equal(0.5, item.Columns["p"].AsFloat64())); // every batch's output was written back
+        Assert.All(result.Items, item => Assert.Equal(0.5, item.Columns["p"].AsFloat64()));
         var calls = models.Calls;
         Assert.Equal(sizes.Order(), calls.Select(c => c.BatchSize).Order());
         var seen = new List<long>();
         foreach (var call in calls)
         {
             var n = call.BatchSize;
-            Assert.Equal(AllKindsSignature.Inputs.Select(s => s.Name).Order(StringComparer.Ordinal), call.Inputs.Select(i => i.Name)); // in ordinal order
+            Assert.Equal(AllKindsSignature.Inputs.Select(s => s.Name).Order(StringComparer.Ordinal), call.Inputs.Select(i => i.Name));
             AssertTensor(call["id"], TensorElementType.Int64, n);
             AssertTensor(call["code"], TensorElementType.Int64, n);
             AssertTensor(call["rank"], TensorElementType.Int32, n);
@@ -123,15 +112,15 @@ public sealed class ModelScorerTests
                 var id = call["id"].Of<long>()[r];
                 var item = Items[id];
                 seen.Add(id);
-                Assert.Equal(item.Code, call["code"].Of<long>()[r]); // exact: no detour through double
-                Assert.Equal(item.Rank, call["rank"].Of<int>()[r]); // at its width: not widened
-                Assert.Equal(item.Ctr, call["ctr"].Of<double>()[r]); // a float64 as is: not rounded to float32
-                Assert.Equal(item.Safe, call["safe"].Of<bool>()[r]); // a bool as a bool
-                Assert.Equal(item.Emb, call["emb"].Of<float>().AsSpan(r * 3, 3).ToArray()); // row-major
+                Assert.Equal(item.Code, call["code"].Of<long>()[r]);
+                Assert.Equal(item.Rank, call["rank"].Of<int>()[r]);
+                Assert.Equal(item.Ctr, call["ctr"].Of<double>()[r]);
+                Assert.Equal(item.Safe, call["safe"].Of<bool>()[r]);
+                Assert.Equal(item.Emb, call["emb"].Of<float>().AsSpan(r * 3, 3).ToArray());
                 Assert.Equal(item.Flags, call["flags"].Of<bool>().AsSpan(r * 2, 2).ToArray());
                 Assert.Equal(item.Ids, call["ids"].Of<int>().AsSpan(r * 2, 2).ToArray());
                 Assert.Equal(item.Weights, call["weights"].Of<double>().AsSpan(r * 2, 2).ToArray());
-                Assert.Equal(UserEmb, call["user_emb"].Of<float>().AsSpan(r * 3, 3).ToArray()); // the request's vector in every row
+                Assert.Equal(UserEmb, call["user_emb"].Of<float>().AsSpan(r * 3, 3).ToArray());
                 Assert.Equal(Big, call["user_id"].Of<long>()[r]);
                 Assert.True(call["member"].Of<bool>()[r]);
                 Assert.Equal(Recent, call["recent"].Of<long>().AsSpan(r * 2, 2).ToArray());
@@ -142,12 +131,12 @@ public sealed class ModelScorerTests
                 Assert.Equal(0.1f, call["boost"].Of<float>()[r]); // a float32 request input, held promoted, narrowed back exactly
                 Assert.Equal(int.MinValue, call["slot"].Of<int>()[r]);
                 Assert.Equal(0.1f, call["affinity"].Of<float>()[r]);
-                Assert.Equal(new[] { int.MaxValue, int.MinValue }, call["slots"].Of<int>().AsSpan(r * 2, 2).ToArray()); // an int32 list in every row
-                Assert.Equal(UserEmb, call["user_emb2"].Of<float>().AsSpan(r * 3, 3).ToArray()); // the same value broadcast to two inputs
+                Assert.Equal(new[] { int.MaxValue, int.MinValue }, call["slots"].Of<int>().AsSpan(r * 2, 2).ToArray());
+                Assert.Equal(UserEmb, call["user_emb2"].Of<float>().AsSpan(r * 3, 3).ToArray());
             }
         }
 
-        Assert.Equal(Items.Keys.Order(), seen.Order()); // each row once
+        Assert.Equal(Items.Keys.Order(), seen.Order());
         Assert.Contains(Big, seen);
     }
 
@@ -198,7 +187,6 @@ public sealed class ModelScorerTests
     [Fact]
     public void ABoolColumnMappedToAFloat32Input_IsAMismatch_WithTheFix()
     {
-        // A bool goes to the model as a bool: not converted to a number of either kind.
         var models = new CapturingModels(new ServiceSignature(new[] { new TensorSpec("safe", TensorElementType.Float32, Rows) }, AllKindsSignature.Outputs));
 
         var compilation = TryCompile(models, """{ "safe": "col.item.safe" }""", batchSize: 2);
@@ -254,18 +242,18 @@ public sealed class ModelScorerTests
         foreach (var item in result.Items)
         {
             var id = item.Id.Int64Value;
-            Assert.Equal(id + 1, item.Columns["n"].AsInt64()); // exact beyond 2^53: never through a float
+            Assert.Equal(id + 1, item.Columns["n"].AsInt64());
             Assert.Equal("l" + id.ToString(CultureInfo.InvariantCulture), item.Columns["label"].AsString());
             Assert.Equal(new double[] { id % 7, -1 }, item.Columns["v"].AsFloat64List().ToArray());
-            Assert.Equal(0.1 * (id % 3), item.Columns["d"].AsFloat64()); // a float64 output, not rounded through float32
+            Assert.Equal(0.1 * (id % 3), item.Columns["d"].AsFloat64());
             Assert.Equal(id % 2 == 1, item.Columns["odd"].AsBool());
             Assert.Equal(int.MinValue + (int)(id % 7), item.Columns["r"].AsInt32());
         }
     }
 
     /// <summary>
-    /// An output with more elements than its shape holds fails the node: sliced by the column's width, its rows would start
-    /// elsewhere than the client wrote them (a list&lt;float32,2&gt; column written 3 per row took the next row's values).
+    /// An output with more elements than its shape holds fails the node: sliced by the column's width, its rows would
+    /// start elsewhere than the client wrote them.
     /// </summary>
     [Theory]
     [InlineData("p", 1)]
@@ -308,7 +296,7 @@ public sealed class ModelScorerTests
         var models = new CapturingModels(signature, (call, outputs) =>
         {
             outputs.GetValues<float>("p", call.BatchSize).Span.Fill(0.5f);
-            outputs.GetValues<string>("label", call.BatchSize).Span[..^1].Fill("x"); // the last row's label never written
+            outputs.GetValues<string>("label", call.BatchSize).Span[..^1].Fill("x");
         });
         var plan = Compile(models, """{ "id": "col.entity_id" }""", batchSize: 8,
             outputs: """{ "p": "score.p", "label": "score.label" }""", resultColumns: """{ "label": "col.score.label" }""");
@@ -343,8 +331,7 @@ public sealed class ModelScorerTests
     }
 
     /// <summary>
-    /// A workspace of one pipeline (recall of the five items, then the scorer with <paramref name="inputs"/>) in a temp
-    /// directory. The ids and int64 values above 2^53 live in data files: artifacts are RFC 8785 JSON, which cannot hold them.
+    /// The ids and int64 values above 2^53 live in data files: artifacts are RFC 8785 JSON, which cannot hold them.
     /// </summary>
     private static PlanCompilation TryCompile(CapturingModels models, string inputs, int batchSize, string? outputs = null, string? resultColumns = null)
     {
@@ -429,10 +416,6 @@ public sealed class ModelScorerTests
         public CapturedInput this[string name] => Inputs.Single(i => i.Name == name);
     }
 
-    /// <summary>
-    /// <c>capture@1</c>: declares a fixed signature, keeps a copy of every call, and scores every row 0.5 (or writes what
-    /// <paramref name="write"/> writes).
-    /// </summary>
     private sealed class CapturingModels(ServiceSignature signature, Action<ServiceCall, IServiceResponse>? write = null) : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "capture@1";

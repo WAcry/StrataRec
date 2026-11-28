@@ -5,15 +5,16 @@ using StrataRec.Artifacts.Json;
 namespace StrataRec.Hosting.Manifests;
 
 /// <summary>
-/// Manifest pointers as files in a directory, next to the blobs of a <see cref="Artifacts.Storage.FileSystemArtifactStore"/>
-/// with the same root: <c>&lt;root&gt;/pointers/&lt;environment&gt;/&lt;pipeline_id&gt;.json</c>, holding
-/// <c>{ "manifest": "sha256:…" }</c>. <c>stratarec publish</c> writes them (<see cref="WritePointerAsync"/>); a node reads
-/// them (<see cref="GetManifestIdAsync"/>). The format is read and written here only.
+/// Manifest pointers as files in a directory, next to the blobs of a
+/// <see cref="Artifacts.Storage.FileSystemArtifactStore"/> with the same root:
+/// <c>&lt;root&gt;/pointers/&lt;environment&gt;/&lt;pipeline_id&gt;.json</c>, holding <c>{ "manifest": "sha256:…"
+/// }</c>. <c>stratarec publish</c> writes them (<see cref="WritePointerAsync"/>); a node reads them
+/// (<see cref="GetManifestIdAsync"/>).
 /// </summary>
 /// <remarks>
 /// A pointer is strict JSON: an object whose <c>manifest</c> is a content id. Other members are ignored, so a release
 /// controller may record more (who published, when) without breaking nodes that do not know them. A pointer is replaced
-/// atomically (a temporary file in the same directory, renamed over it), so a reader sees the old pointer or the new one.
+/// atomically, so a reader sees the old pointer or the new one.
 /// </remarks>
 public sealed class FileSystemManifestSource : IManifestSource
 {
@@ -30,20 +31,8 @@ public sealed class FileSystemManifestSource : IManifestSource
     public string Root { get; }
 
     /// <summary>
-    /// How to name a pipeline or an environment whose pointer this source keeps (<see cref="GetPointerPath"/>): the hint of
-    /// every tool that reports a name it refused, and of a host that cannot read its pointer under such a name. Earlier
-    /// versions wrote pointers under names starting with '.', so it says how to move such a release.
-    /// Renaming the directory is not enough (a manifest names its environment, and a node refuses one naming another), so
-    /// the release is built again; a build takes its experiments from its environment's release file and knows nothing of
-    /// the stops published under another name. Built without the old file it released none of three experiments, and an
-    /// experiment revoked under the old name came back. So the hint names an unused name, carries the release file over,
-    /// and has the experiments the old pointer's stops removed left out of it. No version's <c>status</c> lists a pointer
-    /// under such a name (listing skips dot names, even of an environment given explicitly), and the commands
-    /// that read a manifest by its id (<c>explain-plan</c>, <c>diff</c>) compile it, which needs its bindings' files where
-    /// they run, and show what it releases, not what it revoked. So the hint names the two files that hold the stops,
-    /// JSON read as it is: the pointer names the manifest, and the store keeps it under its digest. A revoked experiment
-    /// is one the manifest lists under <c>revoked</c> and does not release again under <c>experiments</c>
-    /// (<see cref="Artifacts.Model.ReleaseManifest.TryGetStop"/>).
+    /// How to name a pipeline or an environment whose pointer this source keeps (<see cref="GetPointerPath"/>): the
+    /// hint of every tool that reports a name it refused, and of a host that cannot read its pointer under such a name.
     /// </summary>
     public const string NameHint =
         "pipeline ids and environment names are the file names of pointers: use letters, digits, '_', '-' and '.', and do not start with '.'; " +
@@ -89,7 +78,6 @@ public sealed class FileSystemManifestSource : IManifestSource
             }
             catch (DirectoryNotFoundException)
             {
-                // Nothing published yet, unless a file stands where the directory belongs.
                 if (NotADirectory(directory) is { } file)
                 {
                     pointers.Add(new PointerFile(string.Empty, string.Empty, directory, file));
@@ -145,9 +133,8 @@ public sealed class FileSystemManifestSource : IManifestSource
     }
 
     /// <summary>
-    /// Why <paramref name="directory"/>, which could not be found, is no directory although something is there: a file at
-    /// it or at one of the directories above it, up to the root. The system says "not found" for both (ENOTDIR), and a store
-    /// whose pointers cannot be listed is not one that publishes nothing. Null when nothing is there.
+    /// The system says "not found" for both (ENOTDIR), and a store whose pointers cannot be listed is not one that
+    /// publishes nothing.
     /// </summary>
     private string? NotADirectory(string directory)
     {
@@ -162,7 +149,6 @@ public sealed class FileSystemManifestSource : IManifestSource
         return null;
     }
 
-    /// <summary>Why <paramref name="name"/> cannot name a pointer file; null when it can.</summary>
     private static string? PointerName(string name)
     {
         try
@@ -228,7 +214,7 @@ public sealed class FileSystemManifestSource : IManifestSource
         {
             try
             {
-                File.Delete(temporary); // nothing there once moved
+                File.Delete(temporary);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -242,7 +228,7 @@ public sealed class FileSystemManifestSource : IManifestSource
         string? id = null;
         try
         {
-            using var document = JsonDocument.Parse(bytes); // strict: no comments, no trailing commas
+            using var document = JsonDocument.Parse(bytes);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 throw Invalid(path, $"it is a JSON {document.RootElement.ValueKind.ToString().ToLowerInvariant()}, not an object");
@@ -271,11 +257,6 @@ public sealed class FileSystemManifestSource : IManifestSource
     private static InvalidDataException Invalid(string path, string reason, Exception? inner = null) =>
         new($"The manifest pointer {path} is not valid: {reason}. A pointer is {{ \"{ManifestMember}\": \"sha256:<hex>\" }}, as 'stratarec publish' writes it.", inner);
 
-    /// <summary>
-    /// The one rule for the names that become path segments of pointers, for writing, reading and listing alike. A name
-    /// starting with '.' is refused: listing skips such entries, as temporary and lock files are (and editors' and the
-    /// system's hidden ones), so a pointer under one would be written and never seen by <c>stratarec status</c>.
-    /// </summary>
     private static string Segment(string name, string parameter)
     {
         ArgumentException.ThrowIfNullOrEmpty(name, parameter);

@@ -8,9 +8,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Hosting;
 
 /// <summary>
-/// Request-level metric tags of one served plan: the pipeline, pipeline × arm for every arm of the plan,
-/// and pipeline × reason for ignored arms. Built once when the plan is loaded, so recording a request passes cached
-/// arrays.
+/// Built once when the plan is loaded, so recording a request passes cached arrays.
 /// </summary>
 internal sealed class RequestTelemetry
 {
@@ -35,9 +33,8 @@ internal sealed class RequestTelemetry
     public KeyValuePair<string, object?>[] Pipeline { get; }
 
     /// <summary>
-    /// Starts the request span (<see cref="StrataRecTracing.RequestSpanName"/>); null when nobody listens or the sampler
-    /// drops it. Starting it costs a listener check otherwise, so it is started once per request, not per node. The engine
-    /// starts it for every request it runs; nothing else runs a pipeline.
+    /// Starts the request span (<see cref="StrataRecTracing.RequestSpanName"/>); null when nobody listens or the
+    /// sampler drops it.
     /// </summary>
     public static Activity? StartRequest(string pipelineId, string requestId)
     {
@@ -70,7 +67,6 @@ internal sealed class RequestTelemetry
             [pipeline, new(StrataRecTags.Outcome, IgnoredArm.Name(reason))];
     }
 
-    /// <summary>Counts the platform's arm ids a request ignored, by reason; nothing to do (and nothing recorded) when none were.</summary>
     public void RecordIgnored(IgnoredArm[] ignored)
     {
         foreach (var arm in ignored)
@@ -84,7 +80,6 @@ internal sealed class RequestTelemetry
         }
     }
 
-    /// <summary>Records one request once for its pipeline and once per assigned arm.</summary>
     public void Record(double seconds, in RequestArms arms, bool failed, bool empty, bool degraded)
     {
         Record(seconds, Pipeline, failed, empty, degraded, arm: false);
@@ -117,9 +112,6 @@ internal sealed class RequestTelemetry
         }
     }
 
-    /// <summary>Completes the request span with the request's outcome; tags are only built for recorded spans.</summary>
-    /// <param name="plan">The plan the request ran on, when known.</param>
-    /// <param name="arms">The arms assigned before execution.</param>
     public static void EndSpan(Activity activity, RecResult? result, bool degraded, ExecutionPlan? plan, in RequestArms arms)
     {
         if (activity.IsAllDataRequested)
@@ -167,9 +159,8 @@ internal sealed class RequestTelemetry
 }
 
 /// <summary>
-/// Plan lifecycle metrics and event logs: loads are rare, so tags are built per load. None of
-/// it throws: a metric listener or a logger that throws loses its record, and a load's outcome (a plan published, a
-/// release's status and retries) never depends on it.
+/// None of it throws: a metric listener or a logger that throws loses its record, and a load's outcome (a plan
+/// published, a release's status and retries) never depends on it.
 /// </summary>
 internal static partial class PlanLoadTelemetry
 {
@@ -184,7 +175,6 @@ internal static partial class PlanLoadTelemetry
         }
         catch (Exception)
         {
-            // See the summary.
         }
     }
 
@@ -196,7 +186,6 @@ internal static partial class PlanLoadTelemetry
         }
         catch (Exception)
         {
-            // See the summary.
         }
     }
 
@@ -209,7 +198,6 @@ internal static partial class PlanLoadTelemetry
         }
         catch (Exception)
         {
-            // See the summary.
         }
     }
 
@@ -222,7 +210,6 @@ internal static partial class PlanLoadTelemetry
         }
         catch (Exception)
         {
-            // See the summary.
         }
     }
 
@@ -235,7 +222,6 @@ internal static partial class PlanLoadTelemetry
         }
         catch (Exception)
         {
-            // See the summary.
         }
     }
 
@@ -248,11 +234,9 @@ internal static partial class PlanLoadTelemetry
         }
         catch (Exception)
         {
-            // See the summary.
         }
     }
 
-    /// <summary>The manifest, or an artifact it names, could not be read: missing, damaged, of another identity.</summary>
     public static void ArtifactsFailed(ILogger logger, string pipelineId, string manifestId, DiagnosticBag diagnostics)
     {
         try
@@ -262,7 +246,6 @@ internal static partial class PlanLoadTelemetry
         }
         catch (Exception)
         {
-            // See the summary.
         }
     }
 
@@ -298,7 +281,7 @@ internal static partial class PlanLoadTelemetry
         Message = "Manifest '{ManifestId}' (sequence {Sequence}) for pipeline '{PipelineId}' is incompatible: this binary lacks {MissingCapabilities}; the current plan stays")]
     private static partial void LogIncompatible(ILogger logger, string pipelineId, string manifestId, long sequence, string missingCapabilities);
 
-    // EventId 1007 (a manifest below min_accepted_seq) is retired: a revocation is a newer release like any other.
+    // EventId 1007 is retired: do not reuse it.
 
     [LoggerMessage(EventId = 1008, Level = LogLevel.Error,
         Message = "Manifest '{ManifestId}' for pipeline '{PipelineId}' not applied: {ErrorCount} error(s) reading it or its artifacts; the current plan stays. First: {FirstError}")]

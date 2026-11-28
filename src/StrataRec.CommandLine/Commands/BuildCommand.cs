@@ -9,24 +9,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec build</c>: validates, uploads canonical artifacts to a content-addressed store and
-/// writes the release manifest. Nothing is uploaded when validation fails.
-/// </summary>
-/// <remarks>
-/// <para>Without <c>--seq</c>, the manifest is the next release of its pipeline in its environment: its
-/// <c>seq</c> is one more than that of the manifest the store's pointer names (<c>stratarec publish</c> writes it), and it
-/// names that manifest as <c>previous</c>, which
-/// <c>stratarec diff --to</c> compares with; the first release is 1. So build and publish follow each other without
-/// anyone keeping count. A configuration that is the published one's, but for those fields, is no new release: build
-/// writes the published manifest, which publish then finds published already, so a pipeline can run both again.</para>
-/// <para>An experiment that <c>stratarec revoke</c> removed stays out: while the published manifest lists it
-/// as revoked (<see cref="ReleaseManifest.Revoked"/>), a build that releases it unchanged fails at the release file's entry,
-/// so a release that follows the stop (a routine one, from CI) does not bring the stopped experiment back. A changed
-/// experiment is the owner's fix and is released; <c>--restore</c> releases one unchanged. A build's manifest lists no
-/// revocations: it released none unchanged, and what it leaves out, the release file now leaves out.</para>
-/// <para>A release controller that numbers releases itself passes <c>--seq</c>, and the store's pointers are not read.</para>
-/// </remarks>
 internal static class BuildCommand
 {
     /// <summary>
@@ -68,17 +50,12 @@ internal static class BuildCommand
         return command;
     }
 
-    /// <param name="errors">Where diagnostics and the manifest id go; standard error by default.</param>
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
-    /// <param name="seq">The manifest's sequence number; null for the next release (see remarks).</param>
-    /// <param name="restore">Revoked experiments to release again unchanged (see remarks).</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string config, string environment, string? pipeline, string storeRoot, string? manifestPath, long? seq, TextWriter output,
         CancellationToken cancellationToken, TextWriter? errors = null, string[]? restore = null)
     {
         errors ??= Console.Error;
         var diagnostics = new DiagnosticBag();
-        // An expired experiment cannot enter a new release: build compiles with today's date, as validate does.
         var (workspace, request, compilation) = CommonOptions.Compile(provided, config, environment, pipeline, diagnostics, DateOnly.FromDateTime(DateTime.UtcNow));
         if (request is null || compilation is not { Succeeded: true } || diagnostics.HasErrors)
         {
@@ -132,7 +109,7 @@ internal static class BuildCommand
             unchanged = manifest is not null && published is { } was && ManifestBuilder.ContentId(Renumbered(manifest, was.Manifest)) == was.Id;
             if (unchanged)
             {
-                (manifestId, manifest) = published!.Value; // stored when it was built
+                (manifestId, manifest) = published!.Value;
             }
             else if (manifest is not null)
             {
@@ -164,7 +141,6 @@ internal static class BuildCommand
 
         if (diagnostics.Items.Count > 0)
         {
-            // The warnings 'validate' prints: a release is where they matter most.
             Output.Diagnostics(diagnostics.Items, "text", errors, locator: DiagnosticLocator.ForWorkspace(config));
         }
 
@@ -196,11 +172,6 @@ internal static class BuildCommand
         Revoked = like.Revoked,
     };
 
-    /// <summary>
-    /// The manifest the store's pointer names for the pipeline in the environment, and its id; none when nothing is
-    /// published. Not read, after reporting, when the pointer or that manifest cannot be: the next sequence is then
-    /// unknown, and publishing would fail on it too.
-    /// </summary>
     private static async Task<(bool Read, (string Id, ReleaseManifest Manifest)? Published)> ReadPublishedAsync(
         string storeRoot, FileSystemArtifactStore store, string pipelineId, string environment, DiagnosticBag diagnostics, CancellationToken cancellationToken)
     {
@@ -222,11 +193,6 @@ internal static class BuildCommand
             .ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Whether this build keeps out the experiments the published manifest lists as revoked (see remarks): false, after
-    /// reporting at the release file's entry, when it releases one of them as it was and <paramref name="restore"/> does
-    /// not name it.
-    /// </summary>
     private static bool KeepsRevokedOut(
         ConfigWorkspace workspace, PlanCompileRequest request, string environment, ReleaseManifest published, string[] restore, DiagnosticBag diagnostics)
     {

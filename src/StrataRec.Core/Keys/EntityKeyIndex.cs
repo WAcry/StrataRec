@@ -6,18 +6,12 @@ namespace StrataRec.Core.Keys;
 
 /// <summary>
 /// A request-scoped hash index from entity keys to <c>int</c> values (key indices, row numbers). Every array is rented
-/// from the request's <see cref="RequestMemory"/>, so building, probing and growing it allocate nothing per key
-///; a <see cref="Dictionary{TKey, TValue}"/> over thousands of candidates allocates its entries and
-/// buckets on every request, and above 85 KB on the large object heap.
+/// from the request's <see cref="RequestMemory"/>, so building, probing and growing it allocate nothing per key.
 /// </summary>
 /// <remarks>
-/// <para>Open addressing with linear probing over a power-of-two slot table that is kept at most half full, so probe
-/// sequences are short on average and always reach an empty slot. A slot holds <c>entry + 1</c> (0 = empty). Entries are
-/// stored densely in insertion order, so <see cref="Int64Keys"/> / <see cref="StringKeys"/> double as the list of
-/// distinct keys in first-seen order.</para>
-/// <para>One key type per index. The <c>int64</c> case is specialized: keys are compared as <c>long</c> and hashed with a
-/// Fibonacci multiplier, which spreads sequential ids evenly. String keys compare ordinally; their hash codes are
-/// stored per entry so growing never rehashes a string. Lookups of a key of the other type find nothing.</para>
+/// <para>Entries are stored densely in insertion order, so <see cref="Int64Keys"/> / <see cref="StringKeys"/> double as
+/// the list of distinct keys in first-seen order.</para>
+/// <para>One key type per index. String keys compare ordinally. Lookups of a key of the other type find nothing.</para>
 /// <para>Growth rents twice the space and leaves the old arrays on the request's ledger until the request ends, like
 /// Compact does; callers that know an upper bound on the number of keys pass it as the capacity and never grow. An index
 /// built and dropped within one computation (a recall merge) is a scratch index instead: its arrays are scratch buffers
@@ -73,7 +67,6 @@ public sealed class EntityKeyIndex
         _slotMask = _shift = _maxCount = _count = 0;
     }
 
-    /// <summary>Gives back every array of a scratch index (none for a request's) and drops them all, either key type's.</summary>
     private void GiveBackAll()
     {
         GiveBack(_slots);
@@ -204,9 +197,7 @@ public sealed class EntityKeyIndex
 
     /// <summary>
     /// Gives <paramref name="key"/> the value <paramref name="value"/> when the index holds it; returns false, adding
-    /// nothing, when it does not. Its place in insertion order is kept. Probes as <see cref="TryGetValue(long, out int)"/>
-    /// does, so a caller that adds keys and only rarely replaces one (<see cref="Tables.CandidateTable.FindRow"/>) adds
-    /// with <see cref="TryAdd(long, int)"/> and replaces when that finds the key, without slowing the adding.
+    /// nothing, when it does not. Its place in insertion order is kept.
     /// </summary>
     public bool TryReplace(long key, int value)
     {
@@ -261,8 +252,8 @@ public sealed class EntityKeyIndex
     }
 
     /// <summary>
-    /// Returns the value of <paramref name="key"/>, adding it with <paramref name="value"/> first when it is absent —
-    /// one probe sequence for both. Throws when the key's type is not <see cref="KeyType"/>.
+    /// Returns the value of <paramref name="key"/>, adding it with <paramref name="value"/> first when it is absent.
+    /// Throws when the key's type is not <see cref="KeyType"/>.
     /// </summary>
     public int GetOrAdd(in EntityKey key, int value, out bool added) =>
         key.StringValue is { } s ? GetOrAdd(s, value, out added) : GetOrAdd(key.Int64Value, value, out added);
@@ -367,8 +358,6 @@ public sealed class EntityKeyIndex
         }
         else if (!KeysFit())
         {
-            // The slot table is large enough, but this key type's arrays were rented smaller (or not at all); RentKeys
-            // replaces exactly these.
             if (_stringKeys)
             {
                 GiveBack(_strings);
@@ -383,11 +372,10 @@ public sealed class EntityKeyIndex
         }
     }
 
-    /// <summary>Whether every array of the current key type holds <see cref="_maxCount"/> entries.</summary>
     /// <remarks>
     /// The arrays of one key type are rented separately, and a pool only promises at least the requested length (a pool
     /// per element type may round each differently), so each is checked: a long string array says nothing about its
-    /// hash array. <see cref="RentKeys"/> rents the same set.
+    /// hash array.
     /// </remarks>
     private bool KeysFit() => _stringKeys
         ? _strings.Length >= _maxCount && _hashes.Length >= _maxCount
@@ -421,7 +409,6 @@ public sealed class EntityKeyIndex
 
     private void Allocate(int slotCount)
     {
-        // Entry arrays hold at most half the slot count: the load factor never exceeds 0.5.
         _slots = RentArray<int>(slotCount);
         _slots.AsSpan(0, slotCount).Clear();
         _slotMask = slotCount - 1;
@@ -446,7 +433,6 @@ public sealed class EntityKeyIndex
 
     private T[] RentArray<T>(int length) => _scratch ? _memory.RentScratch<T>(length) : _memory.Rent<T>(length);
 
-    /// <summary>A scratch index gives an array it no longer uses back at once; a request's index leaves it on the ledger.</summary>
     private void GiveBack<T>(T[] array)
     {
         if (_scratch && array.Length > 0)

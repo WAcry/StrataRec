@@ -5,27 +5,6 @@ using StrataRec.Hosting.Replay;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// The engines bundles replay on. A bundle's runs name every pipeline its request ran, the primary and, when
-/// it failed over, the fallback pipeline, each on the manifest it recorded (<see cref="ReplayRunRecord.ManifestId"/>); a
-/// replay needs a configuration for each of them, or it does not replay what happened.
-/// </summary>
-/// <remarks>
-/// <para>Where each pipeline's configuration comes from depends on what the command line named:</para>
-/// <list type="bullet">
-/// <item><description>a workspace (<c>-c</c>): every pipeline from it;</description></item>
-/// <item><description>a manifest (<c>--manifest</c>): its pipeline from it, which must be the bundle's own; any other pipeline
-/// the request ran (its fallback) on the manifest it recorded, from the store, so the named manifest replaces one
-/// pipeline's configuration and nothing else;</description></item>
-/// <item><description>nothing, only <c>--store</c>: every pipeline on the manifest it recorded, so a production request
-/// replays on exactly what served it.</description></item>
-/// </list>
-/// <para>A pipeline without a configuration (a recording made on a workspace has a local label, not a content id, and
-/// nothing in a store identifies that workspace; a workspace without the fallback pipeline) leaves the bundle unresolved,
-/// with the run, the pipeline and the command that replays it; the other bundles still replay. Engines are cached by the
-/// configurations they hold, so the bundles of one release share one, and a request whose fallback pipeline ran on another
-/// manifest than another request's gets its own.</para>
-/// </remarks>
 internal sealed class ReplayEngines : IAsyncDisposable
 {
     private const string WorkspaceLabel = "workspace:";
@@ -53,11 +32,9 @@ internal sealed class ReplayEngines : IAsyncDisposable
     }
 
     /// <summary>
-    /// Engines for <paramref name="reference"/> (loaded now, so its errors are reported before any bundle), or, when it is
-    /// null, for the manifests the bundles recorded, read from <paramref name="store"/> as bundles ask for them. Null after
-    /// printing the errors of a configuration that does not load.
+    /// Engines for <paramref name="reference"/> (loaded now, so its errors are reported before any bundle), or, when it
+    /// is null, for the manifests the bundles recorded, read from <paramref name="store"/> as bundles ask for them.
     /// </summary>
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>), for the manifests bundles name.</param>
     public static async Task<ReplayEngines?> CreateAsync(
         Pipeline.Planning.PlanEnvironment provided, ConfigRef? reference, string? store, string environment, string format, TextWriter errors,
         CancellationToken cancellationToken)
@@ -88,7 +65,6 @@ internal sealed class ReplayEngines : IAsyncDisposable
         return engines;
     }
 
-    /// <summary>The engine to replay <paramref name="bundle"/> on, or why there is none and how to replay it instead.</summary>
     /// <exception cref="StrataRec.Pipeline.Replay.ReplayBundleException">The bundle is of another format: checked here as every entry that takes a
     /// bundle checks it, before its runs are read.</exception>
     public async Task<(RecEngine? Engine, string? Problem, string? Hint)> ForAsync(ReplayBundle bundle, CancellationToken cancellationToken)
@@ -125,10 +101,9 @@ internal sealed class ReplayEngines : IAsyncDisposable
     }
 
     /// <summary>
-    /// The pipelines the bundle's request ran, each with the manifest it recorded and where the bundle says so. The primary
-    /// pipeline is always among them: a bundle without a primary run (none recorded, or one cut from the bundle) stands
-    /// for it on the bundle's manifest, and the engine then replays it with every external call a gap, as it does on a
-    /// workspace.
+    /// The primary pipeline is always among them: a bundle without a primary run (none recorded, or one cut from the
+    /// bundle) stands for it on the bundle's manifest, and the engine then replays it with every external call a gap,
+    /// as it does on a workspace.
     /// </summary>
     private static List<Run> Runs(ReplayBundle bundle)
     {
@@ -186,7 +161,6 @@ internal sealed class ReplayEngines : IAsyncDisposable
             }
         }
 
-        // Its recorded manifest: every run without a named configuration, and another pipeline's run (a fallback) when one is.
         var id = run.Manifest;
         if (ContentHash.IsValid(id))
         {
@@ -222,7 +196,6 @@ internal sealed class ReplayEngines : IAsyncDisposable
         return false;
     }
 
-    /// <summary>The cache key of an engine: its pipelines and where each came from, in order.</summary>
     private static string Key(List<(string Pipeline, string Source)> configurations)
     {
         var parts = new string[configurations.Count];
@@ -308,7 +281,5 @@ internal sealed class ReplayEngines : IAsyncDisposable
 
     private readonly record struct Resolution(RecEngine? Engine, string? Problem, string? Hint);
 
-    /// <param name="Fallback">The run of the pipeline the request failed over to (<c>fallback_pipeline</c>).</param>
-    /// <param name="Pointer">Where the bundle records the manifest.</param>
     private readonly record struct Run(string Pipeline, string Manifest, bool Fallback, string Pointer);
 }

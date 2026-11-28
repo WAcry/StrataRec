@@ -12,18 +12,14 @@ namespace StrataRec.Hosting;
 public sealed partial class RecEngine
 {
     /// <summary>
-    /// How deep the pipelines a request's nodes call may nest. A workspace's compile refuses calls that lead back to their
-    /// pipeline; pipelines loaded each from its own release are not compiled together, so a cycle among them is stopped
-    /// here, as a failed call.
+    /// A workspace's compile refuses calls that lead back to their pipeline; pipelines loaded each from its own release
+    /// are not compiled together, so a cycle among them is stopped here, as a failed call.
     /// </summary>
     internal const int MaxCallDepth = 8;
 
     /// <summary>
-    /// What the pipelines a request's nodes called ran, for the request's result: the arms they ran and the experiments
-    /// they triggered, the platform's arms they ignored, and their captured log batches. One per request that calls any,
-    /// shared by its runs; calls may end on any thread.
+    /// One per request that calls any, shared by its runs; calls may end on any thread.
     /// </summary>
-    /// <param name="reads">The request's reads, which the runs it calls share with its own.</param>
     private sealed class RequestCalls(RecEngine engine, RecRequest request, RequestReads reads)
     {
         private readonly Lock _gate = new();
@@ -38,10 +34,8 @@ public sealed partial class RecEngine
 
         public RecRequest Request => request;
 
-        /// <summary>What the cached reads of the request's runs share: every run of the request is handed it.</summary>
         public RequestReads Reads { get; } = reads;
 
-        /// <summary>The request asked for its trace: the called runs are kept with theirs (<see cref="RecResult.Calls"/>).</summary>
         public bool Traces => request.Debug?.Trace == true;
 
         public void Add(CalledRun run)
@@ -53,18 +47,14 @@ public sealed partial class RecEngine
         }
 
         /// <summary>
-        /// The request's arms in a pipeline its nodes call (<see cref="AssignCallAsync"/>): one answer for the request and
-        /// the plan. The arms a cached call's key was built with are the arms the runs under it run, a pipeline called
-        /// again is not asked about again, and what the plan ignores of the answer is reported once, whether its calls
-        /// are then run or answered by a cache. Calls that start before the first answer each ask, and all take the
-        /// answer that came first: a provider that answered two of them differently had one call's key built with arms
-        /// the runs under it did not run. A failed assignment is not kept, and the next call asks again.
+        /// The arms a cached call's key was built with are the arms the runs under it run. Calls that start before the
+        /// first answer each ask, and all take the answer that came first.
         /// </summary>
         public async ValueTask<(CallAssignment? Assignment, string? Error)> AssignAsync(LoadedPipeline callee, long deadline, CancellationToken cancellationToken)
         {
             if (callee.Plan.Arms.IsEmpty)
             {
-                return (CallAssignment.None, null); // nothing to ask about, nothing to keep
+                return (CallAssignment.None, null);
             }
 
             lock (_gate)
@@ -81,8 +71,6 @@ public sealed partial class RecEngine
                 return (null, asked.Error);
             }
 
-            // An arm the pipeline does not have, in a list every pipeline of the request shares, is another pipeline's;
-            // in the provider's answer for this pipeline it is a mistake, and reported.
             var arms = ExternalArms.Yield(callee.Plan, asked.Arms, asked.Ignored, out var ignored);
             var assignment = new CallAssignment(arms, asked.Shared ? NotUnknown(ignored) : ignored);
             lock (_gate)
@@ -103,11 +91,6 @@ public sealed partial class RecEngine
             return (assignment, null);
         }
 
-        /// <summary>
-        /// A run that did not happen because a cache answered its call: the request has its arms and triggered its
-        /// experiments as the request that computed the result did, and <paramref name="batch"/> is its captured record
-        /// of that, when the request captures its logs.
-        /// </summary>
         public void Add(CallExposure exposure, Logging.LogBatch? batch)
         {
             lock (_gate)
@@ -150,10 +133,6 @@ public sealed partial class RecEngine
             }
         }
 
-        /// <summary>
-        /// The request's result with what its called pipelines ran: their arms and triggered experiments after its own (in
-        /// ordinal order, each once), the arms they ignored, and their captured batches after its own.
-        /// </summary>
         public RecResult Merge(RecResult result)
         {
             lock (_gate)
@@ -163,7 +142,6 @@ public sealed partial class RecEngine
                     return result;
                 }
 
-                // Calls end in any order: listed by who called, so the same request lists them alike.
                 _runs?.Sort(static (a, b) =>
                 {
                     // By who called, then by the call's number: as text, a node's tenth call would come before its third.
@@ -205,9 +183,9 @@ public sealed partial class RecEngine
         }
 
         /// <summary>
-        /// The request's ignored arms with those of its called runs: each id and reason once (a pipeline called twice
-        /// ignores the same arm twice), by id as the record has them, and without an arm the request's pipeline did not
-        /// know that a called run ran (a pipeline its plan does not name, called by a configuration override).
+        /// The request's ignored arms with those of its called runs: each id and reason once, by id as the record has
+        /// them, and without an arm the request's pipeline did not know that a called run ran (a pipeline its plan does
+        /// not name, called by a configuration override).
         /// </summary>
         private IReadOnlyList<IgnoredArm> Ignored(IReadOnlyList<IgnoredArm> own)
         {
@@ -260,15 +238,13 @@ public sealed partial class RecEngine
         }
     }
 
-    /// <summary>The request's arms in a plan its nodes call: what the plan runs of the answer, and what it reports as ignored.</summary>
     private sealed record CallAssignment(RequestArms Arms, IgnoredArm[] Ignored)
     {
         public static readonly CallAssignment None = new(RequestArms.None, []);
     }
 
     /// <summary>
-    /// The runs under one cached call that had experiments, gathered while its pipeline runs: what the record of its
-    /// result keeps of them (<see cref="CallExposure"/>). Runs end on any thread.
+    /// Runs end on any thread.
     /// </summary>
     private sealed class CallCapture
     {
@@ -291,23 +267,13 @@ public sealed partial class RecEngine
         }
     }
 
-    /// <summary>What the tiers of a call's cache had of it.</summary>
     /// <param name="Key">The call's key; null when the call is not cached, or cannot be now.</param>
     /// <param name="Keyed">The plans of the pipelines under the called one that the key was built with.</param>
     /// <param name="Stale">A result past its time to live that may still serve if the run fails.</param>
-    /// <param name="StaleShared">The stale result is the distributed tier's.</param>
     /// <param name="CutOff">The read was cut off by the node's budget or the caller.</param>
     private readonly record struct CacheLookup(
         UInt128? Key, List<(LoadedPipeline Pipeline, RequestArms Arms)>? Keyed, CachedCall? Fresh, CachedCall? Stale, bool StaleShared, Exception? CutOff);
 
-    /// <summary>
-    /// The calls of one run (<see cref="OperatorContext.CallPipelineAsync"/>): each runs the pipeline this engine serves
-    /// under that id, for the same request, unless the node's cache has its result
-    /// (<see cref="OperatorCompileContext.TryCallPipeline"/>).
-    /// </summary>
-    /// <param name="pipelineId">The pipeline of the run that calls.</param>
-    /// <param name="depth">How many calls led to that run: 0 for a run of the request's own pipeline.</param>
-    /// <param name="parent">The calls of the run that called it; null at depth 0.</param>
     /// <param name="calledBy">Who called that run, as its logs say it (<see cref="Logging.LogBatch.CalledBy"/>); null at depth 0.</param>
     /// <param name="capture">What the call that started that run keeps of the runs under it, when its result will be cached.</param>
     private sealed class RunCalls(RequestCalls scope, string pipelineId, int depth, RunCalls? parent = null, string? calledBy = null, CallCapture? capture = null)
@@ -317,7 +283,7 @@ public sealed partial class RecEngine
         {
             // The call reads the request's memory (for its cache's distributed tier) after waits of its own (its
             // assignment), which may be after the request has returned: a call its operator did not wait for. So it
-            // holds the memory from before its first wait to its end, as a cached service call and a feature fetch do.
+            // holds the memory from before its first wait to its end.
             call.Memory.Hold();
             try
             {
@@ -373,14 +339,14 @@ public sealed partial class RecEngine
                     return PipelineCallResult.Failed(id, $"pipeline '{id}' is not served by this engine");
                 }
 
-                // Counted as a request of the called pipeline and of its arms from here on, as the host's requests of it are:
-                // its experiments' health is read from these, and a call that fails before it runs (inputs it rejects, an
-                // assignment that fails) is an error of it, as such a request is. An aborted one counts as an error too.
-                // Not a call its cache answers: the pipeline did not run, and its health is that of its runs.
+                // Counted as a request of the called pipeline and of its arms from here on, as the host's requests of
+                // it are: its experiments' health is read from these, and a call that fails before it runs (inputs it
+                // rejects, an assignment that fails) is an error of it, as such a request is. Not a call its cache
+                // answers: the pipeline did not run, and its health is that of its runs.
                 var arms = RequestArms.None;
                 PipelineResult? result = null;
                 var answered = false;
-                RequestReads.SharedRead? reading = null; // the request's read of this call's result, when this call is its reader
+                RequestReads.SharedRead? reading = null;
                 try
                 {
                     var plan = callee.Plan;
@@ -405,21 +371,17 @@ public sealed partial class RecEngine
                     arms = assignment.Arms;
                     callee.Telemetry.RecordIgnored(assignment.Ignored);
 
-                    // A request that runs a configuration of its own (DebugOptions.ConfigOverride) neither reads nor
-                    // writes: what it computes is not what the served configuration computes.
                     var cache = request.Debug?.ConfigOverride is null ? call.Call.Cache : null;
                     var lookup = cache is null ? default : await LookupAsync(cache, callee, arms, inputs, deadline).ConfigureAwait(false);
                     if (lookup.CutOff is not null)
                     {
-                        callerCancellation.ThrowIfCancellationRequested(); // the caller gave up: so does the node, as in a run
+                        callerCancellation.ThrowIfCancellationRequested();
                     }
 
                     var hit = lookup.Fresh;
                     if (hit is null && lookup is { Key: { } asked, CutOff: null })
                     {
-                        // The tiers did not have the result: another call of the request for it may be running the
-                        // pipeline, or have run it, and this one takes what that one computes (RequestReads). The
-                        // same record of the same cache, by a run of this plan: a caller that keeps the pipeline's
+                        // The same record of the same cache, by a run of this plan: a caller that keeps the pipeline's
                         // results elsewhere runs it and keeps its own, and a call of a pipeline published since the
                         // other's began does not wait for the run of the plan before.
                         var joined = scope.Reads.Join(cache!.Table, asked, limit: 0, out var reader, plan: callee);
@@ -440,7 +402,7 @@ public sealed partial class RecEngine
                                 bound.Release();
                             }
 
-                            callerCancellation.ThrowIfCancellationRequested(); // the caller gave up: so does the node, as in a run
+                            callerCancellation.ThrowIfCancellationRequested();
                             if (shared.Record is CachedCall computed && cache!.TakeShared(asked, computed))
                             {
                                 hit = computed;
@@ -482,7 +444,6 @@ public sealed partial class RecEngine
                         scope.Add(result);
                         if (plan.Experiments.Length > 0 && (runCapture is not null || Captured))
                         {
-                            // Kept by the cached calls this run is under, its own included; a run under none makes none.
                             var exposure = new CallExposure(id, plan.ManifestId, null, result.AssignedArms, result.TriggeredExperiments);
                             runCapture?.Add(exposure);
                             Expose(exposure, path);
@@ -490,16 +451,6 @@ public sealed partial class RecEngine
 
                         if (result.Succeeded)
                         {
-                            // Only what a run computed whole is kept: a list one recall source was missing from is not
-                            // served for an hour, and a degraded run under this one made this one degraded; nor is the
-                            // result of a run with a call that was not answered, which its node may go on without. Only of a
-                            // request whose runs write the logs (not one with forced arms or captured logs): a result
-                            // served later says it comes from this request, and what the run logged must be there under
-                            // it. And only while the plans the key was built with are the ones served: a pipeline under
-                            // this one that was replaced since may have run as the new one, and its result is not the
-                            // old key's, for this instance or for the others that share the record.
-                            // The request's other calls for the same result take it whether or not its runs write the
-                            // logs: what they are told it comes from is a run of their own request.
                             if (lookup.Key is { } key && !result.Degraded && !result.CallsUnanswered && engine.Serves(callee, lookup.Keyed!))
                             {
                                 var from = new CachedFrom(request.RequestId, call.TimeMs, path);
@@ -533,7 +484,7 @@ public sealed partial class RecEngine
                 }
                 finally
                 {
-                    reading?.Withdraw(); // unless it ended with the result: the calls waiting for it run the pipeline themselves
+                    reading?.Withdraw();
                     try
                     {
                         if (!answered)
@@ -549,8 +500,8 @@ public sealed partial class RecEngine
                     }
                 }
 
-                // What the tiers have of the call: memory first, then the distributed tier. Null key when the arms of a
-                // pipeline the run may call cannot be told now, and the call then runs as one without a cache.
+                // Null key when the arms of a pipeline the run may call cannot be told now, and the call then runs as
+                // one without a cache.
                 async ValueTask<CacheLookup> LookupAsync(PipelineCallCache cache, LoadedPipeline callee, RequestArms arms, RequestInputs inputs, long deadline)
                 {
                     // Told before the request's arms in those pipelines are asked for: a call without a cache asks for
@@ -578,7 +529,6 @@ public sealed partial class RecEngine
                             return new CacheLookup(key, called, shared.Fresh, memory.Stale, false, shared.CutOff);
                         }
 
-                        // Kept for a failure of the run: the newer of the two, which stays within the window longer.
                         return shared.Stale is { } other && (memory.Stale is null || other.WrittenMs > memory.Stale.WrittenMs)
                             ? new CacheLookup(key, called, null, other, true, null)
                             : new CacheLookup(key, called, null, memory.Stale, false, null);
@@ -589,8 +539,6 @@ public sealed partial class RecEngine
                     }
                 }
 
-                // A result the cache answers: the runs that computed it are this request's exposure too, each logged with
-                // the run it comes from and listed in the request's result.
                 PipelineCallResult Serve(CachedCall cached, bool stale)
                 {
                     var from = stale ? cached.From with { Stale = true } : cached.From;
@@ -598,8 +546,6 @@ public sealed partial class RecEngine
                     var captured = Captured;
                     foreach (var exposure in cached.Exposures)
                     {
-                        // The run of a pipeline under the called one: the computing request's, under the call that
-                        // computed the record, unless a cache answered it there too and it is an earlier request's.
                         var by = exposure.Path is null ? path : path + " > " + exposure.Path;
                         var computed = exposure.From ?? (exposure.Path is null ? cached.From : cached.From with { CalledBy = cached.From.CalledBy + " > " + exposure.Path });
                         scope.Add(exposure, engine._executor.PublishCachedExposure(
@@ -617,10 +563,6 @@ public sealed partial class RecEngine
             }
         }
 
-        /// <summary>
-        /// A run under the call at <paramref name="at"/> (the call's own run, or one its record holds), for every cached
-        /// call this run is under: each keeps it with the calls from its own pipeline down.
-        /// </summary>
         private void Expose(CallExposure exposure, string at)
         {
             for (var run = this; run is not null; run = run.Parent)
@@ -635,7 +577,6 @@ public sealed partial class RecEngine
 
         private CallCapture? Capture => capture;
 
-        /// <summary>This run is under a call whose result will be cached: the runs under it are kept for that record.</summary>
         private bool Captured
         {
             get
@@ -655,10 +596,9 @@ public sealed partial class RecEngine
         private string? CalledBy => calledBy;
 
         /// <summary>
-        /// A pipeline a run of the callee may call is one whose run led to this call: the calls lead back, and the run
-        /// will have one refused (<see cref="Chain"/>). Such a call has no cache: what its run returns depends on where
-        /// the circle was entered, which no key says, and calls that waited for each other's result around the circle
-        /// (<see cref="RequestReads"/>) would wait until their time was up.
+        /// Such a call has no cache: what its run returns depends on where the circle was entered, which no key says,
+        /// and calls that waited for each other's result around the circle (<see cref="RequestReads"/>) would wait
+        /// until their time was up.
         /// </summary>
         private bool LeadsBack(List<LoadedPipeline> called)
         {
@@ -676,7 +616,6 @@ public sealed partial class RecEngine
             return false;
         }
 
-        /// <summary>The pipelines from <paramref name="id"/> back to it, when a run of it is among the runs that led here; null otherwise.</summary>
         private string? Chain(string id)
         {
             for (var run = this; run is not null; run = run.Parent)
@@ -701,10 +640,6 @@ public sealed partial class RecEngine
 
         private RunCalls? Parent => parent;
 
-        /// <summary>
-        /// The inputs of a called run: those the operator passes, and for every other input the pipeline declares, the
-        /// calling run's input of that name, when it has one.
-        /// </summary>
         private static RequestInputs CallInputs(RequestInputs? given, RequestInputs callerInputs, RequestSchema callee)
         {
             var inputs = new RequestInputs(callee.Count);
@@ -763,10 +698,6 @@ public sealed partial class RecEngine
     /// has in it, by pipeline id: with the called pipeline's own, what its run could run. Null when one's arms cannot be
     /// told now (its assignment failed or timed out): the call is then not cached, and the run finds out as it would.
     /// </summary>
-    /// <remarks>
-    /// A pipeline replaced between this and the run is run as the new one: what the run returns is then not kept
-    /// (<see cref="Serves"/>).
-    /// </remarks>
     private static async ValueTask<List<(LoadedPipeline Pipeline, RequestArms Arms)>?> CalledArmsAsync(
         RequestCalls scope, List<LoadedPipeline> reached, long deadline, CancellationToken cancellationToken)
     {
@@ -785,10 +716,6 @@ public sealed partial class RecEngine
         return called;
     }
 
-    /// <summary>
-    /// The pipelines a run of <paramref name="callee"/> may call, and those they may, as served now, by id. One not served
-    /// is not among them: its call fails as a result, and it is among them once it is served.
-    /// </summary>
     private List<LoadedPipeline> Reached(LoadedPipeline callee)
     {
         var reached = new List<LoadedPipeline>();
@@ -819,9 +746,8 @@ public sealed partial class RecEngine
 
     /// <summary>
     /// Whether the plans a call's key was built with (<see cref="CalledArmsAsync"/>) are the ones a run of
-    /// <paramref name="callee"/> may call now, no other and no more: only then is what the run returned a result of that
-    /// key. A pipeline loaded again, to the same configuration too, is another plan, and one first served while the run
-    /// was under way is one the key does not have: either way one result is computed once more.
+    /// <paramref name="callee"/> may call now, no other and no more: only then is what the run returned a result of
+    /// that key.
     /// </summary>
     private bool Serves(LoadedPipeline callee, List<(LoadedPipeline Pipeline, RequestArms Arms)> called)
     {
@@ -843,10 +769,7 @@ public sealed partial class RecEngine
     }
 
     /// <summary>
-    /// The key of a cached call (docs/decisions/pipeline-calls.md): the format, the pipeline and what a result of it
-    /// holds, what would run (the pipeline's and its called pipelines' configuration, or the node's <c>version</c>, and
-    /// the request's arms in each), and every input the pipeline receives. Not the request's id, seed or time, nor who
-    /// calls: whoever declares the cache takes one result for all of those. 128 bits, so very many results do not collide.
+    /// Not the request's id, seed or time, nor who calls: whoever declares the cache takes one result for all of those.
     /// </summary>
     private static UInt128 CallKey(
         PipelineCallCache cache, LoadedPipeline callee, RequestArms arms, List<(LoadedPipeline Pipeline, RequestArms Arms)> called, RequestInputs inputs)
@@ -878,7 +801,7 @@ public sealed partial class RecEngine
             foreach (var name in callee.Plan.RequestSchema.Names)
             {
                 builder.Add(name);
-                builder.AddAny(inputs[name]); // an input without a value is one of the inputs
+                builder.AddAny(inputs[name]);
             }
 
             return builder.Finish128();
@@ -908,18 +831,12 @@ public sealed partial class RecEngine
         }
     }
 
-    /// <summary>
-    /// The seed of a called run: of the calling run's seed, the node, the pipeline and the call's place among the node's
-    /// calls, so the same request calls with the same seeds and two calls of one node differ.
-    /// </summary>
     internal static long CallSeed(long seed, string nodeId, string pipelineId, int sequence) =>
         unchecked((long)StableHash.Hash(seed, StableHash.SeedFromSalt(nodeId + "\u001f" + pipelineId), sequence));
 
     /// <summary>
-    /// The arms of a called run, from where the request's own came: the debugger's forced arms, the platform's answer the
-    /// caller passed, or the assignment provider, asked for the called pipeline's experiments. A list the request's
-    /// pipelines share (<c>Shared</c>: forced, or passed) is taken as the platform's is: an id the called pipeline does
-    /// not have is another pipeline's. A provider that fails, fails the call.
+    /// A list the request's pipelines share (<c>Shared</c>: forced, or passed) is taken as the platform's is: an id the
+    /// called pipeline does not have is another pipeline's.
     /// </summary>
     private async ValueTask<(RequestArms Arms, IgnoredArm[] Ignored, string? Error, bool Shared)> AssignCallAsync(
         LoadedPipeline callee, RecRequest request, long deadline, CancellationToken cancellationToken)
@@ -951,10 +868,6 @@ public sealed partial class RecEngine
         return !plan.Calls.IsEmpty || fallback is not null;
     }
 
-    /// <summary>
-    /// The plans served now of the pipelines a request of <paramref name="plan"/> may call (<see cref="Calls"/>),
-    /// directly or through the pipelines those call, each once.
-    /// </summary>
     private List<ExecutionPlan> CalledPlans(ExecutionPlan plan)
     {
         var plans = new List<ExecutionPlan>();
@@ -1001,7 +914,6 @@ public sealed partial class RecEngine
     /// Forced arms are strict for the pipelines the request calls too: two arms of one layer of a called pipeline are the
     /// debugger's mistake, as two of the request's own are, not a layer that quietly runs its baseline.
     /// </summary>
-    /// <exception cref="ArgumentException">A called pipeline cannot run the arms of it that were forced.</exception>
     private void CheckForcedOfCalled(ExecutionPlan plan, IReadOnlyList<string> forced)
     {
         if (forced.Count < 2 || !Calls(plan, out _))
@@ -1027,11 +939,6 @@ public sealed partial class RecEngine
         }
     }
 
-    /// <summary>
-    /// Whether a pipeline <paramref name="plan"/>'s nodes call, directly or through the pipelines those call, has arm
-    /// <paramref name="armId"/> in the plan it serves now: such an arm is not the request's pipeline's to run, and not a
-    /// mistake either.
-    /// </summary>
     private bool KnownToCalled(ExecutionPlan plan, string armId)
     {
 
@@ -1046,7 +953,6 @@ public sealed partial class RecEngine
         return false;
     }
 
-    /// <summary>The ids of <paramref name="ignored"/> that no pipeline the plan calls has: what the request really ignored.</summary>
     private IgnoredArm[] WithoutCalled(ExecutionPlan plan, IgnoredArm[] ignored)
     {
         if (ignored.Length == 0 || !Calls(plan, out _))

@@ -12,29 +12,21 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Pipeline.Replay;
 
-/// <summary>Spellings used in bundles for node attempt timings (<see cref="ReplayAttemptRecord.Timing"/>).</summary>
 internal static class ReplayTiming
 {
-    /// <summary>The attempt started and finished (successfully or not) within its budget.</summary>
     public const string Ran = "ran";
 
-    /// <summary>No budget was left to start the attempt.</summary>
     public const string DeadlineExceeded = "deadline_exceeded";
 
-    /// <summary>The attempt ran out of its budget: it was cut off at it, or returned only after it (its result unused).</summary>
     public const string TimedOut = "timed_out";
 }
 
 /// <summary>
-/// Converts between engine values and the JSON of a bundle. Every value goes through the log encoding
-/// (<see cref="LogBatchJson.WriteValue"/> / <see cref="LogBatchJson.TryReadValue"/>), so bundles and logs share one value
-/// encoding, with one difference: a bundle keeps NaN and ±∞ (as the strings <c>"NaN"</c>, <c>"Infinity"</c>,
-/// <c>"-Infinity"</c>) where a log writes null, because a replay must see what the request saw. A value is always read
-/// with the type recorded next to it. Readers throw <see cref="ReplayBundleException"/> with the pointer of the bad value.
+/// A value is always read with the type recorded next to it. Readers throw <see cref="ReplayBundleException"/> with the
+/// pointer of the bad value.
 /// </summary>
 internal static class ReplayJson
 {
-    /// <summary>The type spelling of a value's kind, for a value without a declared type (e.g. an undeclared input).</summary>
     public static ColumnType TypeOf(in ScalarValue value) => value.Kind switch
     {
         StorageKind.Bool => ColumnType.Bool,
@@ -133,7 +125,6 @@ internal static class ReplayJson
         return Parse(buffer);
     }
 
-    /// <summary>A model's tensor output as a bundle records it: its element type, and its values in the log encoding.</summary>
     public static ReplayOutput Tensor(in TensorValues values)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -193,7 +184,6 @@ internal static class ReplayJson
         return new ReplayOutput { Type = TensorValues.Name(values.ElementType), Values = Parse(buffer) };
     }
 
-    /// <summary>A recorded tensor output: its element type and its values (a <c>bool[]</c>, <c>int[]</c>, <c>long[]</c>, <c>float[]</c>, <c>double[]</c> or <c>string?[]</c>).</summary>
     public static ReplayTensor Tensor(ReplayOutput output, string pointer)
     {
         if (!TensorValues.TryParse(output.Type, out var type) || type == TensorElementType.Text)
@@ -247,7 +237,7 @@ internal static class ReplayJson
                     b[i] = value.AsBool();
                     break;
                 case int[] n:
-                    n[i] = (int)value.AsInt64(); // the log encoding read it as an int32, in range
+                    n[i] = (int)value.AsInt64();
                     break;
                 case long[] l:
                     l[i] = value.AsInt64();
@@ -274,7 +264,6 @@ internal static class ReplayJson
     public static ReplayTypedValue Typed(ColumnType type, in ScalarValue value) =>
         new() { Type = type.ToString(), Value = value.IsMissing ? null : Value(value) };
 
-    /// <summary>The inputs an operator passed with a pipeline call, each with the type of its value.</summary>
     public static Dictionary<string, ReplayTypedValue> Inputs(RequestInputs? given)
     {
         var inputs = new Dictionary<string, ReplayTypedValue>(StringComparer.Ordinal);
@@ -289,7 +278,6 @@ internal static class ReplayJson
         return inputs;
     }
 
-    /// <summary>A result's columns as a pipeline call records them: in order, with their types.</summary>
     public static List<ReplayCallColumn> Columns(Execution.ResultColumns rows)
     {
         var columns = new List<ReplayCallColumn>(rows.Names.Count);
@@ -301,7 +289,6 @@ internal static class ReplayJson
         return columns;
     }
 
-    /// <summary>A result's request-level values as a pipeline call records them: each a column of one value.</summary>
     public static List<ReplayCallColumn> Columns(Execution.ResultValues values)
     {
         var columns = new List<ReplayCallColumn>(values.Count);
@@ -313,7 +300,6 @@ internal static class ReplayJson
         return columns;
     }
 
-    /// <summary>What a recorded pipeline call returned, decoded with its recorded types.</summary>
     public static Operators.PipelineCallResult CallResult(ReplayPipelineCall call, string pointer)
     {
         if (!call.Succeeded)
@@ -375,11 +361,9 @@ internal static class ReplayJson
         return value;
     }
 
-    /// <summary>A recorded value that does not decode as its recorded type.</summary>
     private static ReplayBundleException Malformed(string pointer, string error, string type) => new(pointer, error,
         $"values use the log encoding of their recorded type ({type}), with \"NaN\", \"Infinity\" and \"-Infinity\" for non-finite floats");
 
-    /// <summary>A value array aligned with <paramref name="expected"/> rows.</summary>
     public static ScalarValue[] Values(JsonElement json, ColumnType type, int expected, string pointer)
     {
         if (json.ValueKind != JsonValueKind.Array)
@@ -434,10 +418,6 @@ internal static class ReplayJson
         return keys;
     }
 
-    /// <summary>
-    /// A feature call's keys (<see cref="Keys(in EntityKeyBatch)"/>), flattened: key r's parts at <c>r * partCount</c>. Every
-    /// key has the same number of parts, 1 (a value) to <see cref="EntityKeyLayout.MaxParts"/> (an array); an empty call has 1.
-    /// </summary>
     public static EntityKey[] KeyTuples(JsonElement json, string pointer, out int partCount)
     {
         if (json.ValueKind != JsonValueKind.Array)
@@ -483,10 +463,8 @@ internal static class ReplayJson
         return keys;
     }
 
-    /// <summary>The status of a call that was still in flight when its request was aborted.</summary>
     public const string Outstanding = "outstanding";
 
-    /// <summary>The error recorded with an <see cref="Outstanding"/> call.</summary>
     public const string OutstandingError = "still in flight when the request was aborted";
 
     /// <summary>
@@ -524,5 +502,4 @@ internal static class ReplayJson
     }
 }
 
-/// <summary>A model's tensor output read from a bundle: its element type and its values, an array of that type.</summary>
 internal readonly record struct ReplayTensor(TensorElementType Type, Array Values);

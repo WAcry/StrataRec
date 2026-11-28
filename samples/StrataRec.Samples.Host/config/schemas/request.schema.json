@@ -44,7 +44,7 @@
       }
     },
     "config_override": {
-      "description": "A configuration to try on this request alone: an RFC 7396 merge patch of the pipeline as an experiment arm writes one (params, nodes, log_taps, columns, param_schema, funnel_groups, features, derived_features), applied after the arms, so it wins over them. The plan is compiled for the request; its taps are captured, never written.",
+      "description": "A configuration to try on this request alone: an RFC 7396 merge patch of the pipeline as an experiment arm writes one (params, nodes, log_taps, columns, param_schema, funnel_groups, features, derived_features), applied after the arms, so it wins over them; its taps are captured, never written.",
       "type": [
         "object",
         "null"

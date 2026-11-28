@@ -13,38 +13,33 @@ namespace StrataRec.Features.Cache;
 public sealed class CacheTableOptions
 {
     /// <summary><c>cache.ttl_ms</c> of the plan that takes the table: with <see cref="StaleIfErrorMs"/>, its
-    /// <see cref="CachePolicy"/>, which the table keeps for its writer (<see cref="LocalTableCache.Policy"/>).</summary>
+    /// <see cref="CachePolicy"/>.</summary>
     public required long TtlMs { get; init; }
 
     /// <summary><c>cache.stale_if_error_ms</c> of the plan that takes the table.</summary>
     public long StaleIfErrorMs { get; init; }
 
     /// <summary>
-    /// Whether the table keeps records (<c>cache.memory</c>). A cache without an in-process tier still has its table, for
-    /// what every tier shares (the records' layout, the keyspace, the clock, the counts): it stays empty, so every read
-    /// misses it and goes on to the distributed tier.
+    /// Whether the table keeps records (<c>cache.memory</c>). A cache without an in-process tier still has its table:
+    /// it stays empty, so every read misses it and goes on to the distributed tier.
     /// </summary>
     public bool Memory { get; init; } = true;
 
     /// <summary>
     /// Whether a tier keeps the cache's records: this table (<see cref="Memory"/>) or a distributed store. False for a
-    /// cache with no tier (<c>"cache": {}</c>), which only has the reads of one request share what one of them got. Its
-    /// table is its own, not that of a cache of the same origin that keeps its records in a store: the reads of a request
-    /// share a record of one cache, and a read that took another cache's would leave its own tier unwritten.
+    /// cache with no tier (<c>"cache": {}</c>), which only has the reads of one request share what one of them got.
     /// </summary>
     public bool Kept { get; init; } = true;
 
     /// <summary>
-    /// The most bytes waiting for the table's writer (<see cref="CacheWriteBatch.Bytes"/>: records and keys); a write-back
-    /// past it is dropped and counted (the key is fetched again on its next miss), but for one larger than the whole limit
-    /// handed to an empty queue, which takes it (<see cref="WriteQueueBudget"/>). 0 takes a sixteenth of <c>max_bytes</c>,
-    /// between 1 MiB and 64 MiB.
+    /// The most bytes waiting for the table's writer (records and keys); a write-back past it is dropped and counted
+    /// (the key is fetched again on its next miss), but for one larger than the whole limit handed to an empty queue,
+    /// which takes it. 0 takes a sixteenth of <c>max_bytes</c>, between 1 MiB and 64 MiB.
     /// </summary>
     public long WriteQueueBytes { get; init; }
 
     /// <summary>
-    /// The clock of write times and expiry, and the timestamps the distributed tier's time is judged by; tests pass one
-    /// they move by hand.
+    /// The clock of write times and expiry, and the timestamps the distributed tier's time is judged by.
     /// </summary>
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
@@ -68,16 +63,12 @@ public sealed class CacheTableOptions
     }
 }
 
-/// <summary>How a cached record stands at a moment.</summary>
 internal enum CacheFreshness : byte
 {
-    /// <summary>Within its key's lifetime: served.</summary>
     Fresh = 1,
 
-    /// <summary>Past its lifetime, within <c>stale_if_error_ms</c> after it: served only when the connector fails.</summary>
     Stale,
 
-    /// <summary>Past both: of no use.</summary>
     Expired,
 }
 
@@ -92,7 +83,6 @@ internal enum CacheTier : byte
     Request = 2,
 }
 
-/// <summary>What a tier had for a key (metric tag <c>stratarec.outcome</c> of <see cref="StrataRecMetrics.CacheKeys"/>).</summary>
 internal enum CacheKeyOutcome : byte
 {
     Hit = 0,
@@ -103,7 +93,6 @@ internal enum CacheKeyOutcome : byte
     Error,
 }
 
-/// <summary>What became of a written-back record (metric tag <c>stratarec.outcome</c> of <see cref="StrataRecMetrics.CacheWrites"/>).</summary>
 internal enum CacheWriteOutcome : byte
 {
     Written = 0,
@@ -118,27 +107,17 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 {
     public EntityKey[] Keys { get; } = keys;
 
-    /// <summary>Parts of every key.</summary>
     public int PartCount { get; } = partCount;
 
-    /// <summary>The parts of key <paramref name="index"/>.</summary>
     public ReadOnlySpan<EntityKey> Key(int index) => Keys.AsSpan(index * PartCount, PartCount);
 
     public ReadOnlyMemory<byte>[] Records { get; } = records;
 
     public int Count { get; } = count;
 
-    /// <summary>
-    /// What the batch holds while it waits, charged to the writer's queue: its records' bytes, its two arrays and its keys'
-    /// strings. A long string key (a composite one, say) with a short record holds more in its key than in its record, and
-    /// the records' bytes alone let the queue hold several times its limit.
-    /// </summary>
     /// <remarks>
-    /// A string is charged once where consecutive keys share it, the same object as the previous key's same part: a part
-    /// from a request input or a context feature is one string for every key of the read, and charging it per key made
-    /// 4,096 candidates sharing a 128-character part cost about 1.44 MiB instead of 0.32 MiB, so an empty 1 MiB queue
-    /// dropped the batch. Comparing references allocates nothing; an equal string that is another object is
-    /// another object held, and charged.
+    /// Comparing references allocates nothing; an equal string that is another object is another object held, and
+    /// charged.
     /// </remarks>
     public long Bytes { get; } = Footprint(keys, records, count, partCount);
 
@@ -164,8 +143,7 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 
 /// <summary>
 /// The in-process tier of a cache: one per table. Its write side is the table's single writer, which applies what reads
-/// hand back and keeps the table within <c>max_bytes</c>; it also holds what every tier of the cache shares (the records'
-/// layout, the keyspace, the clock, the counts). How fresh a record is, each reader asks its own plan's
+/// hand back and keeps the table within <c>max_bytes</c>. How fresh a record is, each reader asks its own plan's
 /// <see cref="CachePolicy"/>.
 /// </summary>
 /// <remarks>
@@ -173,16 +151,13 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 /// <see cref="CacheTableOptions.Clock"/>), and the table ignores a write whose version is not newer than the key's record,
 /// so a slow fetch that started early never replaces what a later one wrote. A record copied from the distributed tier
 /// keeps the write time it was written with there.</para>
-/// <para><b>Write-back is off the request path.</b> A read hands its records over with <see cref="TryWriteBack"/>, which
-/// never waits: past <see cref="CacheTableOptions.WriteQueueBytes"/> waiting bytes the batch is dropped and counted (an
-/// empty queue takes even a larger one, <see cref="WriteQueueBudget"/>). The
-/// engine runs the writer as the table's update source (<see cref="CacheWriterSource"/>), so the table host starts,
-/// restarts and stops it like any other; until it runs, the table counts as loaded at once, since an empty cache is a
-/// complete one (every key misses).</para>
+/// <para><b>Write-back is off the request path.</b> A read hands its records over with <see cref="TryWriteBack"/>,
+/// which never waits: past <see cref="CacheTableOptions.WriteQueueBytes"/> waiting bytes the batch is dropped and
+/// counted (an empty queue takes even a larger one). The engine runs the writer; until it runs, the table counts as
+/// loaded at once, since an empty cache is a complete one (every key misses).</para>
 /// <para><b>Eviction.</b> The writer reclaims records past the stale window, then aims for three quarters of
-/// <c>max_bytes</c>. A SIEVE hand advances in insertion order. A fresh hit marks the record so the hand can skip
-/// it once. If all remaining candidates are visited, the writer can still admit a new key. Victims are removed only
-/// when the pending record fits.</para>
+/// <c>max_bytes</c>. If all remaining candidates are visited, the writer can still admit a new key. Victims are removed
+/// only when the pending record fits.</para>
 /// </remarks>
 public sealed class LocalTableCache
 {
@@ -228,10 +203,8 @@ public sealed class LocalTableCache
     /// <summary>Whether a tier keeps the cache's records (<see cref="CacheTableOptions.Kept"/>).</summary>
     public bool Kept => Options.Kept;
 
-    /// <summary>The most bytes that wait for the writer: the option, or a sixteenth of the table's <c>max_bytes</c> now, within 1–64 MiB.</summary>
     private long QueueLimit => Options.WriteQueueBytes > 0 ? Options.WriteQueueBytes : Math.Clamp(_table.MaxBytes / 16, 1L << 20, 64L << 20);
 
-    /// <summary>A plan takes the table with other times than the plan before it: its records stay, judged by the new ones.</summary>
     internal void Adopt(CachePolicy policy) => Volatile.Write(ref _policy, policy);
 
     /// <summary>
@@ -242,17 +215,15 @@ public sealed class LocalTableCache
 
     private static readonly CacheWriteBatch Nothing = new([], [], 0);
 
-    /// <summary>Bytes handed to the writer and not written yet, as charged (<see cref="CacheWriteBatch.Bytes"/>).</summary>
+    /// <summary>Bytes handed to the writer and not written yet, as charged.</summary>
     public long QueuedBytes => Volatile.Read(ref _queuedBytes);
 
     internal CacheRecordLayout Layout { get; }
 
     internal CacheKeyspace Keyspace { get; }
 
-    /// <summary>The fingerprint the table's records carry.</summary>
     internal ulong Fingerprint => Layout.Fingerprint;
 
-    /// <summary>Now, in Unix milliseconds: the version of a record a fetch starting now writes.</summary>
     internal long NowMs() => Clock.GetUtcNow().ToUnixTimeMilliseconds();
 
     /// <summary>The canonical hash of a one-part key: what its jitter derives from, so every instance agrees.</summary>
@@ -269,8 +240,8 @@ public sealed class LocalTableCache
     }
 
     /// <summary>
-    /// The canonical hash of key <paramref name="index"/> of <paramref name="keys"/>: a one-part key's as above (as before
-    /// keys had parts), several parts each added in order to one tagged, length-prefixed encoding.
+    /// The canonical hash of key <paramref name="index"/> of <paramref name="keys"/>: a one-part key's as above,
+    /// several parts each added in order to one tagged, length-prefixed encoding.
     /// </summary>
     internal static ulong KeyHash(in EntityKeyBatch keys, int index)
     {
@@ -319,10 +290,6 @@ public sealed class LocalTableCache
         return builder.Finish128();
     }
 
-    /// <summary>
-    /// Hands records to the writer without waiting; false (and counted) when they do not fit a queue that holds some
-    /// (<see cref="WriteQueueBudget"/>). A cache without an in-process tier takes none.
-    /// </summary>
     internal bool TryWriteBack(CacheWriteBatch batch)
     {
         if (!Memory)
@@ -346,13 +313,8 @@ public sealed class LocalTableCache
         return true;
     }
 
-    /// <summary>
-    /// Counts a write-back a tier's queue did not take. Never throws: a read hands its records to the queues while it
-    /// resolves, after its calls and before it is recorded, so a metric listener that threw here turned a read the
-    /// connector had answered into a failed fill, unrecorded. The measurement is lost instead, as in
-    /// <see cref="CountKeys"/>. What the writers count on their own threads is reported to the host as before
-    /// (<see cref="CountWrites"/>).
-    /// </summary>
+    /// <summary>Never throws: it runs before the read is recorded, and a listener's exception would fail a read the
+    /// connector answered.</summary>
     internal void CountDropped(CacheTier tier, int records)
     {
         try
@@ -361,16 +323,10 @@ public sealed class LocalTableCache
         }
         catch (Exception)
         {
-            // See the summary.
         }
     }
 
-    /// <summary>
-    /// Counts a read's keys by tier and outcome. Never throws: a read counts its distributed tier's and its stale keys while
-    /// it resolves, after its store calls and before it is recorded, so a metric listener that threw there left a read that
-    /// had answered unrecorded and failed its fill. The measurement is lost instead, as in
-    /// <see cref="IoCall.Complete"/>.
-    /// </summary>
+    /// <summary>Never throws, as <see cref="CountDropped"/>.</summary>
     internal void CountKeys(CacheTier tier, CacheKeyOutcome outcome, int keys)
     {
         if (keys > 0 && (Memory || tier != CacheTier.Memory))
@@ -381,7 +337,6 @@ public sealed class LocalTableCache
             }
             catch (Exception)
             {
-                // See the summary.
             }
         }
     }
@@ -394,10 +349,6 @@ public sealed class LocalTableCache
         }
     }
 
-    /// <summary>
-    /// The writer's run (see <see cref="CacheWriterSource"/>): marks the table loaded, then applies batches as they come
-    /// until cancelled. One run at a time, as for any update source.
-    /// </summary>
     internal async Task RunAsync(LocalTableWriter writer, CancellationToken cancellationToken)
     {
         writer.Checkpoint(UpdatePosition.Empty); // an empty cache is complete: every key misses
@@ -408,7 +359,6 @@ public sealed class LocalTableCache
         }
     }
 
-    /// <summary>Applies every batch waiting now, on the calling thread (the writer's; tests call it directly). Returns the batches applied.</summary>
     internal int WriteQueued(LocalTableWriter writer)
     {
         var batches = 0;
@@ -443,7 +393,7 @@ public sealed class LocalTableCache
                     failed++;
                     break;
                 case WriteResult.Ignored:
-                    break; // the table holds a newer record of the key
+                    break;
             }
         }
 
@@ -555,7 +505,6 @@ public sealed class LocalTableCache
         Failed,
     }
 
-    /// <summary>Copies a record's fields into the table's record builder: every field, so the table's record is complete.</summary>
     private struct BuilderVisitor(RecordBuilder builder, LocalTableCache owner) : ICacheRecordVisitor
     {
         public void Missing(int field) => builder.SetMissing(field);
@@ -592,10 +541,8 @@ public sealed class LocalTableCache
 }
 
 /// <summary>
-/// The writer of a <c>cache</c> table, run by the table host as the table's update source (one
-/// background writer per table): it applies the records reads hand back until it is stopped. Stateless; the queue and
-/// the policy belong to the table (<see cref="LocalFeatureTable.Cache"/>), so whichever plan's spec created the table,
-/// its writer drains the queue every plan's requests write to.
+/// Stateless; the queue and the policy belong to the table (<see cref="LocalFeatureTable.Cache"/>), so whichever plan's
+/// spec created the table, its writer drains the queue every plan's requests write to.
 /// </summary>
 internal sealed class CacheWriterSource : IFeatureUpdateSource
 {

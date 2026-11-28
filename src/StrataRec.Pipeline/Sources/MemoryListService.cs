@@ -194,7 +194,6 @@ public sealed class MemoryListServiceFactory : BindingFactory<IServiceClient, Me
         var file = settings.DataFile;
         var data = file is null ? null : InFile(file, () => BindingSettings.Bind<MemoryListData>(context, DataFile.Read(file), string.Empty, "the file"));
 
-        // A member the binding has is the binding's; else the file's.
         var items = settings.Items is { } own
             ? Entries(context, own, "/items")
             : data?.Items is { } fromFile ? InFile(file!, () => Entries(context, fromFile, "/items")) : [];
@@ -222,7 +221,6 @@ public sealed class MemoryListServiceFactory : BindingFactory<IServiceClient, Me
         return MemoryListService.Create(items, byInput, lists, latency, settings.Fail ?? data?.Fail ?? false);
     }
 
-    /// <summary>A list: ids or <c>{"id", "score"}</c> objects, best first; scores default to a descending ramp.</summary>
     private static MemoryListService.Entry[] Entries(BindingContext context, List<JsonElement> list, string pointer)
     {
         var result = new MemoryListService.Entry[list.Count];
@@ -248,7 +246,6 @@ public sealed class MemoryListServiceFactory : BindingFactory<IServiceClient, Me
         return result;
     }
 
-    /// <summary>What <paramref name="read"/> finds wrong in the data file, reported at its setting, naming the place in the file.</summary>
     private static T InFile<T>(LocalFile? file, Func<T> read)
     {
         try
@@ -261,7 +258,6 @@ public sealed class MemoryListServiceFactory : BindingFactory<IServiceClient, Me
         }
     }
 
-    /// <summary>An error in the data file <paramref name="file"/> (at a pointer within it), as an error of its setting; as it is when null.</summary>
     private static BindingException In(LocalFile? file, BindingException error) => file is null
         ? error
         : new BindingException(file.Pointer, $"'{file.Path}' at {(error.Pointer.Length == 0 ? "its root" : error.Pointer)}: {error.Reason}", error.Hint);

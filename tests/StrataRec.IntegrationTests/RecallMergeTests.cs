@@ -7,11 +7,6 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>MultiSourceRecall@1</c> merge semantics: sources merge in the declared order, the first occurrence
-/// of a key fixes its position and primary source, later ones add their source bit, the best rank and the best score;
-/// a source is truncated at its quota.
-/// </summary>
 public sealed class RecallMergeTests
 {
     // source_order b, a, c. "a" repeats 5 and is cut at its quota of 3, so its 7 never arrives.

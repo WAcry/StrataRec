@@ -3,11 +3,6 @@ using StrataRec.Artifacts.Model;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary>
-/// The generated schemas: an operator's config chosen by a node's op, configs that repeat or contain a type
-/// made self-contained, an arm as a merge patch that never requires a member and lets any value be null, and the
-/// editor's "$schema" taken out of a document before it is bound and hashed.
-/// </summary>
 public sealed class ArtifactSchemasTests
 {
     private static readonly OperatorSchemaSource[] Operators =
@@ -24,7 +19,7 @@ public sealed class ArtifactSchemasTests
         var node = schema["properties"]!["nodes"]!["additionalProperties"]!.AsObject();
         var op = node["properties"]!["op"]!;
 
-        Assert.Equal("""["Optional@1","Recursive@1","Repeated@1"]""", op["enum"]!.ToJsonString()); // by id
+        Assert.Equal("""["Optional@1","Recursive@1","Repeated@1"]""", op["enum"]!.ToJsonString());
         Assert.Equal("""["Nothing required.","Contains itself.","Two parts of one type."]""", op["enumDescriptions"]!.ToJsonString());
         Assert.Equal("Operator type and version, e.g. TopK@1.", op["description"]!.GetValue<string>()); // its XML documentation
 
@@ -38,7 +33,6 @@ public sealed class ArtifactSchemasTests
         Assert.Equal("\"object\"", config["type"]!.ToJsonString());
         Assert.False(config["additionalProperties"]!.GetValue<bool>());
 
-        // Nothing required: a missing or null config is read as {}.
         var optional = Branch(branches, "Optional@1")["then"]!;
         Assert.Null(optional["required"]);
         Assert.Equal("""["object","null"]""", optional["properties"]!["config"]!["type"]!.ToJsonString());
@@ -100,10 +94,10 @@ public sealed class ArtifactSchemasTests
 
         Assert.Equal(ExperimentArtifact.PipelineSections.Concat(ExperimentArtifact.CatalogSections), arm["properties"]!.AsObject().Select(p => p.Key));
         Assert.False(arm["additionalProperties"]!.GetValue<bool>());
-        Assert.Equal("\"object\"", arm["properties"]!["nodes"]!["type"]!.ToJsonString()); // a section is patched, never deleted
+        Assert.Equal("\"object\"", arm["properties"]!["nodes"]!["type"]!.ToJsonString());
 
         var node = arm["properties"]!["nodes"]!["additionalProperties"]!;
-        Assert.Equal("""["object","null"]""", node["type"]!.ToJsonString()); // null deletes a node
+        Assert.Equal("""["object","null"]""", node["type"]!.ToJsonString());
         Assert.Null(node["required"]);
         Assert.Contains(node["properties"]!["op"]!["enum"]!.AsArray(), v => v is null);
         var config = Branch(node["allOf"]!.AsArray(), "Repeated@1")["then"]!;
@@ -113,7 +107,7 @@ public sealed class ArtifactSchemasTests
 
         var feature = arm["properties"]!["features"]!["additionalProperties"]!;
         Assert.Null(feature["required"]);
-        Assert.Equal("""{"type":"null"}""", feature["additionalProperties"]!.ToJsonString()); // an unknown member may only be deleted
+        Assert.Equal("""{"type":"null"}""", feature["additionalProperties"]!.ToJsonString());
     }
 
     [Fact]
@@ -141,7 +135,7 @@ public sealed class ArtifactSchemasTests
 
         Assert.Equal("""["object","null"]""", schema["type"]!.ToJsonString());
         Assert.Null(schema["required"]);
-        Assert.Equal("""{"type":"null"}""", schema["additionalProperties"]!.ToJsonString()); // an unknown key may only be deleted
+        Assert.Equal("""{"type":"null"}""", schema["additionalProperties"]!.ToJsonString());
         var properties = schema["properties"]!;
         Assert.Equal("""{"type":["string","null"],"enum":["x","y",null]}""", properties["a"]!.ToJsonString());
         Assert.Equal("""{"type":["integer","null"]}""", properties["b"]!.ToJsonString());
@@ -154,14 +148,14 @@ public sealed class ArtifactSchemasTests
         Assert.Equal("""["number","null"]""", properties["m"]!["additionalProperties"]!["properties"]!["n"]!["type"]!.ToJsonString());
 
         var branch = schema["allOf"]![0]!;
-        Assert.Equal("""{"properties":{"a":{"const":"x"}},"required":["a"]}""", branch["if"]!.ToJsonString()); // a condition, not a value
+        Assert.Equal("""{"properties":{"a":{"const":"x"}},"required":["a"]}""", branch["if"]!.ToJsonString());
         Assert.Equal("""{"properties":{"e":{}}}""", branch["then"]!.ToJsonString());
     }
 
     [Theory]
     [InlineData("""{ "$schema": "../schemas/pipeline.schema.json", "pipeline_id": "p" }""", """{"pipeline_id":"p"}""")]
     [InlineData("""{ "pipeline_id": "p" }""", """{"pipeline_id":"p"}""")]
-    [InlineData("""{ "nodes": { "a": { "$schema": "x" } } }""", """{"nodes":{"a":{"$schema":"x"}}}""")] // only the top level is the editor's
+    [InlineData("""{ "nodes": { "a": { "$schema": "x" } } }""", """{"nodes":{"a":{"$schema":"x"}}}""")]
     [InlineData("""[1]""", """[1]""")]
     public void TheEditorsSchemaMember_IsTakenOut(string json, string expected)
     {

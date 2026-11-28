@@ -93,9 +93,6 @@ public sealed partial class RecEngine
                 Debug = request.Debug,
             };
 
-            // The caller's mistakes first, as ExecuteAsync checks them: inputs the replayed plan rejects are an
-            // invalid request at their pointer, and no fallback pipeline serves them, so a replay on a changed schema
-            // answers what the engine would answer the request now.
             if (plan.RequestSchema.Check(inputs) is { } invalid)
             {
                 var rejected = Rejected(request, RecErrorKind.InvalidRequest, RequestSchema.Describe(invalid), pointer: invalid.Pointer);
@@ -108,14 +105,9 @@ public sealed partial class RecEngine
                     notes, 0, plan.ManifestId);
             }
 
-            // The arms to run, resolved over the replayed plan as the request's assignment would be now.
-            // A recording of the platform's arms (external, provider) holds every id the platform sent, those that ran and
-            // those it ignored for any reason; they go through the platform's rule again, so a changed plan ignores (an
-            // unknown arm, a layer conflict), runs or yields them as it would the request. Forced arms, and arms passed to
-            // the replay, are strict, as forced arms are in a request: an arm the plan does not have is left out with a
-            // note, two of one layer reject the replay. Yields come last, for every source. The input is the request's
-            // assignment record (the arms of its primary run are what the report compares with): in a bundle the engine
-            // wrote they agree, and an edited assignment shows as replayed arms that differ from the recorded ones.
+            // The input is the request's assignment record (the arms of its primary run are what the report compares
+            // with): in a bundle the engine wrote they agree, and an edited assignment shows as replayed arms that
+            // differ from the recorded ones.
             var recordedAssigned = recordedRequest.Assignment.Arms;
             var recordedIgnored = options?.Arms is null ? IgnoredArms(recordedRequest.Assignment) : Array.Empty<IgnoredArm>();
             RequestArms arms;
@@ -172,8 +164,6 @@ public sealed partial class RecEngine
             arms = ExternalArms.Yield(plan, assigned, ignored, out ignored);
             Notes(plan, recordedAssigned, recordedIgnored, assigned, arms, ignored, notes);
 
-            // The recorded configuration override, applied again over the replayed plan with the replayed arms, as the
-            // request applied it (DebugOptions.ConfigOverride); its run has the arms merged in.
             var running = pipeline;
             IReadOnlyList<string>? merged = null;
             if (recordedRequest.ConfigOverride is { } configOverride)
@@ -192,7 +182,7 @@ public sealed partial class RecEngine
             }
 
             var started = Stopwatch.GetTimestamp();
-            var replayed = new RunCapture(); // the replayed runs' recordings
+            var replayed = new RunCapture();
             RecResult result;
             var executed = await _executor.ExecuteAsync(running.Plan, ReplayRequest(request, request.Inputs, arms, primaryReplay, replayed, running), cancellationToken)
                 .ConfigureAwait(false);
@@ -201,7 +191,6 @@ public sealed partial class RecEngine
             {
                 if (!executed.Succeeded && fallbackRecord is not null)
                 {
-                    // Not a difference of the replayed configuration's behavior: what the request failed over to is absent.
                     notes.Add(pipeline.FallbackPipeline is { } configured && configured != request.PipelineId
                         ? $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}' (manifest {fallbackRecord.ManifestId}), and this engine has not loaded '{configured}': the replay ends with the primary pipeline's failure"
                         : $"the recording ran fallback pipeline '{fallbackRecord.PipelineId}', and the replayed configuration has none");
@@ -211,7 +200,6 @@ public sealed partial class RecEngine
             }
             else if (fallbackRecord is null && primaryRecord is { Result.Succeeded: false })
             {
-                // The recorded request failed too and did not run its fallback pipeline: no time was left.
                 notes.Add($"the recording did not run fallback pipeline '{fallbackId}' (no time was left); neither does the replay");
                 result = ToResult(request, pipeline, executed, ignored, request.PipelineId, merged);
             }
@@ -223,7 +211,7 @@ public sealed partial class RecEngine
                     fallbackReplay = RunReplay.Empty();
                 }
 
-                var fallbackInputs = FallbackInputs(request.Inputs, fallback.Plan.RequestSchema); // as the request did (ExecuteAsync)
+                var fallbackInputs = FallbackInputs(request.Inputs, fallback.Plan.RequestSchema);
                 var served = await _executor.ExecuteAsync(fallback.Plan, ReplayRequest(request, fallbackInputs, RequestArms.None, fallbackReplay, replayed, fallback), cancellationToken)
                     .ConfigureAwait(false);
                 result = Combine(request, executed, ToResult(request, fallback, served, ignored, fallbackId), served, ignored, fallbackId, merged);
@@ -243,7 +231,6 @@ public sealed partial class RecEngine
         }
     }
 
-    /// <param name="replayed">Collects the replayed run's recording: its node decisions and parameters, for the report.</param>
     /// <param name="pipeline">Entered by the caller; the run joins its lease.</param>
     private static PipelineRequest ReplayRequest(
         RecRequest request, RequestInputs inputs, RequestArms arms, RunReplay replay, RunCapture replayed, LoadedPipeline pipeline) => new()
@@ -271,7 +258,7 @@ public sealed partial class RecEngine
     public static ReplayOutcome? Aborted(ReplayBundle bundle)
     {
         ArgumentNullException.ThrowIfNull(bundle);
-        ReplayBundleFile.CheckFormat(bundle); // a bundle object a host deserialized itself is checked as a file is
+        ReplayBundleFile.CheckFormat(bundle);
         if (!bundle.Result.Aborted)
         {
             return null;
@@ -409,7 +396,6 @@ public sealed partial class RecEngine
         return (null, -1);
     }
 
-    /// <summary>Decodes the recorded inputs with their recorded types; inputs the replayed request_schema does not declare are dropped.</summary>
     private static RequestInputs DecodeInputs(ReplayRequestRecord recorded, ExecutionPlan plan, List<string> notes)
     {
         var inputs = new RequestInputs();
@@ -512,7 +498,6 @@ public sealed partial class RecEngine
         return changes;
     }
 
-    /// <summary>How the request's arms were chosen, as a bundle records it.</summary>
     private string AssignmentSource(LoadedPipeline pipeline, RecRequest request) =>
         request.Debug?.ForceArms is not null ? "forced"
         : request.Assignment is not null ? "external"
@@ -540,7 +525,6 @@ public sealed partial class RecEngine
         ElapsedMs = result.ElapsedMs,
     };
 
-    /// <summary>The result of a recorded request with its bundle, which also goes to <see cref="DebugOptions.OnRecording"/>.</summary>
     /// <param name="configOverride">The request's configuration override as its plan was compiled with it (<see cref="LoadedPipeline.ConfigOverride"/>); null without one.</param>
     private RecResult Recorded(
         RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, RecResult result, PipelineResult executed, PipelineResult? served,
@@ -585,10 +569,6 @@ public sealed partial class RecEngine
         return WithRecording(result, bundle);
     }
 
-    /// <summary>
-    /// The bundle of a request aborted while or after a pipeline ran: every run recorded so far (the last one aborted, as a
-    /// snapshot taken at the abort) and an aborted result.
-    /// </summary>
     /// <param name="merged">The arms a configuration override's plan merged in; its run records none (see <see cref="ToResult"/>).</param>
     /// <param name="configOverride">That override as the plan was compiled with it (<see cref="LoadedPipeline.ConfigOverride"/>); null without one.</param>
     private ReplayBundle AbortedBundle(
@@ -631,11 +611,6 @@ public sealed partial class RecEngine
         };
     }
 
-    /// <param name="configOverride">
-    /// The request's configuration override as its plan was compiled with it, not the host's tree (<see cref="DebugOptions.ConfigOverride"/>):
-    /// copying that would write the CLR values the host wrapped once more, and a value that writes something else the
-    /// second time would be recorded as what did not run.
-    /// </param>
     private ReplayRequestRecord RequestRecord(
         RecRequest request, LoadedPipeline pipeline, long seed, long timeMs, IReadOnlyList<string> arms, IReadOnlyList<IgnoredArm> ignored,
         JsonObject? configOverride)
@@ -648,9 +623,9 @@ public sealed partial class RecEngine
                 continue;
             }
 
-            // The value as the host gave it, at its own (promoted) type, not the declared one: decoded, it is that value
-            // again, and each pipeline that binds it converts it as it was served (a fallback pipeline may declare the
-            // input otherwise; an int64 recorded as the primary's float32 lost its digits for an int64 fallback).
+            // The value as the host gave it, at its own (promoted) type, not the declared one: decoded, it is that
+            // value again, and each pipeline that binds it converts it as it was served (a fallback pipeline may
+            // declare the input otherwise).
             inputs[name] = ReplayJson.Typed(ReplayJson.TypeOf(value), value);
         }
 
@@ -683,10 +658,6 @@ public sealed partial class RecEngine
         return records;
     }
 
-    /// <summary>
-    /// Notes for the arms a replay runs otherwise than the recording: one that ran and the replayed plan ignores (the
-    /// strict sources note an unknown arm where they leave it out), and one the recording ignored that runs now.
-    /// </summary>
     private static void Notes(
         ExecutionPlan plan, IReadOnlyList<string> recordedArms, IgnoredArm[] recordedIgnored, in RequestArms assigned, in RequestArms running, IgnoredArm[] ignored,
         List<string> notes)
@@ -714,7 +685,6 @@ public sealed partial class RecEngine
 
         foreach (var arm in recordedIgnored)
         {
-            // An id listed twice (an edited bundle) runs once and is noted once.
             if (plan.TryGetArm(arm.Id, out var info) && running.ArmIn(info.LayerIndex) == info.Index && !Contains(notes, Ran(arm)))
             {
                 notes.Add(Ran(arm));
@@ -737,8 +707,6 @@ public sealed partial class RecEngine
         return false;
     }
 
-    /// <summary>The ignored arms a bundle recorded.</summary>
-    /// <exception cref="ReplayBundleException">A reason this build does not know.</exception>
     private static IgnoredArm[] IgnoredArms(ReplayAssignmentRecord assignment)
     {
         if (assignment.Ignored.Count == 0)
@@ -768,7 +736,6 @@ public sealed partial class RecEngine
         Artifacts = new Dictionary<string, string>(pipeline.ArtifactIds, StringComparer.Ordinal),
     };
 
-    /// <summary>Hands a bundle to <see cref="DebugOptions.OnRecording"/>; a callback that throws is logged and changes nothing else.</summary>
     private void Deliver(RecRequest request, ReplayBundle bundle)
     {
         if (request.Debug?.OnRecording is not { } deliver)
@@ -790,7 +757,6 @@ public sealed partial class RecEngine
         Message = "The recording callback of request '{RequestId}' (pipeline '{PipelineId}') threw; the request's outcome is unchanged")]
     private static partial void LogRecordingCallbackFailed(ILogger logger, Exception exception, string pipelineId, string requestId);
 
-    /// <summary>The run recordings of one request (or replay), in execution order, as the executor delivers them on every exit.</summary>
     private sealed class RunCapture
     {
         public List<ReplayRunRecord> Runs { get; } = new(2);

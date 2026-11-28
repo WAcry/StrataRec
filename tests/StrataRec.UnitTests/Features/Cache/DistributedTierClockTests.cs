@@ -6,12 +6,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features.Cache;
 
-/// <summary>
-/// A distributed tier's time is judged by the cache's clock, which the host may move while its tracing runs as the read
-/// starts: the read is waited for by the time left after that, so a record that comes later than it is not taken
-/// (the order of the two deadlines told before the call started chose the token, and no timer of the
-/// tier's own was set).
-/// </summary>
 public sealed class DistributedTierClockTests
 {
     [Fact]

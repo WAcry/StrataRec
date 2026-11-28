@@ -4,10 +4,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// How a replay bundle writes a feature call's keys: a one-part key as its value, a key of several parts as
-/// the array of its parts (a shared part repeated in every key), read back as the tuples a replay matches by.
-/// </summary>
 public class ReplayKeysTests
 {
     private static readonly EntityKeyLayout ItemCountry = new(

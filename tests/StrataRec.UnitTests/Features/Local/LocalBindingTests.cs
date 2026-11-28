@@ -7,13 +7,8 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features.Local;
 
-/// <summary>
-/// Binding a feature source with mode <c>local</c>: the settings each mode takes, the diagnostics of a
-/// wrong binding (pointer and hint), and the identity that decides when a plan can reuse a loaded table.
-/// </summary>
 public class LocalBindingTests
 {
-    /// <summary>A value of every declared binding setting; a setting added to the binding must be added here.</summary>
     private static readonly Dictionary<string, string> SettingSamples = new(StringComparer.Ordinal)
     {
         ["connector"] = "\"memory@1\"",
@@ -53,7 +48,6 @@ public class LocalBindingTests
         var names = Enum.GetValues<SupplyMode>().Select(FeatureSourceResolver.ModeName).Distinct().ToArray();
         foreach (var mode in Enum.GetValues<SupplyMode>())
         {
-            // A cache is not a mode of its own: a fetch binding with a cache.
             var cached = mode == SupplyMode.Cache;
             var binding = new FeatureSourceBinding { Mode = FeatureSourceResolver.ModeName(mode), Cache = cached ? new CacheBinding() : null };
             Assert.True(FeatureSourceResolver.TryMode(binding, out var parsed));
@@ -140,7 +134,6 @@ public class LocalBindingTests
         Assert.Equal(("BINDING_SETTINGS", "/sources/item_store/bootstrap"), (noUri.Code, noUri.Pointer));
         Assert.Contains("uri", noUri.Hint);
 
-        // Reported with the binding's other problems, not instead of them.
         var several = Errors(Build(Binding("""{ "mode": "local", "max_bytes": "lots", "bootstrap": { "source": "snapshot_files@1", "url": "x" } }""")));
         Assert.Equal(new[] { ("LOCAL_MAX_BYTES", "/sources/item_store/max_bytes"), ("BINDING_SETTINGS", "/sources/item_store/bootstrap/url") },
             several.Select(d => (d.Code, d.Pointer)));
@@ -192,7 +185,6 @@ public class LocalBindingTests
             rig.Physical("item.age", FeatureTestRig.Item, ColumnType.Float32, "item_store");
         });
 
-        // Renamed features, another default, another declaration order, and another source bound differently.
         var same = Identity(rig =>
         {
             rig.Physical("item.age_hours", FeatureTestRig.Item, ColumnType.Float32, "item_store", field: "age");
@@ -202,7 +194,7 @@ public class LocalBindingTests
         });
 
         Assert.Equal(baseline, same);
-        Assert.Matches("\"fields\":\\[\\[\"age\",\"[^\"]+\"\\],\\[\"clicks\",\"[^\"]+\"\\]\\]", baseline); // physical fields, by name
+        Assert.Matches("\"fields\":\\[\\[\"age\",\"[^\"]+\"\\],\\[\"clicks\",\"[^\"]+\"\\]\\]", baseline);
     }
 
     [Fact]
@@ -240,7 +232,7 @@ public class LocalBindingTests
     {
         Assert.True(ByteSize.TryParse(text, out var parsed));
         Assert.Equal(bytes, parsed);
-        Assert.Matches(FeatureSourceBinding.ByteSizePattern, text); // the schema pattern accepts what the parser accepts
+        Assert.Matches(FeatureSourceBinding.ByteSizePattern, text);
     }
 
     [Theory]

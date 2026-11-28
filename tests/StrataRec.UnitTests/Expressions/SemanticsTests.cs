@@ -8,7 +8,6 @@ using StrataRec.Expressions;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>Language semantics, checked on the vectorized paths and the reference interpreter.</summary>
 public class SemanticsTests
 {
     private static readonly bool?[] As = { true, true, true, false, false, false, null, null, null };
@@ -47,7 +46,6 @@ public class SemanticsTests
             ExprAssert.Scalar(f, "ctx.a && ctx.b", and);
             ExprAssert.Scalar(f, "ctx.a || ctx.b", or);
 
-            // Mixed request-level and row-level operands.
             ExprAssert.Rows(f, "ctx.a && col.b", Enumerable.Range(0, 9).Select(r => Kleene(As[i], Bs[r], and: true)).Cast<object?>().ToArray());
             ExprAssert.Rows(f, "col.a || ctx.b", Enumerable.Range(0, 9).Select(r => Kleene(As[r], Bs[i], and: false)).Cast<object?>().ToArray());
         }
@@ -140,7 +138,6 @@ public class SemanticsTests
         ExprAssert.Rows(f, "has(int(col.x * 0.5))", true, true, true, false, false, false, true, true, true, false);
         ExprAssert.Rows(f, "int(col.x) % 2", 0L, 0L, 0L, null, null, null, null, 0L, 0L, null);
 
-        // double() of an int64 rounds to the nearest double, like every int64 operand of float64 arithmetic.
         ExprAssert.Rows(f, "double(col.i)", 5.0, null, 9223372036854775807.0, -9223372036854775808.0, 0.0, 1.0, 2.0, 3.0, 4.0, 9007199254740992.0);
         ExprAssert.Rows(f, "double(col.x)", 2.9, -2.9, -0.5, double.NaN, double.PositiveInfinity, double.NegativeInfinity,
             9223372036854775808.0, -9223372036854775808.0, 9223372036854774784.0, 1e300);
@@ -158,7 +155,6 @@ public class SemanticsTests
     {
         var f = new ExprFixture().Col("col.x", "float64").Col("col.i", "int64").Col("col.b", "bool").Build(3);
 
-        // int() of a float64 may be missing even when its argument is not; int() of an int64 is that int64.
         Assert.Equal(ColumnType.Parse("int64?"), f.Compile("int(col.x)").ResultType);
         Assert.Equal(ColumnType.Parse("int64"), f.Compile("int(col.i)").ResultType);
         Assert.Equal(ColumnType.Parse("float64"), f.Compile("double(col.i)").ResultType);
@@ -170,11 +166,6 @@ public class SemanticsTests
         Assert.Equal(ExpressionErrorCodes.ArgCount, Assert.Single(f.Errors("double(col.x, 1)")).Code);
     }
 
-    /// <summary>
-    /// <c>x % 0</c> has no value, so it is missing, never a silent 0: the result is nullable unless the
-    /// divisor is a non-zero constant, and a constant 0 divisor is a compile error. It used to be 0, counted in a metric
-    /// that was never exported.
-    /// </summary>
     [Fact]
     public void Modulo_ByZero_IsMissing_AndAConstantZeroDivisor_IsAnError()
     {
@@ -182,16 +173,16 @@ public class SemanticsTests
         f.Fill<long>("col.i", 7, 7, long.MinValue, -7, 9, 9);
         f.Fill<long>("col.d", 0, 3, -1, 3, 0, 4);
 
-        ExprAssert.Rows(f, "col.i % col.d", null, 1L, 0L, -1L, null, 1L); // vectorized (both paths) and the reference
+        ExprAssert.Rows(f, "col.i % col.d", null, 1L, 0L, -1L, null, 1L);
         ExprAssert.Rows(f, "(col.i % col.d) ?? -1", -1L, 1L, 0L, -1L, -1L, 1L);
         Assert.True(f.Compile("col.i % col.d", new CompileOptions { AllowNullableResult = true }).ResultType.Nullable);
-        Assert.False(f.Compile("col.i % 4").ResultType.Nullable); // a non-zero constant divisor is never 0
+        Assert.False(f.Compile("col.i % 4").ResultType.Nullable);
 
         var error = Assert.Single(f.Errors("col.i % 0"));
         Assert.Equal((ExpressionErrorCodes.InvalidArgument, 8, 1), (error.Code, error.Offset, error.Length));
         Assert.Equal("use a non-zero divisor", error.Hint);
 
-        ExprAssert.Scalar(f, "7 % (1 - 1)", null); // 0 only after folding: missing, not 0
+        ExprAssert.Scalar(f, "7 % (1 - 1)", null);
         ExprAssert.Scalar(f, "-9223372036854775808 % -1", 0L);
         ExprAssert.Scalar(f, "-7 % 3", -1L);
         ExprAssert.Scalar(f, "7 % -3", 1L);
@@ -222,8 +213,8 @@ public class SemanticsTests
         ExprAssert.Rows(f, "col.s in ctx.allowed", true, false, null, false);
         ExprAssert.Rows(f, "col.s.startsWith('two')", true, false, null, true);
         ExprAssert.Rows(f, "startsWith(col.s, ctx.src)", false, true, null, false);
-        ExprAssert.Rows(f, "col.s.endsWith('_v2')", false, false, null, true); // a dictionary column, a constant suffix: once per distinct value
-        ExprAssert.Rows(f, "endsWith(col.s, col.s2)", true, false, null, false); // per row
+        ExprAssert.Rows(f, "col.s.endsWith('_v2')", false, false, null, true);
+        ExprAssert.Rows(f, "endsWith(col.s, col.s2)", true, false, null, false);
         ExprAssert.Rows(f, "col.s.endsWith(ctx.missing)", null, null, null, null);
         ExprAssert.Rows(f, "col.s == col.s2", true, false, null, false);
         ExprAssert.Rows(f, "col.s ?? 'none'", "two_tower", "cf", "none", "two_tower_v2");
@@ -282,7 +273,7 @@ public class SemanticsTests
     [Fact]
     public void Strings_EveryOperation_OnThePlainColumn()
     {
-        var copy = new string("abc".AsSpan()); // equal to the literal, another instance
+        var copy = new string("abc".AsSpan());
         var large = string.Join(", ", Enumerable.Range(0, 20).Select(i => $"'v{i}'")) + ", 'abc'";
         var f = new ExprFixture().Col("col.t", "string?").Col("col.s", "string").Ctx("ctx.q", "string", ScalarValue.FromString("lo")).Build(4);
         f.FillStrings("col.t", "héllo 😀", string.Empty, null, copy);
@@ -335,7 +326,7 @@ public class SemanticsTests
             }
 
             var bools = (ScalarColumn<bool>)destination;
-            Assert.True(bools[0] && !bools[constants]); // c0 is in the set, c{constants} is not
+            Assert.True(bools[0] && !bools[constants]);
             return best;
         }
 
@@ -378,7 +369,7 @@ public class SemanticsTests
             .Build(4);
         var a = f.Buffer<ListColumn<float>>("col.a");
         a.Set(0, new float[] { 1, 2, 3 });
-        a.Set(1, new float[] { 1, 2 }); // of another length than col.d's rows
+        a.Set(1, new float[] { 1, 2 });
         a.SetMissing(2);
         a.Set(3, Array.Empty<float>());
         var d = f.Buffer<ListColumn<double>>("col.d");
@@ -387,37 +378,27 @@ public class SemanticsTests
         d.Set(2, new double[] { 0, 0, 1 });
         d.Set(3, new double[] { 1, 1, 1 });
 
-        // float32 × float64 is computed in float64: the float32 elements widen, exactly.
         ExprAssert.Rows(f, "dot(col.a, col.d)", 7.0, null, null, null);
         ExprAssert.Rows(f, "cosine(col.a, col.d)", 7.0 / (Math.Sqrt(14) * Math.Sqrt(4.3125)), null, null, null);
         ExprAssert.Rows(f, "dot(col.d, ctx.u)", 0.5, 3.0, 0.0, 1.0);
         ExprAssert.Rows(f, "l2_norm(col.d)", Math.Sqrt(4.3125), 5.0, 1.0, Math.Sqrt(3));
-        ExprAssert.Rows(f, "l2_norm(col.a)", (double)MathF.Sqrt(14), (double)MathF.Sqrt(5), null, 0.0); // float32 alone: in float32
+        ExprAssert.Rows(f, "l2_norm(col.a)", (double)MathF.Sqrt(14), (double)MathF.Sqrt(5), null, 0.0);
         ExprAssert.Rows(f, "dot(col.a, [1.0, 1.0])", null, 3.0, null, null);
-        ExprAssert.Rows(f, "dot(col.a, [1, 1])", null, 3.0, null, null); // an int list literal is a float list here
+        ExprAssert.Rows(f, "dot(col.a, [1, 1])", null, 3.0, null, null);
 
-        // Two declared lengths make the result non-nullable; a list of any length on either side makes it nullable.
         Assert.Equal("float64", f.Compile("dot(col.d, ctx.u)").ResultType.ToString());
         Assert.Equal("float64?", f.Compile("dot(col.a, col.d)", new CompileOptions { AllowNullableResult = true }).ResultType.ToString());
 
-        // Two declared lengths that differ can never pair.
         var mismatch = Assert.Single(f.Errors("dot(col.d, [1.0, 2.0])"));
         Assert.Equal(ExpressionErrorCodes.TypeMismatch, mismatch.Code);
         Assert.Contains("list<float64,3> and list<float64,2>", mismatch.Message);
         Assert.NotNull(mismatch.Hint);
         Assert.Equal(ExpressionErrorCodes.TypeMismatch, Assert.Single(f.Errors("cosine(ctx.u, [1.0])")).Code);
 
-        // Not a float list.
         var ints = Assert.Single(f.Errors("l2_norm(['a'])"));
         Assert.Contains("float list", ints.Message);
     }
 
-    /// <summary>
-    /// dot, cosine and l2_norm compute in the precision the lists are declared in: float32 when every operand is a
-    /// <c>list&lt;float32&gt;</c> (a column, a context value, a choice between them), as TensorPrimitives' float32 kernels
-    /// compute it; float64 when any is a <c>list&lt;float64&gt;</c> or a literal. The vectorized backend, the reference
-    /// interpreter and the request-level program give the same bits, a float32 list held as float64 included.
-    /// </summary>
     [Theory]
     [InlineData(3)]
     [InlineData(300)] // longer than the scalar backend's stack buffer (256), and many SIMD blocks
@@ -462,7 +443,6 @@ public class SemanticsTests
             }
         }
 
-        // float32: columns, a context value (held as float64), a choice between them.
         Check("dot(col.a, col.b)", r => TensorPrimitives.Dot(a[r], b[r]));
         Check("dot(ctx.u, col.a)", r => TensorPrimitives.Dot(u, a[r]));
         Check("cosine(ctx.u, col.a)", r => Cosine32(u, a[r]));
@@ -472,7 +452,6 @@ public class SemanticsTests
         Assert.Equal((double)TensorPrimitives.Dot(u, u), f.Scalar("dot(ctx.u, ctx.u)").AsFloat64());
         Assert.Equal((double)TensorPrimitives.Norm(u), f.Scalar("l2_norm(ctx.u)").AsFloat64());
 
-        // float64: a float64 list, a literal, or a choice that may give one; a float32 list beside one widens.
         Check("dot(col.d, ctx.w)", r => TensorPrimitives.Dot(d[r], w));
         Check("cosine(col.a, col.d)", r => Cosine64(Widen(a[r]), d[r]));
         Check("dot(col.a, ctx.w)", r => TensorPrimitives.Dot(Widen(a[r]), w));
@@ -483,7 +462,6 @@ public class SemanticsTests
 
         if (length >= 100)
         {
-            // The two precisions differ here, so the checks above tell them apart.
             Assert.NotEqual((double)TensorPrimitives.Dot(u, a[0]), TensorPrimitives.Dot(Widen(u), Widen(a[0])));
         }
     }
@@ -567,7 +545,7 @@ public class SemanticsTests
         var calibration = new TestLookupTable("calib", ColumnType.Int64, ColumnType.Float64, new()
         {
             [ScalarValue.FromInt64(1)] = ScalarValue.FromFloat64(0.5),
-            [ScalarValue.FromInt64(2)] = ScalarValue.FromInt64(4), // int stored for a float table: converted
+            [ScalarValue.FromInt64(2)] = ScalarValue.FromInt64(4),
         });
         var weights = new TestLookupTable("country_weight", ColumnType.String, ColumnType.Bool, new()
         {

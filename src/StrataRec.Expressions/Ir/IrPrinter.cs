@@ -6,8 +6,8 @@ using StrataRec.Expressions.Binding;
 namespace StrataRec.Expressions.Ir;
 
 /// <summary>
-/// Prints IR back in ColumnExpr syntax for explain-plan output. Nodes shared by several parents (let bindings and
-/// common subexpressions) are printed once as <c>let</c> bindings, so the text is linear in the DAG size.
+/// Nodes shared by several parents (let bindings and common subexpressions) are printed once as <c>let</c> bindings, so
+/// the text is linear in the DAG size.
 /// </summary>
 internal static class IrPrinter
 {
@@ -58,7 +58,6 @@ internal static class IrPrinter
         }
     }
 
-    /// <summary>Post-order (children first) traversal recording each node's parent count.</summary>
     private static void CountParents(IrNode node, Dictionary<IrNode, int> parents, List<IrNode> order)
     {
         if (parents.TryGetValue(node, out var count))

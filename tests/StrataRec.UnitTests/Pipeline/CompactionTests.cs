@@ -8,10 +8,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// Compaction changes where rows are, never what a request returns: a key a filter dropped stays out of a
-/// later row source whether the filter's node compacts the table or not.
-/// </summary>
 public sealed class CompactionTests
 {
     /// <summary>

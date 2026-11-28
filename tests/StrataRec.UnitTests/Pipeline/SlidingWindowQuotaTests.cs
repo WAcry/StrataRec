@@ -3,19 +3,14 @@ using StrataRec.Pipeline.Operators.Standard;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// <c>SlidingWindowQuota@1</c>'s placement: the earliest row whose group is under quota in the last window − 1 placed,
-/// rows without a group never limited, stopping when nothing can be placed. The per-group queues and heap place exactly
-/// what the first version's rescan placed (kept here as the reference), on every distribution of groups.
-/// </summary>
 public sealed class SlidingWindowQuotaTests
 {
     [Theory]
-    [InlineData(new[] { 0, 0, 1, 1 }, 2, 1, new[] { 0, 2, 1, 3 })]           // alternated
-    [InlineData(new[] { 0, 0, 0, 1 }, 2, 1, new[] { 0, 3, 1 })]              // the third 0 cannot follow the second
-    [InlineData(new[] { 0, -1, 0, 0 }, 3, 1, new[] { 0, 1 })]                // no group: never limited; then no row fits, the rest drops
+    [InlineData(new[] { 0, 0, 1, 1 }, 2, 1, new[] { 0, 2, 1, 3 })]
+    [InlineData(new[] { 0, 0, 0, 1 }, 2, 1, new[] { 0, 3, 1 })]
+    [InlineData(new[] { 0, -1, 0, 0 }, 3, 1, new[] { 0, 1 })]
     [InlineData(new[] { 0, 0, 0, 0, 1, 1 }, 3, 2, new[] { 0, 1, 4, 2, 3, 5 })]
-    [InlineData(new[] { 0, 1, 2, 0, 1, 2 }, 3, 1, new[] { 0, 1, 2, 3, 4, 5 })] // already spread: unchanged
+    [InlineData(new[] { 0, 1, 2, 0, 1, 2 }, 3, 1, new[] { 0, 1, 2, 3, 4, 5 })]
     public void Places_TheEarliestRowUnderQuota(int[] groups, int window, int max, int[] expected)
     {
         Assert.Equal(expected, Place(groups, window, max));
@@ -37,7 +32,7 @@ public sealed class SlidingWindowQuotaTests
             var groups = new int[n];
             for (var i = 0; i < n; i++)
             {
-                // Runs of one group (the shape that made the rescan quadratic), shuffled stretches, and rows without a group.
+                // Runs of one group, shuffled stretches, and rows without a group.
                 groups[i] = random.Next(10) == 0 ? -1 : trial % 3 == 0 ? i * distinct / Math.Max(1, n) : random.Next(distinct);
             }
 
@@ -58,7 +53,7 @@ public sealed class SlidingWindowQuotaTests
 
         var placed = Place(groups, 2, 1);
 
-        Assert.Equal(groups.Length, placed.Length); // alternated to the end: the rescan took seconds here
+        Assert.Equal(groups.Length, placed.Length);
         for (var i = 1; i < placed.Length; i++)
         {
             Assert.NotEqual(groups[placed[i - 1]], groups[placed[i]]);
@@ -84,7 +79,6 @@ public sealed class SlidingWindowQuotaTests
     /// <summary>The number of groups, as <c>RowGroups.Assign</c> gives it: the ids are 0 to count − 1.</summary>
     private static int Densify(int[] groups) => groups.Length == 0 ? 0 : groups.Max() + 1;
 
-    /// <summary>The first version: at each position, rescan the pending rows and count each one's group in the window.</summary>
     private static int[] Reference(int[] groups, int window, int max)
     {
         var n = groups.Length;

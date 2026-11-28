@@ -6,10 +6,6 @@ using StrataRec.Logging;
 
 namespace StrataRec.UnitTests.Logging;
 
-/// <summary>
-/// What the log pipeline's options allow and its accounting of each batch (pending count, queue bytes, the
-/// queue-depth series, per-tap counters) when the host's diagnostics misbehave or a consumer is quick.
-/// </summary>
 /// <remarks>
 /// The metric tests listen to the process-wide queue-depth series, and count only the measurements of their own pipeline:
 /// the pipeline's consumers run in the execution context it was made in, so an <see cref="AsyncLocal{T}"/> set before it
@@ -22,13 +18,6 @@ public sealed class LogPipelineAccountingTests
     /// <summary>A timer's limit: the longest wait <c>Task.Delay</c> and <c>WaitAsync</c> take, 2^32 − 2 ms.</summary>
     private const double TimerLimitMs = uint.MaxValue - 1.0;
 
-    /// <summary>
-    /// Disposal waits for the consumers for the drain timeout and 500 ms more: a drain timeout up to the timer's limit
-    /// passed the check, and disposal then threw <see cref="ArgumentOutOfRangeException"/> instead of draining. A retry
-    /// delay of one tick passed though a timer waits whole milliseconds, so a sink that kept failing was retried in a busy
-    /// loop (49,039 attempts in 79 ms). Both limits are accepted, a step past either is refused, where the pipeline is made
-    /// and where a host registers it.
-    /// </summary>
     [Theory]
     [InlineData(TimerLimitMs - 500, 1.0, null)]
     [InlineData(TimerLimitMs - 499, 1.0, "DrainTimeout")]
@@ -53,10 +42,6 @@ public sealed class LogPipelineAccountingTests
         Assert.Equal((refused, refused), (made.ParamName, registered.ParamName));
     }
 
-    /// <summary>
-    /// At the longest drain timeout, disposal with a write in flight waits for it and returns once it is written: its wait
-    /// (the drain timeout and the grace) is within a timer's limit.
-    /// </summary>
     [Fact]
     public async Task AtTheLongestDrainTimeout_DisposalWaitsForTheWriteInFlight()
     {
@@ -67,17 +52,13 @@ public sealed class LogPipelineAccountingTests
 
         var disposing = pipeline.DisposeAsync().AsTask();
         await Task.Delay(50, TestContext.Current.CancellationToken);
-        Assert.False(disposing.IsCompleted); // draining, not failed
+        Assert.False(disposing.IsCompleted);
         sink.Release.SetResult();
         await disposing.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         Assert.Contains(pipeline.Stats(), s => s is { TapId: "served", Delivered: 1, Dropped: 0 });
     }
 
-    /// <summary>
-    /// The first wait before a failed durable write is retried was 10 ms whatever <see cref="LogPipelineOptions.MaxRetryDelay"/>
-    /// said; it is bounded by it, as every later one is.
-    /// </summary>
     [Theory]
     [InlineData(null, 1, 1)]
     [InlineData(null, 5_000, 10)]
@@ -92,9 +73,8 @@ public sealed class LogPipelineAccountingTests
     }
 
     /// <summary>
-    /// The producer published the batch's +1 only after the batch was queued, so a consumer that wrote and settled it at
-    /// once could publish its −1 first: the series went below zero (5 times in 60,000 submissions). Here the producer's +1
-    /// waits up to a second for a −1 to come first, which it can only do while the batch is already queued.
+    /// Here the producer's +1 waits up to a second for a −1 to come first, which it can only do while the batch is
+    /// already queued.
     /// </summary>
     [Fact]
     public async Task TheQueueDepth_CountsABatchIn_BeforeAConsumerCanCountItOut()
@@ -109,10 +89,6 @@ public sealed class LogPipelineAccountingTests
         Assert.Equal((0L, 0L), (depth.Lowest, depth.Current));
     }
 
-    /// <summary>
-    /// A settled write dropped the pending count before it published the depth's −1, so a flush could return while the
-    /// series still counted the batches. Here a −1 takes 200 ms to be recorded: a flush returns only after it is.
-    /// </summary>
     [Fact]
     public async Task AFlush_ReturnsOnlyOnceTheQueueDepthIsBackDown()
     {
@@ -125,19 +101,13 @@ public sealed class LogPipelineAccountingTests
         Assert.Equal(0L, depth.Current);
     }
 
-    /// <summary>
-    /// The host's logger threw when the consumer logged a failing sink (and when it logged the recovery): the exception
-    /// left the consumer, which never settled the batches it had taken, so a flush never returned, their bytes stayed in
-    /// the budget, and nothing more was written. The logger loses its records; the batches are settled as ever, durable
-    /// ones retried until written, best-effort ones dropped, and the consumers go on with the next batches.
-    /// </summary>
     [Theory]
     [InlineData(LogDelivery.Durable)]
     [InlineData(LogDelivery.BestEffort)]
     public async Task ALoggerThatThrows_LosesOnlyItsRecords(LogDelivery delivery)
     {
         var durable = delivery == LogDelivery.Durable;
-        var sink = new FailingSink(failures: durable ? 1 : int.MaxValue); // durable: fails once, then recovers
+        var sink = new FailingSink(failures: durable ? 1 : int.MaxValue);
         var logger = new ThrowingLoggerFactory();
         await using var pipeline = new LogPipeline(sink, loggerFactory: logger);
 
@@ -153,11 +123,6 @@ public sealed class LogPipelineAccountingTests
         Assert.Equal(durable ? 2 : 0, sink.Written);
     }
 
-    /// <summary>
-    /// A metric listener threw while the consumer settled a write (counting a tap's batches): the settlement stopped half
-    /// way, leaving the batches pending and their bytes in the budget, and the consumer ended. The listener loses its
-    /// measurements; the settlement is whole, and the next batches are written.
-    /// </summary>
     [Fact]
     public async Task AMetricListenerThatThrows_LosesOnlyItsMeasurements()
     {
@@ -196,12 +161,6 @@ public sealed class LogPipelineAccountingTests
         Assert.Equal(2, sink.Snapshot().Count);
     }
 
-    /// <summary>
-    /// The sink wrote one batch of a write and rejected the other, and the host's rejection callback threw an
-    /// exception whose message threw as well. Describing it threw out of the write, which was then settled as a failure:
-    /// both batches counted as dropped, the one the sink had written among them. The outcome is settled before the
-    /// callback runs, and the exception is described by its type.
-    /// </summary>
     [Fact]
     public async Task ARejectionCallbackThatThrows_CannotCountTheBatchesTheSinkWroteAsDropped()
     {
@@ -238,12 +197,6 @@ public sealed class LogPipelineAccountingTests
         Assert.DoesNotContain(logger.Records, r => r.EventId == 3006);
     }
 
-    /// <summary>
-    /// The logger threw when disposal logged the drain timeout (3003), a sink that did not stop (3004), or the
-    /// last window's summaries (2001): the exception left <see cref="LogPipeline.DisposeAsync"/> and the rest of its
-    /// cleanup was skipped, the summaries among it. The logger loses that record; disposal completes, and writes the
-    /// summaries.
-    /// </summary>
     [Theory]
     [InlineData(3003)]
     [InlineData(3004)]
@@ -279,7 +232,6 @@ public sealed class LogPipelineAccountingTests
         }
     }
 
-    /// <summary>A sink that rejects the batches of the tap <c>rejected</c>, and can hold the write of the tap <c>first</c>.</summary>
     private sealed class ScriptedSink : ILogSink
     {
         private readonly List<string> _written = new();
@@ -341,13 +293,11 @@ public sealed class LogPipelineAccountingTests
         IgnoringCancellation,
     }
 
-    /// <summary>An exception of a host's whose message cannot be read.</summary>
     private sealed class UnreadableMessageException : Exception
     {
         public override string Message => throw new InvalidOperationException("the message cannot be read");
     }
 
-    /// <summary>Loggers that record what they write, and throw on one event id.</summary>
     private sealed class RecordingLoggerFactory(int? throwOn) : ILoggerFactory, ILogger
     {
         private readonly List<(int EventId, string Message)> _records = new();
@@ -406,8 +356,8 @@ public sealed class LogPipelineAccountingTests
     }
 
     /// <summary>
-    /// The queue-depth measurements of the pipelines it creates. A +1 can wait for a −1 to be recorded first (which only a
-    /// batch already visible to its consumer can give), and a −1 can take a while to be recorded.
+    /// A +1 can wait for a −1 to be recorded first (which only a batch already visible to its consumer can give), and a
+    /// −1 can take a while to be recorded.
     /// </summary>
     private sealed class DepthSeries : IDisposable
     {
@@ -438,10 +388,6 @@ public sealed class LogPipelineAccountingTests
 
         public long Lowest => Interlocked.Read(ref _lowest);
 
-        /// <summary>
-        /// A pipeline whose measurements this series records (see the class remarks): those of its consumers, and those of
-        /// the submissions made from the caller's flow from now on.
-        /// </summary>
         public LogPipeline Create(ILogSink sink)
         {
             Owner.Value = _marker;
@@ -512,7 +458,6 @@ public sealed class LogPipelineAccountingTests
         }
     }
 
-    /// <summary>Loggers that are enabled and throw on every record.</summary>
     private sealed class ThrowingLoggerFactory : ILoggerFactory, ILogger
     {
         private int _thrown;

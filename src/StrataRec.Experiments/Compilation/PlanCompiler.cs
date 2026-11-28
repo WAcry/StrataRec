@@ -22,7 +22,7 @@ namespace StrataRec.Experiments.Compilation;
 /// </summary>
 /// <remarks>
 /// With no experiments this is the plain pipeline compiler. <see cref="CompileMerged"/> compiles baseline ⊕ a set of
-/// arms as a plain pipeline; it is the reference the unified plan is differentially tested against.
+/// arms as a plain pipeline.
 /// </remarks>
 public static class PlanCompiler
 {
@@ -33,21 +33,15 @@ public static class PlanCompiler
     public const string OverridePointer = "/config_override";
 
     /// <summary>
-    /// How deep a configuration override may nest objects and arrays, the override itself being the first level; deeper is
-    /// <c>CONFIG_OVERRIDE_INVALID</c> at the first level too deep. A recording holds the override two levels down
-    /// (<c>/request/config_override</c>) in a file written and read at most <see cref="Jsonc.MaxDepth"/> levels deep, as
-    /// every configuration file is: so every override that runs can be recorded and replayed from its file, and a request
-    /// file (<c>stratarec run</c>, one level down) holds any. Before the limit, a host's override nested deeper than a
-    /// reader's default depth threw out of the request where it was checked.
+    /// How deep a configuration override may nest objects and arrays, the override itself being the first level; deeper
+    /// is <c>CONFIG_OVERRIDE_INVALID</c> at the first level too deep.
     /// </summary>
     public const int OverrideMaxDepth = Jsonc.MaxDepth - 2;
 
-    /// <param name="bindings">
-    /// Where the plan's local feature tables, clients and connectors come from: the engine passes the
-    /// plan's binding lease, which shares and loads them. Null gives ones that are never loaded, for compiling without
-    /// serving (validate, build, explain): requests reading such a table fail the features, and model signatures that
-    /// need a loaded client are checked when an engine loads the plan.
-    /// </param>
+    /// <param name="bindings">Where the plan's local feature tables, clients and connectors come from. Null gives ones
+    /// that are never loaded, for compiling without serving (validate, build, explain): requests reading such a table
+    /// fail the features, and model signatures that need a loaded client are checked when an engine loads the
+    /// plan.</param>
     public static PlanCompilation Compile(PlanCompileRequest request, PlanEnvironment? environment = null, IPlanBindings? bindings = null)
     {
         var started = Stopwatch.GetTimestamp();
@@ -77,13 +71,12 @@ public static class PlanCompiler
     /// order, as a plain pipeline without experiments. Running it equals running the unified plan with those arms: an
     /// arm whose experiment yields to the experiment of another of them is left out, as a request runs without it.
     /// </summary>
-    /// <param name="configOverride">
-    /// A request's configuration override, applied after the arms, so it wins over them: an RFC 7396 merge
-    /// patch of the patchable view (<see cref="PatchableView.Sections"/>), checked as the baseline is, not by the
-    /// experiment policy. Its own mistakes are reported at <see cref="OverrideArtifact"/>, <see cref="OverridePointer"/>,
-    /// and so is what the compile finds at a value it sets or within an object it patches (<see cref="InOverride"/>). It is
-    /// read once, by its check, and compiled as read (<see cref="PlanCompilation.ConfigOverride"/>).
-    /// </param>
+    /// <param name="configOverride">A request's configuration override, applied after the arms, so it wins over them:
+    /// an RFC 7396 merge patch of the patchable view (<see cref="PatchableView.Sections"/>), checked as the baseline
+    /// is, not by the experiment policy. Its own mistakes are reported at <see cref="OverrideArtifact"/>,
+    /// <see cref="OverridePointer"/>, and so is what the compile finds at a value it sets or within an object it
+    /// patches. It is read once, by its check, and compiled as read
+    /// (<see cref="PlanCompilation.ConfigOverride"/>).</param>
     public static PlanCompilation CompileMerged(
         PlanCompileRequest request, IReadOnlyList<string> armIds, PlanEnvironment? environment = null, IPlanBindings? bindings = null,
         JsonObject? configOverride = null)
@@ -112,8 +105,7 @@ public static class PlanCompiler
             }
         }
 
-        // As the unified plan runs them (ArmYields): an arm whose experiment yields to the experiment of another arm here
-        // does not run. Judged on the arms given, not on those left, so the order does not matter.
+        // Judged on the arms given, not on those left, so the order does not matter.
         var present = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (_, id, _) in selected)
         {
@@ -148,11 +140,8 @@ public static class PlanCompiler
         JsonObject? checkedOverride = null;
         if (configOverride is not null)
         {
-            // A host may build the override from text that repeats a member (JsonNode.Parse keeps both, and the object throws
-            // when it is first enumerated, also under a case-insensitive comparison), nest it as deep as it likes, or wrap a
-            // CLR object that writes either (JsonValue.Create): the override's mistake, at its pointer, found before anything
-            // else reads it, not an exception out of the request. Everything below reads the copy the
-            // check made, never the host's tree, which would write its CLR values again, perhaps differently.
+            // Everything below reads the copy the check made, never the host's tree, which would write its CLR values
+            // again, perhaps differently.
             if (StrictJson.Check(configOverride, OverrideMaxDepth, out var read) is { } invalid)
             {
                 diagnostics.Error("CONFIG_OVERRIDE_INVALID", OverrideArtifact, OverridePointer + invalid.Pointer, invalid.Message, invalid.Hint);
@@ -172,8 +161,7 @@ public static class PlanCompiler
                 }
             }
 
-            // The compiler hashes the definitions it builds (RFC 8785): a value of the override that form cannot hold
-            // exactly (an integer beyond 2^53) is the override's mistake, at its pointer, not an exception out of the request.
+            // The compiler hashes the definitions it builds (RFC 8785).
             try
             {
                 JsonCanonicalizer.CanonicalizeToString(checkedOverride);
@@ -214,17 +202,9 @@ public static class PlanCompiler
     }
 
     /// <summary>
-    /// Whether <paramref name="pointer"/>, a location in the patchable view (where the pipeline's and the catalog's
-    /// sections are), is one <paramref name="configOverride"/> writes: at or under a value it sets (a scalar, an array,
-    /// null), or an object it patches into. The compile of the merged configuration reports what it finds at the
-    /// pipeline's or catalog's pointer, though the value came from the override: an integer the canonical form cannot tell
-    /// from a float (<c>-90071992547409930E-1</c>) passed the override's own checks and was refused by the parameter's
-    /// binding at <c>pipeline:home_feed/params/big</c>, with no pointer for the caller, while the same integer written as
-    /// digits was refused at <c>/config_override/params/big</c>. Such a diagnostic keeps its code, message and
-    /// hint and moves to the override, as an arm's moves to the arm whose patch touches it. Names are compared by ordinal,
-    /// as RFC 7396 merging compares them (<see cref="JsonMergePatch"/>): a <c>FINAL_TOP_K</c> the override sets is another
-    /// parameter than the baseline's <c>final_top_k</c>, whatever the host's object compares (one parsed with
-    /// <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/> moved the baseline's error to the override).
+    /// Whether <paramref name="pointer"/> (in the patchable view) is at or under a value
+    /// <paramref name="configOverride"/> sets, or an object it patches into: a diagnostic there moves to the override.
+    /// Names compare by ordinal, as RFC 7396 merging does.
     /// </summary>
     private static bool InOverride(JsonObject configOverride, string pointer)
     {
@@ -250,7 +230,6 @@ public static class PlanCompiler
         return true;
     }
 
-    /// <summary>The member of <paramref name="obj"/> named <paramref name="name"/> by ordinal comparison, as the merge finds it.</summary>
     private static bool TryGetMember(JsonObject obj, string name, out JsonNode? value)
     {
         foreach (var (key, member) in obj)
@@ -273,17 +252,7 @@ public static class PlanCompiler
     /// full compile's to report.
     /// </summary>
     /// <remarks>
-    /// <para>Recording each experiment's needs is what lets a revocation, which compiles nothing, require what is left:
-    /// inferring them back from the configuration's names kept what an operator used by default and freed nothing a feature
-    /// source needed.</para>
-    /// <para>A combination can need what no experiment needs alone: one arm points recall at a quota map, an arm of another
-    /// layer adds a source of a new client type to that map; and what one experiment needs alone, another pair
-    /// can need too. So each capability the release needs beyond the baseline goes to: the experiments that need
-    /// it alone (O); and, if the release without O still needs it, each remaining experiment without which those remaining
-    /// no longer need it (one compile without each). If none such exists, it stays with the baseline. Compiling more
-    /// experiments never needs less (every arm's variant joins the baseline's), so a set without a holder needs it no more
-    /// than the release without O, or without that holder, does: what is left always requires what it needs. Too much is
-    /// possible (a need no single removal ends goes to the baseline), too little is not.</para>
+    /// <para>Too much is possible (a need no single removal ends goes to the baseline), too little is not.</para>
     /// </remarks>
     public static ReleaseRequirements? Requirements(PlanCompileRequest request, PlanEnvironment? environment, DiagnosticBag diagnostics)
     {
@@ -345,7 +314,6 @@ public static class PlanCompiler
 
             if (restNeeds.Contains(capability))
             {
-                // A combination of the rest needs it too: each of them without which the rest no longer does.
                 var ends = false;
                 foreach (var placement in rest)
                 {
@@ -397,13 +365,11 @@ public static class PlanCompiler
         return rest;
     }
 
-    /// <summary>The needs of compiles of the baseline with sets of experiments, each set compiled once.</summary>
     private sealed class RequirementCompiles(PlanCompileRequest request, PlanEnvironment environment, DiagnosticBag diagnostics)
     {
         private readonly PatchableView _view = PatchableView.Create(request.Pipeline, request.Catalog);
         private readonly Dictionary<string, SortedSet<string>> _needs = new(StringComparer.Ordinal);
 
-        /// <summary>What the release with <paramref name="placements"/> needs; null after reporting a compile's errors.</summary>
         public SortedSet<string>? Needs(List<ExperimentPlacement> placements)
         {
             var key = new System.Text.StringBuilder();
@@ -458,16 +424,13 @@ internal sealed partial class UnifiedCompilation
     private readonly List<string> _layers = new();
     private readonly List<(string Id, int Layer, ImmutableArray<int> Arms)> _experiments = new();
 
-    /// <summary>Experiment id → its artifact label and its <see cref="ExperimentArtifact.ReviewedInteractions"/>.</summary>
     private readonly Dictionary<string, (string Artifact, Dictionary<string, List<string>> Columns)> _reviewed = new(StringComparer.Ordinal);
 
     /// <summary>The reviewed interactions an interaction matched: (experiment, other experiment, column).</summary>
     private readonly HashSet<(string, string, string)> _reviewUsed = new();
 
-    /// <summary>Which experiments yield to which (<see cref="ArmYields"/>); every combination is judged as it runs.</summary>
     private ArmYields _yields = ArmYields.None;
 
-    /// <summary>Each declared yield of a present experiment to another, where it is declared.</summary>
     private readonly List<(int From, int To, string Release, string Pointer)> _yieldDeclarations = new();
 
     /// <summary>Per pair of experiments (lower index first) that never run together because one yields: what that resolves.</summary>
@@ -495,7 +458,6 @@ internal sealed partial class UnifiedCompilation
         _pipelineLabel = "pipeline:" + request.Pipeline.PipelineId;
     }
 
-    /// <summary><paramref name="r"/> with some of its experiments, checked as <see cref="WithoutExperiments"/> is.</summary>
     public static PlanCompileRequest With(PlanCompileRequest r, IReadOnlyList<ExperimentPlacement> experiments) => new()
     {
         Pipeline = r.Pipeline,
@@ -601,8 +563,6 @@ internal sealed partial class UnifiedCompilation
         };
     }
 
-    // ------------------------------------------------------------------ experiments and arms
-
     private void DefineExperiments()
     {
         var placements = new List<ExperimentPlacement>(_request.Experiments);
@@ -704,10 +664,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>
-    /// The yields of the release (<see cref="ExperimentPlacement.YieldsTo"/>): an experiment yields only to
-    /// another of this compile in another layer, never to itself, and never back along a chain of yields.
-    /// </summary>
     private void DefineYields()
     {
         var byId = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -732,7 +688,7 @@ internal sealed partial class UnifiedCompilation
                 var pointer = "/experiments/" + JsonPointer.Escape(id) + "/yields_to/" + i;
                 if (name is null || !byId.TryGetValue(name, out var to))
                 {
-                    continue; // not in this compile: a release that stopped it yields nothing to it (ExperimentPlacement.YieldsTo)
+                    continue;
                 }
 
                 if (to == from)
@@ -753,7 +709,6 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        // A cycle (a yields to b, b to a) has no experiment that runs where all are assigned, and no meaning as a decision.
         var state = new byte[_experiments.Count]; // 0 unvisited, 1 on the path, 2 done
         var path = new List<int>();
         for (var start = 0; start < _experiments.Count; start++)
@@ -817,8 +772,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    // ------------------------------------------------------------------ schema
-
     private SchemaSources BuildSchemaSources()
     {
         foreach (var section in ArmAnalyzer.SchemaSections)
@@ -879,7 +832,6 @@ internal sealed partial class UnifiedCompilation
 
         var funnelGroups = ReadAdditions<FunnelGroupSpec>("funnel_groups");
 
-        // Baseline node ids appear in pointers and expressions (col.x@node); keep them well-formed.
         foreach (var (id, _) in _view.Nodes)
         {
             if (!ArmAnalyzer.IsValidNodeId(id))
@@ -929,8 +881,6 @@ internal sealed partial class UnifiedCompilation
 
         return result;
     }
-
-    // ------------------------------------------------------------------ parameters
 
     private ParamTable BuildParams(out Dictionary<int, SortedSet<int>> leafExperiments)
     {
@@ -986,8 +936,6 @@ internal sealed partial class UnifiedCompilation
         return new ParamTable(ImmutableCollectionsMarshal.AsImmutableArray(baseline), ImmutableCollectionsMarshal.AsImmutableArray(overrides));
     }
 
-    // ------------------------------------------------------------------ node variants
-
     /// <summary>
     /// The arm combinations of the layers that touch one node or tap: per touching layer, "not
     /// modified" plus each arm that modifies it, indexed mixed-radix exactly like <see cref="TimelineSlot.Select"/>.
@@ -1018,10 +966,6 @@ internal sealed partial class UnifiedCompilation
             return index;
         }
 
-        /// <summary>
-        /// The combination index for a set of arms (one per layer at most). Layers of this space without an arm in the
-        /// set, and arms that do not modify the item, map to "not modified".
-        /// </summary>
         public int IndexOfArms(IReadOnlyList<ArmPatch> arms)
         {
             var index = 0;
@@ -1042,7 +986,6 @@ internal sealed partial class UnifiedCompilation
             return index;
         }
 
-        /// <summary>The arms (global indices) a combination index assigns, in layer order.</summary>
         public List<int> ArmsOf(int combination)
         {
             var arms = new List<int>();
@@ -1061,7 +1004,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>All arm combinations of the layers that touch one node id, and the variant compiled for each.</summary>
     internal sealed class NodeVariants : VariantSpace
     {
         public required string NodeId { get; init; }
@@ -1070,7 +1012,6 @@ internal sealed partial class UnifiedCompilation
 
         public required CompiledNode?[] Variants { get; init; }
 
-        /// <summary>Combinations whose definition failed to compile (errors were reported).</summary>
         public required bool[] Failed { get; init; }
 
         public bool IsFallback { get; set; }
@@ -1089,7 +1030,6 @@ internal sealed partial class UnifiedCompilation
     private readonly record struct Space(
         ImmutableArray<int> Layers, int[][] LocalArms, ImmutableArray<FrozenDictionary<int, int>> LocalIndex, ImmutableArray<int> Radix, int Count);
 
-    /// <summary>L(x) and its arms for the arms that touch an item; null (after an error) when C(x) exceeds the limit.</summary>
     private Space? BuildSpace(Func<ArmPatch, bool> touches, string what, string pointer)
     {
         var byLayer = new SortedDictionary<int, List<int>>();
@@ -1127,7 +1067,6 @@ internal sealed partial class UnifiedCompilation
 
             radix[li] = arms.Count + 1;
 
-            // Saturates before it could overflow: a wrapped product would slip under the limit.
             combinations = combinations > long.MaxValue / radix[li] ? long.MaxValue : combinations * radix[li];
             li++;
         }
@@ -1183,12 +1122,9 @@ internal sealed partial class UnifiedCompilation
             }
         }
 
-        // Each distinct definition of a node is compiled at its own place on the timeline (its order; a fallback, which
-        // has none, after the timeline; equal orders by node id): a node declares the columns it writes without a
-        // declaration as it compiles (an implicit output: recall.*, GroupAggregate@1's), and a node that runs after it,
-        // in any combination, must know them. By id, a reader named before its writer ('author_cap' before
-        // 'author_rank') did not know the column; by a node's lowest order, neither did an arm that moves a reader after
-        // the writer.
+        // Each distinct definition compiles at its own place on the timeline (its order; fallbacks after it; ties by
+        // id), so a reader knows the columns an earlier writer declares implicitly (recall.*, GroupAggregate@1's) in
+        // every combination.
         var timeline = new List<NodeDefinition>();
         foreach (var id in ids)
         {
@@ -1219,9 +1155,8 @@ internal sealed partial class UnifiedCompilation
     }
 
     /// <summary>
-    /// A node definition's order as it binds (<see cref="NodeSpec.Order"/>): an integer JSON number, however the tree holds
-    /// it. A tree built in code holds an <c>int</c> where a parsed one holds a JSON element, and reading only one CLR type
-    /// put a moved writer last on the timeline, after the reader it declares a column for.
+    /// A node definition's order as it binds (<see cref="NodeSpec.Order"/>): an integer JSON number, however the tree
+    /// holds it.
     /// </summary>
     internal static int? OrderOf(JsonNode? node) =>
         node is JsonObject definition && definition["order"] is JsonValue value
@@ -1230,10 +1165,8 @@ internal sealed partial class UnifiedCompilation
             : null
             : null;
 
-    /// <summary>A distinct definition of a node: the combinations that define it so, compiled once, at its order.</summary>
     private sealed record NodeDefinition(NodeVariants Variants, long Order, List<int> Combinations);
 
-    /// <summary>Groups a node's combinations by definition (equal content, compiled once).</summary>
     private static void AddDistinctDefinitions(NodeVariants variants, List<NodeDefinition> timeline)
     {
         var byHash = new Dictionary<string, NodeDefinition>(StringComparer.Ordinal);
@@ -1257,7 +1190,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>Each combination's definition of a node (<see cref="NodeVariants.Definitions"/>), compiled afterwards.</summary>
     private NodeVariants? DefineNodeVariants(string nodeId)
     {
         var pointer = "/nodes/" + JsonPointer.Escape(nodeId);
@@ -1283,12 +1215,11 @@ internal sealed partial class UnifiedCompilation
         bool? fallbackRole = null;
         for (var c = 0; c < space.Count; c++)
         {
-            // A combination with an arm that yields never runs as such: it is defined as it runs, without that arm.
             var armsInCombination = Running(ArmPatches(variants.ArmsOf(c)));
             var definition = Merge(baseline, armsInCombination, "nodes", nodeId);
             if (definition is null)
             {
-                continue; // the node does not exist in this combination
+                continue;
             }
 
             var start = _diagnostics.Count;
@@ -1318,7 +1249,7 @@ internal sealed partial class UnifiedCompilation
         return variants;
     }
 
-    /// <summary>Compiles every tap variant. Runs after the nodes: <c>columns_from</c> needs them.</summary>
+    /// <summary>Runs after the nodes: <c>columns_from</c> needs them.</summary>
     private void CompileTapVariants()
     {
         var taps = (JsonObject)_view.Document["log_taps"]!;
@@ -1388,8 +1319,8 @@ internal sealed partial class UnifiedCompilation
                 if (!byHash.TryGetValue(key, out var compiled))
                 {
                     var result = _builder.CompileTap(tapId, tap, _pipelineLabel, nodeId => ResolveVariant(nodeId, armsInCombination));
-                    // A node no combination has, with a suggestion for the typo. One that only some combinations have is
-                    // judged in each (PlanBuilder.ValidateDataFlow), as a compile of that combination alone judges it.
+                    // A node no combination has. One that only some combinations have is judged in each
+                    // (PlanBuilder.ValidateDataFlow).
                     if (result?.AttachAfter is { } after && !_variants.ContainsKey(after))
                     {
                         _diagnostics.Error("TAP_UNKNOWN_NODE", _pipelineLabel, pointer + "/attach/after", $"Tap '{tapId}' attaches after unknown node '{after}'.",
@@ -1408,7 +1339,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>Model nodes named by <c>columns_from</c> in the baseline tap or in any arm's patch of it.</summary>
     private SortedSet<string> ColumnsFromNodes(string tapId, JsonObject? baseline)
     {
         var nodes = new SortedSet<string>(StringComparer.Ordinal);
@@ -1445,7 +1375,6 @@ internal sealed partial class UnifiedCompilation
         return false;
     }
 
-    /// <summary>The variant of <paramref name="nodeId"/> in effect for an arm combination, or null when absent there.</summary>
     private CompiledNode? ResolveVariant(string nodeId, IReadOnlyList<ArmPatch> arms) =>
         _variants.TryGetValue(nodeId, out var variants) ? variants.Variants[variants.IndexOfArms(arms)] : null;
 
@@ -1494,7 +1423,6 @@ internal sealed partial class UnifiedCompilation
                 }
             }
 
-            // A moved node occupies one position per order, with complementary variant arrays.
             foreach (var order in orders)
             {
                 var selected = new CompiledNode?[v.Variants.Length];
@@ -1521,8 +1449,6 @@ internal sealed partial class UnifiedCompilation
         Variants = variants,
     };
 
-    // ------------------------------------------------------------------ trigger sites
-
     private void AssignTriggerSites(
         ImmutableArray<TimelineSlot> timeline, Dictionary<string, TimelineSlot> fallbacks, OutputPlan? output, Dictionary<int, SortedSet<int>> leafExperiments)
     {
@@ -1536,7 +1462,6 @@ internal sealed partial class UnifiedCompilation
             AssignSite(slot);
         }
 
-        // Parameter sites: a node variant (or the output) that reads a leaf some arm of E overrides.
         foreach (var node in _builder.Nodes)
         {
             node.ParamExperiments = ExperimentsReading(node.ReadParams, leafExperiments);
@@ -1593,8 +1518,6 @@ internal sealed partial class UnifiedCompilation
         slot.SiteExperiments = [.. experiments];
     }
 
-    // ------------------------------------------------------------------ helpers
-
     private RequestArms OnlyArm(int armIndex)
     {
         var byLayer = new int[_layers.Count];
@@ -1603,10 +1526,6 @@ internal sealed partial class UnifiedCompilation
         return new RequestArms(byLayer);
     }
 
-    /// <summary>
-    /// A combination (an arm per layer) as it runs: without the arms whose experiment yields to another experiment of it
-    /// (<see cref="ArmYields"/>), the same array when none does.
-    /// </summary>
     private int[] Running(int[] combination)
     {
         if (_yields.IsEmpty)
@@ -1630,7 +1549,6 @@ internal sealed partial class UnifiedCompilation
         return running;
     }
 
-    /// <inheritdoc cref="Running(int[])"/>
     private List<ArmPatch> Running(List<ArmPatch> arms)
     {
         if (_yields.IsEmpty || arms.Count < 2)
@@ -1674,10 +1592,6 @@ internal sealed partial class UnifiedCompilation
         return list;
     }
 
-    /// <summary>
-    /// Moves diagnostics recorded since <paramref name="start"/> back into the bag, deduplicated, and attributes each
-    /// to the arm whose patch touches its location so the message says where to fix it.
-    /// </summary>
     private void Settle(int start, IReadOnlyList<ArmPatch> arms)
     {
         if (_diagnostics.Count == start)
@@ -1758,7 +1672,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>Attributes schema diagnostics about add-only additions (e.g. a bad column type) to the arm that added them.</summary>
     private void SettleAdditions(int start)
     {
         if (_diagnostics.Count == start)

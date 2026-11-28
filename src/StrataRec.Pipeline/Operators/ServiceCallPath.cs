@@ -21,24 +21,21 @@ internal readonly struct ServiceCaller
         Entity = entity;
     }
 
-    /// <summary>The calling node; null for a feature source's call.</summary>
     public string? Node { get; }
 
-    /// <summary>The feature source whose features the call is for; null for a node's call.</summary>
     public string? Source { get; }
 
     /// <summary>
-    /// The entity a source's call computes: a source may compute several, whose calls are each its own as two nodes' are
-    /// (two entities' calls of the same arguments and outputs took each other's answers when
-    /// the prefetch made them in another order).
+    /// The entity a source's call computes: a source may compute several, whose calls are each its own as two nodes'
+    /// are.
     /// </summary>
     public string? Entity { get; }
 
     /// <summary>
     /// One string per caller, which a replay matches a recorded call's on, with whether it is a source's (a node built
-    /// without the plan compiler's checks may spell a source's key): the node id, or <c>source:&lt;source&gt;/&lt;entity&gt;</c>
-    /// with each name escaped as a JSON pointer's token, since a name may hold a slash (source
-    /// <c>a/b</c>'s entity <c>c</c> was source <c>a</c>'s entity <c>b/c</c>). Made when read: only a replay reads it.
+    /// without the plan compiler's checks may spell a source's key): the node id, or
+    /// <c>source:&lt;source&gt;/&lt;entity&gt;</c> with each name escaped as a JSON pointer's token, since a name may
+    /// hold a slash.
     /// </summary>
     public string Key => KeyOf(Node, Source, Entity);
 
@@ -46,20 +43,14 @@ internal readonly struct ServiceCaller
 
     public static ServiceCaller OfSource(string source, string entity) => new(null, source, entity);
 
-    /// <summary>The key of a recorded call's caller (<see cref="Artifacts.Model.ReplayServiceCall"/>'s node, or source and entity).</summary>
     public static string KeyOf(string? node, string? source, string? entity) =>
         node ?? "source:" + JsonPointer.Escape(source ?? "") + "/" + JsonPointer.Escape(entity ?? "");
 }
 
-/// <summary>
-/// What a service call needs of whoever makes it (<see cref="ServiceCallPath"/>): a node's context, or a feature source's
-/// call of one request.
-/// </summary>
 internal interface IServiceCallScope
 {
     ServiceCaller Caller { get; }
 
-    /// <summary>The bound the call is waited for within, with the caller's token: a node's budget, a fetch's.</summary>
     CallBound Budget { get; }
 
     RequestMemory Memory { get; }
@@ -68,7 +59,6 @@ internal interface IServiceCallScope
 
     RunReplay? Replay { get; }
 
-    /// <summary>What the cached reads of the request's runs share (<see cref="RequestReads"/>); null for a request of one run.</summary>
     RequestReads? Reads { get; }
 
     /// <summary>The call was answered with stale values (its cache's), or was when it was recorded.</summary>
@@ -82,18 +72,10 @@ internal interface IServiceCallScope
     void Pending(Task done);
 }
 
-/// <summary>
-/// The one path of a service call, whoever makes it: a replay answers it from the recording;
-/// otherwise its cache, then its client through <see cref="BoundedCall"/>, recorded when the request records. A node's
-/// calls (<see cref="OperatorContext.CallAsync"/>) and a feature source's (<see cref="FeatureServiceSupply"/>) go through
-/// it, so both are bounded, cached, measured, recorded and replayed alike.
-/// </summary>
 internal static class ServiceCallPath
 {
     /// <summary>
-    /// Calls the service; the call has been checked by its caller. Closes <paramref name="response"/>. Returns the client's
-    /// status; throws <see cref="OperationCanceledException"/> when the scope's bound ran out or the caller cancelled (in a
-    /// replay, where the recorded call was).
+    /// Calls the service; the call has been checked by its caller. Closes <paramref name="response"/>.
     /// </summary>
     public static async Task<ServiceStatus> CallAsync(IServiceCallScope scope, BoundService service, ServiceCall call, ServiceResponse response)
     {
@@ -104,7 +86,7 @@ internal static class ServiceCallPath
                 var status = replay.Call(scope.Caller, service.Target, call, response, out var degraded);
                 if (degraded is not null)
                 {
-                    scope.ReportDegraded(degraded); // the call was Degraded when it was recorded
+                    scope.ReportDegraded(degraded);
                 }
 
                 return status;
@@ -116,8 +98,7 @@ internal static class ServiceCallPath
         }
 
         // A cache that keeps nothing serves the one kind of call a request's other calls share: about no items, of a
-        // run with reads to share through. Any other call of it is a call without a cache, which builds no record for
-        // nothing.
+        // run with reads to share through.
         if (service.Cache is { } cache && (cache.Kept || (call.Items.IsEmpty && scope.Reads is not null)))
         {
             return await CachedServiceCall.RunAsync(scope, service, cache, call, response).ConfigureAwait(false);
@@ -133,34 +114,25 @@ internal static class ServiceCallPath
         {
             CallEnd.Answered => result.Value,
             CallEnd.TimedOut or CallEnd.Threw => ServiceStatus.Failed(result.Error ?? "failed"),
-            CallEnd.BudgetRanOut or CallEnd.Cancelled => Rethrow(result.Exception!), // the bound's or the caller's
+            CallEnd.BudgetRanOut or CallEnd.Cancelled => Rethrow(result.Exception!),
         };
     }
 
     /// <summary>
-    /// Sends a call to the service's client, bounded and measured like every call, without recording it: the call of the
-    /// items a service's cache missed (<see cref="CachedServiceCall"/>), whose caller records the whole call. The deadline
-    /// is what is left of the service's <c>timeout_ms</c>; a call whose deadline has passed is not sent.
+    /// Sends a call to the service's client, bounded and measured like every call, without recording it: the call of
+    /// the items a service's cache missed (<see cref="CachedServiceCall"/>), whose caller records the whole call.
     /// </summary>
     public static ValueTask<CallResult<ServiceStatus>> SendAsync(
         IServiceCallScope scope, BoundService service, ServiceCall call, ServiceResponse response, in CallDeadline deadline) =>
         BoundedCall.RunAsync<ServiceStatus, ServiceInvocation>(
             new ServiceInvocation(scope, service.Client, call, response, service.Target, null, 0), scope.Budget, scope.Memory, service.Target, deadline);
 
-    /// <summary>Throws <paramref name="exception"/> with the stack it was thrown with.</summary>
     private static ServiceStatus Rethrow(Exception exception)
     {
         ExceptionDispatchInfo.Throw(exception);
         return default;
     }
 
-    /// <summary>
-    /// A service call: closes or abandons the response when the call ends; counts what a generative client reported
-    /// (<see cref="StrataRecMetrics.IoOutputTokens"/>, <see cref="StrataRecMetrics.IoTruncated"/>) for every call that
-    /// answered, in this one place for every caller; and records what the request saw, with the outputs only of a call
-    /// that answered. A replay never gets here: it is answered from the recording before the call is sent, so it counts
-    /// nothing.
-    /// </summary>
     private readonly struct ServiceInvocation(
         IServiceCallScope scope, IServiceClient client, ServiceCall call, ServiceResponse response, IoTarget target, RunRecorder? recorder, int sequence)
         : IBoundedCall<ServiceStatus>
@@ -191,7 +163,6 @@ internal static class ServiceCallPath
                 response.Close();
             }
 
-            // Whether the caller is thrown cancellation, so a replay throws it too (a failure is a status, not a throw).
             var cutOff = result.End is CallEnd.BudgetRanOut or CallEnd.Cancelled;
             var answered = result.End == CallEnd.Answered;
             if (answered)
@@ -214,7 +185,6 @@ internal static class ServiceCallPath
                 }
                 catch (Exception)
                 {
-                    // A metric listener threw: see above.
                 }
             }
 
@@ -226,7 +196,6 @@ internal static class ServiceCallPath
                 }
                 catch (Exception)
                 {
-                    // As above.
                 }
             }
         }

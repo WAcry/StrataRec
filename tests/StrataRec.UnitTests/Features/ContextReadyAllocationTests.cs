@@ -3,14 +3,9 @@ using static StrataRec.UnitTests.Features.ChainedContextKeyTests;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>What waiting for stored context features costs when they are stored already.</summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class ContextReadyAllocationTests
 {
-    /// <summary>
-    /// Asking whether context features are stored, when a synchronous source stored them, allocates nothing
-    /// (the wait for the other case was a closure over the fetcher, allocated on every ask).
-    /// </summary>
     [Fact]
     public async Task AskingForFeaturesStoredAlready_AllocatesNothing()
     {

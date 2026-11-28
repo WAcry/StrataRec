@@ -9,8 +9,7 @@ namespace StrataRec.Artifacts.Model;
 public sealed class ExperimentArtifact
 {
     /// <summary>
-    /// The sections of the patchable view that come from the pipeline, in canonical order: one list for the
-    /// compiler, which joins the view, and the experiment's JSON Schema, which describes an arm's patch of it.
+    /// The sections of the patchable view that come from the pipeline, in canonical order.
     /// </summary>
     public static IReadOnlyList<string> PipelineSections { get; } = new[] { "params", "param_schema", "columns", "request_columns", "nodes", "funnel_groups", "log_taps" };
 
@@ -32,12 +31,11 @@ public sealed class ExperimentArtifact
     public required Dictionary<string, JsonObject> Arms { get; init; }
 
     /// <summary>
-    /// Interactions with experiments of other layers that were reviewed and may happen together: experiment
-    /// id → the columns, e.g. <c>{ "exp_freshness_calibration": ["score.final"] }</c>, a request column written as
-    /// <c>req.&lt;name&gt;</c>. The two experiments' interaction
-    /// warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a
-    /// new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive
-    /// the interaction it was for. It lives with the experiment, not the release file, because the manifest carries it.
+    /// Interactions with experiments of other layers that were reviewed and may happen together: experiment id → the
+    /// columns, e.g. <c>{ "exp_freshness_calibration": ["score.final"] }</c>, a request column written as
+    /// <c>req.&lt;name&gt;</c>. The two experiments' interaction warnings on those columns are not repeated, so a
+    /// reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction
+    /// of this release needs is a warning, so a review does not outlive the interaction it was for.
     /// </summary>
     public Dictionary<string, List<string>>? ReviewedInteractions { get; init; }
 }

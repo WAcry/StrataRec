@@ -5,11 +5,6 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// A reader that knows a value's declared type (a result column, a log context field) narrows the promoted value to it:
-/// <see cref="ScalarValue.AsInt32"/> is exact for every value of an int32 type and refuses one that would wrap;
-/// <see cref="ScalarValue.AsFloat32"/> is exact for a value read from float32 storage.
-/// </summary>
 public sealed class NarrowValueTests
 {
     [Theory]
@@ -49,7 +44,7 @@ public sealed class NarrowValueTests
     [Theory]
     [InlineData(0.1f)]
     [InlineData(float.MaxValue)]
-    [InlineData(float.Epsilon)] // the smallest subnormal
+    [InlineData(float.Epsilon)]
     [InlineData(-3.4028235e38f)]
     public void AsFloat32_IsExact_ForAValueReadFromFloat32Storage(float value)
     {
@@ -65,18 +60,12 @@ public sealed class NarrowValueTests
     [Fact]
     public void AsFloat32_RoundsADoubleToTheFloatStorageWouldHold()
     {
-        // A double, narrowed, is what a float32 column would store.
         Assert.Equal(0.1f, ScalarValue.FromFloat64(0.1).AsFloat32());
-        Assert.Equal(3f, ScalarValue.FromInt64(3).AsFloat32()); // an integer converts, as AsFloat64 converts it
+        Assert.Equal(3f, ScalarValue.FromInt64(3).AsFloat32());
         Assert.True(float.IsNaN(ScalarValue.FromFloat64(double.NaN).AsFloat32()));
         Assert.Throws<InvalidOperationException>(() => ScalarValue.FromString("x").AsFloat32());
     }
 
-    /// <summary>
-    /// A value converted to a float32 type (a float32 request input, a float32 default or parameter) is a float32 value: the
-    /// nearest float, so an expression computes with the same number a model input, a log or a result of the field gets.
-    /// It was the double given (0.1 stayed 0.1 for expressions, and became 0.1f only where it left the engine).
-    /// </summary>
     [Fact]
     public void ConvertingToFloat32_RoundsToTheNearestFloat_ScalarsListsAndIntegers()
     {
@@ -94,12 +83,11 @@ public sealed class NarrowValueTests
         Assert.True(ScalarValue.FromInt64List([16_777_217]).TryConvert(ColumnType.List(StorageKind.Float32), out var integers));
         Assert.Equal([16_777_216.0], integers.AsFloat64List().ToArray());
 
-        Assert.True(ScalarValue.FromFloat64(0.1).TryConvert(ColumnType.Float64, out var wide)); // float64: the double as given
+        Assert.True(ScalarValue.FromFloat64(0.1).TryConvert(ColumnType.Float64, out var wide));
         Assert.Equal((0.1, false), (wide.AsFloat64(), wide.IsFloat32));
-        Assert.False(ScalarValue.FromFloat64(1e39).TryConvert(ColumnType.Float32, out _)); // beyond the float32 range
+        Assert.False(ScalarValue.FromFloat64(1e39).TryConvert(ColumnType.Float32, out _));
     }
 
-    /// <summary>An integer list converted to list&lt;float64&gt; keeps every integer a double holds: not rounded through float.</summary>
     [Fact]
     public void AnIntegerListConvertedToFloat64_KeepsItsDoubles()
     {
@@ -116,7 +104,7 @@ public sealed class NarrowValueTests
     [Fact]
     public void AnIntegerConvertedToFloat32_RoundsThroughItsDouble()
     {
-        const long Value = 9_007_199_791_611_905; // the direct conversion and the one through the double differ
+        const long Value = 9_007_199_791_611_905;
         Assert.NotEqual((float)Value, (float)(double)Value);
 
         Assert.True(ScalarValue.FromInt64(Value).TryConvert(ColumnType.Float32, out var scalar));
@@ -146,7 +134,6 @@ public sealed class NarrowValueTests
         Assert.Equal([(double)column.Values[0]], list.AsFloat64List().ToArray());
     }
 
-    /// <summary>A list whose elements are floats already converts to list&lt;float32&gt; without copying them.</summary>
     [Fact]
     public void AListOfFloatsAlready_ConvertsToFloat32_WithoutACopy()
     {

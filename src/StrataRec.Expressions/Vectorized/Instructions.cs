@@ -7,7 +7,6 @@ using StrataRec.Expressions.Runtime;
 
 namespace StrataRec.Expressions.Vectorized;
 
-/// <summary>Register file of a value or validity register.</summary>
 internal enum RegFile : byte
 {
     None,
@@ -18,14 +17,12 @@ internal enum RegFile : byte
 }
 
 /// <summary>
-/// One vectorized operation computing a whole column of one IR node (backend A). Instructions are
-/// immutable after lowering and shared by concurrent evaluations; all per-call state lives in the <see cref="Frame"/>.
+/// Instructions are immutable after lowering and shared by concurrent evaluations; all per-call state lives in the
+/// <see cref="Frame"/>.
 /// </summary>
 /// <remarks>
 /// <para>Kernels are element-wise and total: lanes that are missing or that belong to dead rows hold arbitrary
 /// values, and every kernel must stay in bounds and must not throw on them.</para>
-/// <para>Output registers are allocated before the operands' registers are released, so an output never aliases an
-/// operand.</para>
 /// </remarks>
 internal abstract class Instr
 {
@@ -40,7 +37,6 @@ internal abstract class Instr
 
     public ExprType Type { get; }
 
-    /// <summary>Operands, used for liveness.</summary>
     public Opnd[] Operands { get; }
 
     public int ValueReg { get; set; } = -1;
@@ -64,9 +60,6 @@ internal abstract class Instr
     public abstract void Execute(ref Frame f);
 
     public override string ToString() => $"n{Out} = {GetType().Name.Replace("Instr", string.Empty, StringComparison.Ordinal)}({string.Join(", ", Operands)}) : {Type}";
-
-    // ------------------------------------------------------------------------------------------------------------
-    // Output helpers
 
     protected Span<double> OutF(scoped ref Frame f)
     {
@@ -108,7 +101,6 @@ internal abstract class Instr
         return f.B.AsSpan(l.ValidOffset, f.Words);
     }
 
-    /// <summary>Marks every lane missing.</summary>
     protected void ClearValid(ref Frame f) => OutValid(ref f).Clear();
 
     /// <summary>Lifted validity: AND of the operands' validity. Returns false when every lane is missing, in which
@@ -162,7 +154,6 @@ internal abstract class Instr
         return true;
     }
 
-    /// <summary>Copies an operand's validity into this node (constant all-valid stays <c>null</c>).</summary>
     protected void CopyValidity(ref Frame f, Opnd o)
     {
         if (ValidReg < 0)
@@ -184,7 +175,6 @@ internal abstract class Instr
         }
     }
 
-    /// <summary>Validity taken from a column buffer: zero-copy in full-range mode, gathered otherwise.</summary>
     protected void ValidityFromColumn(ref Frame f, ColumnBuffer buffer)
     {
         ref var l = ref f.Locs[Out];
@@ -203,9 +193,6 @@ internal abstract class Instr
             LoadKernels.GatherBits(v, f.Map, f.Physical, OutValid(ref f));
         }
     }
-
-    // ------------------------------------------------------------------------------------------------------------
-    // Operand helpers (missing scalars read as a neutral value; validity decides)
 
     protected static double ScalarF(ref Frame f, Opnd o)
     {
@@ -229,7 +216,6 @@ internal abstract class Instr
 
     protected static ReadOnlySpan<long> SpanI(ref Frame f, Opnd o) => o.IsScalar ? default : f.GetI(o.Index);
 
-    /// <summary>Writes an operand's values into this node's register (broadcasting scalars).</summary>
     protected void CopyValues(ref Frame f, Opnd o)
     {
         switch (ValueFile)
@@ -294,8 +280,6 @@ internal abstract class Instr
     }
 }
 
-/// <summary>Reads a column symbol: slot from <c>FixedSlot</c> or the request's output bindings, int32/float32
-/// promoted, zero-copy in full-range mode where the storage already has the expression type.</summary>
 internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
 {
     private static readonly long[] NoLongs = Array.Empty<long>();
@@ -408,9 +392,9 @@ internal sealed class ColumnInstr(Symbol symbol, ExprType type) : Instr(type)
 
             case (TypeKind.ListBool, ListColumn<bool>):
             case (TypeKind.ListInt, ListColumn<long>):
-            case (TypeKind.ListInt, ListColumn<int>): // list<int32> storage: read in place, see Lanes.IntList
+            case (TypeKind.ListInt, ListColumn<int>):
             case (TypeKind.ListFloat, ListColumn<double>):
-            case (TypeKind.ListFloat, ListColumn<float>): // list<float32> storage: read in place, see Lanes.FloatList
+            case (TypeKind.ListFloat, ListColumn<float>):
             case (TypeKind.ListString, ListColumn<string>):
                 loc.Source = SourceKind.Column;
                 loc.SourceRef = buffer;
@@ -696,8 +680,6 @@ internal sealed class ToFloatInstr(ExprType type, Opnd operand) : Instr(type, op
     }
 }
 
-/// <summary><c>int(x)</c> of a float64 column: lanes that truncate to an int64 keep the operand's validity, the
-/// others become missing (<see cref="ScalarOps.TryTruncate"/>). The result type is always nullable.</summary>
 internal sealed class ToIntInstr(ExprType type, Opnd operand) : Instr(type, operand)
 {
     public override void Execute(ref Frame f)
@@ -871,8 +853,6 @@ internal sealed class HasInstr(ExprType type, Opnd operand) : Instr(type, operan
     }
 }
 
-/// <summary><c>c ? a : b</c> for value kinds: both branches are computed and selected by the condition mask
-///; a missing condition gives a missing result.</summary>
 internal sealed class SelectInstr(ExprType type, Opnd condition, Opnd then, Opnd otherwise) : Instr(type, condition, then, otherwise)
 {
     public override void Execute(ref Frame f)
@@ -949,7 +929,6 @@ internal sealed class SelectInstr(ExprType type, Opnd condition, Opnd then, Opnd
     }
 }
 
-/// <summary><c>x ?? y</c> for value kinds: selects by the validity of <c>x</c>.</summary>
 internal sealed class CoalesceInstr(ExprType type, Opnd left, Opnd right) : Instr(type, left, right)
 {
     public override void Execute(ref Frame f)
@@ -958,7 +937,6 @@ internal sealed class CoalesceInstr(ExprType type, Opnd left, Opnd right) : Inst
         var mask = f.Validity(x);
         if (mask.IsConstant)
         {
-            // x is present everywhere (or missing everywhere): no per-lane selection needed.
             var chosen = mask.Fill != 0 ? x : y;
             CopyValues(ref f, chosen);
             CopyValidity(ref f, chosen);

@@ -12,8 +12,6 @@ namespace StrataRec.Core.Diagnostics;
 /// model, outcome category, tap, and the experiment arm on request-level instruments only. Durations, row counts and
 /// sizes are tagged by what was measured (node, source, model), never crossed with outcomes; outcome categories go on
 /// counters. User, entity, candidate and request ids are never tags.</para>
-/// <para>Tag arrays are built once per compiled plan (per node, arm, source, feature, model, tap) and passed as-is, so a
-/// measurement allocates nothing, with or without listeners.</para>
 /// <para>Histograms advise bucket boundaries that grow by a fixed ratio (<see cref="InstrumentAdvice{T}"/>): exporters
 /// with fixed buckets can adopt them; exponential-histogram exporters ignore them.</para>
 /// <para>Custom operators and connectors may record into these instruments with the same tag keys
@@ -70,20 +68,15 @@ public static class StrataRecMetrics
         public const string LogRejected = "stratarec.log.rejected";
     }
 
-    // Advised boundaries. Field order matters: static initializers run top to bottom, before the instruments below.
+    // Field order matters: static initializers run top to bottom, before the instruments below.
 
-    /// <summary>0.1 ms to ~13 s, ratio √2 (each bucket ~41 % wide), 35 boundaries.</summary>
     private static readonly double[] SecondsBuckets = Geometric(0.0001, Math.Sqrt(2), 35);
 
-    /// <summary>1 to 2^20, ratio 2, 21 boundaries: rows and keys.</summary>
     private static readonly long[] CountBuckets = PowersOfTwo(0, 20);
 
-    /// <summary>1 KiB to 1 GiB, ratio 2, 21 boundaries.</summary>
     private static readonly long[] ByteBuckets = PowersOfTwo(10, 30);
 
     private static readonly GuardedMeter Meter = new(StrataRecTelemetry.Meter);
-
-    // Requests: recorded once per IRecEngine request (assignment, the pipeline and its fallback pipeline).
 
     /// <summary>End-to-end request latency in seconds. Tags: <c>stratarec.pipeline</c> (absent for unknown pipelines).</summary>
     public static readonly Histogram<double> RequestDuration = Seconds(Names.RequestDuration, "End-to-end latency of engine requests.");
@@ -126,8 +119,6 @@ public static class StrataRecMetrics
     /// </summary>
     public static readonly Counter<long> RequestArmsIgnored = Meter.CreateCounter<long>(Names.RequestArmsIgnored, "{arm}", "Arm ids from the experiment platform that requests ignored, by reason.");
 
-    // Memory: recorded once per run.
-
     /// <summary>Bytes a run rented from the buffer pool. Tags: <c>stratarec.pipeline</c>.</summary>
     public static readonly Histogram<long> RequestMemoryRented = Meter.CreateHistogram<long>(Names.RequestMemoryRented, "By",
         "Bytes rented from the buffer pool per run of a pipeline.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = ByteBuckets });
@@ -139,9 +130,6 @@ public static class StrataRecMetrics
     /// Tags: <c>stratarec.pipeline</c>.
     /// </summary>
     public static readonly Counter<long> AbandonedIo = Meter.CreateCounter<long>(Names.AbandonedIo, "{operation}", "Calls and external I/O still under way after their request returned.");
-
-    // Calls of external dependencies, of every role (IoTarget): feature connectors per max_batch chunk, distributed caches
-    // per read, services per call. Tags: stratarec.io.role, stratarec.io.target.
 
     /// <summary>
     /// Time the request waited for one call: until it completed, or until its timeout or the deadline. Tags:
@@ -206,13 +194,9 @@ public static class StrataRecMetrics
     /// <summary>
     /// Values outside the int32 storage of an <c>int32</c> or <c>list&lt;int32&gt;</c> column or feature, and lists of
     /// another length than a <c>list&lt;E,N&gt;</c>'s, replaced by the default or marked missing instead of wrapping or
-    /// being stored (<c>column_out_of_range_total</c>). Recorded once
-    /// per run: the expression backend counts them per request and does not know the column. Tags:
-    /// <c>stratarec.pipeline</c>.
+    /// being stored (<c>column_out_of_range_total</c>). Recorded once per run. Tags: <c>stratarec.pipeline</c>.
     /// </summary>
     public static readonly Counter<long> ColumnOutOfRange = Meter.CreateCounter<long>(Names.ColumnOutOfRange, "{value}", "Values outside the int32 storage range or a list's fixed length, replaced or masked.");
-
-    // Feature sources.
 
     /// <summary>
     /// Values a feature source was asked for, by whether it had them: the missing ratio is
@@ -228,8 +212,6 @@ public static class StrataRecMetrics
     /// totals only drops <c>stratarec.feature</c> with a view.
     /// </summary>
     public static readonly Counter<long> SourceValues = Meter.CreateCounter<long>(Names.SourceValues, "{value}", "Feature values requested from sources, by present or missing.");
-
-    // Local feature tables: one per source and entity, tagged stratarec.source and stratarec.entity.
 
     /// <summary>
     /// Keys a request looked up in a local table, by whether the table had them: the read hit ratio is
@@ -269,10 +251,6 @@ public static class StrataRecMetrics
     /// </summary>
     public static readonly Gauge<double> LocalLoadLastSuccess = Meter.CreateGauge<double>(Names.LocalLoadLastSuccess, "s", "Unix time of the last complete load or checkpoint of local feature tables.");
 
-    // Caches: an in-process table (tier memory), a distributed cache (tier distributed) or both
-    // in front of a cached source's connector, or of a service's client. Tagged stratarec.source, stratarec.entity and
-    // stratarec.cache.tier; a service's cache with the service's name and stratarec.entity = answers.
-
     /// <summary>
     /// Keys a request read from a tier of a cached source or a service's cache (its items, or its whole call), by what the tier had. Tags: <c>stratarec.source</c>,
     /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c> = <c>memory</c> | <c>distributed</c> | <c>request</c> (<see cref="StrataRecTags.CacheTier"/>), <c>stratarec.outcome</c> =
@@ -300,8 +278,6 @@ public static class StrataRecMetrics
     /// first) | <c>capacity</c> (still usable, dropped to make room; records read recently are kept longer).
     /// </summary>
     public static readonly Counter<long> CacheEvictions = Meter.CreateCounter<long>(Names.CacheEvictions, "{record}", "Records evicted from the in-process tables of caches.");
-
-    // What generative services report, and what their operators made of it.
 
     /// <summary>
     /// Tokens generative services produced, as their clients report them (<c>ServiceStatus.OutputTokens</c>; a call whose
@@ -338,8 +314,6 @@ public static class StrataRecMetrics
     /// </summary>
     public static readonly Counter<long> ModelAnswers = Meter.CreateCounter<long>(Names.ModelAnswers, "{answer}", "Per-row answers of generative models, by whether they were used.");
 
-    // Plans.
-
     /// <summary>Time to compile a plan, failed compiles included. Tags: <c>stratarec.pipeline</c>.</summary>
     public static readonly Histogram<double> PlanCompileDuration = Seconds(Names.PlanCompileDuration, "Plan compile time.");
 
@@ -357,8 +331,6 @@ public static class StrataRecMetrics
     /// <c>artifacts_failed</c> (the manifest or an artifact it names could not be read).
     /// </summary>
     public static readonly Counter<long> PlanLoads = Meter.CreateCounter<long>(Names.PlanLoads, "{load}", "Plan loads by outcome.");
-
-    // Log pipeline.
 
     /// <summary>Batches queued or being written. Tags: <c>stratarec.log.delivery</c> = <c>durable</c> | <c>best_effort</c>.</summary>
     public static readonly UpDownCounter<long> LogQueueDepth = Meter.CreateUpDownCounter<long>(Names.LogQueueDepth, "{batch}", "Log batches queued or being written.");
@@ -405,15 +377,8 @@ public static class StrataRecMetrics
         return bounds;
     }
 
-    /// <summary>
-    /// Creates the instruments on <see cref="StrataRecTelemetry.Meter"/>, in this type's initializer. Creating an instrument
-    /// tells every <see cref="MeterListener"/> of it, on this thread: a host's listener that threw there failed the
-    /// initializer, and every later read of any instrument threw <see cref="TypeInitializationException"/> for the rest of
-    /// the process, in a plan load as in a log submission. An instrument whose creation throws is made again
-    /// on a meter disposed before it, which tells no listener and records nothing: the engine runs on without that
-    /// instrument's measurements. The listeners after the one that threw were not told of it either, which only the host
-    /// can mend, by fixing its listener.
-    /// </summary>
+    /// <summary>Creating an instrument runs the host's listeners on this thread: one that throws loses that
+    /// instrument's measurements, never the type's initializer.</summary>
     private sealed class GuardedMeter(Meter meter)
     {
         private Meter? _unpublished; // the initializer runs on one thread

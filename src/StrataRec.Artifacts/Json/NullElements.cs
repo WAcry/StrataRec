@@ -10,32 +10,19 @@ using System.Text.Json.Serialization.Metadata;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// The first null in a document where the type it was bound to says an element cannot be null: an entry of a map or an
-/// item of a list whose element type is not nullable (<c>"outputs": { "x": null }</c> for a
-/// <c>Dictionary&lt;string, Output&gt;</c>). The serializer rejects a null member itself (<c>RespectNullableAnnotations</c>)
-/// but not a null element, which then reached the code that read it as an exception without a location.
+/// The serializer rejects a null member itself (<c>RespectNullableAnnotations</c>) but not a null element.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Walks the document, guided by the serializer's own <see cref="JsonTypeInfo"/>, not the object it was bound to: the
-/// location is where the null is written (a key as written, not as its type reads it back; an index in the array, not in
-/// a set that dropped or reordered items), and no code of the bound object runs (a computed property returning
-/// <c>this</c> recursed). Element nullability comes from the member's annotations, so a model member added
-/// later is checked without being listed; at the root, and where annotations are unknown, a null element is let
-/// through (a patch's null deletes). A polymorphic object is walked as the type its discriminator names, a present
-/// <c>Nullable&lt;T&gt;</c> as its <c>T</c>; a member the serializer does not read (ignored, computed), a member with its
-/// own converter, or a type the serializer does not read as an object, list or map, is not walked into.
-/// </para>
-/// <para>
-/// Runs when a document or a config is bound, and only when the document has a null at all; members are looked up once
-/// per type.
+/// location is where the null is written (a key as written, not as its type reads it back; an index in the array, not
+/// in a set that dropped or reordered items), and no code of the bound object runs.
 /// </para>
 /// </remarks>
 internal static class NullElements
 {
     private static readonly ConcurrentDictionary<(Type, JsonSerializerOptions), Members> ByType = new();
 
-    /// <summary>Whether <paramref name="node"/> has a null anywhere (without one, nothing needs walking).</summary>
     public static bool AnyNull(JsonNode? node) => node switch
     {
         null => true,
@@ -47,8 +34,6 @@ internal static class NullElements
         _ => false,
     };
 
-    /// <param name="document">The document bound.</param>
-    /// <param name="type">The type it was bound to.</param>
     public static JsonBindingError? Find(JsonElement document, Type type, JsonSerializerOptions options) =>
         Walk(document, options.GetTypeInfo(Nullable.GetUnderlyingType(type) ?? type), declared: null, [], options);
 
@@ -79,7 +64,6 @@ internal static class NullElements
     }
 
     /// <param name="declared">The annotations of the member or element <paramref name="value"/> is; null when unknown.</param>
-    /// <param name="path">The steps to <paramref name="value"/>: a member's or key's name, or an item's index.</param>
     private static JsonBindingError? Walk(JsonElement value, JsonTypeInfo info, NullabilityInfo? declared, List<Step> path, JsonSerializerOptions options)
     {
         switch (info.Kind)
@@ -100,8 +84,6 @@ internal static class NullElements
                     }
                     else if (members.ExtensionData is { Read: true } extension)
                     {
-                        // The object's other members, at its own level: entries of the extension map (when the
-                        // serializer fills it).
                         var entry = extension.Nullability?.GenericTypeArguments is { Length: 2 } pair ? pair[1] : null;
                         if (Element(property.Value, Value(extension.Property.PropertyType, options), entry, path, new Step(property.Name, false), options) is { } error)
                         {
@@ -114,7 +96,7 @@ internal static class NullElements
             case JsonTypeInfoKind.Enumerable when value.ValueKind == JsonValueKind.Array && info.ElementType is { } itemType:
                 if ((Nullable.GetUnderlyingType(itemType) ?? itemType) is { IsValueType: true } plain && options.GetTypeInfo(plain).Kind == JsonTypeInfoKind.None)
                 {
-                    return null; // numbers, booleans, enums, with or without ?: a null is the serializer's, and nothing to walk into
+                    return null;
                 }
 
                 var item = declared?.ElementType ?? (declared?.GenericTypeArguments is { Length: 1 } single ? single[0] : null);
@@ -169,7 +151,6 @@ internal static class NullElements
             return Into(value, info.Type, declared, path, step, options);
         }
 
-        // Nullable<T> and annotated references may be null; an element whose annotations are unknown is let through.
         if (declared is null || declared.Type.IsValueType || declared.ReadState != NullabilityState.NotNull)
         {
             return null;
@@ -186,11 +167,9 @@ internal static class NullElements
         return new JsonBindingError(pointer.ToString(), $"{described} must be {JsonBindingErrors.Phrase(options, declared.Type)}, got null.", null);
     }
 
-    /// <summary>The type info of the values of a map type (the extension data's), or of <c>object</c>.</summary>
     private static JsonTypeInfo Value(Type map, JsonSerializerOptions options) =>
         options.GetTypeInfo(options.GetTypeInfo(map).ElementType ?? typeof(object));
 
-    /// <summary>The type a polymorphic object is read as: the derived type its discriminator names, else the type itself.</summary>
     private static JsonTypeInfo Concrete(JsonElement value, JsonTypeInfo info, JsonSerializerOptions options)
     {
         if (info.PolymorphismOptions is not { } polymorphism || !value.TryGetProperty(polymorphism.TypeDiscriminatorPropertyName, out var tag))
@@ -215,13 +194,11 @@ internal static class NullElements
         return info;
     }
 
-    /// <summary>A step of the path: a member's or a key's name as written, or an item's index.</summary>
     private readonly record struct Step(string? Name, bool Index, int Position = 0)
     {
         public string Token => Name ?? Position.ToString(CultureInfo.InvariantCulture);
     }
 
-    /// <summary>A type's members by their JSON names, with their annotations, and its extension data member.</summary>
     private sealed class Members
     {
         public required Dictionary<string, Member> Named { get; init; }
@@ -248,9 +225,8 @@ internal static class NullElements
                         _ => null,
                     };
 
-                    // What the serializer fills: through a setter, a constructor parameter, or the getter's object when
-                    // it populates. An ignored member has no accessors, and its constructor parameter is not read
-                    // either; a computed one has only a getter.
+                    // An ignored member has no accessors, and its constructor parameter is not read either; a computed
+                    // one has only a getter.
                     var ignored = property.Get is null && property.Set is null;
                     var read = !ignored && (parameter is not null || property.Set is not null || PopulatedWithoutSetter(property, info, options));
                     var member = new Member(property, nullability, read);
@@ -270,11 +246,8 @@ internal static class NullElements
     }
 
     /// <summary>
-    /// Whether the serializer fills a member without a setter through its getter's object. Set on the member, the
-    /// serializer has checked that it can (or refused the contract); a type's or the options' preference falls back to
-    /// replacing where the value cannot be populated (a struct, an array, an immutable or read-only collection), and a
-    /// member replaced without a setter is skipped. Whether it can is the serializer's converter's, which it
-    /// does not expose: this follows the shapes its converters populate.
+    /// Whether the serializer fills a member without a setter through its getter's object. Whether it can is the
+    /// serializer's converter's, which it does not expose: this follows the shapes its converters populate.
     /// </summary>
     private static bool PopulatedWithoutSetter(JsonPropertyInfo property, JsonTypeInfo declaring, JsonSerializerOptions options)
     {
@@ -299,8 +272,7 @@ internal static class NullElements
         {
             JsonTypeInfoKind.Object => true,
             // A collection the serializer adds to: one it can create (a read-only interface, an array or an immutable
-            // collection it cannot), or one it adds to though it cannot create one (NullElementsTests compares each
-            // with the serializer).
+            // collection it cannot), or one it adds to though it cannot create one.
             JsonTypeInfoKind.Enumerable or JsonTypeInfoKind.Dictionary => value.CreateObject is not null || AddedTo(property.PropertyType),
             _ => false,
         };
@@ -308,9 +280,8 @@ internal static class NullElements
 
     /// <summary>
     /// A collection the serializer fills through what it can add to (a list, a collection, a dictionary, a queue or a
-    /// stack), whether or not it could create one: a type derived from <c>List&lt;T&gt;</c> with only a constructor that
-    /// takes arguments has no <see cref="JsonTypeInfo.CreateObject"/>, yet the instance its getter returns is filled
-    ///. Never an array or an immutable collection, which also implement the list interfaces.
+    /// stack), whether or not it could create one. Never an array or an immutable collection, which also implement the
+    /// list interfaces.
     /// </summary>
     private static bool AddedTo(Type type)
     {
@@ -345,6 +316,5 @@ internal static class NullElements
         return false;
     }
 
-    /// <param name="Read">Whether the serializer reads the member's value from the document.</param>
     private sealed record Member(JsonPropertyInfo Property, NullabilityInfo? Nullability, bool Read);
 }

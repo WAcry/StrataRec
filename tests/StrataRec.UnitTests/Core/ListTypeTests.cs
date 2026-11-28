@@ -6,7 +6,6 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary><c>list&lt;E&gt;</c> as a type constructor: every element type, one representation per layer.</summary>
 public class ListTypeTests
 {
     [Theory]
@@ -85,14 +84,13 @@ public class ListTypeTests
         Assert.Contains(fix, error, StringComparison.Ordinal);
     }
 
-    /// <summary>There is one string type: <c>text</c>, wherever it is written, is an error that names the spelling meant.</summary>
     [Theory]
     [InlineData("text", "string")]
     [InlineData("text?", "string?")]
     [InlineData(" text ? ", "string?")]
     [InlineData("list<text>", "list<string>")]
     [InlineData("list<text>?", "list<string>?")]
-    [InlineData("list<text?>", "list<string>?")] // a nullable element means a list that may be missing
+    [InlineData("list<text?>", "list<string>?")]
     [InlineData("list<text,4>", "list<string,4>")]
     public void TheRemovedTextType_IsRejected_WithTheStringSpelling(string written, string meant)
     {
@@ -134,7 +132,6 @@ public class ListTypeTests
         var thrown = Assert.Throws<OverflowException>(() => ColumnValues.Set(column, 2, two));
         Assert.Contains("a list of 2 elements, not 3", thrown.Message, StringComparison.Ordinal);
 
-        // Converting a value to the type checks the length as well.
         Assert.True(three.TryConvert(type, out _));
         Assert.False(two.TryConvert(type, out _));
         Assert.True(ScalarValue.FromInt64List([1, 2, 3]).TryConvert(type, out var converted));
@@ -227,7 +224,6 @@ public class ListTypeTests
         Assert.False(ScalarValue.FromInt64List([1]).TryConvert(ColumnType.Int64, out _));
         Assert.False(ScalarValue.FromInt64(1).TryConvert(ColumnType.List(StorageKind.Int64), out _));
 
-        // Values of different element types are different values, even when empty.
         Assert.NotEqual(ScalarValue.FromInt64List([]), ScalarValue.FromFloat64List([]));
     }
 

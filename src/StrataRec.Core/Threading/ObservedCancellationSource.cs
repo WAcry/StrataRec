@@ -49,35 +49,15 @@ public enum CancellationSite : byte
 }
 
 /// <summary>
-/// A token source whose token the framework hands to code it does not own (an operator, a connector, a service client,
-/// an assignment provider, a cache store, a log sink). Cancelling a token runs the callbacks
-/// registered on it synchronously, on the cancelling thread, and what they throw comes out of the cancellation: out of
-/// the timer behind <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/>, that ends the process. Every
-/// cancellation of this token goes through <see cref="CancelObservedAsync"/> instead, whether the framework cancels it
-/// at a time (<see cref="CancelAfterObserved"/>) or now, or the token it is linked to is cancelled: the token observes
-/// the cancellation at once, the callbacks run on the thread pool, never on a timer's or a canceller's thread, and what
-/// they throw is observed: counted (<see cref="StrataRecMetrics.CancellationCallbackErrors"/>), reported, and never
-/// thrown or left in an unobserved task.
+/// A token source whose token the framework hands to code it does not own. Every cancellation of this token goes
+/// through <see cref="CancelObservedAsync"/> instead, whether the framework cancels it at a time
+/// (<see cref="CancelAfterObserved"/>) or now, or the token it is linked to is cancelled: the token observes the
+/// cancellation at once, the callbacks run on the thread pool, never on a timer's or a canceller's thread, and what
+/// they throw is observed: counted (<see cref="StrataRecMetrics.CancellationCallbackErrors"/>).
 /// </summary>
 /// <remarks>
-/// <para>Linked to a token (the caller's, or the token of a framework source it nests in), it is cancelled with it, but
-/// unlike <see cref="CancellationTokenSource.CreateLinkedTokenSource(CancellationToken)"/> not by running its callbacks
-/// in that cancellation: a caller's own timer (a request timeout made with <c>CancelAfter</c>) would otherwise run an
-/// extension's callback on the timer's thread all the same. So a caller's <c>Cancel</c> never throws what an extension's
-/// callback threw. The framework never waits on these tokens' callbacks: its waits are bounded by the caller's token and
-/// absolute deadlines (the shared waits' invariant 1), and a source is disposed only once whoever holds its token has
-/// ended (invariant 3). That holder may end before the pool runs the callbacks; the disposal then completes after them
-/// (<see cref="Dispose(bool)"/>).</para>
-/// <para>Costs as a linked source with <c>CancelAfter</c>: the source, its registration on the linked token, and a
-/// timer (the same timer object as <c>CancelAfter</c>'s, in a 24 B wrapper). Nothing else unless the token is cancelled
-/// while callbacks are registered on it: then the task that runs them, and one continuation until it has.</para>
-/// <para>Reporting: the <see cref="RequestEventLog"/> given, if any, summarizes failures per window
-/// (<see cref="RequestEvent.CancellationCallbacksFailed"/>, subject the site); a subclass with a logger of its own
-/// overrides <see cref="CallbacksFailed"/>. Neither can throw out of here.</para>
 /// <para>Only the cancellations above are covered: <see cref="CancelObservedAsync"/>, <see cref="CancelAfterObserved"/>
-/// and the link. The inherited <c>Cancel</c>, <c>CancelAsync</c> and <c>CancelAfter</c> bypass the protocol: their
-/// callbacks run on the calling thread or the timer, as for any token source, and a disposal concurrent with them can
-/// clear callbacks they have not taken yet. The framework never calls them on these sources.</para>
+/// and the link. The inherited <c>Cancel</c>, <c>CancelAsync</c> and <c>CancelAfter</c> bypass the protocol.</para>
 /// </remarks>
 public class ObservedCancellationSource : CancellationTokenSource
 {
@@ -86,7 +66,6 @@ public class ObservedCancellationSource : CancellationTokenSource
         "assignment", "node", "call", "fetch", "log_drain", "binding_load", "local_table", "signature_lookup", "plan_load", "cache_writer", "release",
     };
 
-    /// <summary>One tag array per site, built once: counting a failure allocates nothing.</summary>
     private static readonly KeyValuePair<string, object?>[][] SiteTags = Tags();
 
     private static readonly TimerCallback Expire = static state => _ = ((ObservedCancellationSource)state!).CancelObservedAsync();
@@ -108,7 +87,7 @@ public class ObservedCancellationSource : CancellationTokenSource
     private readonly string? _requestId;
     private readonly CancellationSite _site;
     private ITimer? _timer;
-    private Task? _callbacks; // the winning cancellation's callbacks, once Published
+    private Task? _callbacks;
     private TaskCompletionSource? _publication; // for whoever asks while the winning cancellation is still starting
     private int _state;
 
@@ -130,10 +109,8 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// <summary>Which token this is.</summary>
     public CancellationSite Site => _site;
 
-    /// <summary>Where a failure is summarized; also where the calls a <see cref="CallBound"/> bounds report.</summary>
     internal RequestEventLog? Events => _events;
 
-    /// <summary>The request a failure is sampled with; also the one the calls a <see cref="CallBound"/> bounds report.</summary>
     internal string? RequestId => _requestId;
 
     /// <summary>The tag value of <paramref name="site"/>.</summary>
@@ -145,17 +122,12 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// before the token is handed out; disposing the source stops the timer.
     /// </summary>
     /// <remarks>
-    /// Unlike <c>CancelAfter</c>'s timer, the timer runs its callback in the execution context it was set in (the
-    /// system's timers flow it; suppressing the flow would allocate a context per timer whenever the request has
-    /// async-locals, as a traced request does): the cancellation, and its log, belong to the request's trace. The
-    /// context is let go with the source.
+    /// Unlike <c>CancelAfter</c>'s timer, the timer runs its callback in the execution context it was set in: the
+    /// cancellation, and its log, belong to the request's trace. The context is let go with the source.
     /// </remarks>
-    /// <param name="delay">
-    /// Capped to what a timer accepts (<see cref="CallBound.MaxWait"/>, just under 49.7 days), so a budget of any length
-    /// is one (a request's <see cref="TimeSpan.MaxValue"/> deadline threw out of the timer); a
+    /// <param name="delay">Capped to what a timer accepts (<see cref="CallBound.MaxWait"/>, just under 49.7 days); a
     /// negative one cancels at once, except <see cref="Timeout.InfiniteTimeSpan"/>, which sets no time, as for
-    /// <c>CancelAfter</c>.
-    /// </param>
+    /// <c>CancelAfter</c>.</param>
     public void CancelAfterObserved(TimeSpan delay)
     {
         if (_timer is not null)
@@ -178,12 +150,10 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// they are done can drop it.
     /// </summary>
     /// <remarks>
-    /// Of concurrent cancellations (the timer, the linked token, the framework), one wins and cancels. The others add no
-    /// callbacks and wait for its: they return its task once it has published it, and before that, while the winner is
-    /// still starting, a task that completes with its callbacks (and does not fault). So whoever cancels, the returned task
-    /// says when the callbacks have run: a stop that finds a call's timer cancelling it still waits for the call's cleanup
-    ///. A source whose disposal was requested is not cancelled (a completed task): whoever held the token
-    /// has ended.
+    /// Of concurrent cancellations (the timer, the linked token, the framework), one wins and cancels. The others add
+    /// no callbacks and wait for its: they return its task once it has published it, and before that, while the winner
+    /// is still starting, a task that completes with its callbacks (and does not fault). A source whose disposal was
+    /// requested is not cancelled (a completed task): whoever held the token has ended.
     /// </remarks>
     public Task CancelObservedAsync()
     {
@@ -206,7 +176,7 @@ public class ObservedCancellationSource : CancellationTokenSource
             }
             catch (ObjectDisposedException)
             {
-                callbacks = Task.CompletedTask; // not through Dispose: nothing to cancel
+                callbacks = Task.CompletedTask;
             }
         }
 
@@ -220,7 +190,7 @@ public class ObservedCancellationSource : CancellationTokenSource
 
         if (Volatile.Read(ref _publication) is { } waiting)
         {
-            CompleteWith(waiting, callbacks); // someone asked while this started (see WinnersCallbacks)
+            CompleteWith(waiting, callbacks);
         }
 
         if (!callbacks.IsCompleted)
@@ -244,9 +214,8 @@ public class ObservedCancellationSource : CancellationTokenSource
     public Task WhenCallbacksRunAsync() => (Volatile.Read(ref _state) & Cancelling) == 0 ? Task.CompletedTask : WinnersCallbacks();
 
     /// <summary>
-    /// The winning cancellation's callbacks (<c>Cancelling</c> is set): its task once published; before that, a task
-    /// completed with them. The winner publishes, then reads <see cref="_publication"/>; this sets it, then reads
-    /// <see cref="_callbacks"/>: each after a full fence, so at least one of the two sees the other and completes it.
+    /// The winner publishes, then reads <see cref="_publication"/>; this sets it, then reads <see cref="_callbacks"/>:
+    /// each after a full fence, so at least one of the two sees the other and completes it.
     /// </summary>
     private Task WinnersCallbacks()
     {
@@ -296,13 +265,9 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// flag.
     /// </summary>
     /// <remarks>
-    /// <para>The disposal and the cancellation meet on <see cref="_state"/>, whose bits are set by atomic Ors of the one
-    /// field, so they are totally ordered: of the disposal's <c>DisposeRequested</c> and the winning cancellation's
-    /// <c>Published</c>, the later sees the earlier, and exactly one of them disposes after the callbacks. Requested with
-    /// no cancellation started, the disposal is at once, and a later cancellation is none.</para>
+    /// <para>Requested with no cancellation started, the disposal is at once, and a later cancellation is none.</para>
     /// <para>The first disposal arranges everything; later ones return. The base disposal runs once. A cancellation
-    /// through the base <c>Cancel</c> runs its callbacks before it returns, so it needs no waiting. Nothing is allocated
-    /// unless callbacks are still running.</para>
+    /// through the base <c>Cancel</c> runs its callbacks before it returns, so it needs no waiting.</para>
     /// </remarks>
     protected override void Dispose(bool disposing)
     {
@@ -317,12 +282,12 @@ public class ObservedCancellationSource : CancellationTokenSource
         var state = Interlocked.Or(ref _state, DisposeRequested);
         if ((state & DisposeRequested) != 0)
         {
-            return; // the first disposal arranged it
+            return;
         }
 
         if ((state & Cancelling) == 0)
         {
-            DisposeBase(); // no cancellation started, so no callback is queued
+            DisposeBase();
         }
         else if ((state & Published) != 0)
         {
@@ -344,7 +309,6 @@ public class ObservedCancellationSource : CancellationTokenSource
         }
     }
 
-    /// <summary>The base disposal, once.</summary>
     private void DisposeBase()
     {
         if ((Interlocked.Or(ref _state, BaseDisposed) & BaseDisposed) == 0)
@@ -353,7 +317,6 @@ public class ObservedCancellationSource : CancellationTokenSource
         }
     }
 
-    /// <summary>The linked token was cancelled: so is this one, its callbacks on the pool (see the remarks).</summary>
     private void CancelLinked() => _ = CancelObservedAsync();
 
     private void Failed(AggregateException errors)
@@ -370,7 +333,6 @@ public class ObservedCancellationSource : CancellationTokenSource
         }
     }
 
-    /// <summary>The first exception a callback threw, through the aggregates of linked cancellations.</summary>
     private static Exception First(AggregateException errors)
     {
         Exception first = errors;

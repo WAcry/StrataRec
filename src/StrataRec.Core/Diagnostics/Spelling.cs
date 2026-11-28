@@ -1,8 +1,8 @@
 namespace StrataRec.Core.Diagnostics;
 
 /// <summary>
-/// "Did you mean ...?" for misspelled names, so an error can say how to fix it (<c>diversty_cap</c> for <c>diversity_cap</c>). In Core so that configuration (artifacts) and the bindings' own settings (clients and
-/// connectors, which see only Core) suggest names by one rule.
+/// "Did you mean.?" for misspelled names, so an error can say how to fix it (<c>diversty_cap</c> for
+/// <c>diversity_cap</c>).
 /// </summary>
 public static class Spelling
 {
@@ -64,7 +64,6 @@ public static class Spelling
             return a.Length;
         }
 
-        // Three rolling rows of the classic dynamic programme: i-2, i-1 and i.
         var previous2 = new int[b.Length + 1];
         var previous = new int[b.Length + 1];
         var current = new int[b.Length + 1];

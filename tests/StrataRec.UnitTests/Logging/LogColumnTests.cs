@@ -7,11 +7,6 @@ using StrataRec.Logging;
 
 namespace StrataRec.UnitTests.Logging;
 
-/// <summary>
-/// A log column holds the declared type's storage: an int32 column is an <c>int[]</c>, a float32 one a <c>float[]</c>,
-/// lists of them their elements in one such array, copied from the buffer for the selected rows without widening. It
-/// logged every column at the expression's promoted type (int64, float64), so a float32 embedding doubled in size.
-/// </summary>
 public sealed class LogColumnTests
 {
     [Fact]
@@ -34,9 +29,9 @@ public sealed class LogColumnTests
 
         Assert.Equal([int.MaxValue - 3, 0, int.MaxValue], Assert.IsType<int[]>(intColumn.Values));
         Assert.Equal(new[] { false, true, false }, new[] { intColumn.IsMissing(0), intColumn.IsMissing(1), intColumn.IsMissing(2) });
-        Assert.Equal(ScalarValue.FromInt64(int.MaxValue), intColumn.Get(2)); // read back promoted, as every value is
+        Assert.Equal(ScalarValue.FromInt64(int.MaxValue), intColumn.Get(2));
         Assert.Equal([0f, 0.1f], Assert.IsType<float[]>(floatColumn.Values));
-        Assert.True(floatColumn.IsMissing(0)); // logs carry no non-finite values, float32 ones included
+        Assert.True(floatColumn.IsMissing(0));
         Assert.True(floatColumn.Get(1).IsFloat32);
         Assert.Equal("float32", floatColumn.Type.ToString());
     }
@@ -57,7 +52,7 @@ public sealed class LogColumnTests
         var column = LogColumn.Capture("emb", type, embedding, [2, 1, 0]);
         var tagColumn = LogColumn.Capture("tags", ColumnType.List(StorageKind.Int32), tags, [0, 1]);
 
-        Assert.Equal([0.1f, -2f, 0.5f, 0.25f], Assert.IsType<float[]>(column.Values)); // 4 bytes an element, not 8
+        Assert.Equal([0.1f, -2f, 0.5f, 0.25f], Assert.IsType<float[]>(column.Values));
         Assert.Equal([0, 2, 2, 4], column.Offsets!);
         Assert.True(column.IsMissing(1));
         Assert.True(column.Get(0).IsFloat32List);
@@ -65,10 +60,6 @@ public sealed class LogColumnTests
         Assert.Equal(ScalarValue.FromInt64List([int.MinValue, 7]), tagColumn.Get(0));
     }
 
-    /// <summary>
-    /// A row of a list&lt;E,N&gt; column with another length (a custom operator can write one) is missing in the log, as
-    /// an expression reading it finds it: logged, it would contradict the declared width.
-    /// </summary>
     [Fact]
     public void Capture_LogsAFixedLengthListsRowOfAnotherLength_AsMissing()
     {
@@ -86,10 +77,6 @@ public sealed class LogColumnTests
         Assert.Equal([0, 0, 2, 2], column.Offsets!);
     }
 
-    /// <summary>
-    /// The width is the logged type's: storage of any length logged as list&lt;E,N&gt; (its element type is the same) and
-    /// values given as they are both log a row of another length missing.
-    /// </summary>
     [Fact]
     public void ARowOfAnotherLength_ThanTheLoggedListOfN_IsMissing_FromAnyStorage_AndFromValues()
     {
@@ -129,8 +116,8 @@ public sealed class LogColumnTests
         Assert.Equal([-5, 0], Assert.IsType<int[]>(ints.Values));
         Assert.True(ints.IsMissing(1));
         Assert.Equal([0.1f, 0f], Assert.IsType<float[]>(floats.Values));
-        Assert.True(floats.IsMissing(1)); // beyond the float32 range: an infinity in float32 storage
-        Assert.Equal([0.5f, 0.25f], Assert.IsType<float[]>(lists.Values)); // the missing row adds no elements, no spare capacity
+        Assert.True(floats.IsMissing(1));
+        Assert.Equal([0.5f, 0.25f], Assert.IsType<float[]>(lists.Values));
         Assert.Equal([0, 0, 2, 2], lists.Offsets!);
         Assert.True(lists.IsMissing(0));
         Assert.Throws<InvalidOperationException>(() => LogColumn.FromValues("n", ColumnType.Int32, [ScalarValue.FromInt64(1L << 40)]));
@@ -182,7 +169,7 @@ public sealed class LogColumnTests
         Assert.Contains("\"context\":{\"ctr\":0.1,\"w\":0.10000000149011612,\"v\":[0.1,0.5]}", json, StringComparison.Ordinal);
         using var document = JsonDocument.Parse(json);
         Assert.True(LogBatchJson.TryReadValue(document.RootElement.GetProperty("float_cols").GetProperty("f")[0], ColumnType.Float32, out var read, out _));
-        Assert.Equal(ScalarValue.FromFloat32(0.1f), read); // reads back as the float logged
+        Assert.Equal(ScalarValue.FromFloat32(0.1f), read);
     }
 
     [Fact]

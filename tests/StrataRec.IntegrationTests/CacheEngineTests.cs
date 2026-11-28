@@ -14,12 +14,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// A <c>cache</c> source through the engine: the sample's <c>item_store</c> (every column type of the catalog,
-/// nullable fields, batches of 25) read through an in-process table in front of its connector, and optionally a
-/// distributed tier shared by engines. Served results are those of the fetched source; a recorded request replays exactly
-/// without the cache; the distributed tier is a binding instance.
-/// </summary>
 /// <remarks>
 /// Write-backs run in the background, so how many of a first request's keys miss depends on when they land: a later read
 /// of the same request finds what an earlier one wrote back, or fetches it again. The tests wait for a state (a request
@@ -47,9 +41,9 @@ public sealed class CacheEngineTests
         Assert.True(expected.Succeeded && first.Succeeded, first.Error);
         Assert.Equal(Items(expected), Items(first));
         Assert.Equal(Items(expected), Items(fromTable));
-        Assert.True(firstRead.Keys("memory", "miss") >= 1 && firstRead.ConnectorKeys >= 1, firstRead.ToString()); // a cold table
-        Assert.Equal(firstRead.Keys("memory", "miss") + firstRead.Keys("memory", "hit"), tableRead.Keys("memory", "hit")); // the same reads, all hits
-        Assert.Equal(0, tableRead.Keys("distributed", "miss") + tableRead.Keys("distributed", "hit")); // there is no distributed tier
+        Assert.True(firstRead.Keys("memory", "miss") >= 1 && firstRead.ConnectorKeys >= 1, firstRead.ToString());
+        Assert.Equal(firstRead.Keys("memory", "miss") + firstRead.Keys("memory", "hit"), tableRead.Keys("memory", "hit"));
+        Assert.Equal(0, tableRead.Keys("distributed", "miss") + tableRead.Keys("distributed", "hit"));
     }
 
     [Fact]
@@ -74,7 +68,6 @@ public sealed class CacheEngineTests
             Assert.Equal(Items(recorded), Items(outcome.Result));
         }
 
-        // Neither tier nor the connector: a replay reads no table and writes nothing back.
         Assert.DoesNotContain(metrics.Measurements.Skip(before), m => m.Instrument.StartsWith("stratarec.cache.", StringComparison.Ordinal)
             || (m.Instrument == StrataRecMetrics.Names.IoKeys && Equals(m.Tags[StrataRecTags.IoTarget], Source)));
     }
@@ -88,8 +81,6 @@ public sealed class CacheEngineTests
         await UntilServedFromTable(engine, metrics, MetricsTests.Request);
         var table = ItemTable(engine);
 
-        // The configuration loaded again: a new plan with a lease of its own gets the connector the host holds, so the
-        // same table, with every row already written back.
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var before = Snapshot.Of(metrics);
         var result = await engine.ExecuteAsync(MetricsTests.Request("req-swapped"), TestContext.Current.CancellationToken);
@@ -105,15 +96,13 @@ public sealed class CacheEngineTests
     [Fact]
     public async Task APlanSwapThatOnlyTunesTheCache_KeepsItsRecords_AndTheTableTakesTheNewLimits()
     {
-        // A cache of millions of items that started empty whenever a timeout changed would send every key to its origin
-        // at once: times and limits are not what the records come from.
         var root = HomeFeedTestHost.LoadModified(r => CacheItems(r)).Root;
         await using var engine = await Load(root, bindings: null);
         using var metrics = new MetricCapture();
         await UntilServedFromTable(engine, metrics, MetricsTests.Request);
         var table = ItemTable(engine);
 
-        ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_batch\":25", "\"max_batch\":20"); // the file as Rebind wrote it
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_batch\":25", "\"max_batch\":20");
         ReplayTests.Edit(root, "bindings/local.jsonc", "\"ttl_ms\":600000", "\"ttl_ms\":300000,\"stale_if_error_ms\":1000");
         ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_bytes\":\"4MiB\"", "\"max_bytes\":\"8MiB\"");
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
@@ -130,8 +119,6 @@ public sealed class CacheEngineTests
     [Fact]
     public async Task ACacheWithAVersion_KeepsItsRecordsWhenTheConnectorsSettingsChange_UntilTheVersionChanges()
     {
-        // Without a version, other connector settings may be other data, so the cache starts anew (the next test). The
-        // version says they are not: the records stay, in the table and under the same keys of the distributed tier.
         var ct = TestContext.Current.CancellationToken;
         var shared = new SharedStores();
         var root = HomeFeedTestHost.LoadModified(r => CacheItems(r, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 1 }""")).Root;
@@ -143,7 +130,6 @@ public sealed class CacheEngineTests
         var table = ItemTable(engine);
         var prefix = table.Cache!.Keyspace.Prefix;
 
-        // The same data at another place: a setting of the connector.
         ReplayTests.Edit(root, "bindings/local.jsonc", "fixtures/items.json", "fixtures/items-moved.json");
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: ct)).Applied);
         var before = Snapshot.Of(metrics);
@@ -154,8 +140,6 @@ public sealed class CacheEngineTests
         Assert.EndsWith(":v.1:", prefix, StringComparison.Ordinal);
         Assert.True(kept.Keys("memory", "miss") == 0 && kept.Keys("memory", "hit") > 0 && kept.ConnectorKeys == 0, kept.ToString());
 
-        // Another version: a cache of its own. Both tiers hold every key under the old one, and neither answers: the
-        // request's first read of each key goes to the connector.
         await Eventually(shared.HoldsEveryKeyRead, () => "the distributed write-back: " + Snapshot.Of(metrics));
         ReplayTests.Edit(root, "bindings/local.jsonc", "\"version\":\"1\"", "\"version\":\"2\"");
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: ct)).Applied);
@@ -166,21 +150,18 @@ public sealed class CacheEngineTests
         Assert.NotSame(table, ItemTable(engine));
         Assert.EndsWith(":v.2:", ItemTable(engine).Cache!.Keyspace.Prefix, StringComparison.Ordinal);
         Assert.True(anew.Keys("memory", "miss") >= 1 && anew.ConnectorKeys >= 1, anew.ToString());
-        Assert.Equal(anew.Keys("distributed", "miss"), anew.ConnectorKeys); // what the shared tier was asked and did not have
+        Assert.Equal(anew.Keys("distributed", "miss"), anew.ConnectorKeys);
     }
 
     [Fact]
     public async Task TwoEnginesSharingAHost_WithConnectorsOfTheirOwn_NeverReadEachOthersTable()
     {
-        // The same configuration, so the same table identity, but each engine resolves its bindings with a registry of its
-        // own, which creates its own connector: the second engine finds an empty table and asks its own connector, instead
-        // of serving the rows the first engine's connector fetched.
         var root = HomeFeedTestHost.LoadModified(r => CacheItems(r)).Root;
         using var host = new BindingHost();
         await using var first = await Load(root, host);
         await using var second = await Load(root, host);
         using var metrics = new MetricCapture();
-        await UntilServedFromTable(first, metrics, MetricsTests.Request); // the first engine's table holds every key it reads
+        await UntilServedFromTable(first, metrics, MetricsTests.Request);
 
         var before = Snapshot.Of(metrics);
         var result = await second.ExecuteAsync(MetricsTests.Request("req-second"), TestContext.Current.CancellationToken);
@@ -215,15 +196,9 @@ public sealed class CacheEngineTests
         Assert.True(secondRead.Keys("distributed", "hit") >= 1, secondRead.ToString());
         Assert.True(secondRead.Keys("distributed", "miss") + secondRead.Keys("distributed", "error") + secondRead.Keys("distributed", "mismatch") == 0, firstRead + " / " + secondRead);
         Assert.Equal(0, secondRead.ConnectorKeys);
-        Assert.Equal(2, shared.Created.Count); // one store per engine: each engine has its own binding host
+        Assert.Equal(2, shared.Created.Count);
     }
 
-    /// <summary>
-    /// The shared tier's keys say where a source's values come from: a source bound to other data reads
-    /// its connector, not what the earlier binding left under the same source and entity, where every record had the same
-    /// layout and was taken for fresh (the new plan served the old data until it expired); a binding that only tunes how
-    /// the values are fetched keeps them.
-    /// </summary>
     [Fact]
     public async Task ASourceBoundToOtherData_DoesNotReadTheEarlierBindingsValues_AndOneOnlyTunedDoes()
     {
@@ -238,8 +213,7 @@ public sealed class CacheEngineTests
             await Eventually(shared.HoldsEveryKeyRead, () => "the first engine's distributed write-back: " + Snapshot.Of(metrics));
         }
 
-        // Fetched in other batches: the same values, read from the shared tier.
-        ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_batch\":25", "\"max_batch\":20"); // the file as Rebind wrote it
+        ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_batch\":25", "\"max_batch\":20");
         var before = Snapshot.Of(metrics);
         await using (var tuned = await Load(root, shared))
         {
@@ -279,18 +253,18 @@ public sealed class CacheEngineTests
         var store = Assert.Single(shared.Created);
         Assert.Equal(1, store.Loads);
 
-        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied); // the same binding: the same store
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         Assert.Single(shared.Created);
 
         CacheItems(root, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 1, "timeout_ms": 20 }""");
-        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied); // how long the engine waits is not the store's identity
+        Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         Assert.Single(shared.Created);
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-unchanged"), TestContext.Current.CancellationToken)).Succeeded);
 
         CacheItems(root, $$"""{ "store": "{{SharedStores.TypeName}}", "generation": 2 }""");
         Assert.True((await engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var replacement = Assert.Single(shared.Created, s => s != store);
-        await store.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // no served plan uses it any more
+        await store.Disposed.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(1, replacement.Loads);
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-changed"), TestContext.Current.CancellationToken)).Succeeded);
 
@@ -318,7 +292,6 @@ public sealed class CacheEngineTests
         return engine;
     }
 
-    /// <summary>An engine on its own registries (so its own connector) over <paramref name="bindings"/>, or a host of its own.</summary>
     private static async Task<RecEngine> Load(string root, BindingHost? bindings)
     {
         var engine = new RecEngine(new PlanEnvironment { BaseDirectory = root }, bindings: bindings);
@@ -341,10 +314,6 @@ public sealed class CacheEngineTests
         return request!;
     }
 
-    /// <summary>
-    /// Runs requests until one reads every key of <see cref="Source"/> from the in-process table (the earlier ones' write-backs
-    /// landed): its result, and what it read.
-    /// </summary>
     private static async Task<(RecResult Result, Snapshot Read)> UntilServedFromTable(RecEngine engine, MetricCapture metrics, Func<string, RecRequest> request)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
@@ -378,7 +347,6 @@ public sealed class CacheEngineTests
     internal static List<(long, int, string)> Items(RecResult result) =>
         result.Items.Select(i => (i.Id.Int64Value, i.Rank, string.Join(";", i.Columns.OrderBy(c => c.Key).Select(c => $"{c.Key}={c.Value}")))).ToList();
 
-    /// <summary>What <see cref="Source"/> read so far: keys by cache tier and outcome, and keys asked of its connector.</summary>
     internal sealed record Snapshot(Dictionary<(string Tier, string Outcome), long> Counts, long ConnectorKeys)
     {
         public static Snapshot Of(MetricCapture metrics)
@@ -409,9 +377,8 @@ public sealed class CacheEngineTests
 }
 
 /// <summary>
-/// <c>shared_memory@1</c>: distributed cache stores over one in-memory dictionary, so that engines with their own binding
-/// hosts share records as instances share a Redis. Accepts any settings (a test changes one to change the identity) and
-/// counts each store's loads and disposals.
+/// <c>shared_memory@1</c>: distributed cache stores over one in-memory dictionary, so that engines with their own
+/// binding hosts share records as instances share a Redis.
 /// </summary>
 internal sealed class SharedStores : IBindingFactory<ICacheStore>
 {
@@ -427,21 +394,17 @@ internal sealed class SharedStores : IBindingFactory<ICacheStore>
 
     public ConcurrentQueue<Store> Created { get; } = new();
 
-    /// <summary>Awaited by every read before it answers, when set: a store that is slow for as long as the test says.</summary>
     public Func<Task>? BeforeGet { get; set; }
 
     private int _gets;
 
-    /// <summary>The reads the stores were asked for, each a round trip.</summary>
     public int Gets => Volatile.Read(ref _gets);
 
-    /// <summary>The records the stores hold.</summary>
     public int Records => _records.Count;
 
     /// <summary>The records the stores were given, one written over another too.</summary>
     public int Sets => Volatile.Read(ref _sets);
 
-    /// <summary>Whether every key any store was asked for has a record: what was missed has been written back.</summary>
     public bool HoldsEveryKeyRead() => !_read.IsEmpty && _read.Keys.All(_records.ContainsKey);
 
     public ICacheStore Create(BindingContext context)

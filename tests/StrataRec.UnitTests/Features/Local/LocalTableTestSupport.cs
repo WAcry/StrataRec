@@ -7,10 +7,8 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.UnitTests.Features.Local;
 
-/// <summary>Schemas, values and read helpers shared by the local feature table tests.</summary>
 internal static class LocalTableTestSupport
 {
-    /// <summary>One field of every storage type a catalog feature can have.</summary>
     public static readonly LocalTableField[] AllTypes =
     {
         new("b", ColumnType.Bool),
@@ -40,7 +38,6 @@ internal static class LocalTableTestSupport
     public static EntityKey Key(EntityKeyType keyType, long id) =>
         keyType == EntityKeyType.Int64 ? EntityKey.FromInt64(id) : EntityKey.FromString("k-" + id);
 
-    /// <summary>A value of every field derived from <paramref name="seed"/>, as promoted scalars.</summary>
     public static Dictionary<string, ScalarValue> Values(long seed) => new(StringComparer.Ordinal)
     {
         ["b"] = ScalarValue.FromBool(seed % 2 == 0),
@@ -59,7 +56,6 @@ internal static class LocalTableTestSupport
         ["lf64"] = ScalarValue.FromFloat64List(new[] { seed / 3.0, 1e300 }),
     };
 
-    /// <summary>Writes (or partially writes) a record through the writer; returns what <see cref="RecordBuilder.Commit"/> returned.</summary>
     public static bool Write(IFeatureTableWriter writer, EntityKey key, long version, IReadOnlyDictionary<string, ScalarValue> values)
     {
         var builder = writer.Begin(key, version);
@@ -81,7 +77,6 @@ internal static class LocalTableTestSupport
         return builder.Commit();
     }
 
-    /// <summary>Every field of a key read through <see cref="TableVersion.Read"/>, or null when the key has no record.</summary>
     public static Dictionary<string, ScalarValue>? ReadRecord(TableVersion version, LocalTableSchema schema, EntityKey key)
     {
         var record = version.Find(key);
@@ -149,7 +144,6 @@ internal static class LocalTableTestSupport
         }
     }
 
-    /// <summary>The expected promoted value of a field after a round trip (float32 storage narrows).</summary>
     public static ScalarValue Stored(ColumnType type, ScalarValue value) => value.IsMissing
         ? value
         : type.Kind switch
@@ -182,7 +176,6 @@ internal static class LocalTableTestSupport
         AssertRecord(expected, schema, array);
     }
 
-    /// <summary>A scratch directory removed at dispose.</summary>
     public sealed class TempDirectory : IDisposable
     {
         public TempDirectory()

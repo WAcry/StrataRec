@@ -6,12 +6,6 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// The host's <see cref="Activity.CurrentChanged"/> handler runs whenever a call gives the flow its activity
-/// back. One that threw when the call's span stopped being current went up through <see cref="IoCall.Sent"/>: the call
-/// site had sent the call and neither completed it nor let go of the request's memory, and the caller got the handler's
-/// exception for a call that had answered.
-/// </summary>
 public sealed class BoundedCallCurrentChangedTests
 {
     [Theory]

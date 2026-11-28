@@ -18,10 +18,9 @@ public enum TypeSite : byte
 }
 
 /// <summary>
-/// The type spellings each place of a configuration accepts (<see cref="TypeSite"/>), and the error for one it does not:
-/// a "did you mean" when a valid spelling is close (or the place's spelling of a name other languages use, such as
-/// <c>double</c>), and the spellings valid there. The one place that says which types columns, features and parameters
-/// take, so their errors agree with what they accept.
+/// The type spellings each place of a configuration accepts (<see cref="TypeSite"/>), and the error for one it does
+/// not: a "did you mean" when a valid spelling is close (or the place's spelling of a name other languages use, such as
+/// <c>double</c>), and the spellings valid there.
 /// </summary>
 public static class ConfigTypes
 {
@@ -92,7 +91,6 @@ public static class ConfigTypes
 
             if (site == TypeSite.Parameter && !IsParameterLeaf(type))
             {
-                // Both mistakes at once (int32?) get one fix: the parameter type the spelling meant, which params accept.
                 message = type.Nullable
                     ? $"Parameter types are written without '?': a parameter always has a value (got '{written}')."
                     : $"'{leaf}' is not a parameter type.";
@@ -109,7 +107,6 @@ public static class ConfigTypes
         message = site == TypeSite.Parameter ? $"Unknown parameter type '{written}'." : $"Unknown type '{written}'.";
         if (ColumnType.TextAsString(leaf) is not null)
         {
-            // One string type: Suggest spells the type meant with string (text? → string?, list<text> → list<string>).
             message = $"{message[..^1]}: {ColumnType.NoTextType}.";
             if (site == TypeSite.Parameter && leaf.StartsWith("list<", StringComparison.Ordinal))
             {
@@ -119,8 +116,6 @@ public static class ConfigTypes
         }
         else if (ColumnType.VectorAsList(leaf) is not null)
         {
-            // There is no vector type: a vector (an embedding) is a list of fixed length, which Suggest spells with the
-            // element and length written. A parameter is never a list.
             message = $"{message[..^1]}: a vector is a list of fixed length, list<E,N>.";
             if (site == TypeSite.Parameter)
             {
@@ -130,8 +125,6 @@ public static class ConfigTypes
         }
         else if (site != TypeSite.Parameter && leaf.StartsWith("list<", StringComparison.Ordinal) && !ColumnType.TryParse(leaf, out _, out var why))
         {
-            // Why a list cannot hold what was written (a nested list, a nullable element, a length). A feature is never
-            // written with '?', so there the fix for a nullable element is the plain list, without a default.
             message = site == TypeSite.Feature && leaf.EndsWith("?>", StringComparison.Ordinal)
                 ? $"Unknown type '{written}': a list's elements are never missing, and a feature without 'default' is the one that may be missing."
                 : why;
@@ -144,7 +137,6 @@ public static class ConfigTypes
         return false;
     }
 
-    /// <summary>A valid spelling close to <paramref name="written"/> (a typo, another case, or another language's name), or null.</summary>
     internal static string? Suggest(string written, TypeSite site)
     {
         var nullable = written.EndsWith('?') && site == TypeSite.Column;
@@ -153,14 +145,11 @@ public static class ConfigTypes
         var suggestion = Alias(core, site);
         if (suggestion is null && site != TypeSite.Parameter)
         {
-            // A vector is a fixed-length list; the length written is kept, e.g. vec<float32,4> → list<float32,4>.
             suggestion = ColumnType.VectorAsList(core);
         }
 
         if (suggestion is null && site != TypeSite.Parameter && ListInner(core) is { } listInner)
         {
-            // Keep the element written, in this place's spelling: list<double> → list<float64>, array<str> → list<string>;
-            // and a valid length: list<double,64> → list<float64,64>.
             var inner = listInner;
             var length = string.Empty;
             var comma = inner.LastIndexOf(',');
@@ -179,14 +168,13 @@ public static class ConfigTypes
 
         if (suggestion is null && Array.IndexOf(candidates, core) >= 0)
         {
-            suggestion = core; // only the case differed
+            suggestion = core;
         }
 
         suggestion ??= NameSuggestions.Closest(core, candidates);
         return suggestion is null ? null : nullable ? suggestion + "?" : suggestion;
     }
 
-    /// <summary>What another language calls a type, in this place's spelling.</summary>
     private static string? Alias(string name, TypeSite site) => name switch
     {
         "int" or "integer" or "long" => "int64",
@@ -200,8 +188,6 @@ public static class ConfigTypes
 
     private static string Wrap(string leaf, bool isMap) => isMap ? $"map<string,{leaf}>" : leaf;
 
-    /// <summary>The element written in a list type of this or another language's spelling (<c>list&lt;E&gt;</c>,
-    /// <c>array&lt;E&gt;</c>, <c>E[]</c>), or null.</summary>
     private static string? ListInner(string core)
     {
         foreach (var prefix in new[] { "list<", "array<", "sequence<", "seq<" })
@@ -215,7 +201,6 @@ public static class ConfigTypes
         return core.EndsWith("[]", StringComparison.Ordinal) ? core[..^2].Trim() : null;
     }
 
-    /// <summary>A type a parameter (or a map parameter's values) takes: int64, float64, bool or string, never nullable.</summary>
     private static bool IsParameterLeaf(ColumnType type) =>
         !type.Nullable && type.Kind is StorageKind.Int64 or StorageKind.Float64 or StorageKind.Bool or StorageKind.String;
 }

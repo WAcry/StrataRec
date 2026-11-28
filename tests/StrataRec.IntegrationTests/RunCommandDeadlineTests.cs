@@ -15,7 +15,6 @@ public sealed class RunCommandDeadlineTests
         var directory = Directory.CreateTempSubdirectory("stratarec-run-deadline-").FullName;
         try
         {
-            // A deadline no request can meet: it is spent before execution starts.
             var request = Path.Combine(directory, "request.json");
             await File.WriteAllTextAsync(request,
                 "{ \"pipeline_id\": \"home_feed\", \"request_id\": \"r\", \"inputs\": { \"user_id\": 1001, \"session_id\": \"s-1\", \"surface\": \"home\" }, \"deadline_ms\": 0.001 }",
@@ -29,7 +28,6 @@ public sealed class RunCommandDeadlineTests
             Directory.Delete(directory, recursive: true);
         }
 
-        // A value the parser cannot convert is its usage error, not a crash out of the validator.
         foreach (var value in new[] { "abc", "0" })
         {
             var usage = new StringWriter();
@@ -46,7 +44,7 @@ public sealed class RunCommandDeadlineTests
                 CancellationToken.None, deadlineMs: deadlineMs);
             using var result = JsonDocument.Parse(output.ToString());
             var succeeded = result.RootElement.GetProperty("succeeded").GetBoolean();
-            Assert.Equal(succeeded ? 0 : 1, code); // the exit code is the request's outcome
+            Assert.Equal(succeeded ? 0 : 1, code);
             return succeeded;
         }
     }

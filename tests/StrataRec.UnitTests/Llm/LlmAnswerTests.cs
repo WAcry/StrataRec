@@ -6,7 +6,6 @@ using StrataRec.Llm;
 
 namespace StrataRec.UnitTests.Llm;
 
-/// <summary>The one parser of generated answers: fences, strict JSON, and what each element counts as.</summary>
 public sealed class LlmAnswerTests
 {
     [Theory]
@@ -14,10 +13,10 @@ public sealed class LlmAnswerTests
     [InlineData("```JSON \r\n [1] \r\n```", "[1]")]
     [InlineData("```\n[1]\n```", "[1]")]
     [InlineData("```\n```", "")]
-    [InlineData("```js\n[1]\n```", "```js\n[1]\n```")] // another language: not unwrapped
-    [InlineData("```[1]```", "```[1]```")] // no line for the opening fence
-    [InlineData("```json\n[1]\n```\n```json\n[2]\n```", "[1]\n```\n```json\n[2]")] // two fences: the outer one only, the rest fails the parse
-    [InlineData("```json\n[2,\"```\",1]\n```", "[2,\"```\",1]")] // backticks in a JSON string are content
+    [InlineData("```js\n[1]\n```", "```js\n[1]\n```")]
+    [InlineData("```[1]```", "```[1]```")]
+    [InlineData("```json\n[1]\n```\n```json\n[2]\n```", "[1]\n```\n```json\n[2]")]
+    [InlineData("```json\n[2,\"```\",1]\n```", "[2,\"```\",1]")]
     [InlineData("[1]", "[1]")]
     [InlineData("```", "```")]
     public void OneFenceAroundTheWholeAnswer_IsRemoved(string text, string inside)
@@ -58,7 +57,6 @@ public sealed class LlmAnswerTests
     [Fact]
     public void BackticksInAFencedAnswer_AreContent_NotASecondFence()
     {
-        // The whole inside was scanned for another fence, so a string holding ``` failed a valid answer.
         var (ranks, rankCounts, rankError) = Parse("```json\n[2,\"```\",1]\n```", AnswerKind.Rank, 10, 20, 30);
         var (ids, idCounts, idError) = Parse("```json\n[\"code```id\"]\n```", AnswerKind.EntityId, "a", "code```id");
         var (_, _, twoBlocks) = Parse("```json\n[1]\n```\n```json\n[2]\n```", AnswerKind.Rank, 10, 20, 30);
@@ -69,13 +67,12 @@ public sealed class LlmAnswerTests
         Assert.Null(idError);
         Assert.Equal(new[] { 1 }, ids);
         Assert.Equal(new AnswerCounts(1, 0, 0), idCounts);
-        Assert.NotNull(twoBlocks); // a second code block is not one strict JSON array
+        Assert.NotNull(twoBlocks);
     }
 
     [Fact]
     public void AStringThatIsNotValidUnicode_IsAnUnknownElement()
     {
-        // An unpaired surrogate escape is valid JSON but cannot equal an id; it threw instead.
         var (positions, counts, error) = Parse("""["\uD800", "b", "\uDC00x"]""", AnswerKind.EntityId, "a", "b");
 
         Assert.Null(error);
@@ -88,16 +85,15 @@ public sealed class LlmAnswerTests
     [InlineData('\uDC00')]
     public void ARawUnpairedSurrogate_IsAnUnknownElement_NeverTheReplacementCharacter(char lone)
     {
-        // A client's string can hold an unpaired surrogate itself, not only its JSON escape. UTF-8 encoding
-        // replaced it with U+FFFD, which matched an entity whose id is U+FFFD.
+        // A client's string can hold an unpaired surrogate itself, not only its JSON escape.
         var answer = "[\"" + lone + "\", \"a\", \"x\uD83D\uDE00\"]";
         var (positions, counts, error) = Parse(answer, AnswerKind.EntityId, "\uFFFD", "a", "x\uD83D\uDE00");
         var (_, _, outside) = Parse("[" + lone + "]", AnswerKind.Rank, 10, 20);
 
         Assert.Null(error);
-        Assert.Equal(new[] { 1, 2 }, positions); // a valid pair (an emoji) still matches
+        Assert.Equal(new[] { 1, 2 }, positions);
         Assert.Equal(new AnswerCounts(2, 1, 0), counts);
-        Assert.NotNull(outside); // outside a string it is not JSON
+        Assert.NotNull(outside);
     }
 
     [Theory]
@@ -105,8 +101,7 @@ public sealed class LlmAnswerTests
     [InlineData('\uDC00')]
     public void ARawUnpairedSurrogate_AfterAnOddRunOfBackslashes_LeavesTheAnswerInvalid(char lone)
     {
-        // The surrogate is the character of an escape, which makes the answer invalid JSON. Written as its own
-        // escape it made "\\uD800" (an escaped backslash and five letters), a valid string that matched that entity.
+        // The surrogate is the character of an escape, which makes the answer invalid JSON.
         var escaped = "\\u" + ((int)lone).ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
         var (_, _, one) = Parse("[\"\\" + lone + "\", \"a\"]", AnswerKind.EntityId, escaped, "a");
         var (_, _, three) = Parse("[\"\\\\\\" + lone + "\", \"a\"]", AnswerKind.EntityId, "\\" + escaped, "a");
@@ -132,9 +127,9 @@ public sealed class LlmAnswerTests
     }
 
     [Theory]
-    [InlineData("[1, 2,]")] // RFC 8259: no trailing commas
-    [InlineData("[1 /* first */]")] // nor comments
-    [InlineData("[1] [2]")] // nor a second value
+    [InlineData("[1, 2,]")]
+    [InlineData("[1 /* first */]")]
+    [InlineData("[1] [2]")]
     [InlineData("[1, 2")]
     public void AnythingButOneStrictJsonArray_IsInvalid(string text)
     {
@@ -161,7 +156,6 @@ public sealed class LlmAnswerTests
         Assert.Equal(new AnswerCounts(1, 2, 0), counts);
     }
 
-    /// <summary>An id a filter dropped is present, also once a compaction released its row.</summary>
     [Fact]
     public void AnIdWhoseRowACompactionReleased_IsPresent_NotNew()
     {
@@ -177,7 +171,7 @@ public sealed class LlmAnswerTests
 
         Assert.Null(error);
         Assert.Equal(new long[] { 5 }, ids[..counts.Used]);
-        Assert.Equal(new AnswerCounts(1, 0, 0, Present: 2), counts); // 1 (released) and 2 (live) are present
+        Assert.Equal(new AnswerCounts(1, 0, 0, Present: 2), counts);
         memory.Release();
     }
 

@@ -3,11 +3,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// <see cref="StringDedup"/>, the scoped deduplication behind <c>IFeatureBatchWriter.Intern</c> and the cache's record
-/// decoding: one instance per distinct value from characters or UTF-8, a bounded table, and decoding as
-/// <see cref="Encoding.UTF8"/> decodes.
-/// </summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class StringDedupTests
 {
@@ -29,7 +24,6 @@ public sealed class StringDedupTests
         Assert.Same(held, dedup.InternUtf8(longUtf8));
         Assert.Same(held, dedup.Intern(longValue.AsSpan()));
 
-        // At the bound and one past it.
         var atBound = new string('y', StringDedup.OnStack);
         var pastBound = new string('z', StringDedup.OnStack + 1);
         Assert.Same(dedup.InternUtf8(Encoding.UTF8.GetBytes(atBound)), dedup.Intern(atBound.AsSpan()));
@@ -47,7 +41,7 @@ public sealed class StringDedupTests
         new byte[] { 0xF0, 0x9F, 0x98, 0x61 }, // a 4-byte sequence cut short
         new byte[] { 0xED, 0xA0, 0x80 }, // an encoded surrogate
         new byte[] { 0xC0, 0xAF }, // an overlong form
-        Enumerable.Repeat((byte)0x62, 300).Concat(new byte[] { 0xFE, 0xE2, 0x82 }).ToArray(), // long, past the stack bound
+        Enumerable.Repeat((byte)0x62, 300).Concat(new byte[] { 0xFE, 0xE2, 0x82 }).ToArray(),
     };
 
     [Theory]
@@ -73,14 +67,14 @@ public sealed class StringDedupTests
         }
 
         Assert.Equal(StringDedup.MaxValues, dedup.Count);
-        Assert.Same(dedup.Intern("v1".AsSpan()), dedup.Intern("v1".AsSpan())); // held before the bound
+        Assert.Same(dedup.Intern("v1".AsSpan()), dedup.Intern("v1".AsSpan()));
 
         var past = "v" + (StringDedup.MaxValues + 5);
         var first = dedup.Intern(past.AsSpan());
         var second = dedup.InternUtf8(Encoding.UTF8.GetBytes(past));
         Assert.Equal(past, first);
         Assert.Equal(past, second);
-        Assert.NotSame(first, second); // past the bound: a string of its own each time
+        Assert.NotSame(first, second);
         Assert.Equal(StringDedup.MaxValues, dedup.Count);
     }
 

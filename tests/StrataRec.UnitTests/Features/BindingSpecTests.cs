@@ -4,7 +4,6 @@ using StrataRec.Features.Bindings;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>The one rule for sharing an instance across plans: what is part of a binding's identity.</summary>
 public sealed class BindingSpecTests
 {
     private static readonly object Factory = new();
@@ -20,8 +19,8 @@ public sealed class BindingSpecTests
     }
 
     [Theory]
-    [InlineData("""{ "uri": "other.bin" }""")] // any setting
-    [InlineData("""{ "uri": "m.bin", "added_later": true }""")] // a setting nobody listed
+    [InlineData("""{ "uri": "other.bin" }""")]
+    [InlineData("""{ "uri": "m.bin", "added_later": true }""")]
     public void EverySettingIsPartOfTheIdentity(string settings)
     {
         Assert.NotEqual(Spec("""{ "uri": "m.bin" }""").Identity, Spec(settings).Identity);
@@ -67,9 +66,9 @@ public sealed class BindingSpecTests
         Assert.Equal(a, b);
 
         var key = Spec("{}", factory: a).Key;
-        Assert.NotEqual(key, Spec("{}", factory: b).Key); // equal by value, but another factory object
+        Assert.NotEqual(key, Spec("{}", factory: b).Key);
         var hash = key.GetHashCode();
-        a.Count++; // changes the record's own equality and hash
+        a.Count++;
         Assert.Equal(key, Spec("{}", factory: a).Key);
         Assert.Equal(hash, Spec("{}", factory: a).Key.GetHashCode());
         Assert.NotEqual(key, Spec("""{ "uri": "m.bin" }""", factory: a).Key);

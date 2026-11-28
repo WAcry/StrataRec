@@ -9,10 +9,6 @@ namespace StrataRec.Core.Diagnostics;
 /// by name (OpenTelemetry: <c>AddMeter("StrataRec")</c>, <c>AddSource("StrataRec")</c>); the engine references no
 /// exporter.
 /// </summary>
-/// <remarks>
-/// One static meter and source per process is the standard .NET pattern: instruments and the source are no-ops until a
-/// listener enables them, so an engine nobody observes pays a null check per measurement and allocates nothing.
-/// </remarks>
 public static class StrataRecTelemetry
 {
     /// <summary>Name of the meter and of the activity source.</summary>
@@ -28,10 +24,6 @@ public static class StrataRecTelemetry
 /// <summary>
 /// Tag (attribute) keys. Metric tags take only bounded values; span-only keys may carry ids.
 /// </summary>
-/// <remarks>
-/// Keys are namespaced with <c>stratarec.</c> so they cannot collide with labels the collection pipeline adds itself
-/// (Kubernetes, for one, adds <c>node</c>).
-/// </remarks>
 public static class StrataRecTags
 {
     public const string Pipeline = "stratarec.pipeline";
@@ -130,8 +122,8 @@ public static class StrataRecTags
 }
 
 /// <summary>
-/// Span helpers. A request gets one span; node and external-I/O child spans exist only while that span is
-/// recorded (<see cref="Activity.Recorded"/>), so a request the host's sampler drops creates no node-level objects.
+/// Span helpers. A request gets one span; node and external-I/O child spans exist only while that span is recorded
+/// (<see cref="Activity.Recorded"/>).
 /// </summary>
 public static class StrataRecTracing
 {

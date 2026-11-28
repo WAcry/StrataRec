@@ -12,20 +12,13 @@ using StrataRec.Expressions;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>
-/// Regression tests of the ColumnExpr engine. Every test asserts the expected value, not only agreement between the backends.
-/// </summary>
 public class ExpressionRegressionTests
 {
-    // ------------------------------------------------------------------------------------------------------------
-    // Desugared built-ins must lift every argument.
-
     private static readonly double?[] Grid = { null, -1.0, 0.0, 0.5, 1.0, 2.0, double.NaN };
 
     [Fact]
     public void LinearDecay_MissingEnd_IsMissing_SoCoalesceTakesTheDefault()
     {
-        // x <= start used to return the constant 1 without looking at end.
         var f = new ExprFixture().Ctx("ctx.end", "float64?").Build(3);
         ExprAssert.Scalar(f, "linear_decay(0.0, 1.0, ctx.end) ?? 0.0", 0.0);
         ExprAssert.Scalar(f, "linear_decay(0.0, 1.0, ctx.end)", null);
@@ -40,7 +33,6 @@ public class ExpressionRegressionTests
     [Fact]
     public void LinearDecay_AnyMissingArgument_IsMissing_OtherwiseMatchesDefinition()
     {
-        // Every combination of missing / present (including NaN) arguments, row by row.
         var f = new ExprFixture(capacity: Grid.Length * Grid.Length * Grid.Length)
             .Col("col.x", "float64?").Col("col.s", "float64?").Col("col.e", "float64?")
             .Build(Grid.Length * Grid.Length * Grid.Length);
@@ -101,7 +93,6 @@ public class ExpressionRegressionTests
 
         for (var missing = 0; missing < arity; missing++)
         {
-            // Row level: the missing argument is a column whose rows hold values but are marked missing.
             var f = new ExprFixture(capacity: Math.Max(3, others))
                 .Col("col.m", "float64?").Col("col.a0", "float64").Col("col.a1", "float64")
                 .Ctx("ctx.m", "float64?").Ctx("ctx.a0", "float64").Ctx("ctx.a1", "float64")
@@ -117,7 +108,6 @@ public class ExpressionRegressionTests
             var rowSource = Instantiate(template, arity, missing, "col.m", "col.a");
             ExprAssert.Rows(f, $"has({rowSource})", Enumerable.Repeat((object?)false, Math.Max(3, others)).ToArray());
 
-            // Request level: the same through the scalar program (optimized) and the reference interpreter.
             var scalarSource = Instantiate(template, arity, missing, "ctx.m", "ctx.a");
             var compiled = f.Compile($"has({scalarSource})");
             for (var k = 0; k < others; k++)
@@ -155,9 +145,6 @@ public class ExpressionRegressionTests
         }
     }
 
-    // ------------------------------------------------------------------------------------------------------------
-    // Every NaN hashes as the canonical quiet NaN, so rewrites that change NaN sign/payload cannot change hash01.
-
     private const long CanonicalNaNBits = 0x7FF8000000000000;
 
     private static readonly double[] NaNs =
@@ -171,7 +158,6 @@ public class ExpressionRegressionTests
         BitConverter.Int64BitsToDouble(unchecked((long)0xFFFFFFFFFFFFFFFF)),
     };
 
-    /// <summary>hash01 of a single float64 NaN, computed from the documented canonical encoding.</summary>
     private static double CanonicalNaNHash01()
     {
         Span<byte> bytes = stackalloc byte[9];
@@ -195,7 +181,6 @@ public class ExpressionRegressionTests
             Assert.Equal(expected, StableHash.ToUnit(v.Finish()));
         }
 
-        // -0.0 still hashes as 0.0, and ordinary values keep their IEEE bytes.
         Span<byte> bytes = stackalloc byte[9];
         bytes[0] = 0x02;
         BinaryPrimitives.WriteDoubleLittleEndian(bytes[1..], 0.0);
@@ -233,7 +218,6 @@ public class ExpressionRegressionTests
             f.Scalar<double>("col.p").Set(r, BitConverter.Int64BitsToDouble(unchecked((long)0xFFF8000000000002)));
         }
 
-        // Row level: optimized vectorized program (full range and gather) and the unoptimized reference interpreter.
         string[] rowLevel =
         {
             "hash01((-sqrt(col.x)) * 2.0)",            // Neg moved into the invariant
@@ -252,7 +236,6 @@ public class ExpressionRegressionTests
             ExprAssert.Rows(f, source, nan, nan, nan, nan);
         }
 
-        // Request level: optimized scalar program and constant folding vs. the unoptimized reference interpreter.
         string[] requestLevel =
         {
             "hash01((-sqrt(ctx.neg)) * 2.0)",
@@ -286,7 +269,7 @@ public class ExpressionRegressionTests
         {
             using var b = new StableHash.Builder();
             b.Add("salt");
-            b.Add(NaNs[r]); // any NaN encodes the same
+            b.Add(NaNs[r]);
             b.Add(1000L + r);
             b.Add(true);
             expected[r] = StableHash.ToUnit(b.Finish());
@@ -295,9 +278,6 @@ public class ExpressionRegressionTests
         ExprAssert.Rows(f, "hash01(ctx.s, sqrt(col.x), col.entity_id, true)", expected);
         ExprAssert.Rows(f, "hash01(ctx.s, -sqrt(col.x) * 2.0, col.entity_id, true)", expected);
     }
-
-    // ------------------------------------------------------------------------------------------------------------
-    // Malformed escapes are syntax diagnostics (offset + hint), never exceptions out of TryCompile.
 
     [Theory]
     [InlineData(@"'\UFFFFFFFF'", 1)]
@@ -412,9 +392,6 @@ public class ExpressionRegressionTests
         static string Show(string s) => "\"" + s.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal) + "\"";
     }
 
-    // ------------------------------------------------------------------------------------------------------------
-    // Evaluating into a column the expression reads (in-place update) uses each row's values from before the call.
-
     [Fact]
     public void Coalesce_IntoTheListColumnItReads_TakesTheFallback_NotStaleData()
     {
@@ -424,7 +401,7 @@ public class ExpressionRegressionTests
             var a = f.Buffer<ListColumn<long>>("col.a");
             a.Set(0, new long[] { 1 });
             a.Set(1, new long[] { 99 });
-            a.SetMissing(1); // stale data behind a missing row
+            a.SetMissing(1);
             a.Set(2, new long[] { 3, 4 });
             a.SetMissing(3);
             for (var r = 4; r < 8; r++)
@@ -472,7 +449,6 @@ public class ExpressionRegressionTests
             f.Scalar<double>("col.x").Set(r, 99.0);
         }
 
-        // Rows 1 and 3 of every nullable column hold data but are missing.
         foreach (var column in new ColumnBuffer[] { a, b, s, v, f.Scalar<double>("col.x") })
         {
             column.SetMissing(1);
@@ -482,19 +458,16 @@ public class ExpressionRegressionTests
         f.Fill<bool>("col.c", true, false, true, false);
         var rows = new[] { 0, 1, 2, 3 };
 
-        // Nullable result: the fallback is missing, so missing rows stay missing.
         f.Compile("col.a ?? ctx.l").Evaluate(f.Context, rows, a);
         ExprAssert.Same(null, ExprFixture.Read(a, 1), "a ?? missing");
         f.SetCtx("ctx.l", ScalarValue.FromInt64List(new long[] { 5, 6 }));
         f.Compile("col.a ?? ctx.l").Evaluate(f.Context, rows, a);
         Assert.Equal(new object?[] { new long[] { 10 }, new long[] { 5, 6 }, new long[] { 12 }, new long[] { 5, 6 } }, ReadAll(a, rows));
 
-        // Nested lazy selections, written into the inner coalesce's column.
         b.SetMissing(0);
         f.Compile("col.b ?? (col.a ?? [7])").Evaluate(f.Context, rows, b);
         Assert.Equal(new object?[] { new long[] { 10 }, new long[] { 5, 6 }, new long[] { 22 }, new long[] { 5, 6 } }, ReadAll(b, rows));
 
-        // A conditional whose branches read the destination.
         f.Compile("col.c ? [8] : col.b").Evaluate(f.Context, rows, b);
         Assert.Equal(new object?[] { new long[] { 8 }, new long[] { 5, 6 }, new long[] { 8 }, new long[] { 5, 6 } }, ReadAll(b, rows));
 
@@ -528,10 +501,6 @@ public class ExpressionRegressionTests
         return values;
     }
 
-    // ------------------------------------------------------------------------------------------------------------
-    // Request-level results never hand out the compiled expression's own constant arrays writable. They were copied;
-    // a value's lists are read-only spans, so the constant itself is returned.
-
     [Theory]
     [InlineData("[1, 2]")]
     [InlineData("ctx.c ? [1, 2] : [3]")]
@@ -546,7 +515,6 @@ public class ExpressionRegressionTests
         Assert.True(Unsafe.AreSame(
             ref MemoryMarshal.GetReference(first.AsInt64List()), ref MemoryMarshal.GetReference(compiled.EvaluateScalar(f.Context).AsInt64List())));
 
-        // The row-level broadcast writes the constant, too.
         var destination = ColumnBuffer.Create(ColumnType.List(StorageKind.Int64), f.Capacity, f.Memory);
         compiled.Evaluate(f.Context, f.Table.Rows.Order, destination);
         ExprAssert.Same(new long[] { 1, 2 }, ExprFixture.Read(destination, 0), "broadcast");
@@ -559,13 +527,11 @@ public class ExpressionRegressionTests
         var compiled = f.Compile("ctx.l ?? ['a', 'b']");
         Assert.Equal(new[] { "a", "b" }, compiled.EvaluateScalar(f.Context).AsStringList());
 
-        // A value the caller supplied is the caller's own array: returned as is, without a copy.
         var supplied = new[] { "x" };
         f.SetCtx("ctx.l", ScalarValue.FromStringList(supplied));
         Assert.True(Unsafe.AreSame(ref MemoryMarshal.GetReference(compiled.EvaluateScalar(f.Context).AsStringList()), ref supplied[0]));
     }
 
-    /// <summary>a value hands out no array of its own (a plan's default or parameter, a constant, is shared).</summary>
     [Fact]
     public void ScalarValue_HandsOutNoWritableArray()
     {

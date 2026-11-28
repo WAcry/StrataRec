@@ -5,7 +5,6 @@ using StrataRec.Features.Bindings;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>The one path from a bindings entry to its instance: the same codes, places and words for every kind.</summary>
 public sealed class BindingResolverTests
 {
     [Theory]
@@ -105,7 +104,6 @@ public sealed class BindingResolverTests
         public IThing Create(BindingContext context) => create is null ? new Thing() : create(context);
     }
 
-    /// <summary>Shares by key, as an engine's instances do.</summary>
     private sealed class CountingInstances : IBindingInstances
     {
         private readonly Dictionary<BindingKey, object> _instances = new();

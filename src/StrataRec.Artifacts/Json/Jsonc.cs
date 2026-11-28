@@ -37,7 +37,7 @@ namespace StrataRec.Artifacts.Json;
 /// </remarks>
 public static class Jsonc
 {
-    /// <summary>Maximum nesting depth of objects and arrays; matches the System.Text.Json default.</summary>
+    /// <summary>Maximum nesting depth of objects and arrays.</summary>
     public const int MaxDepth = 64;
 
     private static readonly JsonReaderOptions _readerOptions = new()
@@ -93,11 +93,10 @@ public static class Jsonc
     }
 
     /// <summary>
-    /// The document as UTF-8, after the checks <see cref="Parse(string, string?)"/> makes (grammar, duplicate keys,
-    /// Unicode, depth), without building a tree: for a caller that binds the bytes itself, as strictly as a parsed file.
+    /// The document as UTF-8, after the checks <see cref="Parse(string, string?)"/> makes: for a caller that binds the
+    /// bytes itself, as strictly as a parsed file.
     /// </summary>
-    /// <param name="hasNull">Whether the document has a <c>null</c> anywhere: one without cannot hold a null element.</param>
-    /// <exception cref="JsoncException">The document is not valid JSONC or breaks one of the strictness rules.</exception>
+    /// <param name="hasNull">Whether the document has a <c>null</c> anywhere.</param>
     internal static ReadOnlyMemory<byte> Checked(string json, string? fileName, out bool hasNull)
     {
         var bytes = Encode(json, fileName);
@@ -129,17 +128,11 @@ public static class Jsonc
     private static ReadOnlySpan<byte> SkipByteOrderMark(ReadOnlySpan<byte> utf8) =>
         utf8.StartsWith("﻿"u8) ? utf8[3..] : utf8; // U+FEFF encodes as EF BB BF
 
-    /// <summary>
-    /// Runs the full grammar over the document and enforces the strictness rules that <see cref="JsonNode.Parse(ReadOnlySpan{byte}, JsonNodeOptions?, JsonDocumentOptions)"/>
-    /// does not (duplicate keys, lone surrogates), with exact positions.
-    /// </summary>
     /// <returns>Whether the document has a <c>null</c> token.</returns>
     private static bool Validate(ReadOnlySpan<byte> json, string? fileName)
     {
         // Utf8JsonReader finds the end of an unescaped string without validating its UTF-8, and JsonNode keeps such
         // values lazily, so invalid bytes would surface only when a value is read, far from this diagnostic boundary.
-        // Checking the whole input up front (vectorized) also makes byte input as strict as string input, whose
-        // encoding to UTF-8 already rejects unpaired surrogates.
         if (!Utf8.IsValid(json))
         {
             var here = PositionOf(json, FirstInvalidUtf8Offset(json));
@@ -152,7 +145,6 @@ public static class Jsonc
 
         var reader = new Utf8JsonReader(json, _readerOptions);
 
-        // Key sets indexed by the depth of the object that owns them; reused across sibling objects.
         var keySets = new List<Dictionary<string, long>>();
         var hasNull = false;
         try
@@ -215,7 +207,6 @@ public static class Jsonc
         }
     }
 
-    /// <summary>Byte offset of the first ill-formed UTF-8 sequence (cold path: only called once validation failed).</summary>
     private static int FirstInvalidUtf8Offset(ReadOnlySpan<byte> json)
     {
         var offset = 0;
@@ -245,7 +236,6 @@ public static class Jsonc
         return new JsoncException(JsoncException.SyntaxErrorCode, reason, fileName, null, null, null, innerException: ex);
     }
 
-    /// <summary>Removes System.Text.Json's " Path: ... | LineNumber: ... | BytePositionInLine: ..." suffix.</summary>
     private static string StripLocation(string message)
     {
         var cut = message.Length;
@@ -275,7 +265,6 @@ public static class Jsonc
         return (line, column, end - lineStart);
     }
 
-    /// <summary>Converts System.Text.Json's 0-based line and byte position into a 1-based UTF-16 column.</summary>
     private static int ColumnOf(ReadOnlySpan<byte> json, long lineNumber, long bytePositionInLine)
     {
         var lineStart = 0;

@@ -28,13 +28,9 @@ public sealed class BufferPoisoningTests
 
         Assert.All(numbers, n => Assert.Equal(unchecked((long)0xCDCDCDCDCDCDCDCD), n));
         Assert.Equal(2, pool.Returned.Count);
-        Assert.Contains((Array)strings, pool.Returned); // references are cleared by the pool, not poisoned
+        Assert.Contains((Array)strings, pool.Returned);
     }
 
-    /// <summary>
-    /// A scratch buffer goes back when the computation that rented it is done, poisoned like the rest, and is
-    /// not on the ledger: the request's end does not give it back again, and it is not in the rented bytes.
-    /// </summary>
     [Fact]
     public void AScratchBuffer_GoesBackAtOnce_Poisoned_AndNotAgainWithTheRequest()
     {

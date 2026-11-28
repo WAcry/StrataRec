@@ -2,7 +2,6 @@ using StrataRec.Experiments.Compilation;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>What a binding's selector names: one error at the selector, whatever the kind of binding and whatever reads it.</summary>
 public sealed class BindingTypeTests
 {
     [Theory]
@@ -16,7 +15,6 @@ public sealed class BindingTypeTests
     [InlineData("sources", "author_store", """{ "mode": "local", "max_bytes": "16MiB", "bootstrap": { "source": "snapshot_file@1", "uri": "fixtures/author_snapshot" } }""",
         "/sources/author_store/bootstrap/source", "Update source of feature source 'author_store' names type 'snapshot_file@1', which this binary does not register.",
         "did you mean 'snapshot_files@1'?")]
-    // A type of another kind is not one of this kind: the hint lists those that are.
     [InlineData("services", "ctr_model", """{ "client": "memory@1" }""",
         "/services/ctr_model/client", "Service 'ctr_model' names type 'memory@1', which is not a service client.",
         "registered: fixed_text@1, linear@1, memory_list@1, memory_vectors@1, random@1")]
@@ -26,16 +24,10 @@ public sealed class BindingTypeTests
 
         var compilation = PlanCompiler.Compile(host.Request, host.Environment);
 
-        // Not again at each node or tap that reads it: the binding is what to fix.
         var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
         Assert.Equal(("BINDING_TYPE_UNKNOWN", "bindings:local", pointer, message, hint), (error.Code, error.Artifact, error.Pointer, error.Message, error.Hint));
     }
 
-    /// <summary>
-    /// A load that fails is a failure however often it is tried: the diagnostics bag keeps one of each error, so the
-    /// verdict is the load's own, not the bag's count (a second load of the same bad workspace into the same bag used to
-    /// come back as loaded).
-    /// </summary>
     [Fact]
     public async Task LoadingTheSameBadWorkspaceTwice_FailsTwice()
     {

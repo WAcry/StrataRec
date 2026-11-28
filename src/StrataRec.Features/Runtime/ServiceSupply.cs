@@ -7,18 +7,16 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The service a source in mode <c>service</c> is bound to, as the plan's service call path gives it: asked
-/// once per request for the features of an entity with args, bounded, cached, recorded and replayed as every service call
-/// is. The pipeline implements it; the fetcher only gathers the call's arguments and stores what it answers.
+/// The service a source in mode <c>service</c> is bound to, as the plan's service call path gives it: asked once per
+/// request for the features of an entity with args, bounded, cached, recorded and replayed as every service call is.
 /// </summary>
 internal interface IServiceSupply
 {
-    /// <summary>The service's binding name.</summary>
     string ServiceName { get; }
 
     /// <summary>
-    /// Asks the service for one request's values of <paramref name="call"/>'s fields. A failure of the service, a cut-off and
-    /// an answer the fields cannot hold are a failed status, never a throw; a stale answer of its cache is a partial one.
+    /// A failure of the service, a cut-off and an answer the fields cannot hold are a failed status, never a throw; a
+    /// stale answer of its cache is a partial one.
     /// </summary>
     ValueTask<FetchStatus> FetchAsync(ServiceSupplyCall call);
 }
@@ -30,13 +28,10 @@ internal interface IServiceSupply
 /// </summary>
 internal delegate IServiceSupply? ServiceSupplyResolver(string source, string service, string pointer);
 
-/// <summary>One argument of a call (<see cref="ServiceSupplyCall.Args"/>): its name, declared type and this request's value.</summary>
 internal readonly record struct ServiceArg(string Name, ColumnType Type, ScalarValue Value);
 
-/// <summary>One request's call of a <see cref="SupplyMode.Service"/> group.</summary>
 internal sealed class ServiceSupplyCall
 {
-    /// <summary>The group: its source, entity and members.</summary>
     public required FetchGroup Group { get; init; }
 
     /// <summary>The entity's arguments, in declared order; a missing value is sent as missing.</summary>
@@ -51,16 +46,13 @@ internal sealed class ServiceSupplyCall
     /// <summary>The request's memory: the call's inputs and its answer are rented from it.</summary>
     public required RequestMemory Memory { get; init; }
 
-    /// <summary>The fetch's bound: the request's deadline and the caller's token.</summary>
     public required CallBound Bound { get; init; }
 
-    /// <summary>The request's recorder or replay, when it records or replays.</summary>
     public IFeatureCallHook? Hook { get; init; }
 
     /// <summary>The request's id and seed, which a service call carries as a node's does.</summary>
     public string? RequestId { get; init; }
 
-    /// <inheritdoc cref="RequestId"/>
     public long? Seed { get; init; }
 
     /// <summary>What the cached reads of the request's runs share; null for a request of one run.</summary>
@@ -70,7 +62,6 @@ internal sealed class ServiceSupplyCall
     public IIoTracker? Io { get; init; }
 }
 
-/// <summary>Tracks an external operation that did not complete synchronously, until it really has.</summary>
 internal interface IIoTracker
 {
     void Track(Task done);

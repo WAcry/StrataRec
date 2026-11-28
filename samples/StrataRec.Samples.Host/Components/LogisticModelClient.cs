@@ -10,21 +10,15 @@ namespace StrataRec.Samples.Host.Components;
 /// <c>[batch]</c>.
 /// </summary>
 /// <remarks>
-/// <para>Binding settings: <see cref="LogisticSettings"/>, which the factory declares as its type argument; the engine
-/// binds them to it, and the factory only checks what the type cannot say.</para>
-/// <para>The rules of the contract, and how this client keeps them:</para>
 /// <list type="bullet">
-/// <item>The signature is the training-serving contract: the engine checks every node calling the model
-/// against it before the plan serves. It follows from the settings here, so it is built once and returned at once; that
-/// also lets <c>validate</c>, which loads nothing, check the nodes. A client that asks a model server implements
+/// <item>The signature is the training-serving contract, checked against every node calling the model before the plan
+/// serves. It follows from the settings, so it is returned at once; a client asking a model server implements
 /// <see cref="ILoadable"/> and answers after its load.</item>
-/// <item>The client never sees a missing value: model inputs are non-nullable columns, so what a missing feature means
-/// is decided in the catalog (a <c>default</c>, or a derived feature with <c>??</c>), the same for training and serving.</item>
-/// <item>A call writes into the caller's output buffers and allocates nothing. A wrong input is a failed status with a
-/// reason, not an exception: the node then applies its <c>on_failure</c> (here, a fallback scorer).</item>
-/// <item>Cancellation: the computation takes microseconds and runs synchronously; a call whose token is already cancelled
-/// does nothing. A remote client passes the token to its I/O; the engine stops waiting at the model's timeout or the
-/// node's budget either way.</item>
+/// <item>Model inputs are non-nullable: what a missing feature means is decided in the catalog, the same for training
+/// and serving.</item>
+/// <item>A call writes into the caller's buffers and allocates nothing. A wrong input is a failed status with a reason,
+/// not an exception: the node then applies its <c>on_failure</c>.</item>
+/// <item>A remote client passes the token to its I/O; the engine stops waiting at the timeout either way.</item>
 /// </list>
 /// </remarks>
 public sealed class LogisticModelClient : IServiceClient
@@ -83,8 +77,8 @@ public sealed class LogisticModelClient : IServiceClient
             return new ValueTask<ServiceStatus>(ServiceStatus.Failed($"Model '{_model}' has no version '{version}'."));
         }
 
-        // Each weight's input, checked once: [batch] exactly; its data may be a longer pooled buffer, but its shape says how
-        // many rows it holds. The index map is on the stack, so a call allocates nothing.
+        // Each weight's input, checked once: [batch] exactly; its data may be a longer pooled buffer, but its shape
+        // says how many rows it holds.
         var batch = call.BatchSize;
         var inputs = call.Inputs.Span;
         Span<int> inputOf = _inputs.Length <= 64 ? stackalloc int[_inputs.Length] : new int[_inputs.Length];
@@ -112,9 +106,8 @@ public sealed class LogisticModelClient : IServiceClient
             }
         }
 
-        // In double, as the coefficients were checked: in float a large weight and bias that cancel (1e40 and -1e40) would
-        // overflow to infinities and give NaN. A logit that is not a number even so (weights that overflow double) is a
-        // failed call, never a score: the node's on_failure decides, not a NaN passed on as a probability.
+        // In double, as the coefficients were checked: in float a large weight and bias that cancel (1e40 and -1e40)
+        // would overflow to infinities and give NaN.
         var probabilities = response.GetValues<float>(_output, batch).Span[..batch];
         for (var r = 0; r < batch; r++)
         {
@@ -181,7 +174,7 @@ public sealed class LogisticModelClientFactory : BindingFactory<IServiceClient, 
             throw new BindingException("/weights", "'weights' must name at least one input.", "e.g. { \"ctr\": 20.0, \"freshness\": 1.0 }");
         }
 
-        var weights = new SortedDictionary<string, double>(settings.Weights, StringComparer.Ordinal); // inputs in ordinal order
+        var weights = new SortedDictionary<string, double>(settings.Weights, StringComparer.Ordinal);
         var inputs = new string[weights.Count];
         var values = new double[weights.Count];
         var i = 0;

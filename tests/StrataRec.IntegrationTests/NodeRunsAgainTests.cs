@@ -8,17 +8,8 @@ using StrataRec.Pipeline.Replay;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A node may run more than once in a request: a fallback node serves every node that names it. Each run writes a version
-/// of its own (<see cref="OperatorContext.Output"/>): what an earlier run committed stays what readers see, the node
-/// itself included, until the later run commits, and for good when the later run fails; and a row the later run does not
-/// write has no value, never the earlier run's.
+/// A node may run more than once in a request: a fallback node serves every node that names it.
 /// </summary>
-/// <remarks>
-/// The pipeline: <c>first</c> marks every row 0; <c>a</c> and <c>b</c> always fail and fall back to <c>backup</c>, which
-/// so runs twice and does what the test says each time. The second run wrote into
-/// the buffer the first had committed, so a second run that failed (or timed out, which a replay skips) left its values
-/// or its blanks behind, and one that succeeded kept the first run's values where it wrote none.
-/// </remarks>
 public sealed class NodeRunsAgainTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
@@ -30,7 +21,6 @@ public sealed class NodeRunsAgainTests
     [InlineData("fails to commit")]
     public async Task ALaterRunThatFails_LeavesWhatTheEarlierRunCommitted_AndAReplayAgrees(string how)
     {
-        // The first run marks every row 1. The second marks them 2 and fails: the 1s stay.
         var marks = new MarksFactory((context, column, _, run) =>
         {
             foreach (var row in context.LiveRows)
@@ -51,7 +41,7 @@ public sealed class NodeRunsAgainTests
                 case "throws":
                     throw new InvalidOperationException("broke after writing");
                 case "returns late":
-                    Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience)); // returns after its budget, as a success
+                    Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience));
                     break;
                 default:
                     column.SetMissing(context.LiveRows[0]);
@@ -88,7 +78,6 @@ public sealed class NodeRunsAgainTests
     [Fact]
     public async Task ALaterRunThatSucceeds_StartsWithNoValues_AndReadsTheEarlierRunsWhileItWrites()
     {
-        // The first run marks every row 1. The second marks only the first row, 2: the others have no value then.
         var blank = false;
         long?[]? read = null;
         var marks = new MarksFactory((context, column, before, run) =>
@@ -161,14 +150,8 @@ public sealed class NodeRunsAgainTests
         public required string As { get; init; }
     }
 
-    /// <summary>
-    /// <c>Marks@1</c>, writing an int64 column: as <c>first</c> it marks every row 0, as <c>primary</c> it fails, and as
-    /// <c>backup</c> it does what the test says, given its buffer, the column's version from before the run, and which
-    /// of its runs in the request this is (1, 2).
-    /// </summary>
     private sealed class MarksFactory(Action<OperatorContext, ScalarColumn<long>, ScalarColumn<long>, int> backup) : IOperatorFactory
     {
-        /// <summary>How often the backup ran in the request.</summary>
         public int Runs { get; set; }
 
         private Action<OperatorContext, ScalarColumn<long>, ScalarColumn<long>, int> Backup { get; } = backup;

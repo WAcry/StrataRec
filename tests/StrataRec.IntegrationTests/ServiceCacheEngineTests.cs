@@ -9,10 +9,8 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// A service's cache through the engine: the sample's <c>ctr_model</c> (<c>linear@1</c>) with
-/// <c>cache</c>. Served results are the model's; later requests are answered from its in-process table; a recorded
-/// request replays exactly without the cache. Write-backs run in the background, so the tests wait for a state (a request
-/// read every key from the table), never for a count or a time.
+/// Write-backs run in the background, so the tests wait for a state (a request read every key from the table), never
+/// for a count or a time.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class ServiceCacheEngineTests
@@ -44,7 +42,7 @@ public sealed class ServiceCacheEngineTests
             var read = Keys(metrics).Minus(before);
             if (read.Miss == 0 && read.Hit > 0)
             {
-                Assert.Equal(0, read.ModelKeys); // the model was not called
+                Assert.Equal(0, read.ModelKeys);
                 break;
             }
 
@@ -53,12 +51,10 @@ public sealed class ServiceCacheEngineTests
         }
 
         Assert.True(expected.Succeeded && first.Succeeded && hit.Succeeded, first.Error ?? hit.Error);
-        Assert.True(firstRead.Miss >= 1 && firstRead.ModelKeys >= 1, firstRead.ToString()); // a cold cache
+        Assert.True(firstRead.Miss >= 1 && firstRead.ModelKeys >= 1, firstRead.ToString());
         Assert.Equal(CacheEngineTests.Items(expected), CacheEngineTests.Items(first));
         Assert.Equal(CacheEngineTests.Items(expected), CacheEngineTests.Items(hit));
 
-        // The recording holds the answer the node got: a fresh engine, whose cache is empty, replays it identically and
-        // reads no cache.
         await using var fresh = MetricsTests.LoadEngine(Host($$"""{ {{Linear}}, "cache": { "ttl_ms": 600000, "memory": { "max_bytes": "1MiB" } } }""")).Engine;
         var replayedFrom = metrics.Measurements.Count;
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(hit.Recording!));
@@ -68,7 +64,6 @@ public sealed class ServiceCacheEngineTests
         Assert.DoesNotContain(metrics.Measurements.Skip(replayedFrom), m => m.Instrument == StrataRecMetrics.Names.CacheKeys && Equals(m.Tags[StrataRecTags.Source], Service));
     }
 
-    /// <summary>Each wrong setting of a service's cache is an error at the setting, and the service is not served without it.</summary>
     [Theory]
     [InlineData("""{ "ttl_ms": 1000 }""", "CACHE_TIERS", "/services/ctr_model/cache")]
     [InlineData("""{ "ttl_ms": 1000, "memory": { } }""", "CACHE_MAX_BYTES", "/services/ctr_model/cache/memory")]
@@ -90,11 +85,6 @@ public sealed class ServiceCacheEngineTests
         Assert.False(string.IsNullOrEmpty(error.Hint));
     }
 
-    /// <summary>
-    /// A hot reload that changes the model's settings (its bias) under the same name and version serves the new model's
-    /// scores at once, though the distributed tier still holds the earlier binding's answers: they are keyed by what the
-    /// binding answers with. The new plan read them, and served the old scores for their TTL.
-    /// </summary>
     [Fact]
     public async Task AReloadThatChangesTheModelsSettings_DoesNotReadTheEarlierAnswersFromTheDistributedTier()
     {
@@ -124,10 +114,6 @@ public sealed class ServiceCacheEngineTests
             string.Join(';', result.Recording!.Runs[0].ServiceCalls.Where(c => c.Service == Service).Select(c => c.Outputs["p_click"].Values.GetRawText()));
     }
 
-    /// <summary>
-    /// A service's cache with a version keeps its answers when the client's settings change, and starts anew when the
-    /// version does: the version is what the answers are keyed by, in place of a digest of the client and its settings.
-    /// </summary>
     [Fact]
     public async Task AServicesCacheWithAVersion_KeepsItsAnswersWhenTheClientsSettingsChange_UntilTheVersionChanges()
     {
@@ -146,7 +132,7 @@ public sealed class ServiceCacheEngineTests
         var anew = await engine.ExecuteAsync(Recorded("req-anew"), token);
 
         Assert.True(first.Succeeded && kept.Succeeded && anew.Succeeded, first.Error ?? kept.Error ?? anew.Error);
-        Assert.Equal(Scores(first), Scores(kept)); // the version says the other bias answers the same
+        Assert.Equal(Scores(first), Scores(kept));
         Assert.NotEqual(Scores(first), Scores(anew));
 
         static void Rebind(string root, double bias, string version) => SampleBindings.RebindService(root, Service, FormattableString.Invariant($$"""
@@ -157,10 +143,6 @@ public sealed class ServiceCacheEngineTests
             string.Join(';', result.Recording!.Runs[0].ServiceCalls.Where(c => c.Service == Service).Select(c => c.Outputs["p_click"].Values.GetRawText()));
     }
 
-    /// <summary>
-    /// A node its service's cache answered with stale values after the service failed is Degraded, and replays Degraded:
-    /// the recording has why. It replayed as succeeded, and the replay called a node changed that was not.
-    /// </summary>
     [Fact]
     public async Task ANodeTheCacheAnsweredWithStaleValues_ReplaysDegraded()
     {
@@ -173,11 +155,11 @@ public sealed class ServiceCacheEngineTests
             {
                 var calls = model.Calls;
                 Assert.True(engine.ExecuteAsync(Recorded("req-warm"), token).AsTask().GetAwaiter().GetResult().Succeeded);
-                return model.Calls == calls; // answered from the cache
+                return model.Calls == calls;
             },
             () => "a request answered from the model's cache");
 
-        clock.Advance(2_000); // past the TTL, within stale_if_error_ms
+        clock.Advance(2_000);
         model.Fail = true;
         var served = await engine.ExecuteAsync(Recorded("req-stale"), token);
         var replay = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(served.Recording!)), cancellationToken: token);
@@ -189,10 +171,6 @@ public sealed class ServiceCacheEngineTests
         Assert.False(ranker.Changed, $"recorded {ranker.Recorded}, replayed {ranker.Replayed}");
     }
 
-    /// <summary>
-    /// A failed answer of a cached service is recorded as the service gave it, its generation details too, as without a
-    /// cache. The cache recorded them only for an answer that succeeded.
-    /// </summary>
     [Fact]
     public async Task AFailedAnswer_IsRecordedWithItsGenerationDetails_WithOrWithoutACache()
     {
@@ -224,10 +202,6 @@ public sealed class ServiceCacheEngineTests
 
     private static HomeFeedTestHost Host(string binding) => HomeFeedTestHost.LoadModified(root => SampleBindings.RebindService(root, Service, binding));
 
-    /// <summary>
-    /// <c>ctr_model</c> as a model that answers 0.25 for every item, or fails reporting 11 generated tokens and a truncated
-    /// generation when <see cref="Fail"/>.
-    /// </summary>
     private sealed class FlakyModel : IBindingFactory<IServiceClient>, IServiceClient
     {
         public const string TypeName = "flaky_model@1";
@@ -266,7 +240,6 @@ public sealed class ServiceCacheEngineTests
         private sealed class NoSettings;
     }
 
-    /// <summary>A wall clock the test moves.</summary>
     private sealed class MovableClock : TimeProvider
     {
         private long _timeMs = 1_720_000_000_000L;
@@ -276,7 +249,6 @@ public sealed class ServiceCacheEngineTests
         public void Advance(long milliseconds) => Interlocked.Add(ref _timeMs, milliseconds);
     }
 
-    /// <summary>The model's cache keys by local outcome so far, and the keys of calls the model was sent.</summary>
     private static ModelKeysRead Keys(MetricCapture metrics)
     {
         long hit = 0, miss = 0;

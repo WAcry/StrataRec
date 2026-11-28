@@ -4,7 +4,6 @@ using static StrataRec.UnitTests.Pipeline.ServiceCacheRig;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>A service's cache: what it answers, what it sends the service, what it keeps.</summary>
 public sealed class ServiceCacheTests
 {
     [Fact]
@@ -16,7 +15,7 @@ public sealed class ServiceCacheTests
         Assert.True(first.Succeeded, first.Error);
         Assert.Equal(1, rig.Apply());
 
-        rig.Service.Offset = 100; // an answer the service gives now is told apart from the cached one
+        rig.Service.Offset = 100;
         var (second, hit) = await rig.CallAsync(Query(1, limit: 3, "answer", "p"));
 
         Assert.Single(rig.Service.Calls);
@@ -31,9 +30,7 @@ public sealed class ServiceCacheTests
     }
 
     /// <summary>
-    /// The limit is not in the key: fewer items are the cached answer's first, more than it has go to the service, unless
-    /// the service had no more when the answer was cached (it stopped short of the limit it was asked). The clock moves
-    /// between calls: a write replaces a record only if it is newer.
+    /// The clock moves between calls: a write replaces a record only if it is newer.
     /// </summary>
     [Fact]
     public async Task FewerItems_AreTheCachedFirst_MoreGoToTheService_UnlessItHadNoMore()
@@ -53,7 +50,6 @@ public sealed class ServiceCacheTests
         rig.Apply();
         rig.Clock.AdvanceMs(1);
 
-        // Asked for 10, the service had 5: 20 is answered from the cache, as the service would answer it.
         await rig.CallAsync(Query(1, limit: 10));
         Assert.Equal(3, rig.Service.Calls.Count);
         rig.Apply();
@@ -62,7 +58,6 @@ public sealed class ServiceCacheTests
         Assert.Equal(3, rig.Service.Calls.Count);
     }
 
-    /// <summary>Another input value, or other outputs read, is another key.</summary>
     [Fact]
     public async Task TheInputsAndTheOutputsRead_AreTheKey()
     {
@@ -76,10 +71,6 @@ public sealed class ServiceCacheTests
         Assert.Equal(3, rig.Service.Calls.Count);
     }
 
-    /// <summary>
-    /// A call about items is cached item by item: the items the cache has are answered from it, the others sent to the
-    /// service in one call of their own, with their rows of every per-item input; the answer is in the call's order.
-    /// </summary>
     [Fact]
     public async Task ACallAboutItems_SendsTheServiceOnlyTheItemsTheCacheMisses_WithTheirRows()
     {
@@ -97,14 +88,12 @@ public sealed class ServiceCacheTests
         Assert.Equal(new[] { 0.4f }, sent.X);
         Assert.Equal(new[] { 3f, 104f, 2f }, Floats(response, "p"));
 
-        // Every item cached now: the service is not called.
         rig.Apply();
         var (_, cached) = await rig.CallAsync(Items([4, 1], [0.4f, 0.1f]));
         Assert.Equal(2, rig.Service.Calls.Count);
         Assert.Equal(new[] { 104f, 1f }, Floats(cached, "p"));
     }
 
-    /// <summary>An item's key covers its own row of each input: the same item with another value is a miss.</summary>
     [Fact]
     public async Task AnItemWithAnotherValueOfItsInput_IsAMiss()
     {
@@ -119,7 +108,6 @@ public sealed class ServiceCacheTests
         Assert.Equal(new[] { 1f, 5f }, Floats(response, "p"));
     }
 
-    /// <summary>Outputs of more than one value an item, and of other element types, are put back row by row.</summary>
     [Fact]
     public async Task OutputsOfSeveralValuesAnItem_AndOfOtherTypes_ArePutBackRowByRow()
     {
@@ -136,7 +124,6 @@ public sealed class ServiceCacheTests
         Assert.Equal(new long[] { 2, 4, 3, 6, 1, 2 }, q.Int64.ToArray());
     }
 
-    /// <summary>A text belongs to the whole call: a call about items that answers one is served and not cached.</summary>
     [Fact]
     public async Task ACallAboutItemsThatAnswersAText_IsNotCached()
     {
@@ -148,10 +135,6 @@ public sealed class ServiceCacheTests
         Assert.Equal(0, rig.Apply());
     }
 
-    /// <summary>
-    /// Cached answers whose output is of another width than the service's answer for the items it missed cannot be put
-    /// together: the call fails, saying the service changed without a new version.
-    /// </summary>
     [Fact]
     public async Task CachedAnswersOfAnotherWidth_ThanTheServicesNow_FailTheCall()
     {
@@ -180,10 +163,6 @@ public sealed class ServiceCacheTests
         Assert.Equal(2, rig.Service.Calls.Count);
     }
 
-    /// <summary>
-    /// Within <c>stale_if_error_ms</c> past its TTL, an answer serves a call the service fails, and the node is degraded;
-    /// past it, or for an item without one, the call fails.
-    /// </summary>
     [Fact]
     public async Task AStaleAnswer_ServesAFailedCall_WithinStaleIfError_AndDegradesTheNode()
     {
@@ -198,7 +177,7 @@ public sealed class ServiceCacheTests
         Assert.Equal(new[] { 2f, 1f }, Floats(response, "p"));
         Assert.Contains("m is down", rig.Last!.DegradedReason, StringComparison.Ordinal);
 
-        var (missing, _) = await rig.CallAsync(Items([1, 3], [0.1f, 0.3f])); // 3 has no answer at all
+        var (missing, _) = await rig.CallAsync(Items([1, 3], [0.1f, 0.3f]));
         Assert.Equal(ServiceStatus.Failed("m is down"), missing);
 
         rig.Clock.AdvanceMs(10_000);
@@ -206,10 +185,6 @@ public sealed class ServiceCacheTests
         Assert.Equal(ServiceStatus.Failed("m is down"), expired);
     }
 
-    /// <summary>
-    /// The distributed tier answers what the local one misses, and its answers go to the local tier; the service's answers
-    /// go to both.
-    /// </summary>
     [Fact]
     public async Task TheDistributedTier_AnswersWhatTheLocalOneMisses_AndFillsIt()
     {
@@ -218,7 +193,7 @@ public sealed class ServiceCacheTests
         await writer.CallAsync(Items([1, 2], [0.1f, 0.2f]));
         await store.WhenWrittenAsync(2).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        var reader = new ServiceCacheRig(store: store); // another process: its own local tier, the same store
+        var reader = new ServiceCacheRig(store: store);
         reader.Service.Offset = 100;
         var (status, response) = await reader.CallAsync(Items([2, 3, 1], [0.2f, 0.3f, 0.1f]));
 
@@ -231,7 +206,6 @@ public sealed class ServiceCacheTests
         Assert.Equal(new[] { 1f, 2f, 103f }, Floats(local, "p"));
     }
 
-    /// <summary>A distributed read that fails leaves its keys to the service: the call is answered.</summary>
     [Fact]
     public async Task AFailedDistributedRead_LeavesItsKeysToTheService()
     {

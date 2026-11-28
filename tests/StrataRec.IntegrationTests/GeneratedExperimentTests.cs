@@ -7,12 +7,9 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The unified plan against the plain compile of each arm combination's merged config, on generated
-/// experiments: the unified plan accepts exactly what every combination accepts (it may refuse more only by a rule across
-/// combinations, such as one type per column), and serves each combination as its merged compile does. The fixed
-/// sample's eight combinations did not find that a baseline could read a column only an arm's node declares (removing the
-/// experiment broke it), or that an arm moving a reader after a writer was refused; generated arms
-/// that add, move, delete and change nodes reading implicit columns do.
+/// The unified plan against the plain compile of each arm combination's merged config, on generated experiments: the
+/// unified plan accepts exactly what every combination accepts (it may refuse more only by a rule across combinations,
+/// such as one type per column), and serves each combination as its merged compile does.
 /// </summary>
 public sealed class GeneratedExperimentTests
 {
@@ -20,10 +17,11 @@ public sealed class GeneratedExperimentTests
     private static readonly HashSet<string> AcrossCombinations = new(StringComparer.Ordinal)
     {
         "COLUMN_TYPE_MISMATCH", "PATCH_CONFLICT", "ADD_CONFLICT", "NODE_ROLE_CHANGED",
-        "COMBINATION_CHECK_LIMIT", // a rule over more combinations than may be checked is refused, not left unchecked
+        "COMBINATION_CHECK_LIMIT",
     };
 
-    /// <summary>300 configs (about 25 s); set <c>STRATAREC_GENERATED_SEEDS</c> to run more, e.g. 3000 after changing the compiler.</summary>
+    /// <summary>300 configs; set <c>STRATAREC_GENERATED_SEEDS</c> to run more, e.g. 3000 after changing the
+    /// compiler.</summary>
     public static TheoryData<int> Seeds =>
         new(Enumerable.Range(0, int.TryParse(Environment.GetEnvironmentVariable("STRATAREC_GENERATED_SEEDS"), out var seeds) ? seeds : 300));
 
@@ -52,8 +50,8 @@ public sealed class GeneratedExperimentTests
         }
         else if (refused.Count == 0)
         {
-            // A column takes the first writer's type in the unified schema, so a reader may also be refused for what that
-            // type implies (a nullable read without a default): declaring the column as the hint says has the same effect.
+            // A column takes the first writer's type in the unified schema, so a reader may also be refused for what
+            // that type implies (a nullable read without a default).
             var errors = unified.Diagnostics.Where(d => d.IsError).ToList();
             var mismatch = errors.Any(d => d.Code == "COLUMN_TYPE_MISMATCH");
             Assert.True(errors.All(d => AcrossCombinations.Contains(d.Code) || (mismatch && d.Code == "EXPR_NULLABLE_RESULT")),
@@ -82,7 +80,6 @@ public sealed class GeneratedExperimentTests
         }
     }
 
-    /// <summary>Compiles with the local tables loaded, as the engine does before serving a plan.</summary>
     private static ExecutionPlan Loaded(HomeFeedTestHost host, Func<IPlanBindings, PlanCompilation> compile)
     {
         var lease = host.Bindings.OpenLease();
@@ -95,7 +92,6 @@ public sealed class GeneratedExperimentTests
     private static string Describe(PipelineResult result) =>
         string.Join(";", result.Items.Select(i => $"{i.Rank}:{i.Id}:{string.Join(",", i.Columns.OrderBy(c => c.Key).Select(c => $"{c.Key}={c.Value}"))}"));
 
-    /// <summary>Each layer: no arm, or one of its arms.</summary>
     private static List<string[]> Combinations(List<List<string>> layers)
     {
         var combinations = new List<string[]> { Array.Empty<string>() };
@@ -107,11 +103,6 @@ public sealed class GeneratedExperimentTests
         return combinations;
     }
 
-    /// <summary>
-    /// The sample with generated experiments, and sometimes a baseline node reading a column only an arm may declare.
-    /// Implicit columns are <c>stat.a</c> and <c>stat.b</c>, written by GroupAggregate@1 (nullable when grouped by a key
-    /// that may be missing), read with or without <c>??</c>, at random places on the timeline.
-    /// </summary>
     private static (PlanCompileRequest Request, List<List<string>> Layers, string Description) Generate(int seed, PlanCompileRequest sample, PlanEnvironment environment)
     {
         var random = new Random(seed);
@@ -125,10 +116,9 @@ public sealed class GeneratedExperimentTests
         }
 
         // With four or five layers of mostly one treatment, the space is past a limit of 8 to 16 that a scope of three
-        // layers fits, so a scope is checked by its combinations, not refused (no generated space checked one).
-        // Half of those plant a rule only three layers break together: a baseline writer of stat.a before author_cap,
-        // one arm making author_cap read it, one moving author_cap to 513 and one moving the writer to 514. Any one or two
-        // of them are legal (a scope check left out went unnoticed, nothing random was refused by three layers).
+        // layers fits, so a scope is checked by its combinations, not refused. Half of those plant a rule only three
+        // layers break together: a baseline writer of stat.a before author_cap, one arm making author_cap read it, one
+        // moving author_cap to 513 and one moving the writer to 514. Any one or two of them are legal.
         var many = random.Next(4) == 0;
         var triple = many && random.Next(2) == 0;
         var baseWriter = triple || random.Next(3) == 0;
@@ -147,10 +137,6 @@ public sealed class GeneratedExperimentTests
             described.Add($"baseline node base_writer: {writer.ToJsonString()}");
         }
 
-        // Sometimes without each arm's own compile (a host with a thousand arms turns it off), so the combinations' checks
-        // alone must refuse what a combination refuses, and then with more arms invalid on their own; sometimes past the
-        // combinations checked in full, so the checks by scope must (the generated space never left the
-        // exhaustive path).
         var alone = random.Next(3) != 0;
         var limit = many ? 8 + (4 * random.Next(3)) : random.Next(3) == 0 ? random.Next(1, 8) : sample.MaxCombinationsChecked;
         described.Add($"arms validated alone: {alone}; combinations checked in full: up to {limit}; three layers planted: {triple}");
@@ -205,7 +191,6 @@ public sealed class GeneratedExperimentTests
                 described.Add($"{id}/t{t}: {patch.ToJsonString()}");
             }
 
-            // Mostly a layer of its own; sometimes the previous experiment's (mutually exclusive with it).
             var layer = e > (triple ? 2 : 0) && random.Next(many ? 8 : 4) == 0 ? placements[^1].Layer : "layer_" + id;
             placements.Add(new ExperimentPlacement(Experiment(id, arms), layer));
             if (!layers.TryGetValue(layer, out var layerArms))
@@ -216,9 +201,6 @@ public sealed class GeneratedExperimentTests
             layerArms.AddRange(armIds);
         }
 
-        // Sometimes one experiment yields to another of a different layer: a combination with both runs, in
-        // the unified plan as in the merged compile, without the one that yields, and a conflict between them is no error.
-        // Drawn last, so the experiments of a seed are those it had before yields were generated.
         if (placements.Count >= 2 && random.Next(3) == 0)
         {
             var from = random.Next(placements.Count);
@@ -249,16 +231,11 @@ public sealed class GeneratedExperimentTests
         return PlanCompiler.CompileMerged(probe, ["probe/t"], environment).Succeeded;
     }
 
-    /// <summary>
-    /// The experiment as a host builds it in code: its patches hold CLR numbers (an order is an <c>int</c>), which a trip
-    /// through JSON text would turn into parsed elements (only a parsed order was read).
-    /// </summary>
     private static ExperimentArtifact Experiment(string id, Dictionary<string, JsonObject> arms) => new()
     {
         ExperimentId = id, PipelineId = "home_feed", Owner = "t", Description = "d", ExpiresAt = "2099-01-01", Arms = arms,
     };
 
-    /// <summary>One change an arm makes; <paramref name="baseWriter"/> when the baseline has a writer of stat.a.</summary>
     private static JsonObject Atom(Random random, string suffix, bool baseWriter)
     {
         switch (random.Next(16))
@@ -271,7 +248,6 @@ public sealed class GeneratedExperimentTests
                 return Patch("nodes", "agg_" + suffix, Producer(random, Stat(random)));
             case 3 or 4:
             {
-                // A writer and a reader of its column, in either order: the arm is refused when the reader comes first.
                 var column = Stat(random);
                 return new JsonObject
                 {
@@ -284,7 +260,6 @@ public sealed class GeneratedExperimentTests
             }
             case 5 or 6:
             {
-                // A baseline node moved after a writer the arm adds, reading what it writes.
                 var column = Stat(random);
                 var producer = Producer(random, column);
                 var after = random.Next(4) == 0 ? Order(random) : (int)producer["order"]! + 1 + random.Next(20);
@@ -324,9 +299,6 @@ public sealed class GeneratedExperimentTests
                 });
             case 14:
             {
-                // One node writing a count and ranking rows by it, in either order of the two names: a node reads what
-                // was committed before it ran, so its own write is not what it reads, and only a node compiled earlier
-                // can have declared the column. Both compiles refuse it wherever nothing before the node writes it.
                 // Columns of their own, int64 either way, so a type mismatch with other writers does not refuse the
                 // plan before the declarations are checked.
                 var (first, second) = random.Next(2) == 0 ? ("self.a", "self.b") : ("self.b", "self.a");
@@ -344,8 +316,6 @@ public sealed class GeneratedExperimentTests
                 });
             }
             case 15:
-                // A declaration of a column nodes may also write without one: it exists only where the arm is assigned,
-                // so a reader in another arm cannot rely on it there.
                 return Patch("columns", random.Next(3) == 0 ? "group.author_rank" : Stat(random), new JsonObject { ["type"] = "int64?" });
             default:
                 return Patch("log_taps", "tap_" + suffix, new JsonObject
@@ -376,9 +346,8 @@ public sealed class GeneratedExperimentTests
     }
 
     /// <summary>
-    /// A predicate reading <paramref name="column"/>, or mostly the sample's author rank (a stat column only an arm
-    /// writes), mostly with a default; sometimes in a branch the optimizer drops, where the name must still be declared
-    ///.
+    /// A predicate reading <paramref name="column"/>, sometimes in a branch the optimizer drops, where the name must
+    /// still be declared.
     /// </summary>
     private static string Reader(Random random, string? column = null)
     {

@@ -4,8 +4,6 @@ using StrataRec.Expressions.Binding;
 
 namespace StrataRec.Expressions.Ir;
 
-/// <summary>Operations of the typed intermediate representation. Sugar (clamp, logit, soft_floor, linear_decay,
-/// n-ary min/max, <c>in</c>) is lowered by the binder into these primitives.</summary>
 internal enum IrOp : byte
 {
     Const,
@@ -13,14 +11,12 @@ internal enum IrOp : byte
     Context,
     Param,
 
-    // Unary.
     Neg,
     Not,
     ToFloat,
 
-    /// <summary><c>int(x)</c> of a float64: truncation toward zero, missing when not finite or out of the int64
-    /// range. With <see cref="Mod"/> by a divisor that may be 0, a lifted operation that can make present values missing:
-    /// the result's validity is cleared on those rows, never the operands'.</summary>
+    /// <summary><c>int(x)</c> of a float64. With <see cref="Mod"/> by a divisor that may be 0, a lifted operation that
+    /// can make present values missing: the result's validity is cleared on those rows, never the operands'.</summary>
     ToInt,
     Abs,
     Sqrt,
@@ -29,7 +25,6 @@ internal enum IrOp : byte
     Log1p,
     Sigmoid,
 
-    // Binary arithmetic.
     Add,
     Sub,
     Mul,
@@ -54,7 +49,6 @@ internal enum IrOp : byte
     Coalesce,
     Has,
 
-    // Lists and strings.
     Size,
     Contains,
     InSet,
@@ -62,20 +56,18 @@ internal enum IrOp : byte
     StartsWith,
     EndsWith,
 
-    // Float lists (embeddings): dot, cosine, l2_norm; in float32 when the payload is Float32Lists, else in float64.
     Dot,
     Cosine,
     L2Norm,
 
-    // Other functions.
     PiecewiseLinear,
     Hash01,
     Lookup,
 }
 
 /// <summary>
-/// A node of the typed IR. After optimization the IR is a DAG: let bindings and common subexpressions are shared
-/// node instances. Nodes are immutable.
+/// After optimization the IR is a DAG: let bindings and common subexpressions are shared node instances. Nodes are
+/// immutable.
 /// </summary>
 internal sealed class IrNode
 {
@@ -110,17 +102,14 @@ internal sealed class IrNode
 
     public IrNode[] Args { get; }
 
-    /// <summary>Constant value (<see cref="IrOp.Const"/>).</summary>
     public ScalarValue Value { get; }
 
-    /// <summary>Resolved symbol for <see cref="IrOp.Column"/>, <see cref="IrOp.Context"/>, <see cref="IrOp.Param"/>.</summary>
     public Symbol Symbol { get; }
 
     /// <summary>Compile-time payload: <see cref="ConstSet"/> (InSet), <see cref="Knots"/> (PiecewiseLinear),
     /// <see cref="ILookupTable"/> (Lookup), <see cref="Float32Lists"/> (Dot, Cosine, L2Norm computed in float32).</summary>
     public object? Data { get; }
 
-    /// <summary>Source span used for diagnostics.</summary>
     public int Start { get; }
 
     public int Length { get; }
@@ -152,7 +141,6 @@ internal sealed class IrNode
     public static IrNode Make(IrOp op, ExprType type, IrNode[] args, int start, int length, object? data = null) =>
         new(op, type, args, default, default, data, start, length);
 
-    /// <summary>Same operation and payload over new arguments (used by the optimizer).</summary>
     public IrNode WithArgs(IrNode[] args, ExprType type)
     {
         var node = new IrNode(Op, type, args, Value, Symbol, Data, Start, Length) { NameHint = NameHint };
@@ -239,9 +227,9 @@ internal sealed class IrNode
 }
 
 /// <summary>
-/// The payload of a <see cref="IrOp.Dot"/>, <see cref="IrOp.Cosine"/> or <see cref="IrOp.L2Norm"/> whose operands are all
-/// declared <c>list&lt;float32&gt;</c>: it is computed in float32 (<see cref="Runtime.VectorOps"/>); without it, in float64.
-/// The binder decides once, from the declared types, so every backend computes the node in the same precision.
+/// The payload of a <see cref="IrOp.Dot"/>, <see cref="IrOp.Cosine"/> or <see cref="IrOp.L2Norm"/> whose operands are
+/// all declared <c>list&lt;float32&gt;</c>: it is computed in float32 (<see cref="Runtime.VectorOps"/>); without it, in
+/// float64.
 /// </summary>
 internal sealed class Float32Lists
 {
@@ -253,9 +241,6 @@ internal sealed class Float32Lists
 }
 
 /// <summary>Constant membership set of an <c>x in [literal list]</c> test, prepared at compile time.</summary>
-/// <remarks>A test of a string allocates nothing: up to <see cref="ScanStrings"/> strings are compared in turn (an ordinal
-/// <see cref="string.Equals(string, string)"/> checks the reference and the length first, so most fail at once), and a
-/// larger set is a <see cref="HashSet{T}"/> built here, once per compiled expression, never per evaluation or row.</remarks>
 internal sealed class ConstSet
 {
     /// <summary>Distinct strings scanned rather than hashed: hashing reads the whole value, a scan mostly stops at its length.</summary>
@@ -277,13 +262,10 @@ internal sealed class ConstSet
         }
     }
 
-    /// <summary>Int, Float or String.</summary>
     public TypeKind ElementKind { get; }
 
-    /// <summary>Distinct string elements in source order.</summary>
     public string[] Strings { get; }
 
-    /// <summary>Elements in source order for printing.</summary>
     public string Display { get; private init; } = string.Empty;
 
     public static ConstSet OfInts(ReadOnlySpan<long> values)
@@ -350,7 +332,6 @@ internal sealed class Knots(double[] xs, double[] ys)
 
     public double[] Ys { get; } = ys;
 
-    /// <summary>Linear interpolation clamped at both ends; NaN for NaN input.</summary>
     public double Evaluate(double x)
     {
         var xs = Xs;

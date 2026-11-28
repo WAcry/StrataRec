@@ -39,7 +39,6 @@ public abstract class ColumnBuffer
     /// <summary>Validity bitmap (bit set = value present). <c>null</c> means every row is valid.</summary>
     public ulong[]? Validity => _validity;
 
-    // Row-at-a-time writers and readers call these once per row: they index the array directly rather than through a span.
     public bool IsValid(int row) => _validity is not { } words || (words[row >> 6] & (1UL << row)) != 0;
 
     /// <summary>Marks a row as missing (allocating the validity bitmap on first use).</summary>
@@ -103,7 +102,7 @@ public abstract class ColumnBuffer
         return _validity;
     }
 
-    /// <summary>Marks every row missing. Only for <see cref="Tables.CandidateTable"/>, which owns when a row has a value.</summary>
+    /// <summary>Only for <see cref="Tables.CandidateTable"/>, which owns when a row has a value.</summary>
     internal void SetAllMissing()
     {
         var words = Bits.WordCount(Capacity);
@@ -113,7 +112,7 @@ public abstract class ColumnBuffer
 
     /// <summary>
     /// Rewrites the column into new buffers of <paramref name="newCapacity"/> rows so that new row <c>i</c> holds old
-    /// row <c>rows[i]</c> (used by Compact). Old arrays stay rented until the request ends.
+    /// row <c>rows[i]</c>. Old arrays stay rented until the request ends.
     /// </summary>
     public void Gather(ReadOnlySpan<int> rows, int newCapacity)
     {

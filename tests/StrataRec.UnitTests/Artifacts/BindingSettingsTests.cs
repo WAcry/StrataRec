@@ -6,12 +6,6 @@ using StrataRec.Core.Bindings;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary>
-/// A binding's own settings bind to the type its factory declares as strictly, and with the same words, as
-/// an operator's config: every mistake is a <see cref="BindingException"/> at its pointer within the binding, with a hint;
-/// local files and secret references are typed members that know their pointer; and the schema of the settings is
-/// generated from the same type.
-/// </summary>
 public sealed class BindingSettingsTests
 {
     private static readonly string Root = Path.Combine(Path.GetTempPath(), "stratarec-settings-root");
@@ -50,7 +44,6 @@ public sealed class BindingSettingsTests
     {
         var error = Assert.Throws<BindingException>(() => BindingSettings.Bind<Outer>(Context("""{ "nested": { "name": "n" }, "file": null }"""), "test@1"));
 
-        // The converter never sees the null; the serializer's own words named a .NET type.
         Assert.Equal(("/file", "'file' must not be null."), (error.Pointer, error.Reason));
         Assert.Contains("stratarec schema bindings", error.Hint, StringComparison.Ordinal);
     }
@@ -90,7 +83,6 @@ public sealed class BindingSettingsTests
     [Fact]
     public void AValueBoundOnItsOwn_ReportsBelowItsPointer()
     {
-        // A member taken in more than one form is declared as a JsonElement and bound once its form is known.
         var context = Context("""{ "routes": [{ "name": "a" }, { "name": "b", "file": "s3://x" }] }""");
         var routes = context.Settings["routes"];
 
@@ -135,7 +127,6 @@ public sealed class BindingSettingsTests
     [Fact]
     public void FilesResolveAgainstTheirOwnBinding_WhenOneIsBoundInsideAnother()
     {
-        // A converter binds a part with another binding's context mid-way; the outer bind's files after it are still its own.
         var outer = Context("""{ "nested": { "name": "n", "file": "b.json" }, "file": "a.json" }""", Path.Combine(Root, "outer"));
 
         var settings = BindingSettings.Bind<Outer>(outer, "outer@1");
@@ -167,7 +158,7 @@ public sealed class BindingSettingsTests
         Assert.Equal(["endpoint"], then["required"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.Equal("The server to call, host:port.", then["properties"]!["endpoint"]!["description"]!.GetValue<string>());
         Assert.Equal("^secret://.", then["properties"]!["password"]!["pattern"]!.GetValue<string>());
-        Assert.Equal(JsonValueKind.Object, then["properties"]!["client"]!.GetValueKind()); // the framework's members stay allowed
+        Assert.Equal(JsonValueKind.Object, then["properties"]!["client"]!.GetValueKind());
         Assert.NotNull(then["properties"]!["timeout_ms"]);
     }
 
@@ -216,7 +207,6 @@ public sealed class BindingSettingsTests
         public required Route Route { get; init; }
     }
 
-    /// <summary>Binds its value as a route of another binding, whose base directory is <c>inner</c>.</summary>
     private sealed class NestedConverter : JsonConverter<Nested>
     {
         public override Nested Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)

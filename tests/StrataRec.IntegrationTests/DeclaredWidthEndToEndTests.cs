@@ -11,13 +11,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// What leaves the engine has the declared type: a log tap's column or context field that is a plain reference (a
-/// feature, a node's output column, a request input, a context feature) is logged at the width it is declared with, a
-/// candidate column copied straight from its storage, and a result column carries the declared type. Computed expressions
-/// keep their promoted type; a derived feature gives one a narrow type. Taps logged every column at the expression's
-/// promoted type (an int32 feature as int64, a float32 embedding as float64), and results carried no types at all.
-/// </summary>
 public class DeclaredWidthEndToEndTests
 {
     [Fact]
@@ -41,17 +34,16 @@ public class DeclaredWidthEndToEndTests
         var ctr = Assert.IsType<float[]>(Column(batch, "ctr").Values);
         Assert.Equal((0.1f, 0.3f), (ctr[first], ctr[second]));
         Assert.Equal(0.6f, Assert.IsType<float[]>(Column(batch, "ctr2").Values)[second]); // a derived float32 feature
-        Assert.IsType<double[]>(Column(batch, "computed").Values); // computed: promoted
+        Assert.IsType<double[]>(Column(batch, "computed").Values);
         Assert.IsType<long[]>(Column(batch, "id").Values);
         Assert.IsType<long[]>(Column(batch, "clicks1").Values); // computed as written, though the optimizer reduces it to the column
         Assert.IsType<double[]>(Column(batch, "dctr").Values); // computed as written, though the binder reduces it to the column
         Assert.IsType<long[]>(Column(batch, "maxc").Values);
-        Assert.Equal([0.25f, 0.25f], Assert.IsType<float[]>(Column(batch, "w").Values)); // a request input broadcast, narrowed
+        Assert.Equal([0.25f, 0.25f], Assert.IsType<float[]>(Column(batch, "w").Values));
         var emb = Column(batch, "emb");
-        Assert.Equal(4, Assert.IsType<float[]>(emb.Values).Length); // a float32 embedding: 4 bytes an element
+        Assert.Equal(4, Assert.IsType<float[]>(emb.Values).Length);
         Assert.Equal(ScalarValue.FromFloat32List([0.1f, 0.2f]), emb.Get(first));
 
-        // Context values stay promoted; a sink narrows them by the declared type.
         var context = batch.Context.ToDictionary(c => c.Name, c => c.Value);
         Assert.Equal(30, context["age"].AsInt32());
         Assert.Equal(0.25f, context["w"].AsFloat32());
@@ -59,8 +51,8 @@ public class DeclaredWidthEndToEndTests
 
         using var json = JsonDocument.Parse(LogBatchJson.Encode(batch, indented: false));
         var written = json.RootElement.GetProperty("context");
-        Assert.Equal(("0.25", "0.1"), (written.GetProperty("w").GetRawText(), written.GetProperty("uctr").GetRawText())); // as floats
-        Assert.Equal(((double)0.1f + 1.0).ToString(System.Globalization.CultureInfo.InvariantCulture), written.GetProperty("sum").GetRawText()); // a computed float64: the double
+        Assert.Equal(("0.25", "0.1"), (written.GetProperty("w").GetRawText(), written.GetProperty("uctr").GetRawText()));
+        Assert.Equal(((double)0.1f + 1.0).ToString(System.Globalization.CultureInfo.InvariantCulture), written.GetProperty("sum").GetRawText());
         Assert.Equal("[0.1,0.3]", Reorder(json.RootElement.GetProperty("float_cols").GetProperty("ctr"), first, second));
     }
 
@@ -78,13 +70,12 @@ public class DeclaredWidthEndToEndTests
         Assert.Equal(int.MaxValue, row["clicks"].AsInt32());
         Assert.Equal(0.1f, row["ctr"].AsFloat32());
         Assert.Equal(0.25f, row["w"].AsFloat32());
-        Assert.True(row["uctr"].IsFloat32); // a float32 context feature prints as the float it is, as a float32 column's value does
+        Assert.True(row["uctr"].IsFloat32);
     }
 
     [Fact]
     public async Task ATapColumn_ReadingAColumnNoNodeProduced_IsMissing()
     {
-        // The only scorer of out.n32n is skipped by its when: a tap reading the column logs it missing, typed as declared.
         var root = Workspace();
         var pipeline = Path.Combine(root, "pipelines", "p.jsonc");
         File.WriteAllText(pipeline, File.ReadAllText(pipeline)
@@ -100,11 +91,6 @@ public class DeclaredWidthEndToEndTests
         Assert.All(column.Rows(), v => Assert.True(v.IsMissing));
     }
 
-    /// <summary>
-    /// A tap expression reading a non-nullable column no node produced logs missing, as a plain reference to the column
-    /// does; it does not fail the request (it threw once such an expression stopped counting as a reference). One reading a
-    /// nullable such column reads it as missing, and keeps what it makes of that.
-    /// </summary>
     [Fact]
     public async Task ATapExpression_ReadingAColumnNoNodeProduced_DoesNotFailTheRequest()
     {
@@ -125,10 +111,6 @@ public class DeclaredWidthEndToEndTests
         Assert.All(Column(Assert.Single(result.LogBatches, b => b.TapId == "t"), "n32").Rows(), v => Assert.True(v.IsMissing));
     }
 
-    /// <summary>
-    /// A tap with <c>columns_from</c> logs a model node's inputs at the types the model was sent: an int32 feature and a
-    /// float32 context feature as int32 and float32, as random@1 (declaring them so) received them.
-    /// </summary>
     [Fact]
     public async Task ATapOfAModelsInputs_LogsThemAtTheTypesTheModelWasSent()
     {
@@ -153,13 +135,9 @@ public class DeclaredWidthEndToEndTests
         var batch = Assert.Single(result.LogBatches, b => b.TapId == "fed");
         Assert.Equal(["clicks:int32", "uctr:float32"], batch.Schema.Columns.Select(f => $"{f.Name}:{f.Type}").Order(StringComparer.Ordinal));
         Assert.IsType<int[]>(Column(batch, "clicks").Values);
-        Assert.Equal([0.1f, 0.1f], Assert.IsType<float[]>(Column(batch, "uctr").Values)); // a context feature broadcast, at its width
+        Assert.Equal([0.1f, 0.1f], Assert.IsType<float[]>(Column(batch, "uctr").Values));
     }
 
-    /// <summary>
-    /// A float32 request input given 0.1 is 0.1f everywhere: an expression computes with the float a result or log of the
-    /// field gets, not the double it was given.
-    /// </summary>
     [Fact]
     public async Task AFloat32RequestInput_IsTheSameFloat_InExpressionsAndWhereItLeavesTheEngine()
     {
@@ -173,16 +151,11 @@ public class DeclaredWidthEndToEndTests
         Assert.True(result.Succeeded, result.Error);
         var row = result.Items[0].Columns;
         Assert.Equal(0.1f, row["w"].AsFloat32());
-        Assert.Equal((double)0.1f, row["w2"].AsFloat64()); // computed in float64 from the float: (double)0.1f, not 0.1
+        Assert.Equal((double)0.1f, row["w2"].AsFloat64());
         var batch = Assert.Single(result.LogBatches, b => b.TapId == "t");
         Assert.Equal((double)0.1f, batch.Context.Single(c => c.Name == "w").Value.AsFloat64());
     }
 
-    /// <summary>
-    /// The primary declares input <c>w</c> float32, its fallback int64. A replay gives the fallback the integer the host
-    /// gave, as the request served it: the recording keeps the host's value, not the primary's float32 of it, which lost
-    /// its last digits.
-    /// </summary>
     [Fact]
     public async Task AReplayedFallback_BindsTheHostsInput_NotThePrimarysDeclaredTypeOfIt()
     {
@@ -213,7 +186,6 @@ public class DeclaredWidthEndToEndTests
 
     private static LogColumn Column(LogBatch batch, string name) => Assert.Single(batch.Columns, c => c.Name == name);
 
-    /// <summary>A two-row JSON array in entity order (1, 2), whatever the rows' order.</summary>
     private static string Reorder(JsonElement array, int first, int second) => $"[{array[first].GetRawText()},{array[second].GetRawText()}]";
 
     private static Task<PipelineResult> Run(ExecutionPlan plan) => new PipelineExecutor().ExecuteAsync(plan, new PipelineRequest

@@ -12,14 +12,11 @@ namespace StrataRec.Features.Catalog;
 
 /// <summary>Converts JSON configuration values (defaults, parameter values, request inputs) to typed scalars.</summary>
 /// <remarks>
-/// One set of rules and words for every form a value arrives in: a <see cref="JsonElement"/> (a request body read once,
-/// without building nodes) is the implementation; a <see cref="JsonNode"/> (configuration) is read through it; a typed
-/// <see cref="ScalarValue"/> a host passed is checked with the words the same value would get as JSON. So a request input
-/// of the wrong type reads alike whether a host, the CLI or the engine reports it. No input makes these methods throw: a
-/// value they cannot represent (a number beyond its type, a string escape that is not Unicode) is an error like any other.
-/// One rule tells the two JSON forms apart: configuration is stored canonical (RFC 8785), so an integer it holds must be
-/// one its canonical form keeps (<see cref="NotCanonical(in JsonElement, long)"/>); a request is never stored so, and
-/// reads <c>9007199254740993.0</c> as the integer written.
+/// One set of rules and words for every form a value arrives in. So a request input of the wrong type reads alike
+/// whether a host, the CLI or the engine reports it. No input makes these methods throw: a value they cannot represent
+/// (a number beyond its type, a string escape that is not Unicode) is an error like any other. One rule tells the two
+/// JSON forms apart: configuration is stored canonical (RFC 8785), so an integer it holds must be one its canonical
+/// form keeps; a request is never stored so, and reads <c>9007199254740993.0</c> as the integer written.
 /// </remarks>
 public static class ConfigValues
 {
@@ -64,7 +61,6 @@ public static class ConfigValues
     public static bool TryToScalar(in JsonElement element, ColumnType type, out ScalarValue value, [NotNullWhen(false)] out string? error) =>
         TryToScalar(element, type, canonical: false, out value, out error);
 
-    /// <param name="canonical">The value is configuration, stored canonical: an integer must keep its value in that form.</param>
     private static bool TryToScalar(in JsonElement element, ColumnType type, bool canonical, out ScalarValue value, [NotNullWhen(false)] out string? error)
     {
         value = ScalarValue.Missing;
@@ -140,9 +136,6 @@ public static class ConfigValues
         return false;
     }
 
-    /// <summary>A JSON array as a list of <paramref name="type"/>'s elements, each read as a scalar of the element type
-    /// is (an int32 element within int32, a float within float64), and as many as a <c>list&lt;E,N&gt;</c> holds; held
-    /// promoted, as every list value is.</summary>
     private static bool TryList(in JsonElement array, ColumnType type, bool canonical, out ScalarValue value, [NotNullWhen(false)] out string? error)
     {
         value = ScalarValue.Missing;
@@ -256,7 +249,6 @@ public static class ConfigValues
             return true;
         }
 
-        // Only why it failed is worked out here, on the error path: TryConvert decided.
         switch (type.Kind)
         {
             case StorageKind.List when value.Kind == StorageKind.List && !ColumnValues.FitsLength(value.ListLength, type):
@@ -266,7 +258,6 @@ public static class ConfigValues
                 error = OutOfRange(type, Words(value), fitsInt64: true);
                 return false;
             case StorageKind.Int32 or StorageKind.Int64 when value.Kind == StorageKind.Float64 && Math.Floor(value.AsFloat64()) == value.AsFloat64():
-                // An integral double ScalarValue.TryConvert refused: outside the type's range (or int64's).
                 error = OutOfRange(type, Words(value), fitsInt64: Math.Abs(value.AsFloat64()) < 9.2e18);
                 return false;
             case StorageKind.List when type.Element == StorageKind.Int32 && value.ListElement == StorageKind.Int64:
@@ -344,9 +335,8 @@ public static class ConfigValues
     private static string Element(ColumnType type, int index, string got) => $"must be {Describe(type)}; element {index} is {got}";
 
     /// <summary>
-    /// An integer outside the range of <paramref name="type"/> (of its elements, with <paramref name="element"/>); for int32
-    /// storage of a value int64 holds, with the fix of declaring the int64 form. The larger type keeps the nullability
-    /// written, so the suggestion can be pasted as it is: <c>int64</c> for an <c>int32?</c> input would make it required.
+    /// The larger type keeps the nullability written, so the suggestion can be pasted as it is: <c>int64</c> for an
+    /// <c>int32?</c> input would make it required.
     /// </summary>
     private static string OutOfRange(ColumnType type, string got, bool fitsInt64, int element = -1)
     {
@@ -358,7 +348,6 @@ public static class ConfigValues
             : $"must be an array of integers within {range}; element {element} is {got}{fix}";
     }
 
-    /// <summary>A finite number beyond float32 for float32 storage, which would hold it as an infinity (<see cref="Float32Range"/>).</summary>
     private static string FloatOutOfRange(ColumnType type, string got, int element = -1)
     {
         var fix = $"; declare the type as {type.Promoted()} for larger values";
@@ -371,10 +360,6 @@ public static class ConfigValues
 
     private static string Elements(int count) => count == 1 ? "1 element" : $"{count} elements";
 
-    /// <summary>
-    /// The index of the first item of <paramref name="array"/> that cannot be read: a string that is not valid Unicode (a
-    /// parsed value holds its element unread), or a container holding one; -1 when there is none.
-    /// </summary>
     private static int Unreadable(JsonArray array)
     {
         for (var i = 0; i < array.Count; i++)
@@ -394,7 +379,6 @@ public static class ConfigValues
         return -1;
     }
 
-    /// <summary>A typed value as the JSON that would carry it is told (<see cref="JsonWords.Value(in JsonElement)"/>).</summary>
     private static string Words(in ScalarValue value) => value.Kind switch
     {
         0 => "null",
@@ -406,10 +390,8 @@ public static class ConfigValues
     };
 
     /// <summary>
-    /// The element a node holds: the parsed one when it has one (no copy), otherwise the node serialized, which only
-    /// configuration built in code (and arrays, which are nodes of their own) pays for, at load. False for a node that
-    /// cannot be written as JSON: one holding a parsed string whose escape is an unpaired surrogate, which cannot be read
-    /// to be written (the serializer may wrap that error). Nothing else in a node makes it throw.
+    /// False for a node that cannot be written as JSON: one holding a parsed string whose escape is an unpaired
+    /// surrogate, which cannot be read to be written (the serializer may wrap that error).
     /// </summary>
     private static bool TryAsElement(JsonNode node, out JsonElement element)
     {
@@ -431,22 +413,17 @@ public static class ConfigValues
     }
 
     /// <summary>
-    /// The integer a JSON number denotes (<c>3</c>, <c>3.0</c>, <c>3e2</c>), exactly (<see cref="JsonIntegers"/>): never
-    /// through a double, which would round <c>9007199254740993.0</c> and accept <c>9007199254740992.5</c>. Plain integer
-    /// text is read without allocating.
+    /// The integer a JSON number denotes (<c>3</c>, <c>3.0</c>, <c>3e2</c>), exactly (<see cref="JsonIntegers"/>):
+    /// never through a double, which would round <c>9007199254740993.0</c> and accept <c>9007199254740992.5</c>.
     /// </summary>
     private static bool TryInteger(in JsonElement number, out long integer) =>
         number.TryGetInt64(out integer) || JsonIntegers.TryParse(number.GetRawText(), out integer);
 
     /// <summary>
-    /// The canonical form (RFC 8785) of an integer written with a fraction or an exponent (<c>1152921504606846976.0</c>)
-    /// when that form is a different integer; null otherwise. Configuration is stored canonical, where such a number is a
-    /// double: past ±2^53 its shortest digits can be another integer (2^60 becomes <c>1152921504606847000</c>), so a plan
-    /// run from the workspace and the same plan run from its manifest bound different values, and the effective plan
-    /// <c>diff</c> canonicalizes failed. The canonicalizer refuses such an integer written as plain digits
-    /// (<see cref="JsonCanonicalizer"/>, when an artifact or an override is hashed), but cannot tell <c>….0</c> from a
-    /// float; the binding can. One whose canonical form is itself (<c>1e18</c>) is kept, as plain digits are. Allocates
-    /// only for such a number past 2^53.
+    /// The canonical form (RFC 8785) of an integer written with a fraction or an exponent
+    /// (<c>1152921504606846976.0</c>) when that form is a different integer; null otherwise. The canonicalizer refuses
+    /// such an integer written as plain digits (<see cref="JsonCanonicalizer"/>, when an artifact or an override is
+    /// hashed), but cannot tell <c>….0</c> from a float; the binding can.
     /// </summary>
     private static string? NotCanonical(in JsonElement number, long integer)
     {
@@ -460,7 +437,6 @@ public static class ConfigValues
         return JsonIntegers.TryParse(canonical, out var stored) && stored == integer ? null : canonical;
     }
 
-    /// <summary>An integer its canonical form would change (<see cref="NotCanonical(in JsonElement, long)"/>), in the canonicalizer's words.</summary>
     private static string NotCanonical(ColumnType type, string literal, string canonical, int element = -1)
     {
         var got = $"the number {literal}, whose canonical form would be {canonical}, a different integer; " +

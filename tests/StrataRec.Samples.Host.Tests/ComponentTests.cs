@@ -6,14 +6,11 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.Samples.Host.Tests;
 
-/// <summary>The sample's custom components on their own, for what the service tests cannot reach.</summary>
 public sealed class ComponentTests
 {
     [Fact]
     public async Task Logistic_LargeCoefficientsThatCancel_GiveTheirProbability_NotNaN()
     {
-        // The factory accepts any finite double, and the call computed in float, where 1e40 is infinite: the
-        // logit was inf - inf, and the call returned NaN as a success.
         var client = new LogisticModelClient("m", "v1", "p", bias: -1e40, inputs: new[] { "x" }, weights: new[] { 1e40 });
         var outputs = new Outputs();
 
@@ -39,7 +36,6 @@ public sealed class ComponentTests
     [Fact]
     public async Task KeyValueStore_AStringKey_IsALoadErrorAtItsLine()
     {
-        // TryGetInt64 throws on a string, so the record's line and the binding's pointer were lost.
         var file = Path.GetTempFileName();
         try
         {
@@ -57,15 +53,11 @@ public sealed class ComponentTests
         }
     }
 
-    /// <summary>
-    /// The components' settings bind to the types their factories declare: a mistake is an error at its pointer with a
-    /// hint, worded as for every built-in component, and the factories check only what the types cannot say.
-    /// </summary>
     [Theory]
     [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": 1 }, "bais": 1 }""", "/bais", "did you mean 'bias'?")]
     [InlineData("logistic@1", """{ "weights": { "ctr": 1 } }""", "", "'version': ")]
     [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": "high" } }""", "/weights/ctr", "'stratarec schema bindings'")]
-    [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": 1e400 } }""", "/weights/ctr", "use a smaller magnitude")] // Finite only
+    [InlineData("logistic@1", """{ "version": "v3", "weights": { "ctr": 1e400 } }""", "/weights/ctr", "use a smaller magnitude")]
     [InlineData("logistic@1", """{ "version": "v3", "weights": {} }""", "/weights", "e.g. { \"ctr\": 20.0")]
     [InlineData("trending@1", """{ "items": [{ "id": 7 }] }""", "/items/0", "'score': ")]
     [InlineData("trending@1", """{ "items": [{ "id": "7", "score": 1 }] }""", "/items/0/id", "'stratarec schema bindings'")]
@@ -96,7 +88,6 @@ public sealed class ComponentTests
         Assert.Contains(Path.Combine(directory, "data", "missing.jsonl"), error.Reason, StringComparison.Ordinal);
     }
 
-    /// <summary>stock@1 answers a call about items, one bool per item; any other call fails, saying what it answers.</summary>
     [Fact]
     public async Task Stock_AnswersEachItem_AndFailsACallItCannotAnswer()
     {

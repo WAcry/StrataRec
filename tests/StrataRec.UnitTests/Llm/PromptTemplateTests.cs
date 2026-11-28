@@ -6,16 +6,10 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
-/// <summary>
-/// Prompt templates bound to StrataRec, through <c>LlmReranker@1</c> and a model that captures its
-/// prompts: names resolved at load and fetched before the node, how every kind of value renders, the sections, and every
-/// load error at the template's pointer with the tag's offset and a hint.
-/// </summary>
 public sealed class PromptTemplateTests
 {
     private const string Pointer = "/nodes/rank/config/prompts/user";
 
-    /// <summary>Every kind of value and section: context, parameters, a nullable guard each way, lists, and the window's rows.</summary>
     internal const string Everything = """
         Query: {{ctx.request.query}} (budget {{ctx.request.budget}}, vip {{ctx.request.vip}}, tier {{ctx.user.tier}}, tone {{param.tone}}, boost {{ param.boost }})
         {{#ctx.user.name}}Hello {{ctx.user.name}}!{{/ctx.user.name}}{{^ctx.request.nickname}}No nickname.{{/ctx.request.nickname}}
@@ -66,7 +60,6 @@ public sealed class PromptTemplateTests
         Assert.Equal("30=Green\nscarf;10=Red \"shoes\";", call.Prompts["user"]);
     }
 
-    /// <summary>Float and bool list elements render as scalars of their type do: float32 ones as the floats they are.</summary>
     [Fact]
     public async Task FloatAndBoolListElements_RenderAsScalarsOfTheirType()
     {
@@ -80,7 +73,6 @@ public sealed class PromptTemplateTests
         Assert.Equal("0.1;1E-07; false,true, 30:none/ 10:0.1;-2.5;/true,false,", Assert.Single(models.Calls).Prompts["user"]);
     }
 
-    /// <summary>The features a template names are the node's reads: fetched before it runs, though nothing else reads them.</summary>
     [Fact]
     public async Task AFeatureOnlyTheTemplateNames_IsFetchedBeforeTheNode()
     {
@@ -104,7 +96,7 @@ public sealed class PromptTemplateTests
     [InlineData("{{.}}", 0, "MUSTACHE_IMPLICIT", "use {{.}} inside a section over a list")]
     [InlineData("{{#rows}} {{.}}{{/rows}}", 10, "MUSTACHE_IMPLICIT", "name the value to show")]
     [InlineData("{{#ctx.request.interests}}{{#.}}x{{/.}}{{/ctx.request.interests}}", 26, "MUSTACHE_SECTION_TYPE", "iterate a list by its name")]
-    [InlineData("{{#rows}}{{col.item.emb}}{{/rows}}", 9, "MUSTACHE_UNRENDERABLE", "iterate it: {{#col.item.emb}}{{.}}, {{/col.item.emb}}")] // an embedding is a list
+    [InlineData("{{#rows}}{{col.item.emb}}{{/rows}}", 9, "MUSTACHE_UNRENDERABLE", "iterate it: {{#col.item.emb}}{{.}}, {{/col.item.emb}}")]
     [InlineData("I like {{ctx.request.interests}}", 7, "MUSTACHE_UNRENDERABLE", "iterate it: {{#ctx.request.interests}}{{.}}, {{/ctx.request.interests}}")]
     [InlineData("{{#ctx.request.query}}q{{/ctx.request.query}}", 0, "MUSTACHE_SECTION_TYPE", "show the value with {{ctx.request.query}}")]
     [InlineData("{{^param.boost}}none{{/param.boost}}", 0, "MUSTACHE_SECTION_TYPE", "a section takes a list")]
@@ -120,7 +112,6 @@ public sealed class PromptTemplateTests
         Assert.Contains(hint, error.Hint);
     }
 
-    /// <summary>Missing is explicit: a nullable value renders only inside a section on the same name, which tests it.</summary>
     [Theory]
     [InlineData("{{ctx.user.name}}", 0)]
     [InlineData("{{^ctx.user.name}}{{ctx.user.name}}{{/ctx.user.name}}", 18)]
@@ -160,7 +151,6 @@ public sealed class PromptTemplateTests
             compilation.Diagnostics.Where(d => d.IsError).Select(d => (d.Pointer, d.Code)));
     }
 
-    /// <summary>A per-row prompt (<c>LlmAnnotator@1</c>) names the row's values anywhere: no rows section, guards and lists as usual.</summary>
     [Fact]
     public async Task APerRowPrompt_RendersItsRowsValues_AtTheTopLevel()
     {
@@ -182,7 +172,6 @@ public sealed class PromptTemplateTests
             models.Calls.Select(c => c.Prompts["user"]).Order(StringComparer.Ordinal));
     }
 
-    /// <summary>A per-request prompt (<c>GenerativeRetriever@1</c>) names request values only.</summary>
     [Fact]
     public async Task APerRequestPrompt_RendersTheRequestsValues()
     {
@@ -197,7 +186,6 @@ public sealed class PromptTemplateTests
             Assert.Single(models.Calls).Prompts["user"]);
     }
 
-    /// <summary>A name only another scope has is a load error that says why; the usual rules hold in every scope.</summary>
     [Theory]
     [InlineData("LlmAnnotator@1", "{{#rows}}{{col.item.title}}{{/rows}}", 0, "MUSTACHE_SCOPE", "name the row's values directly")]
     [InlineData("LlmAnnotator@1", "{{rows}}", 0, "MUSTACHE_SCOPE", "name the row's values directly")]
@@ -248,10 +236,6 @@ public sealed class PromptTemplateTests
     }
 }
 
-/// <summary>
-/// What rendering a prompt allocates: the prompt string and nothing else, however many rows, lists and sections the
-/// template has (docs/development.md section 4: no per-row allocation on the request path).
-/// </summary>
 [Collection(AllocationMeasurement.Name)]
 public sealed class PromptTemplateAllocationTests
 {

@@ -10,11 +10,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// How a replay answers a service call about no items, such as a recall's: by the digest of its inputs. The
-/// node's own recorded call first, as recorded and consumed; else any successful call with the same inputs, consuming
-/// nothing; else nothing, reported. A recorded answer answers only the inputs it was for.
-/// </summary>
 public sealed class ServiceCallReplayTests
 {
     private static readonly RequestMemory Memory = new();
@@ -28,8 +23,8 @@ public sealed class ServiceCallReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
 
         Assert.Equal(("42", true), Retrieve(replay, "a", Query(1)));
-        Assert.Equal(("", false), Retrieve(replay, "a", Query(1))); // the recorded timeout
-        Assert.Equal(("42", true), Retrieve(replay, "a", Query(1))); // a third call of the same inputs
+        Assert.Equal(("", false), Retrieve(replay, "a", Query(1)));
+        Assert.Equal(("42", true), Retrieve(replay, "a", Query(1)));
         Assert.Empty(replay.Gaps);
     }
 
@@ -41,7 +36,6 @@ public sealed class ServiceCallReplayTests
         run.ServiceCalls.Add(Recorded("b", Query(2), "ok", 7));
         var replay = RunReplay.Create(run, "/runs/0");
 
-        // A node the configuration added, asking what b asked: b's answer, though a's list is longer, and b keeps its own.
         Assert.Equal(("7", true), Retrieve(replay, "added", Query(2)));
         Assert.Equal(("7", true), Retrieve(replay, "b", Query(2)));
         Assert.Empty(replay.Gaps);
@@ -84,7 +78,7 @@ public sealed class ServiceCallReplayTests
 
         Assert.False(Retrieve(replay, "added", Query(1)).Succeeded);
         Assert.Equal("not_recorded", Assert.Single(replay.Gaps).Reason);
-        Assert.False(Retrieve(replay, "e", Query(1)).Succeeded); // as recorded: no new gap
+        Assert.False(Retrieve(replay, "e", Query(1)).Succeeded);
         Assert.Single(replay.Gaps);
     }
 
@@ -97,17 +91,13 @@ public sealed class ServiceCallReplayTests
         var replay = RunReplay.Create(run, "/runs/0");
 
         Assert.Equal(("1", true), Retrieve(replay, "full", Query(1, limit: 1)));
-        Assert.Equal(("1,2", true), Retrieve(replay, "added", Query(1, limit: 3))); // the limit is not part of the inputs
-        Assert.Equal(("3,4", true), Retrieve(replay, "short", Query(2, limit: 9))); // the service had no more
+        Assert.Equal(("1,2", true), Retrieve(replay, "added", Query(1, limit: 3)));
+        Assert.Equal(("3,4", true), Retrieve(replay, "short", Query(2, limit: 9)));
 
         var gap = Assert.Single(replay.Gaps);
         Assert.Equal(("recall", "limit_exceeds_recording", 1, "added"), (gap.Kind, gap.Reason, gap.Count, gap.Examples.Single()));
     }
 
-    /// <summary>
-    /// Two nodes asked the same query for 1 and 3 items; a node that replaces them asks for 3. It borrowed the first call
-    /// with that digest, the shorter one, and reported a shortfall the bundle could answer.
-    /// </summary>
     [Fact]
     public void ANodeWithoutACall_BorrowsTheSameInputsAnswerThatAnswersIt_NotTheFirst()
     {
@@ -120,11 +110,6 @@ public sealed class ServiceCallReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// A recorded call that asked for no items says nothing about the items the service has: it does not answer a call
-    /// asking for 3, which another call with the same inputs answers, nor, alone, the same node asking for 3 now (a shortfall
-    /// the recording cannot tell, <c>limit_exceeds_recording</c>). It answered both with no items and no gap.
-    /// </summary>
     [Fact]
     public void ACallThatAskedForNoItems_AnswersNoCallThatAsksForSome()
     {
@@ -145,13 +130,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(("limit_exceeds_recording", 3), (gap.Reason, gap.Count));
     }
 
-    /// <summary>
-    /// Of two partial answers with as much of what a call reads, the one that can tell its items is borrowed: both answered
-    /// text <c>a</c> and no items, the second asked for 3 (the service had none), the first for 0 (it says nothing). The
-    /// first was borrowed and the replay reported 3 items it could not tell besides the missing <c>b</c>.
-    /// A call reading outputs is digested with its limit, so the first is not even
-    /// a candidate: its text may say it was asked for none.
-    /// </summary>
     [Fact]
     public void OfPartialAnswersAsGood_TheOneThatCanTellItsItems_IsBorrowed()
     {
@@ -168,7 +146,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(("not_recorded", "b"), (gap.Reason, gap.Field));
     }
 
-    /// <summary>The same for outputs: a node reading <c>b</c> borrows the call with the same inputs that has it.</summary>
     [Fact]
     public void ANodeWithoutACall_BorrowsTheSameInputsAnswerWithTheOutputItReads()
     {
@@ -187,11 +164,6 @@ public sealed class ServiceCallReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// A call that reads a named output more or less than its recording, with the same inputs and limit, still meets its
-    /// recording: its list is answered, and an output the recording lacks is a <c>not_recorded</c> gap. The limit in the
-    /// digest made such a call another call, its inputs reported changed.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -241,10 +213,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(("summary", "limit_changed"), (gap.Field, gap.Reason));
     }
 
-    /// <summary>
-    /// The items a service added past the call's limit are replayed for that limit, as the node saw them; a call of a
-    /// smaller limit answered from the start of the list has none (they were not recorded).
-    /// </summary>
     [Theory]
     [InlineData(2, 3)]
     [InlineData(1, 0)]
@@ -272,10 +240,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(dropped, response.Dropped);
     }
 
-    /// <summary>
-    /// A failure or a cut-off recorded at another limit does not end a call reading outputs that has an answer of its own
-    /// limit (the first call of the same inputs was taken, whatever its limit).
-    /// </summary>
     [Theory]
     [InlineData("error", false)]
     [InlineData("cancelled", true)]
@@ -298,9 +262,9 @@ public sealed class ServiceCallReplayTests
     }
 
     /// <summary>
-    /// A call takes the node's recording of its own limit first, though recorded later. A failure answers only a call of
-    /// its limit: of another, the service may have failed only past some limit, so a success that
-    /// another node recorded at the call's limit answers it, and with none the call is a <c>limit_changed</c> gap, each time.
+    /// A failure answers only a call of its limit: of another, the service may have failed only past some limit, so a
+    /// success that another node recorded at the call's limit answers it, and with none the call is a
+    /// <c>limit_changed</c> gap, each time.
     /// </summary>
     [Fact]
     public void AFailure_AnswersOnlyACallOfItsLimit()
@@ -309,15 +273,15 @@ public sealed class ServiceCallReplayTests
         run.ServiceCalls.Add(Recorded("n", Query(1, limit: 1), "error"));
         run.ServiceCalls.Add(Recorded("n", Query(1, limit: 3), "ok", 7, 8, 9));
         var replay = RunReplay.Create(run, "/runs/0");
-        Assert.Equal(("7,8,9", true), Retrieve(replay, "n", Query(1, limit: 3))); // its own limit's, though recorded second
-        Assert.Equal(("", false), Retrieve(replay, "n", Query(1, limit: 1))); // the failure, as recorded
+        Assert.Equal(("7,8,9", true), Retrieve(replay, "n", Query(1, limit: 3)));
+        Assert.Equal(("", false), Retrieve(replay, "n", Query(1, limit: 1)));
         Assert.Empty(replay.Gaps);
 
         var larger = RunReplayTests.Run();
         larger.ServiceCalls.Add(Recorded("n", Query(1, limit: 11), "error"));
         larger.ServiceCalls.Add(Recorded("m", Query(1, limit: 2), "ok", 7, 8));
         var smaller = RunReplay.Create(larger, "/runs/0");
-        Assert.Equal(("7,8", true), Retrieve(smaller, "n", Query(1, limit: 2))); // m's, not n's failure at 11
+        Assert.Equal(("7,8", true), Retrieve(smaller, "n", Query(1, limit: 2)));
         Assert.Empty(smaller.Gaps);
 
         foreach (var asked in new[] { Query(1, limit: 3), Reading(Query(1, limit: 3), "summary") })
@@ -333,10 +297,6 @@ public sealed class ServiceCallReplayTests
         }
     }
 
-    /// <summary>
-    /// A recording of another limit that cannot answer the call is not used up by it: a later call of its limit still gets
-    /// it (it was consumed, and that call got the failure recorded after it).
-    /// </summary>
     [Fact]
     public void ARecordingThatCannotAnswerTheCall_IsLeftForACallOfItsLimit()
     {
@@ -346,8 +306,8 @@ public sealed class ServiceCallReplayTests
         run.ServiceCalls.Add(Recorded("m", Reading(Query(1, limit: 2), "summary"), "ok", texts: new() { ["summary"] = "two" }, 7, 8));
         var replay = RunReplay.Create(run, "/runs/0");
 
-        Assert.Equal(("7,8", "two"), Summary(replay, Reading(Query(1, limit: 2), "summary"))); // m's: n's of limit 1 cannot answer
-        Assert.Equal(("7", "one"), Summary(replay, Reading(Query(1, limit: 1), "summary"))); // n's first, still there
+        Assert.Equal(("7,8", "two"), Summary(replay, Reading(Query(1, limit: 2), "summary")));
+        Assert.Equal(("7", "one"), Summary(replay, Reading(Query(1, limit: 1), "summary")));
         Assert.Empty(replay.Gaps);
 
         static (string Ids, string? Text) Summary(RunReplay replay, ServiceCall call)
@@ -359,10 +319,6 @@ public sealed class ServiceCallReplayTests
         }
     }
 
-    /// <summary>
-    /// The generation details of a recorded call (tokens, truncation) describe what it generated for its limit: a call of
-    /// another limit answered from the start of its list does not get them.
-    /// </summary>
     [Theory]
     [InlineData(3, 20, true)]
     [InlineData(1, null, false)]
@@ -379,11 +335,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal((tokens, truncated), (status.OutputTokens, status.Truncated));
     }
 
-    /// <summary>
-    /// A service drops items only past a full list, and a recording holds the count only when there were some: any other
-    /// count is no answer a service gave, rejected at its pointer; nor is one of a failure, even of
-    /// a call that asked for no items.
-    /// </summary>
     [Theory]
     [InlineData(-1, 2, 2, "ok")]
     [InlineData(0, 2, 2, "ok")]
@@ -400,10 +351,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal("/runs/0/service_calls/0/dropped", error.Pointer);
     }
 
-    /// <summary>
-    /// A feature source's call is recorded with its source and no node: its failure answers the source, not a
-    /// node whose id is the source's name.
-    /// </summary>
     [Fact]
     public void ASourcesRecordedFailure_AnswersTheSource_NotANodeOfTheSameName()
     {
@@ -417,14 +364,14 @@ public sealed class ServiceCallReplayTests
         var response = new ServiceResponse(Memory, 0);
 
         Assert.False(replay.Call(ServiceCaller.OfNode("x"), new IoTarget(IoRoles.Recall, "s"), Query(1, limit: 0), response, out _).Succeeded);
-        Assert.Equal("not_recorded", Assert.Single(replay.Gaps).Reason); // the node has no call of its own
+        Assert.Equal("not_recorded", Assert.Single(replay.Gaps).Reason);
         Assert.False(replay.Call(ServiceCaller.OfSource("x", "e"), new IoTarget(IoRoles.Fetch, "s"), Query(1, limit: 0), new ServiceResponse(Memory, 0), out _).Succeeded);
-        Assert.Single(replay.Gaps); // the source's, as recorded
+        Assert.Single(replay.Gaps);
     }
 
     /// <summary>
-    /// A node whose id spells a source's key (a plan built without the plan compiler's id checks) is still another caller
-    /// than the source (the source took the node's recorded failure).
+    /// A node whose id spells a source's key (a plan built without the plan compiler's id checks) is still another
+    /// caller than the source.
     /// </summary>
     [Fact]
     public void ANodeWhoseIdSpellsASourcesKey_IsNotTheSource()
@@ -446,11 +393,6 @@ public sealed class ServiceCallReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// A source's caller is its source and entity, each name as it is: source <c>a/b</c>'s entity <c>intent</c> is not
-    /// source <c>a</c>'s entity <c>b/intent</c> (the two joined by a slash were one key, and one took
-    /// the other's recorded failure).
-    /// </summary>
     [Fact]
     public void ASourceAndAnEntityWhoseNamesHoldASlash_AreNotAnotherSourcesEntity()
     {
@@ -472,15 +414,11 @@ public sealed class ServiceCallReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// An output left unwritten by a call of another limit and other outputs says nothing of it: <c>not_recorded</c>, not
-    /// <c>limit_changed</c>, which the same outputs at another limit are.
-    /// </summary>
     [Fact]
     public void AnOutputLeftUnwrittenAtAnotherLimit_ByACallOfOtherOutputs_IsNotRecorded()
     {
         var run = RunReplayTests.Run();
-        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 2), "summary", "label"), "ok", 7)); // one item, neither written
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 2), "summary", "label"), "ok", 7));
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, 1);
 
@@ -490,10 +428,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(("summary", "not_recorded"), (Assert.Single(replay.Gaps).Field, replay.Gaps[0].Reason));
     }
 
-    /// <summary>
-    /// A call of many outputs, all left unwritten as recorded, compares the outputs with the recorded call's once, not once
-    /// an output (512 outputs read the call's list 1,027 times, the replay of it took 359 ms).
-    /// </summary>
     [Fact]
     public void ACallOfManyOutputsLeftUnwritten_ComparesItsOutputsOnce()
     {
@@ -511,11 +445,6 @@ public sealed class ServiceCallReplayTests
         Assert.InRange(names.Reads, 1, 16);
     }
 
-    /// <summary>
-    /// A caller may reuse its call object and its arrays for its next call (the call's contents are its own): each call is
-    /// answered by what it asks for then (the comparison of outputs was kept by the call object,
-    /// and a reused one asking for other outputs took the answer of the call before).
-    /// </summary>
     [Fact]
     public void ACallObjectReusedForOtherOutputs_IsAnsweredByWhatItAsksForThen()
     {
@@ -525,7 +454,7 @@ public sealed class ServiceCallReplayTests
         {
             Seq = 0, Node = "n", Service = failed.Service, Role = failed.Role, Status = "error", Error = "a failed", InputDigests = failed.InputDigests, Requested = ["a"],
         });
-        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 0), "b"), "ok")); // b left unwritten
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 0), "b"), "ok"));
         var replay = RunReplay.Create(run, "/runs/0");
         var outputs = new[] { "b" };
         var call = new ServiceCall { Service = "s", Inputs = Query(1, limit: 0).Inputs, Outputs = outputs };
@@ -539,7 +468,6 @@ public sealed class ServiceCallReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>Output names that count how often their list is read.</summary>
     private sealed class CountingNames(int count) : System.Buffers.MemoryManager<string>
     {
         public string[] Names { get; } = [.. Enumerable.Range(0, count).Select(i => "o" + i)];
@@ -563,15 +491,11 @@ public sealed class ServiceCallReplayTests
         }
     }
 
-    /// <summary>
-    /// An output a recorded call asked for and the service left unwritten is that call's answer only: a call of other
-    /// outputs takes it from a recorded call that wrote it (the omission answered first, as missing).
-    /// </summary>
     [Fact]
     public void AnOmissionOfACallOfOtherOutputs_DoesNotAnswerOverARecordingThatWroteTheOutput()
     {
         var run = RunReplayTests.Run();
-        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 0), "summary", "other"), "ok", texts: new() { ["other"] = "x" })); // summary unwritten
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 0), "summary", "other"), "ok", texts: new() { ["other"] = "x" }));
         run.ServiceCalls.Add(Recorded("m", Reading(Query(1, limit: 0), "summary"), "ok", texts: new() { ["summary"] = "three" }));
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, 0);
@@ -584,15 +508,11 @@ public sealed class ServiceCallReplayTests
         Assert.Empty(replay.Gaps);
     }
 
-    /// <summary>
-    /// An output asked for at another limit is recorded there, though the service left it unwritten: a call of this limit
-    /// has a <c>limit_changed</c> gap of it, not <c>not_recorded</c>.
-    /// </summary>
     [Fact]
     public void AnOutputLeftUnwrittenAtAnotherLimit_IsALimitChangedGap()
     {
         var run = RunReplayTests.Run();
-        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 2), "summary"), "ok", 7)); // one item, summary unwritten
+        run.ServiceCalls.Add(Recorded("n", Reading(Query(1, limit: 2), "summary"), "ok", 7));
         var replay = RunReplay.Create(run, "/runs/0");
         var response = new ServiceResponse(Memory, 1);
 
@@ -603,10 +523,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal(("summary", "limit_changed"), (Assert.Single(replay.Gaps).Field, replay.Gaps[0].Reason));
     }
 
-    /// <summary>
-    /// A recorded call names each output it asked for once, and holds only those, as the recorder writes it; any other
-    /// is rejected at its pointer.
-    /// </summary>
     [Theory]
     [InlineData("twice", "/runs/0/service_calls/0/requested/1")]
     [InlineData("not asked", "/runs/0/service_calls/0/texts/summary")]
@@ -645,7 +561,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal("/runs/0/service_calls/0/source", error.Pointer);
     }
 
-    /// <summary>A node's recorded failure, replayed once, leaves its next call of the same inputs unrecorded: not "inputs changed".</summary>
     [Fact]
     public void ANodesCallsOfTheSameInputsUsedUp_AreNotRecorded_NotChanged()
     {
@@ -653,7 +568,7 @@ public sealed class ServiceCallReplayTests
         run.ServiceCalls.Add(Recorded("a", Query(1), "error"));
         var replay = RunReplay.Create(run, "/runs/0");
 
-        Assert.False(Retrieve(replay, "a", Query(1)).Succeeded); // as recorded
+        Assert.False(Retrieve(replay, "a", Query(1)).Succeeded);
         Assert.False(Retrieve(replay, "a", Query(1)).Succeeded);
 
         Assert.Equal(("not_recorded", 1), (Assert.Single(replay.Gaps).Reason, replay.Gaps[0].Count));
@@ -675,7 +590,6 @@ public sealed class ServiceCallReplayTests
         Assert.Equal("/runs/0/service_calls/0/scores", error.Pointer);
     }
 
-    /// <summary>A recall's call with one query value, <c>q</c>, as <c>MultiSourceRecall@1</c> sends it; null is missing.</summary>
     private static ServiceCall Query(double? q, int limit = 10) => new()
     {
         Service = "s",
@@ -699,7 +613,6 @@ public sealed class ServiceCallReplayTests
         Scores = status == "ok" ? [.. ids.Select(_ => 1.0)] : [],
     };
 
-    /// <summary>A recorded call with what <see cref="Recorded(string, ServiceCall, string, long[])"/> leaves out.</summary>
     private static ReplayServiceCall With(ReplayServiceCall c, bool threw = false, int? outputTokens = null, bool? truncated = null, int? dropped = null) => new()
     {
         Node = c.Node, Service = c.Service, Role = c.Role, Limit = c.Limit, Status = c.Status, InputDigests = c.InputDigests, Requested = c.Requested, Ids = c.Ids,
@@ -711,7 +624,6 @@ public sealed class ServiceCallReplayTests
         Service = call.Service, Inputs = call.Inputs, Limit = call.Limit, Outputs = outputs,
     };
 
-    /// <summary>The ids answered, comma-separated, and whether the call succeeded.</summary>
     private static (string Ids, bool Succeeded) Retrieve(RunReplay replay, string node, ServiceCall call)
     {
         var response = new ServiceResponse(Memory, call.Limit);

@@ -8,9 +8,7 @@ using StrataRec.Core.Services;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// The input type the model operators share gathers a column only from a buffer of exactly its declared type, at its
-/// width: a buffer of another type would send a tensor other than the one the signature check saw. Not reachable through
-/// a config (a slot takes its column's type); a defensive invariant.
+/// Not reachable through a config (a slot takes its column's type); a defensive invariant.
 /// </summary>
 public sealed class ModelInputTests
 {

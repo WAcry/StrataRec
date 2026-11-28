@@ -4,14 +4,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// The one rule for which tensors the model operators send and which model signatures they accept: the
-/// tensor of an input has the declared type of the column it maps, the operator's layout adds the leading dimensions, and a
-/// model must declare exactly the mapped inputs, each as that tensor, and every read output with the layout's shape (of
-/// the type of the column it is written to, or float32 or float64 for a ranker's score). A
-/// dynamic dimension must be declared -1; a fixed one (the pair's 2, the list batch's 1, a list's N) as its size or -1.
-/// Each mismatch names where to fix it, what is sent and what to change.
-/// </summary>
 public sealed class ModelTensorRuleTests
 {
     private static readonly int[] Rows = { -1 };
@@ -26,9 +18,9 @@ public sealed class ModelTensorRuleTests
 
     [Theory]
     [InlineData("float32", "float32 [-1]")]
-    [InlineData("float64", "float64 [-1]")] // not rounded to float32: the value as declared
-    [InlineData("bool", "bool [-1]")] // not converted to a number
-    [InlineData("int32", "int32 [-1]")] // not widened
+    [InlineData("float64", "float64 [-1]")]
+    [InlineData("bool", "bool [-1]")]
+    [InlineData("int32", "int32 [-1]")]
     [InlineData("int64", "int64 [-1]")]
     [InlineData("string", "string [-1]")]
     [InlineData("list<float32,8>", "float32 [-1, 8]")]
@@ -95,7 +87,7 @@ public sealed class ModelTensorRuleTests
             },
             new[] { Float("p_click"), Float("p_like") });
 
-        Assert.Empty(ModelTensorRule.Check("Model 'm' version 'default'", TensorLayout.Rows, inputs, Outputs, signature)); // an unread output is fine
+        Assert.Empty(ModelTensorRule.Check("Model 'm' version 'default'", TensorLayout.Rows, inputs, Outputs, signature));
     }
 
     [Theory]
@@ -112,10 +104,10 @@ public sealed class ModelTensorRuleTests
     [Theory]
     [InlineData("int64", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int64 [-1]", "a float32 derived feature of col.x")]
     [InlineData("int32", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "int32 [-1]", "a float32 derived feature of col.x")]
-    [InlineData("int32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "int32 [-1]", "an int64 derived feature of col.x")] // no widening
+    [InlineData("int32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "int32 [-1]", "an int64 derived feature of col.x")]
     [InlineData("float32", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "float32 [-1]", "an int64 derived feature of col.x")]
-    [InlineData("float64", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float64 [-1]", "a float32 derived feature of col.x")] // no rounding
-    [InlineData("bool", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "bool [-1]", "an int64 derived feature of col.x")] // no conversion
+    [InlineData("float64", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float64 [-1]", "a float32 derived feature of col.x")]
+    [InlineData("bool", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "bool [-1]", "an int64 derived feature of col.x")]
     [InlineData("string", TensorElementType.Int64, new[] { -1 }, "int64 [-1]", "string [-1]", "an int64 derived feature of col.x")]
     [InlineData("list<bool,2>", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "bool [-1, 2]", "a list<float32,2> derived feature of col.x")]
     [InlineData("list<float32,8>", TensorElementType.Float32, new[] { -1, 16 }, "float32 [-1, 16]", "float32 [-1, 8]", "a list<float32,16> derived feature of col.x")]
@@ -169,12 +161,12 @@ public sealed class ModelTensorRuleTests
     [InlineData("float32", TensorElementType.Float64, new[] { -1 }, "float64 [-1]", "float32 [-1]", ", or write it to a float64 column, which takes what the model returns")]
     [InlineData("float32", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "float32 [-1]", ", or write it to a list<float32,2> column, which takes what the model returns")]
     [InlineData("float32", TensorElementType.Float32, new[] { -1, -1 }, "float32 [-1, -1]", "float32 [-1]", ", or write it to a list<float32,N> column, which takes what the model returns")]
-    [InlineData("float32", TensorElementType.Float32, new[] { 256 }, "float32 [256]", "float32 [-1]", "; no column takes float32 [256]")] // a fixed batch
+    [InlineData("float32", TensorElementType.Float32, new[] { 256 }, "float32 [256]", "float32 [-1]", "; no column takes float32 [256]")]
     [InlineData("float32", TensorElementType.Float32, new[] { -1, 2, 3 }, "float32 [-1, 2, 3]", "float32 [-1]", "; no column takes float32 [-1, 2, 3]")]
     [InlineData("float32", TensorElementType.Text, new int[0], "text []", "float32 [-1]", "; no column takes text []")]
-    [InlineData("float32", TensorElementType.Float32, new[] { -1, 0 }, "float32 [-1, 0]", "float32 [-1]", "; no column takes float32 [-1, 0]")] // a list of no length
+    [InlineData("float32", TensorElementType.Float32, new[] { -1, 0 }, "float32 [-1, 0]", "float32 [-1]", "; no column takes float32 [-1, 0]")]
     [InlineData("float32", TensorElementType.Float32, new[] { -1, -2 }, "float32 [-1, -2]", "float32 [-1]", "; no column takes float32 [-1, -2]")]
-    [InlineData("float32", (TensorElementType)255, new[] { -1 }, "none [-1]", "float32 [-1]", "; no column takes none [-1]")] // an element type no column has
+    [InlineData("float32", (TensorElementType)255, new[] { -1 }, "none [-1]", "float32 [-1]", "; no column takes none [-1]")]
     [InlineData("int64?", TensorElementType.Int32, new[] { -1 }, "int32 [-1]", "int64 [-1]", ", or write it to an int32 column, which takes what the model returns")]
     [InlineData("list<float32,4>", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 4]", ", or write it to a float32 column, which takes what the model returns")]
     public void AScorerOutputDeclaredOtherwiseThanItsColumnTakes_IsAMismatch_SayingWhatIsReadAndHowToFixIt(
@@ -195,7 +187,7 @@ public sealed class ModelTensorRuleTests
     [Theory]
     [InlineData("float64", TensorElementType.Float64, new[] { -1 })]
     [InlineData("int64", TensorElementType.Int64, new[] { -1 })]
-    [InlineData("int32?", TensorElementType.Int32, new[] { -1 })] // every row gets a value; a nullable column may take them
+    [InlineData("int32?", TensorElementType.Int32, new[] { -1 })]
     [InlineData("bool", TensorElementType.Bool, new[] { -1 })]
     [InlineData("string", TensorElementType.String, new[] { -1 })]
     [InlineData("list<float32,4>", TensorElementType.Float32, new[] { -1, 4 })]
@@ -283,12 +275,7 @@ public sealed class ModelTensorRuleTests
         Assert.False(ModelTensorRule.AcceptsScore(TensorLayout.Rows, new TensorSpec("x", TensorElementType.Float32, new[] { 1 })));
     }
 
-    /// <summary>
-    /// Rule 3 in each layout, both ways: the dynamic dimension (pairs, the list's length) only as -1; the fixed ones (the
-    /// pair's 2, the list batch's 1, a list's N) as their size or -1; never another rank.
-    /// </summary>
     [Theory]
-    // A pair's column: [-1, 2], [-1, 2, N].
     [InlineData("Pairs", false, "float32", TensorElementType.Float32, new[] { -1, 2 }, true)]
     [InlineData("Pairs", false, "float64", TensorElementType.Float64, new[] { -1, -1 }, true)]
     [InlineData("Pairs", false, "float64", TensorElementType.Float32, new[] { -1, 2 }, false)]
@@ -301,7 +288,6 @@ public sealed class ModelTensorRuleTests
     [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, -1, -1 }, true)]
     [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, 2, 5 }, false)]
     [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, 4 }, false)]
-    // A context value in a pair call: [-1], [-1, N].
     [InlineData("Pairs", true, "float32", TensorElementType.Float32, new[] { -1 }, true)]
     [InlineData("Pairs", true, "int64", TensorElementType.Int64, new[] { -1 }, true)]
     [InlineData("Pairs", true, "float32", TensorElementType.Float32, new[] { -1, 2 }, false)]
@@ -309,7 +295,6 @@ public sealed class ModelTensorRuleTests
     [InlineData("Pairs", true, "list<float32,4>", TensorElementType.Float32, new[] { -1, 4 }, true)]
     [InlineData("Pairs", true, "list<float32,4>", TensorElementType.Float32, new[] { -1, -1 }, true)]
     [InlineData("Pairs", true, "list<float32,4>", TensorElementType.Float32, new[] { -1, 2, 4 }, false)]
-    // The list's column: [1, -1], [1, -1, N].
     [InlineData("List", false, "float32", TensorElementType.Float32, new[] { 1, -1 }, true)]
     [InlineData("List", false, "bool", TensorElementType.Bool, new[] { -1, -1 }, true)]
     [InlineData("List", false, "bool", TensorElementType.Int64, new[] { 1, -1 }, false)]
@@ -323,7 +308,6 @@ public sealed class ModelTensorRuleTests
     [InlineData("List", false, "list<float32,4>", TensorElementType.Float32, new[] { 1, -1, 4 }, true)]
     [InlineData("List", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, -1, -1 }, true)]
     [InlineData("List", false, "list<float32,4>", TensorElementType.Float32, new[] { 1, 4 }, false)]
-    // A context value in the list call: [1], [1, N].
     [InlineData("List", true, "float32", TensorElementType.Float32, new[] { 1 }, true)]
     [InlineData("List", true, "int64", TensorElementType.Int64, new[] { -1 }, true)]
     [InlineData("List", true, "float32", TensorElementType.Float32, new[] { 2 }, false)]
@@ -386,20 +370,18 @@ public sealed class ModelTensorRuleTests
     }
 
     [Theory]
-    // A column declared as the context value it is not: the hint offers the context value.
     [InlineData("Pairs", false, "float32", TensorElementType.Float32, new[] { -1 }, "float32 [-1]", "float32 [-1, 2]",
         "or map a float32 context value instead (PairwiseRanker@1 sends a column's values of the two rows of each pair, and a context value once per pair)")]
     [InlineData("Pairs", false, "int64", TensorElementType.Float32, new[] { -1, 2 }, "float32 [-1, 2]", "int64 [-1, 2]",
         "or map a float32 derived feature of col.x instead")]
     [InlineData("Pairs", false, "list<float32,4>", TensorElementType.Float32, new[] { -1, 2, 8 }, "float32 [-1, 2, 8]", "float32 [-1, 2, 4]",
         "or map a list<float32,8> derived feature of col.x instead")]
-    // A context value declared as a column: the hint offers a column.
     [InlineData("Pairs", true, "int64", TensorElementType.Int64, new[] { -1, 2, 3 }, "int64 [-1, 2, 3]", "int64 [-1]",
         "or map a list<int64,3> column instead (PairwiseRanker@1 sends a column's values of the two rows of each pair, and a context value once per pair)")]
     [InlineData("Pairs", true, "int64", TensorElementType.Int64, new[] { -1, 2, 3, 4 }, "int64 [-1, 2, 3, 4]", "int64 [-1]",
         "no column gives int64 [-1, 2, 3, 4]")]
     [InlineData("List", true, "float32", TensorElementType.Int64, new[] { 1, -1 }, "int64 [1, -1]", "float32 [1]",
-        "or map a list<int64,N> derived feature of ctx.x instead")] // a context list of any declared N gives [1, N]
+        "or map a list<int64,N> derived feature of ctx.x instead")]
     [InlineData("List", true, "float32", TensorElementType.Int64, new[] { 1, -1, 3 }, "int64 [1, -1, 3]", "float32 [1]",
         "or map a list<int64,3> column instead (ListwiseReranker@1 sends a column's values of the rows of the list, and a context value once per list)")]
     // Same kind first: a context list whose N is declared -1 gives [1, -1] too.

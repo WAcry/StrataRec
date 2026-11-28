@@ -7,9 +7,8 @@ using StrataRec.Hosting.Replay;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The sample's <c>item_country</c> entity, keyed by <c>["col.entity_id", "ctx.request.country"]</c>: a local
-/// table loaded from a snapshot whose keys are arrays, read by the fusion multiplier, recorded with its keys' parts and
-/// replayed by tuple.
+/// The sample's <c>item_country</c> entity, keyed by <c>["col.entity_id", "ctx.request.country"]</c>: a local table
+/// loaded from a snapshot whose keys are arrays, read by the fusion multiplier.
 /// </summary>
 public sealed class CompositeKeyEndToEndTests
 {
@@ -39,7 +38,6 @@ public sealed class CompositeKeyEndToEndTests
         Assert.Equal(Scores(none), Scores(unknown)); // every boost is the default, 1.0
         Assert.NotEqual(Scores(none), Scores(us)); // items 1-3 have US boosts (0.5, 1.5, 2.0)
 
-        // No country: no key, so nothing is read (no call is recorded with keys); a country: every row's (item, country).
         var noneCall = none.Recording!.Runs[0].FeatureCalls.SingleOrDefault(c => c.Source == "item_country_store");
         Assert.True(noneCall is null || noneCall.Keys.GetArrayLength() == 0);
         var usCall = Assert.Single(us.Recording!.Runs[0].FeatureCalls, c => c.Source == "item_country_store");
@@ -63,7 +61,7 @@ public sealed class CompositeKeyEndToEndTests
         var text = ReplayBundleFile.Serialize(recorded.Recording!);
         var bundle = ReplayBundleFile.Parse(text);
         var call = Assert.Single(bundle.Runs[0].FeatureCalls, c => c.Source == "item_country_store");
-        Assert.Contains(call.Keys.EnumerateArray(), key => key[0].GetInt64() == 3 && key[1].GetString() == "US"); // as written
+        Assert.Contains(call.Keys.EnumerateArray(), key => key[0].GetInt64() == 3 && key[1].GetString() == "US");
 
         var sample = HomeFeedTestHost.Load();
         await using var replayOnly = new RecEngine(sample.Environment, bindings: new BindingHost(new BindingHostOptions { Load = false }));
@@ -73,7 +71,6 @@ public sealed class CompositeKeyEndToEndTests
         Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
         Assert.Empty(replayed.Report.Gaps);
 
-        // The same bundle with another country in its request: the recorded (item, US) keys are not the ones asked for.
         var at = text.IndexOf("\"country\": {", StringComparison.Ordinal); // the request input, before the runs
         var value = text.IndexOf("\"US\"", at, StringComparison.Ordinal);
         var edited = ReplayBundleFile.Parse(string.Concat(text.AsSpan(0, value), "\"DE\"", text.AsSpan(value + 4)));

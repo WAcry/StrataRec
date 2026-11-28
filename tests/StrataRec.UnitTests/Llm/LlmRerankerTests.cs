@@ -10,17 +10,12 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
-/// <summary>
-/// <c>LlmReranker@1</c>: the one call it sends, how it turns the answer into a new order of the window, what
-/// fails the node (leaving the order as it was), and the load-time checks of its config and of every model version.
-/// </summary>
 public sealed class LlmRerankerTests
 {
     private const string Ranks = "{{#rows}}{{rank}}. {{col.item.title}}\n{{/rows}}";
 
     private const string Ids = "{{#rows}}{{col.entity_id}}: {{col.item.title}}\n{{/rows}}";
 
-    /// <summary>The incoming order, which a failed node leaves as it is.</summary>
     private static readonly long[] Unchanged = Incoming;
 
     [Fact]
@@ -45,7 +40,7 @@ public sealed class LlmRerankerTests
 
         var result = await Run(Compile(models, Config));
 
-        Assert.Equal("1234567", Assert.Single(models.Calls).Prompts["user"]); // all seven rows: fewer than the window
+        Assert.Equal("1234567", Assert.Single(models.Calls).Prompts["user"]);
         Assert.Equal(256, models.Calls[0].MaxOutputTokens);
         Assert.Equal(new long[] { 60, 30, 10, 50, 20, 40, 70 }, IdsOf(result));
     }
@@ -96,7 +91,6 @@ public sealed class LlmRerankerTests
         Assert.Equal(new long[] { 10, 50, 30, 20, 40, 70, 60 }, IdsOf(result));
     }
 
-    /// <summary>Elements that name no window row and repeats are ignored; the rest still reorders the window.</summary>
     [Fact]
     public async Task UnknownAndRepeatedElements_AreIgnored()
     {
@@ -229,7 +223,7 @@ public sealed class LlmRerankerTests
     [InlineData("""{ "model": "llm", "output": "answer", "answer": "rank", "prompts": { } }""", "/prompts", "LLM_PROMPTS")]
     [InlineData("""{ "model": "llm", "output": "", "answer": "rank", "prompts": { "user": "x" } }""", "/output", "MODEL_OUTPUT")]
     [InlineData("""{ "model": "nope", "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "SERVICE_UNBOUND")]
-    [InlineData("""{ "model": null, "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "NODE_BAD_CONFIG")] // threw
+    [InlineData("""{ "model": null, "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "NODE_BAD_CONFIG")]
     [InlineData("""{ "model": "", "output": "answer", "answer": "rank", "prompts": { "user": "x" } }""", "/model", "SERVICE_UNBOUND")]
     public void TheAnswerKind_ThePrompts_TheOutput_AndTheModel_AreRequired(string config, string key, string code)
     {
@@ -239,7 +233,6 @@ public sealed class LlmRerankerTests
         Assert.False(string.IsNullOrEmpty(error.Hint), error.ToString());
     }
 
-    /// <summary>Every version a request may use is checked against what the node sends and reads; v2 differs in each way.</summary>
     [Theory]
     [InlineData("float_input", "/nodes/rank/config/prompts/user", "MODEL_TENSOR_MISMATCH",
         "Model 'llm' version 'v2' declares input 'user' as float32 [-1], but LlmReranker@1 sends a rendered prompt, which is text.")]
@@ -268,21 +261,11 @@ public sealed class LlmRerankerTests
     }
 }
 
-/// <summary>
-/// What a generative call counts: the tokens and truncations its client reports, for every model call, and
-/// the fate of each element of an answer the node parses; a replay counts nothing, and answers from the recording with
-/// the same status, so the node decides and reports as the request did.
-/// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class LlmMetricsTests
 {
     private const string Template = "{{#rows}}{{rank}}. {{col.item.title}}\n{{/rows}}";
 
-    /// <summary>
-    /// A host's listener that throws on the generation counts loses those measurements, not the answer or its record: the
-    /// counts ran before the call was recorded, without the boundary the call's other metrics have, so the node failed
-    /// and the call was left outstanding in the recording.
-    /// </summary>
     [Fact]
     public async Task AListenerThatThrowsOnTheGenerationCounts_LosesThoseMeasurements_NotTheAnswerOrItsRecord()
     {
@@ -321,7 +304,6 @@ public sealed class LlmMetricsTests
             metrics.Of(StrataRecMetrics.Names.ModelAnswerIds).Select(m => (m.Outcome!, m.Value)));
         Assert.All(metrics.Of(StrataRecMetrics.Names.ModelAnswerIds), m => Assert.Equal("llm", m.Model));
 
-        // The recording has the answers and the status details; a replay serves them without calling the model.
         var recorded = Assert.Single(cut.Recording!.ServiceCalls, c => c.Role == "model");
         Assert.Equal(("[2, 3", 64, (bool?)true), (recorded.Texts["answer"], recorded.OutputTokens, recorded.Truncated));
         Assert.Equal((42, (bool?)null), (Assert.Single(answered.Recording!.ServiceCalls, c => c.Role == "model").OutputTokens, answered.Recording.ServiceCalls.FindAll(c => c.Role == "model")[0].Truncated));
@@ -332,13 +314,12 @@ public sealed class LlmMetricsTests
         var replayedCut = await Replay(plan, cut);
 
         Assert.Equal(IdsOf(answered), IdsOf(replayedAnswer));
-        Assert.Equal(Rank(cut).Detail, Rank(replayedCut).Detail); // "… the answer was cut at max_output_tokens (64) …", from the recorded status
+        Assert.Equal(Rank(cut).Detail, Rank(replayedCut).Detail);
         Assert.Contains("the answer was cut at max_output_tokens (64)", Rank(replayedCut).Detail);
         Assert.Equal(calls, models.Calls.Count);
         Assert.Empty(metrics.All);
     }
 
-    /// <summary>A replay after the limit changed serves no recorded answer: the call differs, so the node follows <c>on_failure</c>.</summary>
     [Fact]
     public async Task AReplayWithAnotherMaxOutputTokens_IsNotServedTheRecordedAnswer()
     {
@@ -355,7 +336,6 @@ public sealed class LlmMetricsTests
         Assert.Single(models.Calls);
     }
 
-    /// <summary><c>stratarec.model.answers</c>: each row of an annotator's window, by what became of its answer; nothing in a replay.</summary>
     [Fact]
     public async Task AnAnnotatorsAnswers_AreCountedByOutcome_TaggedWithTheModel_AndNotInAReplay()
     {
@@ -382,7 +362,6 @@ public sealed class LlmMetricsTests
         Assert.Empty(metrics.All);
     }
 
-    /// <summary><c>stratarec.model.answer_ids</c> of a retriever's answer: used, unknown, repeated, present and over the limit.</summary>
     [Fact]
     public async Task ARetrieversAnswerElements_AreCountedByOutcome_AndNotInAReplay()
     {
@@ -414,7 +393,6 @@ public sealed class LlmMetricsTests
             Replay = RunReplay.Create(recorded.Recording!, "/runs/0"),
         });
 
-    /// <summary>The model metrics as (name, value, model, outcome), in the order they were recorded.</summary>
     private sealed class Measurements : IDisposable
     {
         private static readonly HashSet<string> Names = new()

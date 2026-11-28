@@ -7,7 +7,6 @@ using StrataRec.Expressions.Vectorized;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>The vectorized backend: row domains, reads, destinations, allocation and thread safety.</summary>
 [Collection(AllocationMeasurement.Name)]
 public class BackendTests
 {
@@ -65,7 +64,6 @@ public class BackendTests
             live = new[] { 3 };
         }
 
-        // Dead rows hold garbage: NaN, infinities, extreme ints, missing.
         foreach (var dead in Enumerable.Range(0, 200).Except(live))
         {
             f.Scalar<float>("col.x").Set(dead, float.NaN);
@@ -141,7 +139,6 @@ public class BackendTests
         var i64 = (ScalarColumn<long>)f.EvaluateAll(f.Compile("col.i % 3"), "int64");
         Assert.Equal(new long[] { 1, ((long)int.MaxValue + 2) % 3, 0, 1 }, i64.Span[..4].ToArray());
 
-        // A previously missing row becomes present again when re-evaluated with a present result.
         var reuse = (ScalarColumn<double>)ColumnBuffer.Create(ColumnType.Parse("float64?"), f.Capacity, f.Memory);
         reuse.SetMissing(0);
         f.Compile("col.x ?? 0.0").Evaluate(f.Context, f.Table.Rows.Order, reuse);
@@ -186,7 +183,6 @@ public class BackendTests
         f.Compile("ctx.s").Evaluate(f.Context, new[] { 2 }, s);
         Assert.Equal("x", s.Get(2));
 
-        // Works without a table, too.
         Assert.Equal(3.0, compiled.EvaluateScalar(f.RequestContext).AsFloat64());
     }
 
@@ -206,7 +202,6 @@ public class BackendTests
     {
         var f = new ExprFixture().Col("col.opt", "float64?").Col("col.req", "float64").Col("col.text", "string?").Col("col.list", "list<int64>?").Build(4);
 
-        // Never written (no buffer).
         ExprAssert.Rows(f, "col.opt + 1.0", null, null, null, null);
         ExprAssert.Rows(f, "(col.opt ?? 2.0) + 1.0", 3.0, 3.0, 3.0, 3.0);
         ExprAssert.Rows(f, "size(col.text) ?? -1", -1L, -1L, -1L, -1L);

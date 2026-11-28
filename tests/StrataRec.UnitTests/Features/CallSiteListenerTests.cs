@@ -9,14 +9,6 @@ using StrataRec.UnitTests.Features.Cache;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// A host's metric listener that throws when a feature call completes loses its measurement. The call is
-/// recorded with its outcome and values and the fill gets them: the call site completed the call (metrics, health, span)
-/// before recording it, so the throw left a call that had answered unrecorded, outstanding in a recording, and threw the
-/// listener's exception out of the fill. Both ways a call is found answered: at once, and after a wait. A read the
-/// request serves from a table is recorded before its metrics, and the write-back the read's queue drops is counted
-/// without throwing.
-/// </summary>
 [Collection(MetricMeasurement.Name)]
 public sealed class CallSiteListenerTests
 {
@@ -52,12 +44,6 @@ public sealed class CallSiteListenerTests
         Assert.Equal(0, request.Memory.Release());
     }
 
-    /// <summary>
-    /// A read served from a table (a cache whose every key is fresh, or a local table) counted the values it
-    /// served (<c>stratarec.source.values</c>) before it was recorded: a listener that threw there failed the fill, as on
-    /// any metric the request thread records, and left the recording without the read. Recorded first now; the fill
-    /// still fails.
-    /// </summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -94,11 +80,10 @@ public sealed class CallSiteListenerTests
         Assert.Equal(1, listener.Calls);
         var read = Assert.Single(hook.Recorded);
         Assert.Equal(new double?[] { 1.0 }, read.Values);
-        Assert.Equal(cache ? 1 : 0, connector.Calls.Count); // only the warm request reached the connector
+        Assert.Equal(cache ? 1 : 0, connector.Calls.Count);
         request.Memory.Release();
     }
 
-    /// <summary>The same for a context feature, read by the context prefetch from a fresh cache record or a local table.</summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -144,9 +129,8 @@ public sealed class CallSiteListenerTests
 
     /// <summary>
     /// A read hands what the connector answered to the table's write-back queue while it resolves, before it is
-    /// recorded; a full queue drops it and counts the drop (<c>stratarec.cache.writes</c>, outcome <c>dropped</c>) on the
-    /// request's thread. A listener that threw there failed a fill the connector had answered, unrecorded. The drop is
-    /// counted as before and its listener's exception lost; what the writer counts on its own thread is reported as before.
+    /// recorded; a full queue drops it and counts the drop (<c>stratarec.cache.writes</c>, outcome <c>dropped</c>) on
+    /// the request's thread.
     /// </summary>
     [Fact]
     public async Task AWriteBackTheQueueDrops_WhoseListenerThrows_LeavesTheFillAndTheRecording()
@@ -157,7 +141,7 @@ public sealed class CallSiteListenerTests
         var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, source);
         rig.Build();
         var table = rig.Tables[source].Cache!;
-        Assert.True(table.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(99)], [new byte[2 << 20]], 1))); // an empty queue takes it
+        Assert.True(table.TryWriteBack(new CacheWriteBatch([EntityKey.FromInt64(99)], [new byte[2 << 20]], 1)));
         using var listener = MeasurementHook.Throwing(StrataRecMetrics.Names.CacheWrites, (StrataRecTags.Outcome, "dropped"));
         var hook = new FeatureCallHookTests.ListHook();
         var request = rig.NewRequest([1], hook: hook);
@@ -166,7 +150,7 @@ public sealed class CallSiteListenerTests
 
         Assert.Equal(FeatureState.Ok, result.State);
         Assert.Equal(1.0, request.Value(clicks, 0).AsFloat64());
-        Assert.Equal(1, listener.Calls); // the drop was counted, and the listener threw
+        Assert.Equal(1, listener.Calls);
         Assert.Equal(IoOutcome.Ok, Assert.Single(hook.Recorded).Outcome);
         Assert.Single(connector.Calls);
         await request.Fetcher.WhenIoCompleteAsync();

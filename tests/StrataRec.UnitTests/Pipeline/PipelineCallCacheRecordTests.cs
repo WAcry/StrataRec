@@ -12,10 +12,6 @@ using StrataRec.UnitTests.Features;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// The record a cached pipeline call is kept as: any result reads back as the result it was, a record that is not whole
-/// is not read at all, and a reader judges a record's age by its own times.
-/// </summary>
 public sealed class PipelineCallCacheRecordTests
 {
     private static readonly UInt128 Key = new(0x1234_5678_9abc_def0, 0x0fed_cba9_8765_4321);
@@ -34,10 +30,6 @@ public sealed class PipelineCallCacheRecordTests
         return new Rig(new PipelineCallCache(tiers, new CachePolicy(ttlMs, staleIfErrorMs), null), tiers, table, clock);
     }
 
-    /// <summary>
-    /// A result that no tier keeps is not encoded: the request's own calls have it as it is, so the cache does not
-    /// read it again to build a record for nobody.
-    /// </summary>
     [Theory]
     [InlineData(true, 1)]
     [InlineData(false, 0)]
@@ -58,7 +50,6 @@ public sealed class PipelineCallCacheRecordTests
         Assert.Equal(read, exposures.Read);
     }
 
-    /// <summary>No exposures, counting how often their number is asked for.</summary>
     private sealed class CountedExposures : IReadOnlyList<CallExposure>
     {
         public int Read { get; private set; }
@@ -86,7 +77,6 @@ public sealed class PipelineCallCacheRecordTests
         ColumnType.List(StorageKind.Float64, nullable: true), ColumnType.List(StorageKind.Float32, nullable: true), ColumnType.List(StorageKind.String, nullable: true),
     ];
 
-    /// <summary>A value of <paramref name="type"/>, or none: what a result's column may hold on a row.</summary>
     private static ScalarValue Value(Random random, ColumnType type, bool mayBeMissing)
     {
         if (mayBeMissing && random.Next(5) == 0)
@@ -121,7 +111,6 @@ public sealed class PipelineCallCacheRecordTests
         var types = Enumerable.Range(0, random.Next(5)).Select(_ => Types[random.Next(Types.Length)]).ToArray();
         var names = types.Select((_, c) => "c" + c).ToArray();
 
-        // Some columns have a value on every row (kept as the values and one tag), some do not.
         var columns = types.Select(t =>
         {
             var gaps = random.Next(2) == 0;
@@ -132,7 +121,7 @@ public sealed class PipelineCallCacheRecordTests
         var exposures = Enumerable.Range(0, random.Next(3)).Select(e => new CallExposure(
             "pipeline" + e, "manifest" + e, e == 0 ? null : "p/n#" + e, Enumerable.Range(0, random.Next(3)).Select(a => $"exp{a}/arm").ToArray(),
             Enumerable.Range(0, random.Next(2)).Select(a => "exp" + a).ToArray(),
-            random.Next(3) == 0 ? new CachedFrom("earlier-" + e, random.NextInt64(), "other/n#" + e) : null)).ToArray(); // one a cache answered when the result was computed
+            random.Next(3) == 0 ? new CachedFrom("earlier-" + e, random.NextInt64(), "other/n#" + e) : null)).ToArray();
         var shape = new PipelineInterface
         {
             PipelineId = "p",
@@ -175,10 +164,6 @@ public sealed class PipelineCallCacheRecordTests
         return text.ToString();
     }
 
-    /// <summary>
-    /// Any result reads back as it was written: keys of either type, no rows, columns with and without a value on every
-    /// row, lists, values, the runs that computed it. Generated; <c>STRATAREC_GENERATED_SEEDS</c> runs more.
-    /// </summary>
     [Fact]
     public void AnyResult_ReadsBackAsTheResultItWas()
     {
@@ -203,10 +188,6 @@ public sealed class PipelineCallCacheRecordTests
         }
     }
 
-    /// <summary>
-    /// A record that does not hold exactly what its counts say (cut short, with a value left over, of another kind or
-    /// other counts than the reader's pipeline returns) is a miss: nothing of it is read as a value.
-    /// </summary>
     [Theory]
     [InlineData("kind")]
     [InlineData("rows more")]
@@ -276,9 +257,7 @@ public sealed class PipelineCallCacheRecordTests
 
     /// <summary>
     /// A record whose counts add up, but not to a result of the reader's pipeline, is a miss too: it was written for
-    /// another shape, or changed so that every list is still read to its end. Read as it was, two rows of a fixed-length
-    /// list came back as lists of one and three elements, a string as the value of an int64 column, and string ids as
-    /// the rows of a pipeline with int64 keys.
+    /// another shape, or changed so that every list is still read to its end.
     /// </summary>
     [Theory]
     [InlineData("list lengths moved")]
@@ -327,7 +306,6 @@ public sealed class PipelineCallCacheRecordTests
         Assert.Equal(default, rig.Cache.ReadMemory(Key, shape));
     }
 
-    /// <summary>The same record, undamaged, is read: the damage above is what makes each a miss.</summary>
     [Fact]
     public void TheRecordOfTheDamageCases_IsReadWhenWhole_AndNotAsAResultOfAnotherShape()
     {
@@ -348,10 +326,6 @@ public sealed class PipelineCallCacheRecordTests
         Assert.Equal(default, rig.Cache.ReadMemory(Key, wider));
     }
 
-    /// <summary>
-    /// A node judges a record by its own times, from when the run that computed it started: fresh within its ttl, kept
-    /// for a failure within its stale window, and nothing after; another node with a longer ttl still has it fresh.
-    /// </summary>
     [Fact]
     public void ANodeJudgesARecordByItsOwnTimes()
     {
@@ -369,22 +343,18 @@ public sealed class PipelineCallCacheRecordTests
         rig.Clock.AdvanceMs(800); // within the ttl whatever its jitter (±10%)
         Assert.NotNull(rig.Cache.ReadMemory(Key, shape).Fresh);
 
-        rig.Clock.AdvanceMs(1_200); // 2,000: past the ttl, within the stale window
+        rig.Clock.AdvanceMs(1_200);
         var stale = rig.Cache.ReadMemory(Key, shape);
         Assert.True(stale is { Fresh: null, Stale: not null });
         Assert.True(rig.Cache.Usable(Key, stale.Stale));
         Assert.NotNull(patient.ReadMemory(Key, shape).Fresh);
 
-        rig.Clock.AdvanceMs(5_000); // 7,000: past both
+        rig.Clock.AdvanceMs(5_000);
         Assert.False(rig.Cache.Usable(Key, stale.Stale)); // judged when it is to be served, not when it was read
         Assert.Equal(default, rig.Cache.ReadMemory(Key, shape));
         Assert.NotNull(patient.ReadMemory(Key, shape).Fresh);
     }
 
-    /// <summary>
-    /// Any value is part of a key as what it is: a missing input, an empty string and an empty list are three inputs, a
-    /// list is its elements in order, and where one value ends and the next begins is part of it.
-    /// </summary>
     [Fact]
     public void AnyValueHashes_AsWhatItIs()
     {

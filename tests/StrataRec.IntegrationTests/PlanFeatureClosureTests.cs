@@ -6,12 +6,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// A plan holds the catalog features it reads and what those are computed from or keyed by, whichever way it
-/// reads them: a node, a <c>when</c>, a fallback, an arm's node, a tap, the output, another derived feature, the key of a
-/// foreign-key entity. Each case reads a feature nothing else reads, checks the plan holds it (and not the user features
-/// the sample declares and nothing reads), and that the value arrives where it is read.
-/// </summary>
 public sealed class PlanFeatureClosureTests
 {
     private static readonly string[] SampleFeatures =
@@ -30,9 +24,6 @@ public sealed class PlanFeatureClosureTests
         Assert.Equal(
             ["author_store", "engagement_model", "geo_store", "item_country_store", "item_store", "region_store", "user_store"],
             plan.Features.Groups.Select(g => g.SourceName).Order(StringComparer.Ordinal));
-        // The context features are the fusion's regional weight, the region it is keyed by, the embedding the two-tower
-        // recall's query reads, and the engagement boost with the user's CTR it is computed from; none of the user's other
-        // features.
         Assert.Equal(
             ["country.region", "engagement.propensity", "region.boost", "user.ctr_30d", "user.embedding"],
             plan.Schema.ContextFields.Where(f => f.Kind == ContextFieldKind.Feature).Select(f => f.Name).Order(StringComparer.Ordinal));
@@ -50,7 +41,6 @@ public sealed class PlanFeatureClosureTests
             "\"order\": 515, \"op\": \"ExpressionFilter@1\", \"when\": \"ctx.request.surface == 'home' && ctx.user.tenure_days > 100.0\"")).Plan();
 
         Assert.Equal([.. SampleFeatures, "user.tenure_days"], Names(plan));
-        // Prefetched with the request, beside the sample's region chain.
         Assert.Equal(["country.region", "engagement.propensity", "region.boost", "user.ctr_30d", "user.embedding", "user.tenure_days"], plan.ContextFeatures.Select(f => plan.Features.Features[f].Definition.Name).Order(StringComparer.Ordinal));
 
         // users.json: 1001 has 420 days, 1002 has 12.
@@ -86,8 +76,7 @@ public sealed class PlanFeatureClosureTests
     [Fact]
     public async Task AFeatureReadOnlyByAnArmsNode_IsInThePlan_AndServedToTheArm()
     {
-        // The sample's exp_freshness_calibration: only its arm's node (and that arm's tap) reads item.age_hours. The unified
-        // plan compiles every arm's variants, so it holds it; the baseline alone does not (nor mmr's item.embedding).
+        // The sample's exp_freshness_calibration: only its arm's node (and that arm's tap) reads item.age_hours.
         var host = HomeFeedTestHost.Load();
         var plan = host.Plan();
         Assert.Contains("item.age_hours", Names(plan));
@@ -110,7 +99,6 @@ public sealed class PlanFeatureClosureTests
 
         Assert.True(compared > 0);
 
-        // The arm's tap logs what the arm's node read.
         var served = Assert.Single(calibrated.LogBatches, b => b.TapId == "served");
         var logged = served.Columns.Single(c => c.Name == "age_hours");
         for (var row = 0; row < served.RowCount; row++)
@@ -171,7 +159,7 @@ public sealed class PlanFeatureClosureTests
         Assert.All(result.Items, item =>
         {
             var author = items[item.Id.ToString()]!["i_author_id"]?.GetValue<long>();
-            Assert.Equal(author is { } a ? followers.GetValueOrDefault(a) : 0.0, item.Columns["followers"].AsFloat64()); // default 0.0
+            Assert.Equal(author is { } a ? followers.GetValueOrDefault(a) : 0.0, item.Columns["followers"].AsFloat64());
         });
     }
 
@@ -186,7 +174,6 @@ public sealed class PlanFeatureClosureTests
                 """));
         }).Compile();
 
-        // The tap's reference resolves to the catalog feature: the error is the tap's rule, not an unknown name.
         var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
         Assert.Equal("TAP_FEATURE_NOT_FETCHED", error.Code);
         Assert.Contains("item.out_clicks", error.Message);
@@ -214,7 +201,6 @@ public sealed class PlanFeatureClosureTests
     private static void AddOutput(string root, string name, string expression) =>
         EditJson(root, "pipelines/home_feed.jsonc", pipeline => pipeline["output"]!["columns"]![name] = expression);
 
-    /// <summary>Rewrites a JSONC file of the workspace as JSON (its comments are dropped) after <paramref name="edit"/>.</summary>
     internal static void EditJson(string root, string file, Action<JsonObject> edit)
     {
         var path = Path.Combine(root, file);

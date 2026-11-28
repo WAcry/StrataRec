@@ -8,10 +8,6 @@ using StrataRec.Hosting.Manifests;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>stratarec publish</c> on builds of the home_feed sample: the pointer a node reads, moved only forward and only to a
-/// manifest whose artifacts a node can read; and a node loading what the pointer names.
-/// </summary>
 public sealed class PublishCommandTests
 {
     [Fact]
@@ -21,7 +17,7 @@ public sealed class PublishCommandTests
         var store = ManifestStores.NewStore();
         var (id, file) = await ManifestStores.BuildAsync(root, store);
         var blobs = new FileSystemArtifactStore(store);
-        File.Delete(blobs.GetBlobPath(id)); // published by file: stored again first
+        File.Delete(blobs.GetBlobPath(id));
 
         var (code, output, errors) = await Publish(store, file);
 
@@ -30,7 +26,6 @@ public sealed class PublishCommandTests
         Assert.Equal($"home_feed (local): (none) -> {id} (seq 1)\npointer {pointer}\n", output.ReplaceLineEndings("\n"));
         Assert.True(File.Exists(blobs.GetBlobPath(id)));
 
-        // A node: the pointer, the manifest, its plan.
         var named = await new FileSystemManifestSource(store).GetManifestIdAsync("home_feed", "local", CancellationToken.None);
         Assert.Equal(id, named);
         var diagnostics = new DiagnosticBag();
@@ -53,7 +48,6 @@ public sealed class PublishCommandTests
         var (first, _) = await ManifestStores.BuildAsync(root, store);
         Assert.Equal(0, (await Publish(store, first)).Code);
 
-        // The same manifest again: published already, nothing written, so a pipeline step can run twice.
         var pointer = Path.Combine(store, "pointers", "local", "home_feed.json");
         var written = File.GetLastWriteTimeUtc(pointer);
         var (code, again, errors) = await Publish(store, first, "json");
@@ -65,7 +59,6 @@ public sealed class PublishCommandTests
 
         Assert.Equal(written, File.GetLastWriteTimeUtc(pointer));
 
-        // Another manifest at the same sequence: not newer.
         var sameSeq = await BuildAsync(root, store, seq: 1, finalTopK: 7);
         (code, _, errors) = await Publish(store, sameSeq, "json");
         Assert.Equal(1, code);
@@ -74,7 +67,6 @@ public sealed class PublishCommandTests
         Assert.Contains("--seq 2", error.Hint);
         Assert.Contains($"Sequence 1 is not greater than 1, the sequence of '{first}', which the pointer", errors);
 
-        // Seq 2: published, from 1 to 2.
         var second = await BuildAsync(root, store, seq: 2, finalTopK: 8);
         (code, var output, errors) = await Publish(store, second, "json");
         Assert.True(code == 0, errors);
@@ -116,12 +108,6 @@ public sealed class PublishCommandTests
         Assert.Equal("MANIFEST_UNKNOWN", Assert.Single(ManifestStores.Errors(errors)).Code);
     }
 
-    /// <summary>
-    /// Without --seq, build makes the next release of what the store's pointer names: one more seq, and it as
-    /// previous, which diff compares with; the same configuration is no new release, so build and publish run again change
-    /// nothing, and a revocation published stays published, still listing what it revoked. A changed configuration is a
-    /// release that lists no revocations. A pointer build cannot read stops it, unless --seq says the number.
-    /// </summary>
     [Fact]
     public async Task Build_WithoutSeq_IsTheNextReleaseOfWhatIsPublished()
     {
@@ -140,17 +126,15 @@ public sealed class PublishCommandTests
         var revocationId = await ManifestStores.PutAsync(store, revocationManifest);
         Assert.Equal(0, (await Publish(store, revocationId)).Code);
 
-        // The same configuration: the published manifest, and publishing it changes nothing.
         var errors = new StringWriter();
         var file = Path.Combine(store, "again.json");
         Assert.Equal(0, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, file, null, TextWriter.Null, CancellationToken.None, errors));
         Assert.Equal(revocationId, ManifestBuilder.ContentId(ManifestStores.Read(file)));
         Assert.Contains("(seq 3, ", errors.ToString());
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors.ToString());
-        Assert.DoesNotContain("publish it with", errors.ToString()); // it is
+        Assert.DoesNotContain("publish it with", errors.ToString());
         Assert.Contains("is published already", (await Publish(store, file)).Output);
 
-        // Changed: seq 4, the published manifest as previous (diff --to compares with it), no revocations.
         var path = Path.Combine(root, "pipelines", "home_feed.jsonc");
         File.WriteAllText(path, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(path), "\"final_top_k\": \\d+,", "\"final_top_k\": 7,"));
         var (next, nextManifest) = await BuildNext(root, store);
@@ -161,7 +145,6 @@ public sealed class PublishCommandTests
         Assert.Equal(1, await StrataRecCommandLine.InvokeAsync(["diff", "--to", next, "-s", store], Tool.Environment, diff, TextWriter.Null, TestContext.Current.CancellationToken));
         Assert.Contains("final_top_k", diff.ToString());
 
-        // A pointer that cannot be read: the next number is unknown; --seq says it.
         File.WriteAllText(Path.Combine(store, "pointers", "local", "home_feed.json"), "{ not json");
         errors = new StringWriter();
         Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
@@ -171,9 +154,7 @@ public sealed class PublishCommandTests
     }
 
     /// <summary>
-    /// A pointer names a manifest of its own pipeline and environment; one that names another's (copied or edited by hand)
-    /// says nothing of this pipeline's sequence, so build without --seq and publish refuse it rather than number or compare
-    /// by it. Sequence numbers end at 2^53 - 1, the largest integer a manifest's JSON writes exactly.
+    /// Sequence numbers end at 2^53 - 1, the largest integer a manifest's JSON writes exactly.
     /// </summary>
     [Fact]
     public async Task Build_AndPublish_RefuseAPointerToAnotherPipelinesManifest_AndSeqsEndAt2To53()
@@ -183,7 +164,6 @@ public sealed class PublishCommandTests
         var (_, firstManifest) = await BuildNext(root, store);
         var pointers = new FileSystemManifestSource(store);
 
-        // home_feed's local pointer names a prod manifest of seq 50.
         var foreign = await ManifestStores.PutAsync(store, Renumbered(firstManifest, "prod", 50));
         await pointers.WritePointerAsync("home_feed", "local", foreign, TestContext.Current.CancellationToken);
         var errors = new StringWriter();
@@ -192,7 +172,6 @@ public sealed class PublishCommandTests
         Assert.Contains("error POINTER_MANIFEST_FOREIGN", errors.ToString());
         Assert.Contains("hint: fix the pointer, or pass --seq", errors.ToString());
 
-        // A release of seq 2 is not compared with seq 50 of another environment, nor published over it.
         var second = await BuildAsync(root, store, 2, 7);
         var (code, _, publishErrors) = await Publish(store, second);
         Assert.Equal(1, code);
@@ -202,13 +181,11 @@ public sealed class PublishCommandTests
         File.Delete(pointers.GetPointerPath("home_feed", "local"));
         Assert.Equal(0, (await Publish(store, second)).Code);
 
-        // Published at 2^53 - 1: there is no next.
         Assert.Equal(0, (await Publish(store, await ManifestStores.PutAsync(store, Renumbered(firstManifest, "local", BuildCommand.MaxSeq)))).Code);
         errors = new StringWriter();
         Assert.Equal(1, await BuildCommand.RunAsync(Tool.Environment, root, "local", null, store, null, null, TextWriter.Null, CancellationToken.None, errors));
         Assert.Contains("error SEQ_EXHAUSTED", errors.ToString());
 
-        // --seq takes 1 to 2^53 - 1; what is no long at all is the parser's usage error, not a crash.
         foreach (var seq in new[] { "0", "9007199254740992" })
         {
             var usage = new StringWriter();
@@ -224,11 +201,6 @@ public sealed class PublishCommandTests
         }
     }
 
-    /// <summary>
-    /// An environment named with a leading '.' is refused alike by build, publish and status, with the hint: build and
-    /// publish took it and wrote <c>pointers/.preview/home_feed.json</c>, which listing pointers skips as a hidden or
-    /// temporary entry, so <c>status -e .preview</c> listed nothing and exited 0.
-    /// </summary>
     [Fact]
     public async Task AnEnvironmentStartingWithADot_IsRefusedByBuildPublishAndStatus()
     {
@@ -244,7 +216,6 @@ public sealed class PublishCommandTests
         Assert.Contains(Hint, errors.ToString());
         Assert.Contains("hint: pass --seq to build without reading the pointer; pipeline ids and environment names", errors.ToString());
 
-        // With --seq the store's pointers are not read, and build writes the manifest; publishing it is refused.
         var file = Path.Combine(store, "preview.json");
         errors = new StringWriter();
         Assert.True(0 == await BuildCommand.RunAsync(Tool.Environment, root, ".preview", null, store, file, 1, TextWriter.Null, CancellationToken.None, errors), errors.ToString());
@@ -260,9 +231,6 @@ public sealed class PublishCommandTests
         Assert.Contains("error POINTER_NAME_INVALID --env", status.ToString());
         Assert.Contains(Hint, status.ToString());
 
-        // Earlier versions published under such names; the hint says how to move such a release. To an
-        // unused name, with the old release file. Leaving out what the old release revoked, read from the files
-        // that hold it, since no version's status lists a pointer under such a name.
         Assert.Contains("to move a release an earlier version published under such a name, choose a new environment name nothing uses yet, " +
             "copy releases/<pipeline>.<old name>.jsonc to releases/<pipeline>.<new name>.jsonc", status.ToString());
         Assert.Contains("leave out of it each experiment the old release revoked (in the store, pointers/<old name>/<pipeline>.json names the manifest " +
@@ -290,7 +258,6 @@ public sealed class PublishCommandTests
         return (id, manifest);
     }
 
-    /// <summary>Builds the workspace copy at <paramref name="root"/> with its <c>final_top_k</c> set, so the manifest differs; its id.</summary>
     private static async Task<string> BuildAsync(string root, string store, long seq, int finalTopK)
     {
         var path = Path.Combine(root, "pipelines", "home_feed.jsonc");

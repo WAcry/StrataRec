@@ -17,11 +17,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>stratarec revoke</c>, the emergency stop, on builds of the home_feed sample: what is published, at
-/// once, without the experiment, as a revocation nodes serve and that refuses every earlier manifest; <c>build</c>
-/// keeping the stopped experiment out of the releases that follow; and <c>status</c> showing the stops in force.
-/// </summary>
 public sealed class RevokeCommandTests
 {
     [Fact]
@@ -32,7 +27,7 @@ public sealed class RevokeCommandTests
         var first = await BuildAndPublishAsync(root, store);
         var blobs = new FileSystemArtifactStore(store);
         var firstManifest = await ReadAsync(blobs, first);
-        Assert.Equal(["MmrDiversifier@1"], firstManifest.Experiments["exp_mmr_diversity"].Requires); // only the experiment adds the node
+        Assert.Equal(["MmrDiversifier@1"], firstManifest.Experiments["exp_mmr_diversity"].Requires);
         Assert.DoesNotContain("MmrDiversifier@1", firstManifest.Requires);
 
         var (code, output, errors) = await Revoke(store, "exp_mmr_diversity");
@@ -52,7 +47,6 @@ public sealed class RevokeCommandTests
         Assert.Contains("'stratarec build' refuses to release a revoked experiment unchanged", errors);
         Assert.DoesNotContain("0 errors", errors);
 
-        // A node serves it, ignoring the platform's arm of the revoked experiment; the manifest before it is older, so stale.
         await using var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root));
         var loaded = await engine.LoadManifestAsync(revocation, revocationId, blobs, TestContext.Current.CancellationToken);
         Assert.True(loaded.Applied, loaded.Reason);
@@ -68,13 +62,11 @@ public sealed class RevokeCommandTests
         Assert.Equal("exp_mmr_diversity/mmr", Assert.Single(result.Experiments.Ignored).Id);
         Assert.Equal(ManifestLoadStatus.Stale, (await engine.LoadManifestAsync(firstManifest, first, blobs, TestContext.Current.CancellationToken)).Status);
 
-        // Again: nothing changes, and it succeeds, so a stop can be retried.
         (code, output, errors) = await Revoke(store, "exp_mmr_diversity");
         Assert.True(code == 0, errors);
         Assert.Equal("home_feed (local): exp_mmr_diversity was revoked already (at seq 2)\n", output.ReplaceLineEndings("\n"));
         Assert.Equal(revocationId, await Pointer(store));
 
-        // A second stop: one more revocation, which still lists the first experiment as revoked at seq 2.
         (code, output, errors) = await Revoke(store, "--format", "json", "exp_quality_weight", "exp_mmr_diversity");
         Assert.True(code == 0, errors);
         var second = await Pointer(store);
@@ -105,12 +97,11 @@ public sealed class RevokeCommandTests
         Assert.Contains($"error EXPERIMENT_NOT_RELEASED manifest:{first}/experiments: Manifest '{first}' (seq 1), which pipeline 'home_feed' in environment " +
                         "'local' publishes, does not release experiment 'exp_mmr_diversty'.", errors);
         Assert.Contains("hint: did you mean 'exp_mmr_diversity'?", errors);
-        Assert.Equal(first, await Pointer(store)); // nothing revoked, not even the experiment that is released
+        Assert.Equal(first, await Pointer(store));
 
         (code, _, errors) = await Revoke(store, "exp_none");
         Assert.Contains("hint: it releases exp_freshness_calibration, exp_mmr_diversity, exp_quality_weight", errors);
 
-        // Usage errors.
         Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["revoke", "-s", store, "exp_mmr_diversity"], Tool.Environment, TextWriter.Null, TextWriter.Null,
             TestContext.Current.CancellationToken));
         Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(["revoke", "-s", store, "-p", "home_feed"], Tool.Environment, TextWriter.Null, TextWriter.Null, TestContext.Current.CancellationToken));
@@ -120,11 +111,6 @@ public sealed class RevokeCommandTests
         Assert.Contains("error POINTER_NAME_INVALID --env", usage.ToString());
     }
 
-    /// <summary>
-    /// While a revocation is published, build refuses to release what it revoked unchanged, at the release file's entry, so
-    /// a routine release does not undo the stop; a changed experiment (the owner's fix) and <c>--restore</c> release it, and
-    /// an ordinary release ends the check: what it left out was left out on purpose.
-    /// </summary>
     [Fact]
     public async Task Build_KeepsARevokedExperimentOut_UntilItChangesOrIsRestored()
     {
@@ -144,7 +130,6 @@ public sealed class RevokeCommandTests
         (code, errors) = await Build(root, store, "--restore", "exp_mmr_diversity");
         Assert.True(code == 0, errors);
 
-        // The owner's fix: a changed experiment is released.
         var experiment = Path.Combine(root, "experiments", "exp_mmr_diversity.jsonc");
         File.WriteAllText(experiment, File.ReadAllText(experiment).Replace("\"mmr_lambda\": 0.7", "\"mmr_lambda\": 0.6", StringComparison.Ordinal));
         (code, errors) = await Build(root, store);
@@ -153,7 +138,6 @@ public sealed class RevokeCommandTests
         File.WriteAllText(experiment, File.ReadAllText(experiment).Replace("\"mmr_lambda\": 0.6", "\"mmr_lambda\": 0.7", StringComparison.Ordinal));
         var blobs = new FileSystemArtifactStore(store);
 
-        // Left out of the release file, the configuration is the revocation's: build says so, and the stop stays.
         var releaseFile = Path.Combine(root, "releases", "home_feed.local.jsonc");
         var withIt = File.ReadAllText(releaseFile);
         File.WriteAllText(releaseFile, withIt.Replace("\"exp_mmr_diversity\":         { \"layer\": \"rerank\" },", string.Empty, StringComparison.Ordinal));
@@ -161,7 +145,6 @@ public sealed class RevokeCommandTests
         Assert.True(code == 0, errors);
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors);
 
-        // An ordinary release after it ends the check: what it left out was left out on purpose, and adding it back releases it.
         var pipeline = Path.Combine(root, "pipelines", "home_feed.jsonc");
         File.WriteAllText(pipeline, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(pipeline), "\"final_top_k\": \\d+,", "\"final_top_k\": 7,"));
         var ordinary = await BuildAndPublishAsync(root, store);
@@ -172,14 +155,6 @@ public sealed class RevokeCommandTests
         Assert.True(code == 0, errors);
     }
 
-    /// <summary>
-    /// The move <see cref="FileSystemManifestSource.NameHint"/> describes for a release an earlier version
-    /// published under a name starting with '.', step by step (the old release is under <c>local</c> here: the files are
-    /// laid out alike, and no version's status lists one under such a name, so the hint names them). The pointer names the
-    /// manifest, the store holds it under its digest as JSON, and what it revoked is under <c>revoked</c> and not under
-    /// <c>experiments</c>; left out of the release file copied to the new name, it stays out of what that name publishes,
-    /// which releases what the old pointer did. Built from the copy as it was, the revoked experiment came back.
-    /// </summary>
     [Fact]
     public async Task TheMoveTheNameHintDescribes_KeepsWhatTheOldReleaseRevokedOut()
     {
@@ -188,14 +163,12 @@ public sealed class RevokeCommandTests
         await BuildAndPublishAsync(root, store);
         Assert.Equal(0, (await Revoke(store, "exp_quality_weight")).Code);
 
-        // In the store, pointers/<old name>/<pipeline>.json names the manifest sha256:<hex>, blobs/sha256/<hex> holds it.
         var id = JsonNode.Parse(File.ReadAllText(Path.Combine(store, "pointers", "local", "home_feed.json")))!["manifest"]!.GetValue<string>();
         var old = JsonNode.Parse(File.ReadAllText(Path.Combine(store, "blobs", "sha256", id["sha256:".Length..])))!;
         var released = old["experiments"]!.AsObject();
         var revoked = old["revoked"]!.AsObject().Select(m => m.Key).Where(name => !released.ContainsKey(name)).ToList();
         Assert.Equal(["exp_quality_weight"], revoked);
 
-        // The release file, copied to the new name with its environment and bindings for it, without those experiments.
         var release = (JsonObject)Jsonc.Parse(File.ReadAllBytes(Path.Combine(root, "releases", "home_feed.local.jsonc")), "release")!;
         release["environment"] = "preview";
         release["bindings"] = "preview";
@@ -218,10 +191,6 @@ public sealed class RevokeCommandTests
         Assert.Equal(released.Select(m => m.Key).Order(StringComparer.Ordinal), moved.Experiments.Keys.Order(StringComparer.Ordinal));
     }
 
-    /// <summary>
-    /// <c>status</c> shows what nodes will load from the store, and the stops in force; a pointer that cannot be read is
-    /// reported, and the other pointers are still listed.
-    /// </summary>
     [Fact]
     public async Task Status_ShowsWhatTheStorePublishes_AndTheStopsInForce()
     {
@@ -235,14 +204,14 @@ public sealed class RevokeCommandTests
         Assert.Equal(0, (await Revoke(store, "exp_mmr_diversity")).Code);
         var revocation = await Pointer(store);
         var pointers = new FileSystemManifestSource(store);
-        await pointers.WritePointerAsync("home_feed", "prod", first, TestContext.Current.CancellationToken); // another environment, and one pointer that cannot be read
+        await pointers.WritePointerAsync("home_feed", "prod", first, TestContext.Current.CancellationToken);
         await pointers.WritePointerAsync("other_feed", "prod", first, TestContext.Current.CancellationToken);
 
         (code, output, errors) = await Status(store);
         Assert.Equal(1, code);
         Assert.Contains("error MANIFEST_OTHER_PIPELINE", errors);
         Assert.Contains($"error POINTER_MANIFEST_FOREIGN {pointers.GetPointerPath("other_feed", "prod")}", errors);
-        Assert.Contains("error MANIFEST_OTHER_ENVIRONMENT", errors); // home_feed's prod pointer names the local manifest
+        Assert.Contains("error MANIFEST_OTHER_ENVIRONMENT", errors);
         Assert.Equal(
             $"home_feed (local): {revocation}\n" +
             "  seq          2\n" +
@@ -265,11 +234,6 @@ public sealed class RevokeCommandTests
         Assert.Contains("error STORE_NOT_FOUND --store", errors);
     }
 
-    /// <summary>
-    /// A pointer that cannot be read, however it cannot, is one error, and what the other pointers publish is still shown
-    /// (an undecodable string, a file name no pointer can have and an environment that cannot be listed each
-    /// ended the command with nothing shown); a filter skips the environments it does not ask for.
-    /// </summary>
     [Fact]
     public async Task Status_ShowsTheOtherPointers_WhateverIsWrongWithOne()
     {
@@ -303,8 +267,8 @@ public sealed class RevokeCommandTests
         try
         {
             (code, output, errors) = await Status(store, "-e", "local");
-            Assert.Equal(1, code); // a_bad still
-            Assert.DoesNotContain("z_locked", errors); // not asked for
+            Assert.Equal(1, code);
+            Assert.DoesNotContain("z_locked", errors);
             Assert.Contains("home_feed (local)", output);
 
             (code, output, errors) = await Status(store);
@@ -316,7 +280,6 @@ public sealed class RevokeCommandTests
             File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
 
-        // Pointers that cannot be traversed are not "nothing published", with -e either (exit 0, nothing shown).
         var all = Path.Combine(store, "pointers");
         File.SetUnixFileMode(all, UnixFileMode.None);
         try
@@ -340,12 +303,6 @@ public sealed class RevokeCommandTests
         return (code, output.ToString(), errors.ToString());
     }
 
-    /// <summary>
-    /// Each experiment records what its compile needed beyond the baseline, and a revocation drops exactly that, so a binary
-    /// without those types refuses the release and takes the revocation. Inferred from the names the
-    /// configuration wrote, a revocation kept the connector and store types of feature sources only the revoked experiment
-    /// read, and guessed at models an operator uses by its config's default.
-    /// </summary>
     [Fact]
     public async Task EachExperiment_RequiresWhatItsCompileUsed_AndARevocationDropsExactlyThat()
     {
@@ -380,12 +337,11 @@ public sealed class RevokeCommandTests
         Assert.Equal(["MmrDiversifier@1"], first.Experiments["exp_mmr_diversity"].Requires);
         Assert.Empty(first.Experiments["exp_freshness_calibration"].Requires); // its ExpressionScorer@1 is the baseline's too
         Assert.Empty(first.Experiments["exp_quality_weight"].Requires);
-        Assert.Contains("linear@1", first.Requires); // the baseline's model
-        Assert.Contains("snapshot_files@1", first.Requires); // the baseline's local table
+        Assert.Contains("linear@1", first.Requires);
+        Assert.Contains("snapshot_files@1", first.Requires);
         Assert.DoesNotContain("random@1", first.Requires);
         Assert.DoesNotContain("redis@1", first.Requires);
 
-        // A binary without those types refuses the release, and serves it without the experiment.
         var older = Tool.Environment with
         {
             Bindings = new BindingRegistry()
@@ -409,17 +365,12 @@ public sealed class RevokeCommandTests
         var loaded = await engine.LoadManifestAsync(revocation, revocationId, blobs, TestContext.Current.CancellationToken);
         Assert.True(loaded.Applied, loaded.Reason);
 
-        // A second stop keeps what the first dropped dropped.
         (code, _, errors) = await Revoke(store, "exp_mmr_diversity");
         Assert.True(code == 0, errors);
         var second = await ReadAsync(blobs, await Pointer(store));
         Assert.Equal(first.Requires, ManifestBuilder.RequiredCapabilities(second));
     }
 
-    /// <summary>
-    /// What the published manifest releases is not revoked, whatever it lists as revoked: a controller brought it back
-    /// (build refused the configuration that was published), and a later stop no longer lists it.
-    /// </summary>
     [Fact]
     public async Task Build_TakesWhatThePublishedManifestBroughtBack()
     {
@@ -431,7 +382,6 @@ public sealed class RevokeCommandTests
         Assert.Equal(0, (await Revoke(store, "exp_mmr_diversity")).Code);
         var revocation = await ReadAsync(blobs, await Pointer(store));
 
-        // Another controller publishes the first release's configuration again, keeping the revocation's list.
         var back = Path.Combine(store, "back.json");
         File.WriteAllText(back, ArtifactSerializer.ToNode(new ReleaseManifest
         {
@@ -443,7 +393,6 @@ public sealed class RevokeCommandTests
         Assert.True(code == 0, errors);
         Assert.Contains(": unchanged, the release the pointer names has this configuration", errors);
 
-        // Nor does status call it revoked, in text or JSON: the entry is no stop in force.
         var (statusCode, status, statusErrors) = await Status(store);
         Assert.True(statusCode == 0, statusErrors);
         Assert.DoesNotContain("revoked ", status);
@@ -451,7 +400,6 @@ public sealed class RevokeCommandTests
         Assert.True(statusCode == 0, statusErrors);
         Assert.Empty(System.Text.Json.Nodes.JsonNode.Parse(status)!["published"]![0]!["revoked"]!.AsArray());
 
-        // A stop of another experiment lists only that one.
         Assert.Equal(0, (await Revoke(store, "exp_quality_weight")).Code);
         Assert.Equal(["exp_quality_weight"], (await ReadAsync(blobs, await Pointer(store))).Revoked.Keys);
         (code, errors) = await Build(root, store);
@@ -460,10 +408,6 @@ public sealed class RevokeCommandTests
         Assert.DoesNotContain("error EXPERIMENT_REVOKED /experiments/exp_mmr_diversity", errors);
     }
 
-    /// <summary>
-    /// A stop takes the pointer's lock as publish does, and names an experiment once however often it is given; a blob the
-    /// process may not read is a diagnostic at the manifest's pointer (an unhandled exception).
-    /// </summary>
     [Fact]
     public async Task Revoke_TakesThePointersTurn_NamesEachExperimentOnce_AndSaysWhatItCannotRead()
     {

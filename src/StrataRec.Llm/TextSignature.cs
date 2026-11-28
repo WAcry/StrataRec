@@ -6,10 +6,10 @@ using StrataRec.Core.Services;
 namespace StrataRec.Llm;
 
 /// <summary>
-/// The load-time check of a model version that a generative operator calls with rendered prompts and reads text from
-///: every prompt is a text input of the signature, every input of the signature has a prompt, and every
-/// output read is text. A version that does not match would load cleanly and then fail on every request, so every version
-/// a node may use is checked, with the codes and hint style of the tensor operators' rule.
+/// The load-time check of a model version that a generative operator calls with rendered prompts and reads text from:
+/// every prompt is a text input of the signature, every input of the signature has a prompt, and every output read is
+/// text. A version that does not match would load cleanly and then fail on every request, so every version a node may
+/// use is checked.
 /// </summary>
 /// <remarks>
 /// Only the element type is checked: a text value is one string whatever shape the signature gives it (a scalar, or a
@@ -78,7 +78,6 @@ public static class TextSignature
     /// <summary>The config key of a model input mapped under <c>prompts</c>.</summary>
     public static string PromptKey(string name) => "/prompts/" + JsonPointer.Escape(name);
 
-    /// <summary>A tensor spec as <c>float32 [-1, 2]</c> or <c>text []</c>.</summary>
     private static string Describe(TensorSpec spec)
     {
         var text = new StringBuilder(spec.ElementType.ToString().ToLowerInvariant()).Append(" [");

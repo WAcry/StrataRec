@@ -3,8 +3,6 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Expressions.Vectorized;
 
-/// <summary>An instruction operand: a row-varying node (by instruction index) or a hoisted request-level value
-/// (by scalar slot).</summary>
 internal readonly record struct Opnd(int Index, bool IsScalar)
 {
     public static Opnd Node(int index) => new(index, false);
@@ -14,7 +12,6 @@ internal readonly record struct Opnd(int Index, bool IsScalar)
     public override string ToString() => IsScalar ? $"s{Index}" : $"n{Index}";
 }
 
-/// <summary>How a list node's per-lane values are found.</summary>
 internal enum SourceKind : byte
 {
     None,
@@ -30,9 +27,9 @@ internal enum SourceKind : byte
 }
 
 /// <summary>
-/// Where one node's result lives during an evaluation. Scalar kinds point either at a register (a slice of a rented
-/// register file) or, zero-copy, at a column's own array in full-range mode. Validity is <c>null</c> when every lane is
-/// present. List nodes are lazy sources resolved per lane.
+/// Scalar kinds point either at a register (a slice of a rented register file) or, zero-copy, at a column's own array
+/// in full-range mode. Validity is <c>null</c> when every lane is present. List nodes are lazy sources resolved per
+/// lane.
 /// </summary>
 internal struct Loc
 {
@@ -49,8 +46,8 @@ internal struct Loc
 }
 
 /// <summary>
-/// Per-call evaluation state. Lanes are either all physical rows <c>[0, N)</c> (<see cref="Identity"/>) or the
-/// requested rows gathered densely (<c>lane i ↔ Map[i]</c>).
+/// Lanes are either all physical rows <c>[0, N)</c> (<see cref="Identity"/>) or the requested rows gathered densely
+/// (<c>lane i ↔ Map[i]</c>).
 /// </summary>
 internal ref struct Frame
 {
@@ -97,7 +94,6 @@ internal ref struct Frame
 
     public readonly ref ScalarValue Scalar(Opnd o) => ref Scalars[o.Index];
 
-    /// <summary>Validity of an operand as a per-word view.</summary>
     public readonly WordView Validity(Opnd o)
     {
         if (o.IsScalar)
@@ -109,7 +105,6 @@ internal ref struct Frame
         return l.Valid is null ? WordView.Constant(ulong.MaxValue) : new WordView(new ReadOnlySpan<ulong>(l.Valid, l.ValidOffset, Words));
     }
 
-    /// <summary>Bool values of an operand as a per-word view (a missing scalar reads as false; validity decides).</summary>
     public readonly WordView BoolValues(Opnd o)
     {
         if (o.IsScalar)
@@ -123,7 +118,6 @@ internal ref struct Frame
 
 }
 
-/// <summary>A bitmap that is either backed by words or constant (all ones / all zeros).</summary>
 internal readonly ref struct WordView
 {
     private readonly ReadOnlySpan<ulong> _words;

@@ -13,14 +13,8 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>Defects of the feature runtime that were fixed, one test each.</summary>
 public class FeatureRuntimeRegressionTests
 {
-    /// <summary>
-    /// <see cref="FeaturePlan.Create"/> fills in the infos it is given, so a plan built from another plan's
-    /// (its public <see cref="FeaturePlan.Features"/>, here with bindings that fail) rewrote that plan's groups under its
-    /// requests, which then failed. Such infos are refused before anything changes.
-    /// </summary>
     [Fact]
     public async Task FeaturePlanCreate_RefusesAnotherPlansInfos_AndThatPlanServesAsBefore()
     {
@@ -43,8 +37,6 @@ public class FeatureRuntimeRegressionTests
 
     private static readonly long[] TwoItems = { 1, 2 };
 
-    // ---- The context prefetch must hold the request memory through its last staging read ----------------
-
     [Fact]
     public async Task ContextPrefetch_OutlivingTheRequest_ReadsStagingBeforeBuffersReturn()
     {
@@ -64,7 +56,7 @@ public class FeatureRuntimeRegressionTests
         var request = rig.NewRequest(TwoItems, userId: 7, pool);
 
         request.Fetcher.StartContextFetch(new[] { doubled }, CancellationToken.None);
-        request.Memory.Release(); // the request fails (or never reads context features) and returns first
+        request.Memory.Release();
 
         Assert.False(request.Memory.IsReturned);
         gate.SetResult();
@@ -77,9 +69,7 @@ public class FeatureRuntimeRegressionTests
     }
 
     /// <summary>
-    /// A reader of context features waits for the sources it reads, not for the slowest one: an ANN recall
-    /// reading the user's embedding did not start before a slower source of other user features answered. A derived
-    /// context feature still waits for the whole fetch, which computes it last.
+    /// A derived context feature still waits for the whole fetch, which computes it last.
     /// </summary>
     [Fact]
     public async Task AContextReader_WaitsForTheSourcesItReads_NotForTheSlowest()
@@ -121,12 +111,6 @@ public class FeatureRuntimeRegressionTests
         await request.Fetcher.WhenIoCompleteAsync();
     }
 
-    /// <summary>
-    /// When sending one context group threw (here a recording hook, as the next group was about to be sent),
-    /// the prefetch released the request memory while a group already sent was still to be stored: once its connector
-    /// answered and released its own hold, the buffers went back, and the store then read poisoned staging and wrote a
-    /// default. The prefetch now holds the memory until every group it started is stored, and still fails.
-    /// </summary>
     [Fact]
     public async Task AContextGroupSentBeforeTheStartFailed_IsStoredBeforeTheMemoryGoesBack()
     {
@@ -149,16 +133,15 @@ public class FeatureRuntimeRegressionTests
         var request = rig.NewRequest(TwoItems, userId: 7, new PoisoningPool(), hook: new FailingSecondBegin());
 
         request.Fetcher.StartContextFetch(new[] { a, b }, CancellationToken.None);
-        request.Memory.Release(); // the request ends; the first group's connector still holds the memory
+        request.Memory.Release();
         gate.SetResult();
         await Assert.ThrowsAsync<IOException>(() => request.Fetcher.WhenIoCompleteAsync().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken));
 
         Assert.True(request.Memory.IsReturned);
         Assert.Equal(FeatureState.Ok, request.Fetcher.GetState(a));
-        Assert.Equal(99.0, request.ContextValue(a).AsFloat64()); // read from the staging before it went back
+        Assert.Equal(99.0, request.ContextValue(a).AsFloat64());
     }
 
-    /// <summary>Records nothing, and throws when the second call is about to be sent.</summary>
     private sealed class FailingSecondBegin : IFeatureCallHook
     {
         private int _begun;
@@ -200,8 +183,6 @@ public class FeatureRuntimeRegressionTests
         Assert.Equal(1.5, request.ContextValue(score).AsFloat64());
     }
 
-    // ---- Concurrent max_batch chunks must not share staging state ----------------------------------------
-
     [Fact]
     public async Task Batches_EachChunkWritesItsOwnWindowOfTheFetchStaging()
     {
@@ -234,7 +215,6 @@ public class FeatureRuntimeRegressionTests
     [Fact]
     public async Task Batches_AreTheFewestChunksOfMaxBatch_EvenlySized()
     {
-        // Nine keys at most four a chunk: three chunks of three, not 4, 4 and 1, each still its own window.
         var windows = new List<(int Keys, int Offset)>();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
@@ -264,7 +244,6 @@ public class FeatureRuntimeRegressionTests
     [Fact]
     public async Task Batches_AMaxBatchOfInt32Max_IsOneChunkOfEveryKey()
     {
-        // "Everything in one chunk": the chunk count overflowed to 0, so no call was sent and no key was fetched.
         var chunks = new List<int>();
         var connector = new ScriptedConnector((keys, fields, writer, _) =>
         {
@@ -289,16 +268,15 @@ public class FeatureRuntimeRegressionTests
     [Fact]
     public async Task Batches_AMaxBatchOfInt32Max_ReadsTheDistributedTierAndFetchesItsMissesInOneChunkEach()
     {
-        // The cache path chunks its distributed read and its fetch of the misses by max_batch too.
         var store = new FakeCacheStore();
         var writer = new FeatureTestRig().CacheSource("shared", ScriptedConnector.Values((key, _) => key * 1.5), distributed: store, maxBatch: int.MaxValue);
         var writerScore = writer.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "shared");
         writer.Build();
         await writer.NewRequest([1, 2, 3]).EnsureAsync(writerScore);
-        await store.WhenWrittenAsync(3).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken); // never written while the chunk count overflowed
+        await store.WhenWrittenAsync(3).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         var connector = ScriptedConnector.Values((key, _) => key * 1.5);
-        var reader = new FeatureTestRig().CacheSource("shared", connector, distributed: store, maxBatch: int.MaxValue); // an empty table
+        var reader = new FeatureTestRig().CacheSource("shared", connector, distributed: store, maxBatch: int.MaxValue);
         var score = reader.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "shared");
         reader.Build();
         var request = reader.NewRequest([1, 2, 3, 4, 5]);
@@ -352,12 +330,9 @@ public class FeatureRuntimeRegressionTests
         }
     }
 
-    // ---- Failed chunks and unwritten fields are never published --------------------------------------------
-
     [Fact]
     public async Task FailedChunk_FromMemoryConnectorDecodeError_IsNotPublished()
     {
-        // Key 1's record cannot be decoded (a string where a float is expected): memory@1 throws for that chunk only.
         var rig = new FeatureTestRig().MemorySource("item_store", """{"1": {"score": "oops"}, "2": {"score": 2.5}}""", maxBatch: 1);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
@@ -367,7 +342,7 @@ public class FeatureRuntimeRegressionTests
 
         Assert.Equal(FeatureState.Degraded, result.State);
         Assert.Contains("failed", result.Error);
-        Assert.True(request.Value(score, 0).IsMissing); // not the pooled garbage left in the staging array
+        Assert.True(request.Value(score, 0).IsMissing);
         Assert.Equal(2.5, request.Value(score, 1).AsFloat64());
     }
 
@@ -421,7 +396,7 @@ public class FeatureRuntimeRegressionTests
 
         var result = await request.EnsureAsync(score);
 
-        Assert.True(result.Failed); // a source failure never degrades into defaults
+        Assert.True(result.Failed);
         Assert.False(request.IsFilled(score, 0));
         Assert.False(request.IsFilled(score, 1));
     }
@@ -474,8 +449,6 @@ public class FeatureRuntimeRegressionTests
         Assert.Equal(-1, request.Value(c, 1).AsInt64());
     }
 
-    // ---- Derived foreign keys are computed before the groups keyed by them ---------------------------------
-
     [Fact]
     public void Waves_FollowTheDependencyGraphThroughDerivedKeys()
     {
@@ -483,7 +456,7 @@ public class FeatureRuntimeRegressionTests
         var plan = rig.Plan;
 
         Assert.Equal(0, plan.Features[raw].Wave);
-        Assert.Equal(0, plan.Features[creatorId].Wave); // computed right after wave 0 fetched its input
+        Assert.Equal(0, plan.Features[creatorId].Wave);
         Assert.Equal(1, plan.Features[followers].Wave);
         Assert.Equal(1, plan.MaxWave);
     }
@@ -501,10 +474,9 @@ public class FeatureRuntimeRegressionTests
         Assert.Equal(100, request.Value(creatorId, 0).AsInt64());
         Assert.Equal(1000.0, request.Value(followers, 0).AsFloat64());
         Assert.Equal(2000.0, request.Value(followers, 1).AsFloat64());
-        Assert.True(request.Value(followers, 2).IsMissing); // item 3 has no creator: legitimately missing
+        Assert.True(request.Value(followers, 2).IsMissing);
         Assert.Single(items.Calls);
 
-        // A later ensure finds the correct values already filled.
         await request.EnsureAsync(followers);
         Assert.Single(creators.Calls);
         Assert.Equal(1000.0, request.Value(followers, 0).AsFloat64());
@@ -523,7 +495,7 @@ public class FeatureRuntimeRegressionTests
         Assert.Equal(0, rig.Plan.Features[followers].Wave);
         var request = rig.NewRequest(new long[] { 10, 21, 35 });
 
-        request.Fetcher.Prefetch(new[] { followers }, CancellationToken.None); // key not computed yet
+        request.Fetcher.Prefetch(new[] { followers }, CancellationToken.None);
         var result = await request.EnsureAsync(followers);
 
         Assert.Equal(FeatureState.Ok, result.State);
@@ -548,7 +520,7 @@ public class FeatureRuntimeRegressionTests
 
         var result = await request.EnsureAsync(followers);
 
-        Assert.True(result.Failed); // not silently the default 0
+        Assert.True(result.Failed);
         Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(creatorId));
         Assert.Equal(FeatureState.Failed, request.Fetcher.GetState(followers));
         Assert.Empty(creators.Calls);
@@ -568,8 +540,6 @@ public class FeatureRuntimeRegressionTests
         return (rig, raw, creatorId, followers);
     }
 
-    // ---- Waits are bounded by the source timeout and the request deadline ----------------------------------
-
     [Fact]
     public async Task HungConnector_WaitEndsAtSourceTimeout_AndMemoryWaitsForTheRealCompletion()
     {
@@ -577,7 +547,7 @@ public class FeatureRuntimeRegressionTests
         var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
         {
             await release.Task; // ignores cancellation
-            ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 5.0); // late write into its staging buffer
+            ScriptedConnector.WriteAll(keys, fields, writer, (_, _) => 5.0);
             return FetchStatus.Ok;
         });
         var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 300); // time to send the call on a loaded machine: one never sent holds nothing
@@ -592,11 +562,11 @@ public class FeatureRuntimeRegressionTests
 
         Assert.True(result.Failed);
         Assert.Contains("timed out", result.Error);
-        Assert.True(elapsed.ElapsedMilliseconds < 30_000, $"waited {elapsed.ElapsedMilliseconds} ms"); // the connector never answers: a generous watchdog
+        Assert.True(elapsed.ElapsedMilliseconds < 30_000, $"waited {elapsed.ElapsedMilliseconds} ms");
 
-        request.Memory.Release(); // the request finishes while the connector is still in flight
+        request.Memory.Release();
         Assert.False(request.Memory.IsReturned);
-        Assert.True(pool.Outstanding > 0); // the ledger is still out
+        Assert.True(pool.Outstanding > 0);
 
         release.SetResult();
         await request.Fetcher.WhenIoCompleteAsync();
@@ -622,7 +592,7 @@ public class FeatureRuntimeRegressionTests
         elapsed.Stop();
 
         Assert.True(result.Failed);
-        Assert.True(elapsed.ElapsedMilliseconds < 30_000, $"waited {elapsed.ElapsedMilliseconds} ms"); // the connector never answers: a generous watchdog
+        Assert.True(elapsed.ElapsedMilliseconds < 30_000, $"waited {elapsed.ElapsedMilliseconds} ms");
         release.SetResult();
         await request.Fetcher.WhenIoCompleteAsync();
     }
@@ -630,9 +600,8 @@ public class FeatureRuntimeRegressionTests
     [Fact]
     public async Task HungChunk_FailsAlone_AndItsLateResultIsRejected()
     {
-        // The caller cuts the hung chunk off, not a budget: the budget is the whole fetch's, and a short one would cut off
-        // the chunk that answered as well, were the test thread held up before the fetch observed it. A hung chunk timing
-        // out at the budget is covered where every chunk hangs (HungConnector_WaitEndsAtSourceTimeout_..., FetchChunkTests).
+        // The caller cuts the hung chunk off, not a budget: the budget is the whole fetch's, and a short one would cut
+        // off the chunk that answered as well, were the test thread held up before the fetch observed it.
         var release = new TaskCompletionSource();
         var connector = new ScriptedConnector(async (keys, fields, writer, _) =>
         {
@@ -688,8 +657,6 @@ public class FeatureRuntimeRegressionTests
         await request.Fetcher.WhenIoCompleteAsync();
     }
 
-    // ---- Only the required members of a group are fetched -------------------------------------------------
-
     [Fact]
     public async Task Ensure_FetchesOnlyTheRequestedMembersOfAGroup()
     {
@@ -714,7 +681,6 @@ public class FeatureRuntimeRegressionTests
         Assert.False(request.IsFilled(unused, 0));
         Assert.Equal(FeatureState.Unrequested, request.Fetcher.GetState(embedding));
 
-        // Late materialization: the same group is fetched again for the next field.
         await request.EnsureAsync(embedding);
 
         var calls = connector.Calls.ToArray();
@@ -737,19 +703,17 @@ public class FeatureRuntimeRegressionTests
         var request = rig.NewRequest(TwoItems);
 
         request.Fetcher.Prefetch(new[] { a }, CancellationToken.None);
-        request.Fetcher.Prefetch(new[] { a }, CancellationToken.None); // already in flight: no second call
+        request.Fetcher.Prefetch(new[] { a }, CancellationToken.None);
         await request.EnsureAsync(a, derived);
 
         var calls = connector.Calls.ToArray();
         Assert.Equal(2, calls.Length);
         Assert.Equal(new[] { "a" }, calls[0].Fields);
-        Assert.Equal(new[] { "c" }, calls[1].Fields); // the derived feature's dependency, not b
+        Assert.Equal(new[] { "c" }, calls[1].Fields);
         Assert.Equal(2.0, request.Value(a, 1).AsFloat64());
         Assert.Equal(4.0, request.Value(c, 1).AsFloat64());
         Assert.False(request.IsFilled(b, 0));
     }
-
-    // ---- Every floating-point feature write is sanitized ---------------------------------------------------
 
     [Fact]
     public async Task Backfill_NonFiniteValues_BecomeDefaultOrMissing_AndAreCounted()
@@ -875,7 +839,7 @@ public class FeatureRuntimeRegressionTests
         Assert.True(request.ContextValue(nan).IsMissing);
         Assert.Equal(3.0, request.ContextValue(inf).AsFloat64());
         Assert.True(request.ContextValue(derived).IsMissing);
-        Assert.True(request.ContextValue(safe).IsMissing); // not requested: not fetched
+        Assert.True(request.ContextValue(safe).IsMissing);
         Assert.Equal(3, request.Fetcher.NonFiniteReplaced);
     }
 }

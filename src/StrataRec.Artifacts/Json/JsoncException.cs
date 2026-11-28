@@ -4,12 +4,11 @@ using System.Text.Json;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// A JSONC document could not be read: a syntax error, a duplicate key, invalid Unicode, or a value that does not
-/// fit the target type. Carries the file name and a 1-based line and column so editors and CI logs can jump to it.
+/// A JSONC document could not be read: a syntax error, a duplicate key, invalid Unicode. Carries the file name and a
+/// 1-based line and column so editors and CI logs can jump to it.
 /// </summary>
 /// <remarks>
-/// Derives from <see cref="JsonException"/>, so existing handlers keep working. The inherited
-/// <see cref="JsonException.LineNumber"/> and <see cref="JsonException.BytePositionInLine"/> keep their
+/// The inherited <see cref="JsonException.LineNumber"/> and <see cref="JsonException.BytePositionInLine"/> keep their
 /// System.Text.Json meaning (0-based, UTF-8 bytes); <see cref="Line"/> and <see cref="Column"/> are 1-based, with the
 /// column counted in UTF-16 code units as most editors do.
 /// </remarks>

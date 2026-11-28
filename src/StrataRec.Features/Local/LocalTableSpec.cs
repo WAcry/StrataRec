@@ -32,9 +32,9 @@ public sealed class LocalTableSpec
     }
 
     /// <summary>
-    /// Creates the spec and its bootstrap source with one base directory, pinned now (<see cref="BindingContext.PinBaseDirectory"/>, the rule every binding uses):
-    /// the source resolves its relative paths against the same absolute directory the <see cref="Identity"/> names, so a
-    /// later change of the process's current directory changes neither what the source reads nor which table is shared.
+    /// Creates the spec and its bootstrap source with one base directory, pinned now: the source resolves its relative
+    /// paths against the same absolute directory the <see cref="Identity"/> names, so a later change of the process's
+    /// current directory changes neither what the source reads nor which table is shared.
     /// </summary>
     /// <param name="binding">The source's binding as written (mode <c>local</c>, with a <c>bootstrap</c>); part of the identity.</param>
     /// <param name="bootstrapFactory">The factory of the binding's <c>bootstrap</c> source, which loads the table; the
@@ -69,34 +69,6 @@ public sealed class LocalTableSpec
         return new LocalTableSpec(schema, options, ArtifactSerializer.ToNode(binding), source, bootstrapFactory, artifact, pointer, directory);
     }
 
-    /// <summary>
-    /// The spec of a cache's table: a feature source's (fed by the requests that miss it) or a service's (by the calls
-    /// that miss it), through its writer, which the table host runs as the table's source
-    /// (<see cref="Cache.CacheWriterSource"/>).
-    /// </summary>
-    /// <remarks>
-    /// The identity is what decides which records the table may hold, and nothing else: the layout, whether it keeps
-    /// records at all, and <paramref name="origin"/>. The cache's times and limits (<c>ttl_ms</c>,
-    /// <c>stale_if_error_ms</c>, <c>max_bytes</c>, timeouts, the distributed tier) are not part of it: a release that
-    /// only tunes them keeps the table and its records, which take the new ones (<see cref="LocalFeatureTable.Retune"/>).
-    /// A cache of millions of records that started empty whenever a timeout changed would send every key to its origin
-    /// at once.
-    /// </remarks>
-    /// <param name="options">With <see cref="LocalFeatureTableOptions.Cache"/> set.</param>
-    /// <param name="origin">
-    /// What the records come from: the binding's <c>cache.version</c>, or without one a digest of the connector or client
-    /// and its settings, so a table never serves what another origin answered.
-    /// </param>
-    /// <param name="owner">
-    /// The registry the plan's bindings were resolved with, the spec's <see cref="Owner"/>: the same for every plan of an
-    /// engine, whatever connector or client object the plan got, so a binding with a <c>cache.version</c> keeps its table
-    /// when its settings change.
-    /// </param>
-    /// <param name="kind">
-    /// What the cache is in front of: <c>source</c>, <c>service</c> or <c>pipeline</c>. A source and a service may have
-    /// one name, and the identity compares fields by name whatever their order: without it a source whose fields are
-    /// named as a service's record lists are shared the service's table, which lays them out in another order.
-    /// </param>
     public static LocalTableSpec CreateCache(
         LocalTableSchema schema,
         LocalFeatureTableOptions options,
@@ -132,10 +104,8 @@ public sealed class LocalTableSpec
 
     /// <summary>
     /// The runtime object whose data the table holds, compared by reference: the bootstrap source's factory for a
-    /// <c>local</c> table, the bindings registry for a cache's table. The <see cref="Identity"/> describes the configuration
-    /// only, and two engines on one host can compile the same configuration with different registries; a table shared
-    /// on the identity alone would serve one engine the data another engine's source loaded or another engine's connector
-    /// fetched. Not part of the identity, which stays a canonical, stable description of the configuration.
+    /// <c>local</c> table, the bindings registry for a cache's table. Not part of the identity, which stays a
+    /// canonical, stable description of the configuration.
     /// </summary>
     public object Owner { get; }
 
@@ -160,11 +130,6 @@ public sealed class LocalTableSpec
     /// binding as written, for a cache's table what its records come from (<see cref="CreateCache"/>). Nothing
     /// else in the configuration is part of it: other sources, pipelines and experiments never cause a reload.
     /// </summary>
-    /// <remarks>
-    /// A <c>local</c> binding is taken whole rather than setting by setting, so a binding setting added later is part of
-    /// the identity without anyone remembering to add it: a loaded table is never shared between bindings that differ in
-    /// anything.
-    /// </remarks>
     public string Identity { get; }
 
     /// <summary>What a table is shared by: <see cref="Identity"/> and the <see cref="Owner"/> object.</summary>
@@ -184,7 +149,7 @@ public sealed class LocalTableSpec
         {
             ["source"] = schema.Source,
             ["entity"] = schema.Entity,
-            ["key_type"] = schema.Key.TypeText, // "int64" or "string" for one part, "(int64,string)" for several
+            ["key_type"] = schema.Key.TypeText,
             ["mode"] = schema.Mode.ToString(),
             ["fields"] = fieldArray,
             [schema.Mode == LocalTableMode.Cache ? "cache" : "binding"] = binding,
@@ -196,10 +161,7 @@ public sealed class LocalTableSpec
 
 /// <summary>
 /// The key of every collection of shared tables (<see cref="LocalTableSpec.Key"/>): the spec's identity, and its owner
-/// compared by reference, as <see cref="Bindings.BindingKey"/> does for instances. A table is shared only between plans
-/// whose data comes from the same source factory or connector object, so the owner's own <c>Equals</c> and
-/// <c>GetHashCode</c> are never used: an owner with value equality (a record) would get another owner's table. One type,
-/// so no collection can compare owners another way.
+/// compared by reference.
 /// </summary>
 public readonly struct TableKey : IEquatable<TableKey>
 {
@@ -226,8 +188,8 @@ public readonly struct TableKey : IEquatable<TableKey>
 }
 
 /// <summary>Gives a plan being compiled the table of each local (source, entity) it reads.</summary>
-/// <remarks>The engine's provider (<c>BindingLease</c> in Hosting) shares tables by <see cref="LocalTableSpec.Key"/>
-/// and loads them in the background; a plan is served only once its tables are loaded.</remarks>
+/// <remarks>The engine's provider shares tables by <see cref="LocalTableSpec.Key"/> and loads them in the background; a
+/// plan is served only once its tables are loaded.</remarks>
 public interface ILocalTableProvider
 {
     /// <summary>The table for <paramref name="spec"/>: one already held with the same key, or a new one.</summary>
@@ -284,7 +246,6 @@ public sealed class LocalTableLoadException : Exception
     /// <summary>How to fix it, when the source said.</summary>
     public string? Hint { get; }
 
-    /// <summary>The message without the hint (the inner exception's own hint line is moved to <see cref="Hint"/>).</summary>
     private static string Format(LocalTableSpec spec, Exception inner)
     {
         var reason = inner switch

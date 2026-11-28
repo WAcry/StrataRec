@@ -14,12 +14,12 @@ public enum LocalTableMode : byte
     Local = 1,
 
     /// <summary>Fetched values are written back on a miss. The version is the write time, so records can expire and be
-    /// evicted by age (phase 2).</summary>
+    /// evicted by age.</summary>
     Cache,
 }
 
-/// <summary>One physical field of a local table: the store's field name and its storage type (never nullable: whether a
-/// record has a value is a validity bit, as in a column).</summary>
+/// <summary>One physical field of a local table: the store's field name and its storage type (never
+/// nullable).</summary>
 public readonly record struct LocalTableField(string Name, ColumnType Type);
 
 /// <summary>
@@ -27,8 +27,6 @@ public readonly record struct LocalTableField(string Name, ColumnType Type);
 ///. The record layout follows from it and is fixed for the life of the table: a catalog that adds or retypes
 /// a field of the source, or keys the entity by parts of other types, needs a new table.
 /// </summary>
-/// <remarks>Any key layout: a one-part int64 key is indexed by its value, every other key (a string, several parts) by the
-/// XXH3-64 hash of its canonical bytes, with the bytes kept in the record (<see cref="TableKeys"/>).</remarks>
 public sealed class LocalTableSchema
 {
     private readonly Dictionary<string, int> _byName;
@@ -135,10 +133,10 @@ public sealed class LocalTableSchema
     }
 
     /// <summary>
-    /// The schema of the table holding <paramref name="features"/> (physical features of <paramref name="entity"/> bound
-    /// to <paramref name="source"/>): one field per distinct physical field, in field-name order. The one place that
-    /// decides a table's fields: one physical field has one storage type, so two features reading it with different
-    /// types are a configuration error, returned in <paramref name="conflict"/> (and false) with the second feature.
+    /// The schema of the table holding <paramref name="features"/> (physical features of <paramref name="entity"/>
+    /// bound to <paramref name="source"/>): one field per distinct physical field, in field-name order: one physical
+    /// field has one storage type, so two features reading it with different types are a configuration error, returned
+    /// in <paramref name="conflict"/> (and false) with the second feature.
     /// </summary>
     public static bool TryFromFeatures(
         string source,
@@ -182,7 +180,6 @@ public sealed class LocalTableSchema
         return true;
     }
 
-    /// <summary>How the key is written in a hint: <c>an int64</c>, <c>a string</c>, or <c>an array [int64, string]</c>.</summary>
     internal string KeyHint()
     {
         if (Key.PartCount == 1)

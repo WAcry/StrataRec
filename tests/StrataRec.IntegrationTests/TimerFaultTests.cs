@@ -19,19 +19,13 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The framework cancels, at a deadline or a timeout, tokens it handed to code it does not own. A callback
-/// that code registered and that throws used to escape on the timer's thread, which ends the process (exit 134). Each
-/// site runs in a child process with the system's timers: the child must live, end the request (or the shutdown) within
-/// its budget, and observe the callback's exception: counted under its site and logged, with no task left unobserved.
-/// </summary>
 public sealed class TimerFaultTests
 {
     [Theory]
     [InlineData("call", "recall sources failed: popular: timed out after 300 ms")] // BoundedCall's own timeout
     [InlineData("node", "timed out after")] // the node's budget (AttemptBudget), no timeout of the call's own
     [InlineData("fetch", "timed out")] // a feature fetch's budget (its CallBound)
-    [InlineData("assignment", "deadline exceeded during assignment")] // the assignment provider's deadline
+    [InlineData("assignment", "deadline exceeded during assignment")]
     [InlineData("log_drain", "disposed")] // the log pipeline's drain timeout
     [InlineData("caller", "cancelled by the caller")] // the caller's own timer, through the node token linked to it
     public void AThrowingCancellationCallback_IsObservedAtItsSite_AndTheProcessLives(string site, string ended)
@@ -45,7 +39,7 @@ public sealed class TimerFaultTests
         // would otherwise fail below as if the framework had lost the exception.
         Assert.True(Value(output, "hung") == "True", "the request ended before it made the call that hangs:\n" + output);
         Assert.Contains(ended, Value(output, "ended"));
-        Assert.True(long.Parse(Value(output, "elapsed_ms")) < long.Parse(Value(output, "budget_ms")) + 1_000, output); // its budget, give or take scheduling
+        Assert.True(long.Parse(Value(output, "elapsed_ms")) < long.Parse(Value(output, "budget_ms")) + 1_000, output);
         Assert.True(long.Parse(Value(output, "counted")) >= 1, output);
         Assert.Equal("0", Value(output, "counted_elsewhere"));
         Assert.Equal("True", Value(output, "logged"));
@@ -53,10 +47,9 @@ public sealed class TimerFaultTests
     }
 
     /// <summary>
-    /// The holder of a token can end once it sees the cancellation flag, before the pool runs the callbacks
-    /// of that cancellation, and the framework then disposes the source. The base disposal clears the registrations, so
-    /// the callbacks were dropped, silently. The child has one pool worker, held by a gate, so the callbacks are queued
-    /// and not yet taken when the source is disposed.
+    /// The holder of a token can end once it sees the cancellation flag, before the pool runs the callbacks of that
+    /// cancellation, and the framework then disposes the source. The child has one pool worker, held by a gate, so the
+    /// callbacks are queued and not yet taken when the source is disposed.
     /// </summary>
     [Fact]
     public void CallbacksACancellationQueued_RunEvenIfTheSourceIsDisposedBeforeThePoolTakesThem()
@@ -65,19 +58,15 @@ public sealed class TimerFaultTests
 
         Assert.True(exitCode == 0, $"the child exited with {exitCode}:\n{output}");
         Assert.Equal("True", Value(output, "single_worker"));
-        Assert.Equal("True", Value(output, "queued")); // the order the test is about: queued, disposed, then run
+        Assert.Equal("True", Value(output, "queued"));
         Assert.Equal("1", Value(output, "ran"));
-        Assert.Equal("True", Value(output, "disposed")); // and the disposal completes once they have run
+        Assert.Equal("True", Value(output, "disposed"));
     }
 
     /// <summary>
-    /// The cancellation and the disposal of a source may meet in any order. Two cancellations at once
-    /// (the timer and the linked token), and a disposal repeated while a cancellation is still starting, must neither
-    /// drop the queued callbacks nor dispose ahead of them. The pool's only worker is held while every round queues its
-    /// callbacks, so none has run when its source is disposed; then every callback must run, once, and every source end
-    /// disposed. The two threads of a round only start together: nothing stops one inside a window, so this is a stress
-    /// test, not a schedule. With the old protocol the rounds hit its windows within a few dozen (in one
-    /// run, 60 of 2,000 two-cancellation rounds dropped callbacks), so it fails reliably, not by construction.
+    /// The pool's only worker is held while every round queues its callbacks, so none has run when its source is
+    /// disposed; then every callback must run, once, and every source end disposed. The two threads of a round only
+    /// start together: nothing stops one inside a window, so this is a stress test, not a schedule.
     /// </summary>
     [Fact]
     public void CancellationsAndDisposals_InAnyOrder_RunEveryQueuedCallbackOnce_AndDisposeAfterThem()
@@ -108,17 +97,12 @@ public sealed class TimerFaultTests
     }
 }
 
-/// <summary>
-/// The child process of <see cref="TimerFaultTests"/>: one site, with a client that registers a throwing callback on
-/// its token and answers only when the token is cancelled. Prints what the parent checks, one <c>key=value</c> a line.
-/// </summary>
 internal static class TimerFaultChild
 {
     public const string CleanupFailed = "the extension's cleanup failed";
 
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
-    /// <summary>Runs this assembly as a child process for <paramref name="site"/> and returns what it printed.</summary>
     /// <param name="singleWorker">The child runs with one processor, so it can hold the pool to a single worker.</param>
     public static string Start(string site, out int exitCode, bool singleWorker = false)
     {
@@ -158,11 +142,6 @@ internal static class TimerFaultChild
         return stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult();
     }
 
-    /// <summary>
-    /// Cancels a source while the pool's only worker is held, so the callbacks are queued and not yet taken; disposes
-    /// it, as the framework does once the token's holder has ended; then lets the pool go, counts the callbacks and
-    /// checks that the disposal completed after them.
-    /// </summary>
     public static int CancelThenDispose()
     {
         ThreadPool.SetMinThreads(1, 1);
@@ -191,10 +170,6 @@ internal static class TimerFaultChild
         return 0;
     }
 
-    /// <summary>
-    /// The rounds of <see cref="TimerFaultTests.CancellationsAndDisposals_InAnyOrder_RunEveryQueuedCallbackOnce_AndDisposeAfterThem"/>,
-    /// with the pool's only worker held until all are queued.
-    /// </summary>
     public static int CancelRaces()
     {
         const int Rounds = 2000;
@@ -205,9 +180,6 @@ internal static class TimerFaultChild
         ThreadPool.UnsafeQueueUserWorkItem(_ => { entered.Set(); release.Wait(); }, null);
         entered.Wait();
 
-        // Two cancellations at once, then the disposal once both have returned. No callback can run before the pool's
-        // worker is released, so a returned task already complete said "done" too early (the one that lost
-        // while the winner was still starting got a completed task).
         var twoRan = 0;
         var two = new ObservedCancellationSource[Rounds];
         var returned = new Task[2 * Rounds];
@@ -329,9 +301,9 @@ internal static class TimerFaultChild
         if (site == "node")
         {
             // The node's budget is the request's deadline, which runs from the request's start: on a cold process the
-            // code between the start and the call can take longer than the deadline to compile (742 ms on one contended
-            // core), and the deadline then passes before there is a callback to run. A request of the same shape first,
-            // whose call registers nothing that throws and which the caller ends once it hangs.
+            // code between the start and the call can take longer than the deadline to compile, and the deadline then
+            // passes before there is a callback to run. A request of the same shape first, whose call registers nothing
+            // that throws and which the caller ends once it hangs.
             Throwing = false;
             Pipeline(new ListLoggerFactory(), popularTimeoutMs: null, deadlineMs: (int)Patience.TotalMilliseconds, callerTimeoutMs: 1);
             Throwing = true;
@@ -363,8 +335,6 @@ internal static class TimerFaultChild
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
-        // The request event log's summary (2001) names the event and the site and samples the callback's message; the
-        // log pipeline's own event (3005) carries the exception.
         var logged = loggers.Entries.Any(e => e.EventId.Id == 2001
                 && e.Message.Contains($"CancellationCallbacksFailed for '{token}'", StringComparison.Ordinal)
                 && e.Message.Contains(CleanupFailed, StringComparison.Ordinal)
@@ -407,7 +377,6 @@ internal static class TimerFaultChild
         return ($"{result.Error} | recall: {recall?.Detail}", deadlineMs, elapsed, events);
     }
 
-    /// <summary>The sample's <c>item_store</c> bound to a connector that never answers on its own: cut off at the fetch's budget.</summary>
     private static (string Ended, int BudgetMs, long ElapsedMs, RequestEventLog? Events) Fetch(ListLoggerFactory loggers, int timeoutMs, int deadlineMs)
     {
         var host = HomeFeedTestHost.LoadModified(root => SampleBindings.Rebind(root, "item_store",
@@ -418,11 +387,6 @@ internal static class TimerFaultChild
         return ($"{result.Error} | {details}", deadlineMs, elapsed, events);
     }
 
-    /// <returns>
-    /// The result, or null when the caller's token ended the request. The caller's timer of <paramref name="callerTimeoutMs"/>
-    /// starts once the call hangs, and the elapsed time is counted from there: started with the request, it fired on a
-    /// slow machine before the request had reached the call, and no callback was registered for it to run.
-    /// </returns>
     private static (RecResult? Result, long ElapsedMs) Execute(HomeFeedTestHost host, RequestEventLog events, int deadlineMs,
         IBindingFactory<IServiceClient>? sources = null, IBindingFactory<IFeatureSourceConnector>? connectors = null, int? callerTimeoutMs = null)
     {
@@ -463,7 +427,6 @@ internal static class TimerFaultChild
         }
     }
 
-    /// <summary>A provider that never answers on its own: the request's deadline cancels its token.</summary>
     private static (string Ended, int BudgetMs, long ElapsedMs, RequestEventLog? Events) Assignment(ListLoggerFactory loggers, int deadlineMs)
     {
         var host = HomeFeedTestHost.Load();
@@ -479,7 +442,6 @@ internal static class TimerFaultChild
         return (result.Error ?? "succeeded", deadlineMs, watch.ElapsedMilliseconds, events);
     }
 
-    /// <summary>A log sink whose write never ends on its own: the drain timeout cancels its token when the pipeline is disposed.</summary>
     private static (string Ended, int BudgetMs, long ElapsedMs, RequestEventLog? Events) LogDrain(ListLoggerFactory loggers, int drainMs)
     {
         var pipeline = new LogPipeline(new HangingSink(), new LogPipelineOptions { DrainTimeout = TimeSpan.FromMilliseconds(drainMs) }, "child", loggers);
@@ -514,10 +476,6 @@ internal static class TimerFaultChild
         Debug = new DebugOptions { Trace = true, ForceArms = force ? ReplayTests.ControlArms : null },
     };
 
-    /// <summary>
-    /// Registers a callback that throws on <paramref name="token"/>, and returns a task that ends only when the token is
-    /// cancelled: what an extension that cleans up on cancellation, and fails at it, looks like.
-    /// </summary>
     private static Task<T> Hang<T>(CancellationToken token)
     {
         var ended = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);

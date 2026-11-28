@@ -2,13 +2,11 @@ using StrataRec.Core.Bindings;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>One registry for the factories of every kind of binding, by the type a binding names.</summary>
 public sealed class BindingRegistryTests
 {
     [Fact]
     public void AFactoryOfAMoreSpecificInstance_ServesItsContract()
     {
-        // Declaring the factory by the class it creates must not hide it from the contract a section asks for.
         var registry = new BindingRegistry().Add(new Factory<Special>("special@1"));
 
         Assert.True(registry.TryGet<IThing>("special@1", out var factory));

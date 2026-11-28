@@ -9,7 +9,7 @@ namespace StrataRec.Hosting.Replay;
 /// <summary>Reads and writes replay bundles as JSON files.</summary>
 public static class ReplayBundleFile
 {
-    /// <summary>Serializes a bundle with the artifact serializer (snake_case, nulls omitted).</summary>
+    /// <summary>Serializes a bundle (snake_case, nulls omitted).</summary>
     public static string Serialize(ReplayBundle bundle) => JsonSerializer.Serialize(bundle, ArtifactSerializer.Options);
 
     public static void Save(ReplayBundle bundle, string path)
@@ -50,10 +50,10 @@ public static class ReplayBundleFile
     }
 
     /// <summary>
-    /// Refuses a bundle of another format, at <c>/format</c>: every entry that takes a bundle (a file, or an object a host
-    /// deserialized from its own store) checks it before reading anything else, and a host that keeps bundles can check
-    /// them when it reads them. A format can change while the layout stays (2026-11-20.2 batches calls evenly), so
-    /// deserializing a bundle proves nothing about its version.
+    /// Refuses a bundle of another format, at <c>/format</c>: every entry that takes a bundle (a file, or an object a
+    /// host deserialized from its own store) checks it before reading anything else, and a host that keeps bundles can
+    /// check them when it reads them. A format can change while the layout stays, so deserializing a bundle proves
+    /// nothing about its version.
     /// </summary>
     /// <exception cref="ReplayBundleException">The bundle is of another format.</exception>
     public static void CheckFormat(ReplayBundle bundle)
@@ -68,7 +68,6 @@ public static class ReplayBundleFile
     private static ReplayBundleException UnsupportedFormat(string format) =>
         new("/format", $"unsupported format '{format}'", $"this build reads {ReplayBundle.CurrentFormat}; record the request again with this build");
 
-    /// <summary>The top-level <c>format</c> string, or null when the document has none or cannot be read that far.</summary>
     private static string? DeclaredFormat(string json)
     {
         try

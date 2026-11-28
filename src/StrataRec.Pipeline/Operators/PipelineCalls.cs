@@ -13,7 +13,7 @@ public readonly record struct PipelineOutput(string Name, ColumnType Type);
 /// <summary>
 /// What a pipeline offers the operator of another that calls it: the inputs it declares, the columns and values its
 /// output returns, and its key type. An experiment cannot change any of it (<c>request_schema</c> and <c>output</c> are
-/// not patchable, declarations are add-only), so a caller is checked against it once, not per arm combination.
+/// not patchable, declarations are add-only).
 /// </summary>
 public sealed class PipelineInterface
 {
@@ -30,7 +30,7 @@ public sealed class PipelineInterface
     /// <summary>Its output's request-level values in order (<c>output.values</c>).</summary>
     public ImmutableArray<PipelineOutput> Values { get; init; } = [];
 
-    /// <summary>The pipelines its own nodes call, in any arm, sorted: what a cycle is found with.</summary>
+    /// <summary>The pipelines its own nodes call, in any arm, sorted.</summary>
     public ImmutableArray<string> Calls { get; init; } = [];
 
     /// <summary>The interface of a compiled plan.</summary>
@@ -155,33 +155,26 @@ public sealed class PipelineCall
     /// </summary>
     public PipelineInterface? Interface { get; }
 
-    /// <summary>The pipeline of the node that calls.</summary>
     internal string Caller { get; }
 
     internal string NodeId { get; }
 
-    /// <summary>Where the node's config names the pipeline.</summary>
     internal string ConfigKey { get; }
 
     internal RequestSchema CallerInputs { get; }
 
     internal EntityKeyType CallerKeyType { get; }
 
-    /// <summary>The inputs the operator passes itself, with the types it passes them as.</summary>
     internal IReadOnlyList<PipelineOutput> Inputs => _inputs;
 
-    /// <summary>The output columns the operator reads, each with the type it reads it into.</summary>
     internal IReadOnlyList<PipelineOutput> Columns => _columns;
 
     internal IReadOnlyList<PipelineOutput> Values => _values;
 
-    /// <summary>The operator appends the result's rows: the pipeline's keys must be of the caller's key type.</summary>
     internal bool AppendsRows { get; set; }
 
-    /// <summary>The key type the operator reads the result's ids as (<see cref="OperatorCompileContext.CallReadsKeys"/>); null when it said none.</summary>
     internal EntityKeyType? ReadsKeys { get; set; }
 
-    /// <summary>The node's cache of the call's results (<see cref="OperatorCompileContext.TryCallPipeline"/>); null for a call that always runs the pipeline.</summary>
     internal PipelineCallCache? Cache { get; set; }
 
     internal bool PassesInput(string name) => IndexOf(_inputs, name) >= 0;
@@ -192,11 +185,6 @@ public sealed class PipelineCall
 
     internal void AddValue(string name, ColumnType into) => _values.Add(new PipelineOutput(name, into));
 
-    /// <summary>
-    /// What of <paramref name="callee"/> does not fit the call, or null: the first of its key type, an input the call passes,
-    /// an input the pipeline requires and nothing passes, a column or a value the operator reads. In the words a failed
-    /// call reports; a compile reports each at the config key that declared it (<see cref="OperatorCompileContext"/>).
-    /// </summary>
     internal string? Mismatch(PipelineInterface callee)
     {
         if (AppendsRows && KeyMismatch(callee) is { } key)
@@ -241,7 +229,6 @@ public sealed class PipelineCall
         return null;
     }
 
-    /// <summary><see cref="Mismatch"/> of the plan the pipeline serves now, found once per plan.</summary>
     internal string? MismatchOf(ExecutionPlan plan)
     {
         var last = Volatile.Read(ref _checked);
@@ -275,17 +262,11 @@ public sealed class PipelineCall
             return $"input '{name}' is passed as {given} and pipeline '{callee.PipelineId}' declares it {required}: {failure}";
         }
 
-        // A value and its absence are judged apart, as for a fallback pipeline's inputs: the type says which values convert,
-        // nullability whether none may be passed.
         return given.Nullable && !required.Nullable
             ? $"input '{name}' is passed as {given}, which may be missing, and pipeline '{callee.PipelineId}' requires it ({required})"
             : null;
     }
 
-    /// <summary>
-    /// An input <paramref name="callee"/> requires that the call cannot give it: the operator does not pass it, and the
-    /// caller's request has none of that name to pass on, or one whose values do not convert.
-    /// </summary>
     internal string? MissingInput(PipelineInterface callee)
     {
         foreach (var name in callee.Inputs.Names)
@@ -405,24 +386,14 @@ public sealed class PipelineCallResult
     /// </summary>
     public bool Degraded { get; internal init; }
 
-    /// <summary>The run that returned this made a call that was not answered (<see cref="PipelineResult.CallsUnanswered"/>).</summary>
     internal bool CallsUnanswered { get; init; }
 
     internal static PipelineCallResult Failed(string pipelineId, string error) => new(pipelineId, false, error, ResultColumns.Empty, ResultValues.Empty);
 }
 
-/// <summary>One call as the engine runs it: what <see cref="OperatorContext"/> hands over.</summary>
-/// <param name="Given">The inputs the operator passes; null when it passes none.</param>
-/// <param name="CallerInputs">The calling run's inputs: those of the same name as an input the pipeline declares are passed on.</param>
-/// <param name="Sequence">The call's place among the calls its node made in the run, from 0.</param>
-/// <param name="Seed">The calling run's seed; the called run's is derived from it, the node and <paramref name="Sequence"/>.</param>
-/// <param name="TimeMs">The calling run's request time, which is the called run's.</param>
-/// <param name="Budget">What is left of the node's budget: the called run's deadline.</param>
-/// <param name="Memory">The calling run's request memory: held for a read of the call's cache that outlives its wait.</param>
 internal readonly record struct PipelineCallRequest(
     PipelineCall Call, RequestInputs? Given, RequestInputs CallerInputs, int Sequence, long Seed, long TimeMs, TimeSpan Budget, Core.Memory.RequestMemory Memory);
 
-/// <summary>Runs the pipelines a run's nodes call: the engine's, since it serves them.</summary>
 internal interface IPipelineCalls
 {
     /// <summary>

@@ -5,11 +5,7 @@ using StrataRec.Features.Runtime;
 namespace StrataRec.UnitTests.Features;
 
 /// <summary>
-/// A fill's temporaries (its closure and marks, a wave's groups and started fetches, a local read's rows, keys, records
-/// and masks) are scratch, given back to the pool as soon as the fill or the read is over, not left on the
-/// request's ledger until the request ends: a request runs a fill per node, and held to its end they were all out of the
-/// pool at once. What a fetch keeps (its keys, staging and calls, which a connector may read after the fill) stays on the
-/// ledger. <see cref="StrataRec.Core.Memory.RequestMemory.RentedBytes"/> counts the ledger only.
+/// <see cref="StrataRec.Core.Memory.RequestMemory.RentedBytes"/> counts the ledger only.
 /// </summary>
 public class FillTemporariesTests
 {
@@ -28,7 +24,7 @@ public class FillTemporariesTests
         await request.Fetcher.EnsureAsync([copy], [2, 0], CancellationToken.None);
         request.Fetcher.Prefetch([@base], CancellationToken.None);
 
-        Assert.Equal(ledger, request.Memory.RentedBytes); // the closure, its marks and each wave's groups were rented every time
+        Assert.Equal(ledger, request.Memory.RentedBytes);
     }
 
     [Fact]
@@ -54,7 +50,6 @@ public class FillTemporariesTests
 
         await request.Fetcher.EnsureAsync([score, clicks], Enumerable.Range(Rows, Rows).ToArray(), CancellationToken.None);
 
-        // The read's rows, key entries, records, row mask and field reads stayed on the ledger: 8 KB more per read of 1,000 rows.
         Assert.Equal(ledger, request.Memory.RentedBytes);
         Assert.Equal(2 * Rows * 0.5, request.Value(score, (2 * Rows) - 1).AsFloat64());
         Assert.Equal(Rows + 1, request.Value(clicks, Rows).AsInt64());

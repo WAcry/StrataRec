@@ -2,12 +2,10 @@ using StrataRec.Core.Bindings;
 
 namespace StrataRec.Models;
 
-/// <summary>The checks the built-in clients share beyond what their settings types say: a list of names, a latency.</summary>
 internal static class SettingChecks
 {
     /// <summary>
-    /// The names of a list setting (<c>"inputs": ["a", "b"]</c>): each non-empty, none twice, each problem at its item's
-    /// pointer. Whether the list may be empty is the client's to say.
+    /// Whether the list may be empty is the client's to say.
     /// </summary>
     public static void Names(IReadOnlyList<string> names, string setting, string hint)
     {
@@ -27,7 +25,6 @@ internal static class SettingChecks
         }
     }
 
-    /// <summary><c>latency_ms</c>: a simulated latency, 0 or more.</summary>
     public static void Latency(int latencyMs)
     {
         if (latencyMs < 0)

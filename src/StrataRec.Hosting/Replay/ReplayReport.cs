@@ -35,10 +35,9 @@ public sealed class ReplayOutcome
 
     /// <summary>
     /// Set when the bundle records an aborted request (cancelled by its caller, or stopped by a defect), which a replay
-    /// does not execute: the request has no result to reproduce, and its recording, a snapshot taken at the
-    /// abort, holds nothing past the node that was running, so a replay could not reach the point of a defect either.
-    /// Nothing ran: <see cref="Result"/> is a placeholder, <see cref="ReplayReport.Nodes"/> holds the recorded node
-    /// decisions only, and <see cref="ResultDiff.Identical"/> is false. Null when the request was replayed.
+    /// does not execute. Nothing ran: <see cref="Result"/> is a placeholder, <see cref="ReplayReport.Nodes"/> holds the
+    /// recorded node decisions only, and <see cref="ResultDiff.Identical"/> is false. Null when the request was
+    /// replayed.
     /// </summary>
     public RecordedAbort? NotReplayed { get; init; }
 
@@ -110,10 +109,6 @@ public sealed record RetypedColumn(string Column, ColumnType Recorded, ColumnTyp
 /// An item whose rank or values differ: its rank in each result (null in the one that does not have it), and the values of
 /// its own columns that differ, compared when both results have the item.
 /// </summary>
-/// <remarks>
-/// Per item, not per rank: comparing what two different items hold at one rank says nothing about either, while an item's
-/// move and its own score change are what a reader asks about.
-/// </remarks>
 public sealed record ItemChange(EntityKey Id, int? RecordedRank, int? ReplayedRank, IReadOnlyList<ColumnChange> Columns);
 
 /// <summary>Difference of two results: the recorded one and the replayed one (or a baseline and a candidate).</summary>
@@ -258,8 +253,6 @@ public static class ResultComparison
 {
     public static ResultDiff Diff(ComparableResult left, ComparableResult right)
     {
-        // A column only one side has (the configuration added or removed an output) is reported once, not per item; a
-        // missing value in a column both sides have is a value like any other.
         var leftNames = ColumnNames(left);
         var rightNames = ColumnNames(right);
         var shared = new SortedSet<string>(leftNames, StringComparer.Ordinal);
@@ -269,7 +262,6 @@ public static class ResultComparison
         var removed = new List<string>(leftNames);
         removed.RemoveAll(shared.Contains);
 
-        // Each item against itself: where it is in the other result, and its own values there.
         var rightIndex = new Dictionary<EntityKey, int>(right.Ids.Count);
         for (var j = 0; j < right.Ids.Count; j++)
         {
@@ -317,8 +309,6 @@ public static class ResultComparison
 
         var count = Math.Max(left.Ids.Count, right.Ids.Count);
 
-        // A column both declare, as another type: its values may compare equal (0.1f widened is the double compared) while
-        // a host reads it, and a result prints it, otherwise.
         var retyped = new List<RetypedColumn>();
         foreach (var (name, type) in left.Types)
         {
@@ -330,7 +320,6 @@ public static class ResultComparison
 
         retyped.Sort((a, b) => string.CompareOrdinal(a.Column, b.Column));
 
-        // The request-level values: each name either result returned, compared with its type, as a host reads it.
         var valueNames = new SortedSet<string>(left.Values.Keys, StringComparer.Ordinal);
         valueNames.UnionWith(right.Values.Keys);
         var valueChanges = new List<ResultValueChange>();
@@ -414,7 +403,7 @@ public static class ResultComparison
             rankInB.TryAdd(b[i], i);
         }
 
-        var shared = new List<int>(); // rank in b, in a's order
+        var shared = new List<int>();
         for (var i = 0; i < a.Count; i++)
         {
             if (rankInB.TryGetValue(a[i], out var rank))
@@ -451,8 +440,7 @@ public static class ResultComparison
 
     /// <summary>
     /// Two-sample Kolmogorov–Smirnov statistic: the largest gap between the empirical distributions (0–1), over the
-    /// finite values of each sample. NaN and ±∞ have no place in a distribution of scores; they are left out (callers
-    /// count them separately), so the statistic is defined and the computation ends for any input.
+    /// finite values of each sample. NaN and ±∞ have no place in a distribution of scores; they are left out.
     /// </summary>
     public static double KolmogorovSmirnov(IReadOnlyList<double> a, IReadOnlyList<double> b)
     {

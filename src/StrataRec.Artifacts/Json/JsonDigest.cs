@@ -6,10 +6,8 @@ using StrataRec.Core.Hashing;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// A digest of a JSON value that every value has, for telling two configurations apart: an identity derived from typed
-/// configuration that compiled must not be able to fail. Not an id of content: <see cref="ContentHash"/> is, over the
-/// RFC 8785 form, which a value it cannot hold exactly (an integer beyond 2^53, which a typed host may well pass as a
-/// parameter) does not have.
+/// A digest of a JSON value that every value has, for telling two configurations apart. Not an id of content:
+/// <see cref="ContentHash"/> is, over the RFC 8785 form.
 /// </summary>
 /// <remarks>
 /// Members are taken in ordinal order of their names, so the order they were written in does not matter. A string is
@@ -73,7 +71,7 @@ public static class JsonDigest
                 break;
             case JsonValue value when !JsonNodeUtilities.IsJsonNull(value):
                 hash.Add('#');
-                hash.Add(value.ToJsonString()); // a number as written, true or false
+                hash.Add(value.ToJsonString());
                 break;
             default:
                 hash.Add('0');

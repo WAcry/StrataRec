@@ -57,8 +57,6 @@ public static class JsonMergePatch
                 {
                     result[member.Key] = Apply(member.Value, patchValue);
                 }
-
-                // else: null deletes the member, so it is not copied.
             }
         }
 

@@ -10,16 +10,8 @@ using static StrataRec.IntegrationTests.CombinationLimitTests;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Request columns (<c>req.*</c>) in the home feed: the recall's statistics (<c>recall_stats</c>) a later node's
-/// <c>when</c> reads and the result returns (<c>output.values</c>), recorded and replayed like the items.
-/// </summary>
 public sealed class RequestColumnEndToEndTests
 {
-    /// <summary>
-    /// The values are part of the recorded result: a replay of the same configuration is identical, and one after a
-    /// value's definition changed reports that value, by name, with the items unchanged.
-    /// </summary>
     [Fact]
     public async Task TheValues_AreRecorded_AndAReplayAfterOneChanges_ReportsIt()
     {
@@ -51,10 +43,6 @@ public sealed class RequestColumnEndToEndTests
         Assert.NotEqual(popular.Value.AsInt64(), change.Replayed!.Value.Value.AsInt64());
     }
 
-    /// <summary>
-    /// A request its fallback pipeline serves returns the fallback's values, as it returns its items, live and replayed:
-    /// the result of the run that served, the backup counting the 10 candidates it recalled.
-    /// </summary>
     [Fact]
     public async Task AFallbackPipelinesValues_AreTheResults_LiveAndReplayed()
     {
@@ -106,11 +94,6 @@ public sealed class RequestColumnEndToEndTests
         }
     }
 
-    /// <summary>
-    /// A condition may read a request column only its own arm writes: the node writing it is a site of the experiment
-    /// too, and an earlier one, so a request of the other arm is triggered there, before the condition, and both arms are
-    /// triggered alike.
-    /// </summary>
     [Fact]
     public async Task ASiteConditionReadingARequestColumnOnlyItsArmWrites_IsPrecededByTheWritersSite()
     {
@@ -130,10 +113,6 @@ public sealed class RequestColumnEndToEndTests
         }
     }
 
-    /// <summary>
-    /// An arm may declare a request column of its own, as it declares a column (add-only), and its nodes
-    /// write and read it: in a request of the arm the count gates author_cap on explore; the control has neither.
-    /// </summary>
     [Fact]
     public async Task AnArm_DeclaresARequestColumn_ItsNodesWriteAndRead()
     {
@@ -162,10 +141,6 @@ public sealed class RequestColumnEndToEndTests
         Assert.Equal(NodeOutcomeKind.SkippedWhen, control.Outcomes.Single(o => o.NodeId == "author_cap").Kind);
     }
 
-    /// <summary>
-    /// A request column an arm declares exists only where the arm is assigned: a node of another layer's arm reading it is
-    /// refused for the combination without the declaring arm, as that combination's own compile refuses it.
-    /// </summary>
     [Fact]
     public void AReaderOfARequestColumnAnotherLayersArmDeclares_IsRejected_WhereThatArmIsNotAssigned()
     {
@@ -213,10 +188,6 @@ public sealed class RequestColumnEndToEndTests
         Assert.DoesNotContain(unified.Diagnostics, d => d.Code == "COMBINATION_CHECK_LIMIT");
     }
 
-    /// <summary>
-    /// Request columns interact between experiments as columns do: an added node reading
-    /// what another layer's added node writes, two added nodes writing one flow column. The review names it req.&lt;name&gt;.
-    /// </summary>
     [Fact]
     public void AddedWritersAndReadersOfARequestColumn_Interact_UntilTheReviewIsRecorded()
     {
@@ -254,14 +225,6 @@ public sealed class RequestColumnEndToEndTests
         Assert.Empty(reviewed.Diagnostics);
     }
 
-    /// <summary>
-    /// A tap binding a request column only another layer's arm declares, in a branch the optimizer drops, is refused
-    /// where that arm is not assigned, also when the combinations are checked by scope (past the limit): the name decides
-    /// which combinations the tap is checked in. gate's named input reads the column only when
-    /// a and b both switch it on, and only the tap c adds compiles it (columns_from); d declares it. The same for a
-    /// parameter only d declares (the scope left parameters out, the plan loaded, and the tap threw when
-    /// it captured a request in a, b and c).
-    /// </summary>
     [Theory]
     [InlineData("true ? 1 : (req.maybe ?? 0)", """{ "request_columns": { "maybe": { "type": "int64?" } } }""", "'req.maybe'")]
     [InlineData("param.maybe", """{ "param_schema": { "maybe": { "type": "int64" } }, "params": { "maybe": 17 } }""", "'param.maybe'")]
@@ -344,7 +307,6 @@ public sealed class RequestColumnEndToEndTests
         }
     }
 
-    /// <summary>A request column the baseline declares is the same in every arm: an arm may not change or delete it.</summary>
     [Theory]
     [InlineData("""{ "type": "int64?" }""")]
     [InlineData("null")]
@@ -360,7 +322,6 @@ public sealed class RequestColumnEndToEndTests
         Assert.StartsWith("/arms/t/request_columns/candidates.recalled", error.Pointer, StringComparison.Ordinal);
     }
 
-    /// <summary>The home feed with <c>cand.n</c> declared and exp_req_when in its own layer: control, and t changing <paramref name="nodes"/>.</summary>
     private static HomeFeedTestHost WithExperiment(string nodes) => HomeFeedTestHost.LoadModified(root =>
     {
         ReplayTests.Edit(root, "pipelines/home_feed.jsonc", "\"request_columns\": {", "\"request_columns\": { \"cand.n\": { \"type\": \"int64\" },");

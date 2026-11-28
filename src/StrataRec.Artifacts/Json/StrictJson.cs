@@ -15,15 +15,11 @@ namespace StrataRec.Artifacts.Json;
 /// <c>0xFF</c>, which <see cref="JsonDocument"/> keeps until the text is read).
 /// </summary>
 /// <remarks>
-/// System.Text.Json parses both. What it does with them later is not an answer to the caller: a <c>JsonObject</c> throws
-/// when its members are first enumerated, a reader of a <see cref="JsonElement"/> sees both values of a duplicate and keeps
-/// one, and reading such a string or name throws. Checked once where the request comes in, either is an invalid request
-/// at its pointer (RFC 8259 section 4 leaves duplicate names undefined; I-JSON, RFC 7493, forbids both). The check walks
-/// the value once and allocates nothing for objects of a few members with plain names; errors only on the error path.
+/// Checked once where the request comes in, either is an invalid request at its pointer (RFC 8259 section 4 leaves
+/// duplicate names undefined; I-JSON, RFC 7493, forbids both).
 /// </remarks>
 public static class StrictJson
 {
-    /// <summary>Objects with more members are checked for duplicates with a set instead of by pairs.</summary>
     private const int PairwiseLimit = 16;
 
     /// <summary>
@@ -32,7 +28,6 @@ public static class StrictJson
     /// </summary>
     public static JsonBindingError? Check(in JsonElement value) => Check(value, ignoreCase: false);
 
-    /// <param name="ignoreCase">Whether two names that differ only in case are one, as they are to a node read with <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/>.</param>
     /// <param name="level">The level of <paramref name="value"/>, the root being 1.</param>
     /// <param name="maxDepth">The levels an object or array may be at; the first one deeper is the problem. Text the
     /// reader parsed is bounded by its own limit; an element built in code is not, and is not walked past this.</param>
@@ -68,31 +63,12 @@ public static class StrictJson
     }
 
     /// <summary>
-    /// <see cref="Check(in JsonElement)"/> for a node tree a host built in code, before the engine reads it, so that no
-    /// later read throws. Each object is enumerated once here, inside a catch: an object
-    /// <see cref="JsonNode.Parse(string, JsonNodeOptions?, JsonDocumentOptions)"/> made from text keeps that text until it
-    /// is first enumerated, and then throws when two members have one name (by ordinal comparison, or ignoring case when
-    /// its <see cref="JsonNodeOptions.PropertyNameCaseInsensitive"/> says so) or a name is not Unicode, at whatever level
-    /// and in whatever reader that happens. Such an object is reported at the member at fault, found in the text it still
-    /// writes; one whose fault cannot be found there, at the object. A string read from text is checked as a request's is.
-    /// A tree nested deeper than <paramref name="maxDepth"/> objects and arrays (the outermost is the first) is reported at
-    /// the first one too deep, without reading further.
+    /// A tree nested deeper than <paramref name="maxDepth"/> objects and arrays (the outermost is the first) is
+    /// reported at the first one too deep, without reading further.
     /// </summary>
     /// <remarks>
-    /// <para>A CLR value the host wrapped (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is JSON only once it is
-    /// written, and it is written anew by every reader: a CLR object that writes an object or an array (a property and
-    /// <see cref="System.Text.Json.Serialization.JsonExtensionDataAttribute"/> holding one name twice, an
-    /// <c>object[]</c> nested deeper than the limit) passed as a leaf, and threw where the canonical form or a recording
-    /// wrote it. So such a value is written once, here, and read back from that text, with names compared by
-    /// ordinal (as RFC 7396 merging compares them, <see cref="JsonMergePatch"/>): its objects and arrays get the same
-    /// checks, its depth counted from its place in the tree, at pointers into it. One whose writing throws (a cycle, a
-    /// NaN inside it) is reported at its pointer, in the words of what threw. A number JSON cannot write (NaN or an
-    /// infinity, of double, float or Half, boxed or not) that cannot be written, and a string that is not Unicode (the
-    /// writer puts U+FFFD in its place), are kept as they are: the canonical form reports them at their pointer. Every
-    /// other value, a primitive too, is the JSON it writes, by its own converter, but one holding a
-    /// <see cref="JsonElement"/>, which is the JSON of the element, whatever converter it was given.</para>
     /// <para>What the check read is what the caller must read from then on, <paramref name="copy"/>: reading the host's
-    /// tree again would write its CLR values again, and a value may write something else the second time.</para>
+    /// tree again would write its CLR values again.</para>
     /// </remarks>
     /// <param name="copy">When there is no problem, a copy of the tree as checked, which shares no node with it: each
     /// wrapped CLR value is the JSON it wrote here, read back (but a number or string the canonical form reports, and a
@@ -174,15 +150,8 @@ public static class StrictJson
         }
     }
 
-    /// <summary>
-    /// A value the host gave as a CLR object (see the remarks of <see cref="Check(JsonNode?, int, out JsonNode?)"/>): written
-    /// once, here, inside the catch, and read back; that text is what is checked and copied, so nothing after the check
-    /// writes a CLR value, and what is checked is what the value writes, by its own converter (asking an object
-    /// its kind wrote it, and writing it wrote it again; a double NaN a converter writes as the string "NaN" was refused as
-    /// the number it is). A number JSON cannot write (NaN or an infinity, <see cref="JsonNodeUtilities.IsNonFiniteNumber"/>)
-    /// that fails to write or to read back is the canonical form's to report at its pointer, as a double NaN is, whatever
-    /// its CLR type (writing a Half NaN wrote text that threw a JsonReaderException out of the request).
-    /// </summary>
+    /// <summary>A host's CLR value is written once, here, and the text it wrote is what is checked and copied: nothing
+    /// after the check runs its converter again.</summary>
     private static JsonBindingError? CheckClrValue(JsonValue value, int level, int maxDepth, out JsonNode? copy)
     {
         copy = null;
@@ -195,13 +164,13 @@ public static class StrictJson
         JsonNode? read;
         try
         {
-            read = JsonNode.Parse(Write(value).Span, documentOptions: new JsonDocumentOptions { MaxDepth = WrittenDepth }); // names by ordinal
+            read = JsonNode.Parse(Write(value).Span, documentOptions: new JsonDocumentOptions { MaxDepth = WrittenDepth });
         }
         catch (Exception ex)
         {
             if (JsonNodeUtilities.IsNonFiniteNumber(value, out var number))
             {
-                copy = JsonValue.Create(number); // as a double NaN is: the canonical form's (CONFIG_OVERRIDE_NOT_CANONICAL for an override)
+                copy = JsonValue.Create(number);
                 return null;
             }
 
@@ -211,21 +180,11 @@ public static class StrictJson
                 "give a value System.Text.Json can write (no cycle, no NaN or infinity), or build it from JsonObject and JsonArray");
         }
 
-        return CheckNode(read, level, maxDepth, out copy); // read from the text it wrote: no CLR value is left in it
+        return CheckNode(read, level, maxDepth, out copy);
     }
 
-    /// <summary>
-    /// A value holding a <see cref="JsonElement"/>: the JSON the element is, read from the element and copied from it, never
-    /// written by the value, whose converter may be the host's (one given a <c>JsonTypeInfo&lt;JsonElement&gt;</c>
-    /// was checked as the element and copied by <see cref="JsonNode.DeepClone"/>, which ran the converter outside the
-    /// check: what it wrote was used unchecked, and what it threw went out of the request). Its strings and names are
-    /// checked as text, with its depth counted from its place in the tree, by one walk that stops at the first problem
-    /// (the depth was checked by the copy, after a walk of the whole element, which a host's element thousands
-    /// of levels deep took past the stack); then it is copied. Walked, not read back from its text:
-    /// the text of an element read from JSONC keeps its comments and trailing commas, one read with a larger depth limit
-    /// went past the reader's own, and getting the text of one holding bytes that are not UTF-8 threw. A default element
-    /// holds no JSON at all.
-    /// </summary>
+    /// <summary>An element is walked and copied as itself, never written by a converter or read back from its text
+    /// (which may keep JSONC comments, or be deeper than the reader allows).</summary>
     private static JsonBindingError? CheckElement(JsonElement element, int level, int maxDepth, out JsonNode? copy)
     {
         copy = null;
@@ -266,11 +225,10 @@ public static class StrictJson
 
                 return array;
             default:
-                return JsonValue.Create(element); // null for JSON null
+                return JsonValue.Create(element);
         }
     }
 
-    /// <summary>Whether <paramref name="text"/> has no unpaired UTF-16 surrogate.</summary>
     private static bool IsUnicode(string text)
     {
         for (var i = 0; i < text.Length; i++)
@@ -288,7 +246,6 @@ public static class StrictJson
         return true;
     }
 
-    /// <summary>The text <paramref name="node"/> writes: at most <see cref="WrittenDepth"/> levels, which a <see cref="Utf8JsonWriter"/> writes by default.</summary>
     private static ReadOnlyMemory<byte> Write(JsonNode node)
     {
         var text = new ArrayBufferWriter<byte>();
@@ -301,9 +258,8 @@ public static class StrictJson
     }
 
     /// <summary>
-    /// Enumerates <paramref name="obj"/>, which an object read from text does only once its members are first read; null
-    /// when that succeeds. One that throws is still the text it was read from, and the same checks on that text, under
-    /// the object's own comparison of names, find the member at fault.
+    /// One that throws is still the text it was read from, and the same checks on that text, under the object's own
+    /// comparison of names, find the member at fault.
     /// </summary>
     private static JsonBindingError? Enumerate(JsonObject obj)
     {
@@ -389,7 +345,6 @@ public static class StrictJson
         return null;
     }
 
-    /// <summary>The name of the first member that repeats an earlier one, or null.</summary>
     private static string? Duplicate(in JsonElement value, int count, bool escaped, bool ignoreCase)
     {
         if (count < 2)
@@ -399,7 +354,7 @@ public static class StrictJson
 
         if (escaped || ignoreCase || count > PairwiseLimit)
         {
-            // Escapes compare after unescaping ("a" and "a" are one name); a large object would cost pairs squared.
+            // Escapes compare after unescaping ("a" and "a" are one name).
             var names = new HashSet<string>(count, ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
             foreach (var member in value.EnumerateObject())
             {

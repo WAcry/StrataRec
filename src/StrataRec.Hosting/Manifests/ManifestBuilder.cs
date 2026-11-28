@@ -95,12 +95,12 @@ public static class ManifestBuilder
     }
 
     /// <summary>
-    /// The emergency stop: <paramref name="manifest"/> without <paramref name="experiments"/>, as the next
-    /// release (its <c>seq</c> one more, <paramref name="manifestId"/> its <c>previous</c>), listing them in
-    /// <see cref="ReleaseManifest.Revoked"/> with what the manifest revoked before. Nothing is compiled or validated: removing experiments keeps a valid release valid, which is
-    /// what makes the stop take seconds. The artifacts are read as a node reads them. What the release requires loses what
-    /// the removed experiments required (<see cref="ManifestExperiment.Requires"/>), so removing the experiment that needs a
-    /// capability a rolled-back binary lacks makes the release one it serves. Null after reporting errors.
+    /// The emergency stop: <paramref name="manifest"/> without <paramref name="experiments"/>, as the next release (its
+    /// <c>seq</c> one more, <paramref name="manifestId"/> its <c>previous</c>), listing them in
+    /// <see cref="ReleaseManifest.Revoked"/> with what the manifest revoked before. Nothing is compiled or validated.
+    /// What the release requires loses what the removed experiments required
+    /// (<see cref="ManifestExperiment.Requires"/>), so removing the experiment that needs a capability a rolled-back
+    /// binary lacks makes the release one it serves. Null after reporting errors.
     /// </summary>
     /// <param name="experiments">Experiments of the manifest; a name it does not release changes nothing.</param>
     public static async ValueTask<ReleaseManifest?> RevokeAsync(
@@ -124,7 +124,7 @@ public static class ManifestBuilder
         {
             if (manifest.TryGetStop(name, out var stop))
             {
-                revoked[name] = stop; // not one the manifest releases: that was brought back
+                revoked[name] = stop;
             }
         }
 
@@ -136,7 +136,6 @@ public static class ManifestBuilder
             }
             else if (entry.YieldsTo is { } yieldsTo && yieldsTo.Exists(removing.Contains))
             {
-                // A yield to a stopped experiment yields nothing (it is not there to run with): the entry no longer names it.
                 var kept = yieldsTo.FindAll(to => !removing.Contains(to));
                 entries[name] = new ManifestExperiment { Artifact = entry.Artifact, Layer = entry.Layer, YieldsTo = kept.Count == 0 ? null : kept, Requires = entry.Requires };
             }
@@ -356,9 +355,8 @@ public static class ManifestBuilder
 
     /// <summary>
     /// Checks that <paramref name="environment"/> provides every capability the manifest requires, and reports
-    /// <c>MANIFEST_INCOMPATIBLE</c> at <c>manifest:&lt;id&gt;/requires</c> naming each one it lacks otherwise. Returns the
-    /// missing capabilities (<see cref="MissingCapabilities"/>). The engine (<see cref="RecEngine.LoadManifestAsync"/>) and
-    /// the command line check here, so a node and <c>stratarec</c> report an incompatible manifest the same way.
+    /// <c>MANIFEST_INCOMPATIBLE</c> at <c>manifest:&lt;id&gt;/requires</c> naming each one it lacks otherwise. Returns
+    /// the missing capabilities (<see cref="MissingCapabilities"/>).
     /// </summary>
     public static List<string> CheckCapabilities(ReleaseManifest manifest, string manifestId, PlanEnvironment environment, DiagnosticBag diagnostics)
     {
@@ -376,10 +374,8 @@ public static class ManifestBuilder
 
     /// <summary>
     /// Checks that the manifest a pointer names is one of the pointer's pipeline and environment, and reports
-    /// <c>MANIFEST_OTHER_PIPELINE</c> at <c>/pipeline_id</c> or <c>MANIFEST_OTHER_ENVIRONMENT</c> at <c>/environment</c>
-    /// otherwise. A content hash proves integrity, not identity: a node must not serve another pipeline's plan under this
-    /// one's name, and <c>stratarec build</c> and <c>publish</c> must not number a release after another pipeline's.
-    /// Returns whether it is.
+    /// <c>MANIFEST_OTHER_PIPELINE</c> at <c>/pipeline_id</c> or <c>MANIFEST_OTHER_ENVIRONMENT</c> at
+    /// <c>/environment</c> otherwise. Returns whether it is.
     /// </summary>
     public static bool CheckIdentity(ReleaseManifest manifest, string manifestId, string pipelineId, string environment, DiagnosticBag diagnostics)
     {
@@ -403,7 +399,6 @@ public static class ManifestBuilder
         return diagnostics.ErrorCount == errors;
     }
 
-    /// <summary>The diagnostic artifact of a manifest: <c>manifest:&lt;id&gt;</c>.</summary>
     internal static string Label(string manifestId) => "manifest:" + manifestId;
 
     private static async ValueTask<T?> FetchAsync<T>(IArtifactStore store, string id, string label, string pointer, DiagnosticBag diagnostics, CancellationToken cancellationToken)

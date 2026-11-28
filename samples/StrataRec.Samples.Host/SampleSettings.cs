@@ -6,19 +6,14 @@ namespace StrataRec.Samples.Host;
 /// </summary>
 /// <param name="ConfigRoot">The workspace directory, absolute.</param>
 /// <param name="Environment">Selects <c>releases/&lt;pipeline&gt;.&lt;env&gt;.jsonc</c> and <c>bindings/&lt;env&gt;.jsonc</c>.</param>
-/// <param name="Deadline">
-/// The end-to-end budget of one request: assignment, recall, features and models all spend it. It is the service's, not the
-/// caller's, so a client cannot make the service hold a request longer. A production service sets it from its latency
-/// objective and warms the process up before it reports ready: the first request of a cold process includes compiling the
-/// code it runs (JIT), which is why the sample's default is generous.
-/// </param>
+/// <param name="Deadline">The end-to-end budget of one request: assignment, recall, features and models all spend it.
+/// It is the service's, not the caller's, so a client cannot make the service hold a request longer.</param>
 /// <param name="Store">
 /// The directory of an artifact store to serve release manifests from (<c>stratarec build --store</c>, then
 /// <c>stratarec publish</c>), absolute; null serves the workspace in <paramref name="ConfigRoot"/> as it is at startup.
 /// </param>
 /// <param name="Pipelines">The pipelines a node serving releases loads: a store has no workspace to list them.</param>
-/// <param name="ReleasePoll">How often a node serving releases reads the pointers; the sample polls often, to show a release
-/// or a stop take effect while you watch, where production keeps the engine's default (10 seconds).</param>
+/// <param name="ReleasePoll">How often a node serving releases reads the pointers.</param>
 public sealed record SampleSettings(
     string ConfigRoot, string Environment, TimeSpan Deadline, string? Store, IReadOnlyList<string> Pipelines, TimeSpan ReleasePoll)
 {

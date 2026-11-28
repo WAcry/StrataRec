@@ -16,22 +16,15 @@ using StrataRec.Testing;
 
 namespace StrataRec.Samples.Host.Tests;
 
-/// <summary>
-/// The host sample (samples/StrataRec.Samples.Host) started in-process: its workspace loads clean with its own components,
-/// the stratarec commands run with them, <c>POST /recommend</c> serves items that its custom source recalled, its custom
-/// connector fed, its custom model scored and its custom operator boosted, and the engine's error kinds map to 404, 400,
-/// 504 and 500.
-/// </summary>
 public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>, IDisposable
 {
     private const string Pipeline = "trending_feed";
 
-    /// <summary>The sample's pipelines: the home page (pipelines/home.jsonc) calls the other two.</summary>
     private static readonly string[] Pipelines = ["editors_picks", "home", "shelves", "sponsored", "trending_feed"];
 
     private readonly SampleHost _host;
 
-    private readonly List<string> _copies = new(); // workspace copies this test made, deleted when it ends
+    private readonly List<string> _copies = new();
 
     public HostSampleTests(SampleHost host) => _host = host;
 
@@ -43,18 +36,15 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         }
     }
 
-    /// <summary>The sample's workspace as the test output holds it.</summary>
     private static string ConfigRoot => Path.Combine(AppContext.BaseDirectory, "samples", "StrataRec.Samples.Host", "config");
 
     [Fact]
     public async Task TheWorkspace_Validates_AndLoads_WithNoErrorsOrWarnings()
     {
-        // What `dotnet run -- stratarec validate -c config` runs: the stock commands with this binary's components.
         var (code, validated, _) = await Stratarec("validate", "-c", ConfigRoot, "--format", "json");
         Assert.True(code == 0, validated.ToJsonString());
         Assert.Equal((0, 0), (validated["errors"]!.GetValue<int>(), validated["warnings"]!.GetValue<int>()));
 
-        // What the service does at startup: compile, load every binding (kv_store@1 reads its files), check the model's signature.
         await using var engine = new RecEngine(SampleEnvironment.Create() with { BaseDirectory = ConfigRoot });
         var loaded = await ServiceCollectionExtensions.LoadWorkspaceAsync(engine, ConfigRoot, "local", cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(Clean(loaded.Items), string.Join("\n", loaded.Items));
@@ -78,8 +68,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
             .ToList();
         Assert.Contains(("BOOST_INVALID", "pipeline:trending_feed/nodes/editorial_boost/config/boosts/local_news"), errors);
         Assert.Contains(("BINDING_SETTINGS", "bindings:local/sources/user_store/data_fle"), errors);
-        Assert.Contains(("SERVICE_SIGNATURE", "pipeline:trending_feed/nodes/engagement/config/model"), errors); // the node calls v3; the binding serves v4
-        // The pages that call the pipeline that does not compile say so where they name it.
+        Assert.Contains(("SERVICE_SIGNATURE", "pipeline:trending_feed/nodes/engagement/config/model"), errors);
         Assert.Contains(("PIPELINE_CALL_FAILED", "pipeline:home/nodes/blend/config/organic"), errors);
         Assert.Contains(("PIPELINE_CALL_FAILED", "pipeline:shelves/nodes/content/config/pipelines/trending/pipeline"), errors);
         Assert.Equal(5, errors.Count);
@@ -102,10 +91,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Contains("CategoryBoost@1", unknown.Error, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// The workspace's schemas/ are what this binary writes (<c>dotnet run -- stratarec schema --out config/schemas</c>), so
-    /// an editor completes and checks the custom operator's config in the pipeline as it does the built-ins'.
-    /// </summary>
     [Fact]
     public async Task TheWorkspaceSchemas_AreTheOnesThisBinaryWrites_WithTheCustomOperator()
     {
@@ -145,10 +130,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Contains("stock@1", capabilities);
     }
 
-    /// <summary>
-    /// StockFilter@1 asks stock@1 about the candidates and drops the ones out of stock (items 1 and 22 in the bindings):
-    /// neither is served, and with everything in stock item 1, the top of the region's list, is.
-    /// </summary>
     [Fact]
     public async Task TheStockFilter_DropsWhatTheStockServiceSaysIsOutOfStock()
     {
@@ -157,7 +138,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
         Assert.Equal(HttpStatusCode.OK, served.Status);
         Assert.DoesNotContain(Items(served.Json), i => i.Id is 1 or 22);
-        Assert.Equal(2, served.Json["values"]!["out_of_stock"]!.GetValue<long>()); // the filter's request column
+        Assert.Equal(2, served.Json["values"]!["out_of_stock"]!.GetValue<long>());
 
         var copy = CopyOfTheWorkspace();
         var bindings = Path.Combine(copy, "bindings", "local.jsonc");
@@ -189,7 +170,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
         var served = await Post(_host.CreateClient(), Pipeline, body);
 
-        // One document (RecResultJson): the same items, ranks, ids and columns, and the same record of experiments.
         Assert.Equal(Items(served.Json), Items(local));
         Assert.Equal(served.Json["experiments"]!.ToJsonString(), local["experiments"]!.ToJsonString());
         Assert.Equal("req-1001", local["request_id"]!.GetValue<string>());
@@ -214,20 +194,17 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         var data = ItemData();
         foreach (var item in items)
         {
-            // kv_store@1 fed the features: the category as stored, null where the store has none.
             Assert.Equal(data[item.Id].Category, item.Category);
 
             // logistic@1 scored the rows (its fallback would have written the raw ctr).
             Assert.Equal(Engagement(data[item.Id], affinity: 0.8), item.Engage, 5);
 
-            // CategoryBoost@1 wrote the boosted score: the strong arm's 2.0 for local news, the engagement otherwise.
             Assert.Equal(item.Engage * (item.Category == "local_news" ? 2.0 : 1.0), item.Score, 5);
 
             // trending@1 recalled the region's list; the editors' picks come from the built-in memory_list@1.
             Assert.True(item.Source == "editorial" ? new long[] { 21, 22, 3, 23 }.Contains(item.Id) : UsTrending.Contains(item.Id), $"item {item.Id} from {item.Source}");
         }
 
-        // Ranked by the boosted score, which reorders the model's ranking: a boosted item outranks a better-engaging one.
         Assert.Equal(items.Select(i => i.Score).OrderByDescending(s => s), items.Select(i => i.Score));
         Assert.Contains(items, a => items.Any(b => a.Rank < b.Rank && a.Engage < b.Engage));
         Assert.Contains(items, i => i.Source == "trending");
@@ -258,10 +235,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(("exp_gone/treatment", "unknown"), (ignored!["id"]!.GetValue<string>(), ignored["reason"]!.GetValue<string>()));
     }
 
-    /// <summary>
-    /// The home page (pipelines/home.jsonc): one request, and the engine runs the trending feed and the sponsored pipeline
-    /// for it, each with its own arms; SlotBlend@1 places a sponsored row after every few organic ones.
-    /// </summary>
     [Theory]
     [InlineData("""{ "inputs": { "user_id": 1001, "region": "us" } }""", new[] { 4, 8 })]
     [InlineData("""{ "inputs": { "user_id": 1001, "region": "us" }, "assignment": ["exp_home_slots/dense", "exp_local_boost/strong"] }""", new[] { 3, 6, 9 })]
@@ -280,7 +253,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
             .ToList();
         Assert.Equal(sponsoredRanks, items.Where(i => i.Sponsored).Select(i => i.Rank));
 
-        // The organic rows are the feed's, in its order; the sponsored ones the sponsored pipeline's that the feed lacks, with their bids.
         var feedIds = feed.Json["items"]!.AsArray().Select(i => i!["id"]!.GetValue<long>()).ToList();
         var organic = items.Where(i => !i.Sponsored).Select(i => i.Id).ToList();
         Assert.Equal(feedIds.Take(organic.Count), organic);
@@ -288,20 +260,11 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
             .Select(i => (i!["id"]!.GetValue<long>(), i["columns"]!["bid"]!.GetValue<double>())).ToList();
         Assert.Equal(bids.Take(sponsoredRanks.Length), items.Where(i => i.Sponsored).Select(i => (i.Id, i.Score)));
 
-        // The request's arms are those of every pipeline it ran.
         var assigned = Strings(home.Json["experiments"]!["assigned"]);
         Assert.Equal(body.Contains("assignment", StringComparison.Ordinal) ? new[] { "exp_home_slots/dense", "exp_local_boost/strong" } : [], assigned);
         Assert.Empty(home.Json["experiments"]!["ignored"]!.AsArray());
     }
 
-    /// <summary>
-    /// The page of shelves: each row is a shelf, and its items are the list the shelf's pipeline returned, called by
-    /// <c>PipelineColumns@1</c>. An item is on two shelves; only the sponsored shelf has track ids; a shelf no pipeline
-    /// fills is dropped; and the page's own operator (<c>DistinctHeads@1</c>) moves what a shelf above shows first
-    /// behind the items no shelf above shows first, with every list that goes with the ids, unless the experiment's arm
-    /// turns the rule off. Nothing is dropped, so a shelf with fewer such items than its head still starts with some a
-    /// shelf above shows.
-    /// </summary>
     [Fact]
     public async Task ThePageOfShelves_HasAListPerShelf_AndItsOwnRuleAcrossThem()
     {
@@ -317,7 +280,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.True(status == HttpStatusCode.OK, page.ToJsonString());
         Assert.Equal(new[] { "trending", "editors", "sponsored" }, Shelves(page).Select(s => s.Id)); // "archive" has no pipeline, and no items
 
-        // Without the rule, a shelf is its pipeline's result as it is.
         var asRanked = Shelves(plain).ToDictionary(s => s.Id);
         Assert.Equal(Ids(trending), asRanked["trending"].Items);
         Assert.Equal(Ids(editors), asRanked["editors"].Items);
@@ -326,17 +288,14 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
             asRanked["sponsored"].Scores.Select(s => (double)(float)s));
         Assert.Equal(sponsored["items"]!.AsArray().Select(i => i!["columns"]!["track_id"]!.GetValue<string>()), asRanked["sponsored"].TrackIds);
         Assert.Null(asRanked["trending"].TrackIds);
-        Assert.NotEmpty(asRanked["trending"].Items.Intersect(asRanked["editors"].Items)); // an item on two shelves
+        Assert.NotEmpty(asRanked["trending"].Items.Intersect(asRanked["editors"].Items));
 
-        // With it, the editors' shelf starts with what the trending shelf does not show first, and its scores moved with its ids.
         var ruled = Shelves(page).ToDictionary(s => s.Id);
         var head = ruled["trending"].Items.Take(3).ToHashSet();
         Assert.Equal(asRanked["trending"].Items, ruled["trending"].Items);
         Assert.NotEmpty(asRanked["editors"].Items.Take(3).Intersect(head));
         Assert.Empty(ruled["editors"].Items.Take(2).Intersect(head));
 
-        // The editors' shelf has two items the trending shelf does not show first, fewer than a head: they come first, the
-        // others follow in their order, and so the third it shows is still one the trending shelf shows (nothing is dropped).
         var fresh = asRanked["editors"].Items.Where(i => !head.Contains(i)).ToArray();
         Assert.Equal(2, fresh.Length);
         Assert.Equal(fresh.Concat(asRanked["editors"].Items.Where(head.Contains)), ruled["editors"].Items);
@@ -346,12 +305,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(new[] { "exp_shelf_heads/as_ranked" }, Strings(plain["experiments"]!["assigned"]));
     }
 
-    /// <summary>
-    /// A shelf kept without items (a placeholder: the filter keeps it) has empty lists, which the page's rule passes on.
-    /// The ids are a column that is not nullable: <c>DistinctHeads@1</c> refuses one that is where the node names it, so
-    /// "no items" has one spelling, the empty list (a row, then a whole column, without ids were
-    /// what the operator's own handling of them got wrong).
-    /// </summary>
     [Fact]
     public async Task AShelfKeptWithoutItems_HasEmptyLists_AndNullableIdsAreRefused()
     {
@@ -367,7 +320,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(new[] { "trending", "editors", "sponsored", "archive" }, rows.Select(s => s.Id));
         Assert.Empty(rows[3].Items);
         Assert.Empty(rows[3].Scores);
-        Assert.Equal(4, rows[1].Items.Length); // the other shelves as before
+        Assert.Equal(4, rows[1].Items.Length);
 
         Edit(shelves, "\"items\":       { \"type\": \"list<int64>\",   \"flow\": true }", "\"items\":       { \"type\": \"list<int64>?\",  \"flow\": true }");
         var (code, report, _) = await Stratarec("validate", "-c", root, "--format", "json");
@@ -391,7 +344,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
 
     private static long[] Ids(JsonNode result) => result["items"]!.AsArray().Select(i => i!["id"]!.GetValue<long>()).ToArray();
 
-    /// <summary>The home page on a copy of the workspace, edited, as <c>stratarec run</c> serves it with its trace.</summary>
     private async Task<JsonNode> RunHome(Action<string> edit)
     {
         var root = CopyOfTheWorkspace();
@@ -407,21 +359,14 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     private static List<(long Id, bool Sponsored)> HomeItems(JsonNode result) =>
         result["items"]!.AsArray().Select(i => (i!["id"]!.GetValue<long>(), i["columns"]!["sponsored"]!.GetValue<bool>())).ToList();
 
-    /// <summary>
-    /// SlotBlend@1 as a row source among others, and at its edges: a sponsored row may take the page's last
-    /// place; a key an earlier node appended is not appended again; and without sponsored rows the sponsored pipeline is
-    /// not called.
-    /// </summary>
     [Fact]
     public async Task TheBlend_PlacesAtThePagesEnd_AppendsNoKeyTwice_AndCallsOnlyWhatItUses()
     {
         var home = Path.Combine("pipelines", "home.jsonc");
 
-        // A page of four with a sponsored row after every three: the fourth place is the sponsored row's.
         var four = HomeItems(await RunHome(root => Edit(Path.Combine(root, home), "\"page_size\": 10", "\"page_size\": 4")));
         Assert.Equal(new[] { false, false, false, true }, four.Select(i => i.Sponsored));
 
-        // A pinned sponsored row from a node before the blend: the blend passes over its key.
         var pinned = HomeItems(await RunHome(root =>
         {
             var file = Path.Combine(root, home);
@@ -434,7 +379,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(pinned.Count, pinned.Select(i => i.Id).Distinct().Count());
         Assert.True(pinned[0].Sponsored);
 
-        // No sponsored rows, or a page with no place for one: the sponsored pipeline is not called.
         foreach (var (from, to) in new[] { ("\"sponsored_every\": 3", "\"sponsored_every\": 0"), ("\"page_size\": 10", "\"page_size\": 3") })
         {
             var none = await RunHome(root => Edit(Path.Combine(root, home), from, to));
@@ -443,10 +387,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         }
     }
 
-    /// <summary>
-    /// Validating one pipeline validates what serving it serves: the pipelines it calls, and their fallback pipelines
-    /// (<c>validate -p home</c> passed, and running it failed on a called pipeline's fallback).
-    /// </summary>
     [Fact]
     public async Task ValidatingOnePipeline_ValidatesThePipelinesItCalls_AndTheirFallbacks()
     {
@@ -480,7 +420,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     [InlineData("""{ "request_id": "" }""", "/request_id", "request_id must be a non-empty string")]
     [InlineData("""{ "inputs": """, "", "not JSON")]
     [InlineData("""[]""", "", "must be a JSON object")]
-    // A JsonObject throws on a duplicate name only when its members are enumerated, which gave an empty 500.
     [InlineData("""{ "inputs": {}, "inputs": {} }""", "/inputs", "Member 'inputs' is given more than once.")]
     [InlineData("""{ "inputs": { "user_id": 1001, "user_id": 1002 } }""", "/inputs/user_id", "Member 'user_id' is given more than once.")]
     [InlineData("""{ "assignment": [], "inputs": { "region": { "a": 1, "a": 2 } } }""", "/inputs/region/a", "Member 'a' is given more than once.")]
@@ -496,10 +435,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         Assert.Equal(pointer, response.Json["errors"]![0]!["pointer"]!.GetValue<string>());
     }
 
-    /// <summary>
-    /// Bytes that are not UTF-8 parse, and threw when the name or string was read, which gave a 500. <c>#</c>
-    /// stands for a raw <c>0xFF</c>.
-    /// </summary>
     [Theory]
     [InlineData("""{ "inputs": { "#": 1 } }""", "/inputs", "The name of member 1 of this object is not valid UTF-8 text.")]
     [InlineData("""{ "request_id": "r-#" }""", "/request_id", "The string is not valid UTF-8 text.")]
@@ -616,7 +551,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         return 1.0 / (1.0 + Math.Exp(-logit));
     }
 
-    /// <summary>The records of data/items.jsonl: what kv_store@1 serves.</summary>
     private static Dictionary<long, (double? Ctr, double? AgeHours, string? Category)> ItemData()
     {
         var items = new Dictionary<long, (double?, double?, string?)>();
@@ -632,12 +566,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     private static bool Clean(IEnumerable<ConfigDiagnostic> diagnostics) =>
         !diagnostics.Any(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning);
 
-    /// <summary>A stratarec command with the sample's components (what <c>dotnet run -- stratarec …</c> runs); its output as JSON.</summary>
-    /// <summary>
-    /// The release loop Program.cs describes: built and published with this binary's commands, served from the store with
-    /// StrataRec:Store set, and stopped with 'stratarec revoke' while the service runs: within a poll it serves the
-    /// revocation, and ignores the stopped experiment's arm.
-    /// </summary>
     [Fact]
     public async Task WithAStore_TheServiceServesWhatIsPublished_AndAStopTakesEffectWhileItRuns()
     {
@@ -647,7 +575,6 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
         string error;
         foreach (var id in Pipelines)
         {
-            // The service serves them all: each is built and published on its own, with the pipelines the pages call.
             var manifest = Path.Combine(store, id + ".manifest.json");
             (code, _, error) = await StratarecText("build", "-c", ConfigRoot, "-s", store, "-p", id, "-m", manifest);
             Assert.True(code == 0, error);
@@ -761,8 +688,7 @@ public sealed class HostSampleTests : IClassFixture<HostSampleTests.SampleHost>,
     private sealed record Item(int Rank, long Id, double Score, double Engage, string? Category, string Source);
 
     /// <summary>
-    /// The sample's Program on a test server, one per test class. Untimed: the first request of the process compiles what it
-    /// runs, and no machine should be slow enough to fail it (see <see cref="SampleBudgets.UntimedMs"/>).
+    /// The sample's Program on a test server, one per test class.
     /// </summary>
     public sealed class SampleHost : WebApplicationFactory<global::Program>
     {

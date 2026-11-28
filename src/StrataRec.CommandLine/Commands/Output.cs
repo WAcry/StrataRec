@@ -8,13 +8,8 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>Diagnostic and value rendering shared by commands.</summary>
 internal static class Output
 {
-    /// <summary>Prints diagnostics (errors first) and returns the exit code: 1 when there are errors.</summary>
-    /// <param name="locator">Where the configuration's files are, so each diagnostic in one is printed with its file, line and
-    /// column (<c>file:line:column:</c> in text, <c>file</c>, <c>line</c>, <c>column</c> in JSON); null prints artifacts and
-    /// pointers only, as for a manifest read from a store.</param>
     public static int Diagnostics(
         IReadOnlyList<ConfigDiagnostic> diagnostics, string format, TextWriter writer, bool warningsAsErrors = false, DiagnosticLocator? locator = null)
     {
@@ -66,16 +61,9 @@ internal static class Output
         return errors > 0 || (warningsAsErrors && warnings > 0) ? 1 : 0;
     }
 
-    /// <summary><paramref name="count"/> with its noun, singular for one: "1 experiment", "2 experiments", "0 errors".</summary>
     public static string Count(int count, string noun, string? plural = null) =>
         count.ToString(CultureInfo.InvariantCulture) + " " + (count == 1 ? noun : plural ?? noun + "s");
 
-    /// <summary>
-    /// One diagnostic as text. Located, it starts with <c>file:line:column:</c>, which terminals and editors open at the
-    /// place, followed by the pointer (and the artifact label when it says more than the file, such as the arms of a
-    /// combination); otherwise it is <see cref="ConfigDiagnostic.ToString"/>. Under the source line and its caret, the
-    /// message is the <see cref="ConfigDiagnostic.Brief"/> one, which does not quote the expression the line shows.
-    /// </summary>
     public static string Text(ConfigDiagnostic d, SourceLocation? location)
     {
         if (location is not { } at)
@@ -90,15 +78,11 @@ internal static class Output
         return $"{at.File}:{at.Line}:{at.Column}: {d.SeverityName} {d.Code}{(where.Length > 0 ? " " + where : string.Empty)}: {message}{source}{hint}";
     }
 
-    /// <summary>Lines longer than this are cut to this many characters around the column.</summary>
     private const int SnippetWidth = 100;
 
     /// <summary>
-    /// The source line of a located diagnostic and a caret under its column, so a reader in a terminal sees the place
-    /// without counting columns (an expression's culprit is often far into a long string). The indentation is dropped and a
-    /// long line is cut to a window around the column, marked with "...". The caret line copies tabs, puts nothing under a
-    /// zero-width character and a full-width space under a wide one (CJK, an emoji), so the caret stays under the column
-    /// where a terminal draws those in two cells.
+    /// The caret line copies tabs, puts nothing under a zero-width character and a full-width space under a wide one
+    /// (CJK, an emoji), so the caret stays under the column where a terminal draws those in two cells.
     /// </summary>
     internal static string Snippet(string line, int column)
     {
@@ -120,13 +104,13 @@ internal static class Output
         if (end - start > SnippetWidth)
         {
             var to = Math.Min(end, Math.Max(start, at - SnippetWidth / 2) + SnippetWidth);
-            var from = Math.Max(start, to - SnippetWidth); // near the end, still a full window
+            var from = Math.Max(start, to - SnippetWidth);
             before = from > start ? "..." : string.Empty;
             after = to < end ? "..." : string.Empty;
             (start, end) = (from, to);
             if (start < at && char.IsLowSurrogate(line[start]))
             {
-                start++; // never half a pair at the edges
+                start++;
             }
 
             if (end > at + 1 && char.IsHighSurrogate(line[end - 1]))
@@ -137,8 +121,6 @@ internal static class Output
 
         var caret = new System.Text.StringBuilder(before.Length + at - start + 1);
         caret.Append(' ', before.Length);
-        // By code point: a mark, a format character or a variation selector takes no cell, whatever block it is
-        // in; then a wide character two (a full-width space) and any other one.
         for (var i = start; i < at;)
         {
             if (Rune.DecodeFromUtf16(line.AsSpan(i, at - i), out var rune, out var used) != OperationStatus.Done)
@@ -160,7 +142,6 @@ internal static class Output
             }
             else if (Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark or UnicodeCategory.Format)
             {
-                // no cell
             }
             else
             {
@@ -173,9 +154,8 @@ internal static class Output
     }
 
     /// <summary>
-    /// East Asian wide and full-width characters, which terminals draw in two cells: the CJK, Hangul and full-width blocks,
-    /// the emoji blocks and the supplementary ideographic planes. Other characters, those of other supplementary blocks
-    /// included, take one.
+    /// East Asian wide and full-width characters, which terminals draw in two cells: the CJK, Hangul and full-width
+    /// blocks, the emoji blocks and the supplementary ideographic planes.
     /// </summary>
     private static bool IsWide(int c) => c is (>= 0x1100 and <= 0x115F) or (>= 0x2E80 and <= 0x303E) or (>= 0x3041 and <= 0x33FF)
         or (>= 0x3400 and <= 0x4DBF) or (>= 0x4E00 and <= 0x9FFF) or (>= 0xA000 and <= 0xA4CF) or (>= 0xAC00 and <= 0xD7A3)
@@ -206,10 +186,6 @@ internal static class Output
         json.WriteEndObject();
     }
 
-    /// <summary>
-    /// Writes a value as JSON, exactly: missing is null, a float in its shortest round-trip form (a float32 value as the
-    /// float, <see cref="ScalarValue.IsFloat32"/>), NaN and ±∞, which JSON numbers cannot be, as strings.
-    /// </summary>
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value)
     {
         switch (value.Kind)
@@ -266,17 +242,11 @@ internal static class Output
     }
 
     /// <summary>
-    /// A JSON value on one line in its RFC 8785 form: members in ordinal order, so a workspace and the manifest built from
-    /// it (whose store keeps canonical bytes) print alike, and nothing escaped that a terminal shows as is (quotes in
-    /// expressions, non-ASCII).
+    /// A JSON value on one line in its RFC 8785 form: members in ordinal order, so a workspace and the manifest built
+    /// from it (whose store keeps canonical bytes) print alike.
     /// </summary>
     public static string Compact(System.Text.Json.Nodes.JsonNode? value) => Artifacts.Json.JsonCanonicalizer.CanonicalizeToString(value);
 
-    /// <summary>
-    /// Writes a file the command line names (<c>build --manifest</c>, <c>run --record</c>), creating its directory as
-    /// <c>init</c> and <c>schema --out</c> do. What cannot be written is OUTPUT_UNWRITABLE at <paramref name="option"/>, with
-    /// what the system said, not an exception and its stack. False when it was not written.
-    /// </summary>
     public static bool WriteFile(string option, string path, Action<string> write, DiagnosticBag diagnostics)
     {
         try
@@ -298,10 +268,6 @@ internal static class Output
         }
     }
 
-    /// <summary>
-    /// A store that cannot be written (build, publish and revoke write it; a node only reads it): STORE_UNWRITABLE at
-    /// <c>--store</c> with what the system said, which names the path, not an exception and its stack.
-    /// </summary>
     public static void StoreUnwritable(Exception ex, DiagnosticBag diagnostics) =>
         diagnostics.Error("STORE_UNWRITABLE", "--store", string.Empty, ex.Message,
             "check that this process may write the store, and that its blobs/ and pointers/ and the directories in them are directories");

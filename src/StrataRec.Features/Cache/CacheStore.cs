@@ -6,16 +6,16 @@ using StrataRec.Core.Keys;
 namespace StrataRec.Features.Cache;
 
 /// <summary>
-/// The keys of one (source, entity) in a distributed cache store: what a store prefixes to every key so that the records
-/// of different sources and entities never collide. Built once per table, so a read builds no prefix.
+/// The keys of one (source, entity) in a distributed cache store: what a store prefixes to every key so that the
+/// records of different sources and entities never collide.
 /// </summary>
 /// <remarks>
 /// <para>The name is <c>{source}:{entity}:</c>. Entity names are identifiers; a source name is escaped (<c>%</c> as
 /// <c>%25</c>, <c>:</c> as <c>%3A</c>) so that no source and entity pair can spell another's prefix.</para>
-/// <para>A store sees each key as its text (<see cref="KeyText"/>), the same in every process and every run, so instances
-/// share records: one part is the value as before keys had parts (an int64 in invariant decimal, a string as is), several
-/// parts are their texts joined by <c>:</c>. A key's layout is not in its text: records carry a fingerprint of the layout
-/// and the fields, so a record written for another layout whose text happens to match is a miss, never misread.</para>
+/// <para>A store sees each key as its text (<see cref="KeyText"/>), the same in every process and every run, so
+/// instances share records: one part is the value (an int64 in invariant decimal, a string as is), several parts are
+/// their texts joined by <c>:</c>. A key's layout is not in its text: records carry a fingerprint of the layout and the
+/// fields, so a record written for another layout whose text happens to match is a miss, never misread.</para>
 /// </remarks>
 public sealed class CacheKeyspace
 {
@@ -56,8 +56,8 @@ public sealed class CacheKeyspace
     /// as is (not copied); for several, each part's text in order joined by <c>:</c>, a string part escaped (<c>%</c> as
     /// <c>%25</c>, <c>:</c> as <c>%3A</c>), e.g. <c>10042:US</c>.
     /// </summary>
-    /// <remarks>Unambiguous among keys of one layout: no part's text holds a <c>:</c>, so a text splits back into its parts,
-    /// and each position has one type. A one-part string is not escaped, as before keys had parts: nothing follows it.</remarks>
+    /// <remarks>Unambiguous among keys of one layout: no part's text holds a <c>:</c>, so a text splits back into its
+    /// parts, and each position has one type. A one-part string is not escaped: nothing follows it.</remarks>
     public static string KeyText(ReadOnlySpan<EntityKey> parts)
     {
         if (parts.Length == 1)
@@ -127,11 +127,10 @@ public sealed class CacheKeyspace
 public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> Record, TimeSpan TimeToLive);
 
 /// <summary>
-/// A distributed cache shared by a deployment's instances, of a feature source in mode
-/// <c>cache</c> or of a service with a <c>cache</c>: the engine reads it for the keys its in-process table misses, before
-/// the connector or the service's client, and writes back what they returned. Records are opaque
-/// bytes the engine encodes (with their write time and a fingerprint of the field set); the store only moves them.
-/// <c>redis@1</c> (package StrataRec.Redis) is one; a host can plug in another distributed cache.
+/// A distributed cache shared by a deployment's instances, of a feature source in mode <c>cache</c> or of a service
+/// with a <c>cache</c>: the engine reads it for the keys its in-process table misses, before the connector or the
+/// service's client, and writes back what they returned. Records are opaque bytes the engine encodes; the store only
+/// moves them. <c>redis@1</c> (package StrataRec.Redis) is one; a host can plug in another distributed cache.
 /// </summary>
 /// <remarks>
 /// <para>A store is a binding instance: the whole lifetime contract (create, share, load, dispose) is on
@@ -155,10 +154,10 @@ public interface ICacheStore
     /// <remarks>
     /// <para>Called inline on the request's thread, like a connector's fetch: the synchronous part (up to the first
     /// asynchronous wait) runs there and the engine does not bound it; only the returned task is waited for, within the
-    /// tier's <c>timeout_ms</c> and the source's budget. So send the request and return: do the I/O asynchronously, as
-    /// <c>redis@1</c> does, and never block before returning. An answer the engine first finds complete after the tier's
-    /// time or the source's deadline is late, however it arrived: its records are not used, and its keys go to the
-    /// connector if the source has time left. Chunks not sent yet when the tier's time is up are not sent.</para>
+    /// tier's <c>timeout_ms</c> and the source's budget. So send the request and return: do the I/O asynchronously and
+    /// never block before returning. An answer the engine first finds complete after the tier's time or the source's
+    /// deadline is late, however it arrived: its records are not used, and its keys go to the connector if the source
+    /// has time left. Chunks not sent yet when the tier's time is up are not sent.</para>
     /// <para><paramref name="keys"/> and <paramref name="records"/> are the request's pooled buffers: valid until the returned
     /// task completes, also when the engine stopped waiting for it earlier, and not after. Write nothing into
     /// <paramref name="records"/> after completing; the bytes it points at must stay unchanged (a fresh array per value, or

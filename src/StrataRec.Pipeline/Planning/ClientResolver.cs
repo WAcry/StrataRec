@@ -9,10 +9,10 @@ using StrataRec.Pipeline.Operators;
 namespace StrataRec.Pipeline.Planning;
 
 /// <summary>
-/// Binds logical service names to client instances using the environment's bindings. The instances come
-/// from the plan's <see cref="IPlanBindings"/> through the <see cref="BindingResolver"/>: an engine shares them across
-/// plans by binding identity (<see cref="BindingSpec.Identity"/>), so a plan swap never creates or loads a client again;
-/// each name is resolved once per compile pass and cached here, a failure too, so it is reported once.
+/// Binds logical service names to client instances using the environment's bindings. The instances come from the plan's
+/// <see cref="IPlanBindings"/>: an engine shares them across plans by binding identity
+/// (<see cref="BindingSpec.Identity"/>), so a plan swap never creates or loads a client again; each name is resolved
+/// once per compile pass, a failure too, so it is reported once.
 /// </summary>
 public sealed class ClientResolver
 {
@@ -55,7 +55,6 @@ public sealed class ClientResolver
         }
     }
 
-    /// <summary>The client bound to service <paramref name="name"/>, and its cache when the binding declares one.</summary>
     /// <returns>False with an error for the caller to report at its own config key (the name has no binding), or with a
     /// null error when the binding is wrong (its cache included), which is reported at the binding.</returns>
     internal bool TryGetService(string name, out IServiceClient client, out int? timeoutMs, out ServiceCache? cache, out string? error, out string? hint)
@@ -78,7 +77,7 @@ public sealed class ClientResolver
             ServiceCache? serviceCache = null;
             if (binding.Cache is { } settings && !TryCache(name, binding, settings, bound, out serviceCache))
             {
-                bound = null; // a wrong cache is a wrong binding: the service is not served without the cache it declares
+                bound = null;
             }
 
             entry = (bound, binding.TimeoutMs, serviceCache);
@@ -149,13 +148,6 @@ public sealed class ClientResolver
         return ContentHash.Compute(node);
     }
 
-    /// <summary>
-    /// The tiers this environment keeps the results of pipeline <paramref name="pipelineId"/>'s calls in
-    /// (<c>pipelines.&lt;id&gt;.cache</c>): one table and one distributed tier for every node that calls it, whatever times
-    /// each node gives. Resolved once per compile, a failure too.
-    /// </summary>
-    /// <returns>False with an error for the caller to report at its own config key (the environment binds no cache for the
-    /// pipeline), or with a null error when the binding is wrong, which is reported at the binding.</returns>
     internal bool TryGetPipelineCache(string pipelineId, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ServiceCache? tiers, out string? error, out string? hint)
     {
         error = null;
@@ -184,8 +176,8 @@ public sealed class ClientResolver
         }
 
         // The table never judges a record dead by its age: each calling node has its own times, and a reader judges by
-        // its own. Records leave by capacity. Its identity names no origin: a record's key says what it is of
-        // (PipelineCallCache.Format), so the table is kept across every change of the configuration.
+        // its own. Its identity names no origin: a record's key says what it is of (PipelineCallCache.Format), so the
+        // table is kept across every change of the configuration.
         var spec = new CacheSpec(CachePolicy.Unlimited, null, memoryBytes, distributed, distributedTimeoutMs);
         var table = LocalTableSpec.CreateCache(
             ServiceCache.Schema(pipelineId, PipelineCallCache.Entity), spec.TableOptions(_clock, origin: null), PipelineCallCache.Entity, "pipeline", _resolver.Registry,
@@ -196,7 +188,6 @@ public sealed class ClientResolver
         }
         catch (ArgumentOutOfRangeException ex)
         {
-            // max_bytes below what an empty table takes.
             _resolver.Diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer + "/memory/max_bytes", ex.Message.Split('\n')[0], "raise max_bytes");
             return false;
         }
@@ -206,10 +197,9 @@ public sealed class ClientResolver
     }
 
     /// <summary>
-    /// The cache of the calls of pipeline <paramref name="pipelineId"/> by a node whose <c>cache</c> has no settings: no
-    /// tier, so nothing of the environment's (<c>pipelines.&lt;id&gt;.cache</c> is not asked for). Its table, which stays
-    /// empty, is what the calls of one request that share a result are found by, and is not the table of the tiers
-    /// the environment may bind for the nodes that keep their results: those calls share among themselves.
+    /// Its table, which stays empty, is what the calls of one request that share a result are found by, and is not the
+    /// table of the tiers the environment may bind for the nodes that keep their results: those calls share among
+    /// themselves.
     /// </summary>
     internal ServiceCache RequestPipelineCache(string pipelineId)
     {
@@ -226,10 +216,6 @@ public sealed class ClientResolver
         return cache;
     }
 
-    /// <summary>
-    /// The cache a service's binding declares: its table, shared across plans by the identity of its answers, and its
-    /// distributed tier; every problem reported at its setting. False when any is wrong.
-    /// </summary>
     private bool TryCache(string name, ClientBinding binding, CacheBinding settings, IServiceClient? client, out ServiceCache? cache)
     {
         cache = null;
@@ -255,7 +241,6 @@ public sealed class ClientResolver
         }
         catch (ArgumentOutOfRangeException ex)
         {
-            // max_bytes below what an empty table takes.
             diagnostics.Error("CACHE_MAX_BYTES", _resolver.Artifact, pointer + "/memory/max_bytes", ex.Message.Split('\n')[0], "raise max_bytes");
             return false;
         }
@@ -266,9 +251,8 @@ public sealed class ClientResolver
     }
 
     /// <summary>
-    /// The content id of what a binding answers with, for a cache that names no <c>version</c>: its client and settings,
-    /// canonical (RFC 8785), so every instance with the same configuration has the same one. Not its <c>timeout_ms</c> or
-    /// <c>cache</c>, which change when an answer arrives and how long it is kept, not what it is.
+    /// Not its <c>timeout_ms</c> or <c>cache</c>, which change when an answer arrives and how long it is kept, not what
+    /// it is.
     /// </summary>
     private static string AnswerIdentity(ClientBinding binding)
     {

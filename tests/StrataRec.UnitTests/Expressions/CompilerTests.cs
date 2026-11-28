@@ -5,10 +5,8 @@ using StrataRec.Expressions.Vectorized;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>Parsing, typing, diagnostics and explain output.</summary>
 public class CompilerTests
 {
-    /// <summary>The home-feed catalog plus the columns the example expressions read.</summary>
     internal static ExprFixture HomeFeed()
     {
         var f = new ExprFixture()
@@ -48,12 +46,12 @@ public class CompilerTests
     }
 
     [Theory]
-    [InlineData("col.item.age_hours", "col.item.age_hours")] // a reference, with the column's own type (float32?)
+    [InlineData("col.item.age_hours", "col.item.age_hours")]
     [InlineData("(col.item.report_rate)", "col.item.report_rate")]
     [InlineData("col.score.final@fusion", "col.score.final@fusion")]
     [InlineData("col.item.report_rate * 2.0", null)]
     [InlineData("col.item.age_hours ?? 0.0", null)]
-    [InlineData("ctx.user.tenure_days", null)] // a context value is not a candidate column
+    [InlineData("ctx.user.tenure_days", null)]
     public void AnExpressionThatIsAColumn_NamesIt(string source, string? column)
     {
         var compiled = HomeFeed().Compile(source);
@@ -67,7 +65,7 @@ public class CompilerTests
 
     [Theory]
     [InlineData("col.item.age_hours", "col.item.age_hours")]
-    [InlineData("ctx.user.tenure_days", "ctx.user.tenure_days")] // a request-level value is a reference too
+    [InlineData("ctx.user.tenure_days", "ctx.user.tenure_days")]
     [InlineData("(param.w_click)", "param.w_click")]
     [InlineData("param.w_click * 2.0", null)]
     [InlineData("ctx.user.tenure_days > 30.0", null)]
@@ -91,25 +89,20 @@ public class CompilerTests
 
     public static TheoryData<string, string> FormulaExamples() => new()
     {
-        // derived features
         { "(col.item.clicks_7d + 10.0) / (col.item.impressions_7d + 100.0)", "float64" },
         { "dot(ctx.user.embedding, col.item.embedding) ?? 0.0", "float64" },
-        // the fusion formula
         { FusionFormula, "float64" },
         { "!contains(ctx.request.recent_item_ids, col.entity_id) && (col.item.is_policy_safe ?? false)", "bool" },
-        // weighted sums of parameters and scores
         { "param.w_click * col.score.p_click + param.w_like * col.score.p_like", "float64" },
         { "1.0 + param.w_fresh * exp(-(col.item.age_hours ?? 720.0) / param.half_life_hours)", "float64" },
         { "col.item.report_rate > 0.05 ? 0.2 : 1.0", "float64" },
         { "param.explore_eps * hash01(ctx.request.seed, col.entity_id)", "float64" },
-        // predicates of filters, taps and arms
         { "col.score.coarse > 0.35", "bool" },
         { "col.item.is_policy_safe ?? false", "bool" },
         { "col.recall.best_score * (1.0 + 0.05 * log1p(col.item.clicks_7d))", "float64" },
         { "col.score.final * (1.0 + 0.15 * exp(-(col.item.age_hours ?? 720.0) / 24.0))", "float64" },
         { "col.item.bookmarks_7d / (col.item.clicks_7d + 1.0)", "float64" },
         { "(col.item.is_policy_safe ?? false) && col.item.report_rate < 0.05", "bool" },
-        // recall columns and missing values
         { "col.recall.primary_source == 'two_tower'", "bool" },
         { "col.score.final@fusion * 2.0", "float64" },
     };
@@ -200,7 +193,6 @@ public class CompilerTests
         // (a || b) ?? true: missing || false = missing → true. The other grouping would give missing.
         Assert.Equal(ScalarValue.FromBool(true), f.Scalar("ctx.a || ctx.b ?? true"));
 
-        // (a ?? true) ? 'big' : 'small'
         Assert.Equal(ScalarValue.FromString("big"), f.Scalar("ctx.a ?? true ? 'big' : 'small'"));
 
         // Like C#, '??' binds looser than comparisons: x ?? (2.0 > 1.0) is a type error.
@@ -269,10 +261,10 @@ public class CompilerTests
     [InlineData("1.0 + col.item.unknown.size()", ExpressionErrorCodes.UnknownName, 6)]
     [InlineData("col.item.clicks_7d.frobnicate()", ExpressionErrorCodes.UnknownFunction, 19)]
     [InlineData("col.item.clicks_7d && true", ExpressionErrorCodes.TypeMismatch, 0)]
-    [InlineData("5.0 % 2.0", ExpressionErrorCodes.TypeMismatch, 4)] // both operands wrong: the operator
+    [InlineData("5.0 % 2.0", ExpressionErrorCodes.TypeMismatch, 4)]
     [InlineData("'a' < 'b'", ExpressionErrorCodes.TypeMismatch, 4)]
     [InlineData("col.recall.primary_source + 'x'", ExpressionErrorCodes.TypeMismatch, 26)]
-    [InlineData("dot(col.item.embedding, ctx.small)", ExpressionErrorCodes.TypeMismatch, 24)] // the second list has another length
+    [InlineData("dot(col.item.embedding, ctx.small)", ExpressionErrorCodes.TypeMismatch, 24)]
     [InlineData("1.5 in col.tags_int", ExpressionErrorCodes.TypeMismatch, 0)]
     [InlineData("size(col.score.final)", ExpressionErrorCodes.TypeMismatch, 5)]
     [InlineData("ctx.request.seed@fusion", ExpressionErrorCodes.UnknownName, 0)]
@@ -347,7 +339,6 @@ public class CompilerTests
         Assert.Equal("append ' ?? 0.0' to the expression", d.Hint);
         Assert.NotNull(f.Compile("dot(col.item.embedding, ctx.user.embedding) ?? 0.0", CompileOptions.Score));
 
-        // Resolved nullability compiles; nullable sites accept it.
         Assert.NotNull(f.Compile("(col.item.age_hours ?? 0.0) / 24.0", CompileOptions.Score));
         Assert.True(f.Compile("col.item.age_hours / 24.0", new CompileOptions { ExpectedType = ColumnType.Float32, AllowNullableResult = true }).ResultType.Nullable);
     }
@@ -411,8 +402,8 @@ public class CompilerTests
     public void Depth_CountsLeftAssociativeChains()
     {
         var f = new ExprFixture().Build(1);
-        var ok = string.Join(" + ", Enumerable.Repeat("1", 33));      // 32 operators
-        var tooDeep = string.Join(" + ", Enumerable.Repeat("1", 34)); // 33 operators
+        var ok = string.Join(" + ", Enumerable.Repeat("1", 33));
+        var tooDeep = string.Join(" + ", Enumerable.Repeat("1", 34));
         Assert.Equal(33L, f.Scalar(ok).AsInt64());
         Assert.Equal(ExpressionErrorCodes.TooDeep, Assert.Single(f.Errors(tooDeep)).Code);
         Assert.Equal(ExpressionErrorCodes.TooDeep, Assert.Single(f.Errors(tooDeep, new CompileOptions { MaxDepth = 32, AllowNullableResult = true })).Code);

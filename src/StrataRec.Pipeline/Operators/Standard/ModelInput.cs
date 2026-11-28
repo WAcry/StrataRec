@@ -11,17 +11,6 @@ namespace StrataRec.Pipeline.Operators.Standard;
 /// <c>long[]</c>, <c>float[]</c>, <c>double[]</c> or <c>string[]</c>.</param>
 internal readonly record struct GatheredInput(Array Values);
 
-/// <summary>
-/// One mapped input of a model operator: the plain reference it reads and the value each row contributes
-/// (<see cref="ModelTensorRule"/>). The one place that turns column storage or a request-level value into tensor data,
-/// for every layout.
-/// </summary>
-/// <remarks>
-/// Inputs are plain references, so a column is copied straight from its storage, at its declared width, into one buffer
-/// per call, rented from the request and ordered like the rows asked for (the live rows, the rows of each pair, the
-/// list), and each call's tensor is a slice of it; a request-level value is evaluated once, narrowed back to its declared
-/// type (it is held promoted, exactly) and repeated for every entry of the largest batch. No per-row allocation.
-/// </remarks>
 /// <param name="declared">The reference's declared type: a column's symbol type, a context value's declared type (its
 /// symbol has the promoted form).</param>
 internal sealed class ModelInput(string name, CompiledExpression expression, Symbol symbol, ColumnType declared, ModelTensorRule.InputTensor tensor)
@@ -32,7 +21,6 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
 
     public string Source => expression.Source;
 
-    /// <summary>A request-level value (<c>ctx.*</c>, <c>param.*</c>): the same in every batch entry.</summary>
     public bool Broadcast => symbol.Kind != SymbolKind.Column;
 
     public ModelTensorRule.InputTensor Tensor => tensor;
@@ -49,17 +37,13 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
             return Repeat(context, broadcastCount);
         }
 
-        // Non-nullable, so every row has a value and validity is not read, as the expression evaluator does not read it.
+        // Non-nullable, so every row has a value and validity is not read.
         var buffer = context.Read(_column)
                      ?? throw new InvalidOperationException($"Column '{symbol.Name}' is declared non-nullable ({symbol.Type}) but has no data in this " +
                                                             "request (unresolved slot or never written). The engine must produce it before a model reads it.");
         return GatherFrom(buffer, rows, context.Memory);
     }
 
-    /// <summary>
-    /// The tensor of one call: <paramref name="count"/> entries of the batch's dynamic dimension (rows, pairs, or the list's
-    /// rows) from entry <paramref name="first"/>, in <paramref name="layout"/>'s shape (<see cref="ModelTensorRule.InputShape"/>).
-    /// </summary>
     public NamedInput Batch(in GatheredInput values, TensorLayout layout, int first, int count)
     {
         var shape = ModelTensorRule.InputShape(layout, Broadcast, count, tensor.Dimension);
@@ -82,7 +66,6 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         };
     }
 
-    /// <summary>Copies the value of every row of a column's buffer, after checking that it holds the declared type.</summary>
     internal GatheredInput GatherFrom(ColumnBuffer buffer, ReadOnlySpan<int> rows, RequestMemory memory)
     {
         // Once per input, not per row: the switch below would otherwise accept a buffer of the same storage under another
@@ -110,7 +93,6 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         };
     }
 
-    /// <summary>One value per row, as stored.</summary>
     private static T[] Gather<T>(ReadOnlySpan<T> src, ReadOnlySpan<int> rows, RequestMemory memory)
     {
         var dst = memory.Rent<T>(rows.Length);
@@ -133,7 +115,6 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         return dst;
     }
 
-    /// <summary>N elements per row, row-major, as stored.</summary>
     private T[] GatherList<T>(ListColumn<T> column, ReadOnlySpan<int> rows, RequestMemory memory)
     {
         var width = tensor.Dimension;
@@ -155,9 +136,8 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
     }
 
     /// <summary>
-    /// The request-level value repeated <paramref name="count"/> times at its declared type. The value is held promoted
-    /// (an int32 as int64, a float32 as float64), exactly: it was checked against its type where it entered,
-    /// so narrowing it back loses nothing.
+    /// The value is held promoted (an int32 as int64, a float32 as float64), exactly: it was checked against its type
+    /// where it entered, so narrowing it back loses nothing.
     /// </summary>
     private GatheredInput Repeat(OperatorContext context, int count)
     {
@@ -201,7 +181,6 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         return values;
     }
 
-    /// <summary><paramref name="count"/> copies of <paramref name="list"/>, one after another.</summary>
     private static T[] Tile<T>(RequestMemory memory, int count, ReadOnlySpan<T> list)
     {
         var entries = memory.Rent<T>(checked(count * list.Length));
@@ -214,7 +193,6 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         return entries;
     }
 
-    /// <summary><paramref name="count"/> copies of a <c>list&lt;int32&gt;</c> value's elements (int32 values held promoted), narrowed once.</summary>
     private static int[] TileInt32(RequestMemory memory, int count, ReadOnlySpan<long> list)
     {
         var entries = memory.Rent<int>(checked(count * list.Length));
@@ -227,7 +205,6 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         return entries;
     }
 
-    /// <summary><paramref name="count"/> copies of a <c>list&lt;float32&gt;</c> value's elements (float32 values held promoted), narrowed once.</summary>
     private static float[] TileFloat32(RequestMemory memory, int count, ReadOnlySpan<double> list)
     {
         var entries = memory.Rent<float>(checked(count * list.Length));
@@ -240,7 +217,6 @@ internal sealed class ModelInput(string name, CompiledExpression expression, Sym
         return entries;
     }
 
-    /// <summary>Copies the first <paramref name="width"/> entries into the next <paramref name="count"/> − 1 slices.</summary>
     private static void RepeatFirst<T>(T[] entries, int count, int width)
     {
         var first = entries.AsSpan(0, width);

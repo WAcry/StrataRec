@@ -12,8 +12,8 @@ public abstract class CompiledExpression
     /// <summary>Original source text.</summary>
     public abstract string Source { get; }
 
-    /// <summary>Promoted result type with nullability (int64, float64, bool, string, list): a text column reads as
-    /// string, as int32 reads as int64; which storage a result is written to is the destination's choice.</summary>
+    /// <summary>Promoted result type with nullability (int64, float64, bool, string, list): int32 reads as int64; which
+    /// storage a result is written to is the destination's choice.</summary>
     public abstract ColumnType ResultType { get; }
 
     /// <summary>True when the expression reads any <c>col.*</c> symbol (otherwise it is request-level).</summary>
@@ -35,11 +35,6 @@ public abstract class CompiledExpression
     /// otherwise. What leaves the engine as such a reference has the type the referenced name is declared with, not
     /// <see cref="ResultType"/>.
     /// </summary>
-    /// <remarks>
-    /// Judged on the syntax, not on the IR: the binder folds <c>double(col.ctr)</c> and <c>max(col.clicks)</c>, and the
-    /// optimizer <c>col.x * 1</c>, to a reference, but they are written as computations and leave the engine at their
-    /// promoted types; the types a log or a result has must not depend on what binding and optimizing rules exist.
-    /// </remarks>
     public virtual Symbol? Reference => null;
 
     /// <summary>The candidate column the expression is (<see cref="Reference"/> of a <c>col.*</c> symbol): a reader can
@@ -69,16 +64,13 @@ public abstract class CompiledExpression
     /// lists to <c>list&lt;int64&gt;</c> or <c>list&lt;int32&gt;</c> (narrowing) columns, and other kinds to the same kind.
     /// Missing results clear the destination's validity bit; present results set it.</para>
     /// <para>Narrowing to int32 storage never wraps. A value outside the int32 range (for a list: any element outside
-    /// it, since a partial list would be wrong data) is out of range, and so is a list of another length than a
-    /// <c>list&lt;E,N&gt;</c> destination's: the row is marked missing and counted in
-    /// <see cref="ExpressionCounters.OutOfRange"/>. Use the overload with a replacement value to write the column's
-    /// default instead.</para>
-    /// <para>Non-finite values are written as-is; the engine applies column defaults and counting at commit
-    ///. Request-level expressions broadcast their value to every listed row.</para>
+    /// it) is out of range, and so is a list of another length than a <c>list&lt;E,N&gt;</c> destination's: the row is
+    /// marked missing and counted in <see cref="ExpressionCounters.OutOfRange"/>.</para>
+    /// <para>Non-finite values are written as-is. Request-level expressions broadcast their value to every listed
+    /// row.</para>
     /// <para>The destination may be a column the expression reads (an in-place update such as <c>col.a ?? [7]</c>
     /// written into <c>col.a</c>): every listed row's result is computed from the values and validity the column had
     /// when the call started.</para>
-    /// <para>No managed allocation for numeric and bool expressions in steady state.</para>
     /// </remarks>
     public void Evaluate(in EvalContext context, ReadOnlySpan<int> rows, ColumnBuffer destination) =>
         Evaluate(context, rows, destination, ScalarValue.Missing);

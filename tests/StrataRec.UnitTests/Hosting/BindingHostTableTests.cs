@@ -13,9 +13,7 @@ using StrataRec.UnitTests.Features;
 namespace StrataRec.UnitTests.Hosting;
 
 /// <summary>
-/// The engine's table lifecycle: sharing by identity and owner, readiness, first-load failures, restarts with
-/// backoff, release and shutdown. Sources are scripted run by run and signal through task completion sources, so nothing here
-/// depends on timing.
+/// Sources are scripted run by run and signal through task completion sources, so nothing here depends on timing.
 /// </summary>
 public class BindingHostTableTests
 {
@@ -41,15 +39,13 @@ public class BindingHostTableTests
         Assert.Empty(await a.WaitLoadedAsync(TestContext.Current.CancellationToken));
         Assert.Empty(await b.WaitLoadedAsync(TestContext.Current.CancellationToken));
         Assert.Equal(1, first.Runs);
-        Assert.Equal(0, second.Runs); // the shared table keeps the source that loaded it
+        Assert.Equal(0, second.Runs);
         Assert.Equal(1.0, Read(tableB, 1));
     }
 
     [Fact]
     public async Task SpecsWithTheSameIdentityFromAnotherFactory_GetATableOfTheirOwn_LoadedByTheirOwnSource()
     {
-        // Two engines on one host compile the same configuration with registries of their own: the identities are equal,
-        // but the second engine's table must hold what its own source loads, not what the first engine's source loaded.
         using var host = new BindingHost();
         var mine = new ScriptedSource(Load(1));
         var theirs = new ScriptedSource(Load(2));
@@ -73,9 +69,6 @@ public class BindingHostTableTests
     [Fact]
     public void CacheSpecsOfTheSameOrigin_ShareATableWithinAnEngine_AndTheTableTakesTheLimitsOfThePlanThatServes()
     {
-        // A plan swap keeps a cache's table and its records as long as what the records come from is the same: the table
-        // takes the new plan's times and max_bytes when that plan serves. Another origin, another set of tiers or
-        // another engine's registry gets an empty table of its own.
         using var host = new BindingHost(new BindingHostOptions { Load = false });
         var engine = new object();
         var otherEngine = new object();
@@ -91,7 +84,7 @@ public class BindingHostTableTests
         var anotherOrigin = moved.Acquire(CacheSpec(engine, origin: "v.2"));
         var withoutMemory = distributedOnly.Acquire(CacheSpec(engine, memory: false));
         using var service = host.OpenLease();
-        var ofAService = service.Acquire(CacheSpec(engine, kind: "service")); // a service of the source's name, with fields of the same names
+        var ofAService = service.Acquire(CacheSpec(engine, kind: "service"));
 
         Assert.Equal(CacheSpec(engine).Identity, CacheSpec(otherEngine, maxBytes: 2 << 20, ttlMs: 5_000).Identity);
         Assert.Same(table, takenOver);
@@ -105,12 +98,6 @@ public class BindingHostTableTests
         Assert.Equal(5, host.TableCount);
     }
 
-    /// <summary>
-    /// A plan that is compiled and never served leaves no trace on a table another plan serves from: not its limits,
-    /// and not the records a lower limit would evict while it holds the table. The table took a plan's limits when the
-    /// plan acquired it: a candidate with a quarter of the memory, discarded after one write of the serving plan, left
-    /// one record of 9,000.
-    /// </summary>
     [Fact]
     public void APlanThatIsCompiledAndNotServed_ChangesNothingOfATableAnotherServesFrom()
     {
@@ -128,7 +115,6 @@ public class BindingHostTableTests
         Assert.Equal((1L << 20, 60_000L), (table.MaxBytes, table.Cache!.Policy.TtlMs));
         Assert.Equal(9_001, table.Pin().RecordCount);
 
-        // The same plan, served: the table takes its limits and gives the memory back at once, keeping what fits.
         using var next = host.OpenLease();
         next.Acquire(CacheSpec(engine, maxBytes: 256 << 10, ttlMs: 5_000));
         next.Serve();
@@ -137,7 +123,7 @@ public class BindingHostTableTests
         Assert.InRange(table.Pin().Bytes, 1, 256 << 10);
         Assert.InRange(table.Pin().RecordCount, 1_000, 9_000);
 
-        serving.Dispose(); // the plan before lets go: the limits are still those of the plan that serves
+        serving.Dispose();
         Assert.Equal((256L << 10, 1), (table.MaxBytes, host.TableCount));
     }
 
@@ -154,7 +140,7 @@ public class BindingHostTableTests
 
         Assert.Equal(1 << 20, table.MaxBytes);
         current.Dispose();
-        Assert.Equal(0, host.TableCount); // the refused plan holds no reference
+        Assert.Equal(0, host.TableCount);
     }
 
     [Fact]
@@ -204,10 +190,9 @@ public class BindingHostTableTests
         Assert.Contains("/data/items/part-0000.jsonl:3 /fields/score: expected a number", failure.Message);
         Assert.Equal("write the field as a JSON number", failure.Hint);
         Assert.False(failedTable.IsLoaded);
-        Assert.False(failedTable.Writer.IsReloading); // the open reload was aborted
+        Assert.False(failedTable.Writer.IsReloading);
         Assert.Contains(logs.Entries, e => e.EventId == 1202 && e.Message.Contains("part-0000.jsonl:3", StringComparison.Ordinal));
 
-        // Still held by the failed lease, but never handed out again: a new plan loads a new table.
         using var retry = host.OpenLease();
         var retried = retry.Acquire(Spec(source));
         Assert.NotSame(failedTable, retried);
@@ -283,7 +268,7 @@ public class BindingHostTableTests
         var restarts = logs.Entries.Where(e => e.EventId == 1203).ToList();
         Assert.Equal(new[] { 1.0, 2, 3, 3, 1 }, restarts.Select(e => (double)e.Values["DelayMs"]!));
         Assert.Equal(new[] { 1, 2, 3, 4, 1 }, restarts.Select(e => (int)e.Values["Failures"]!));
-        Assert.Equal(2.0, Read(table, 1)); // served throughout, with what each run wrote
+        Assert.Equal(2.0, Read(table, 1));
 
         await host.DisposeAsync();
         await stopped.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -316,7 +301,7 @@ public class BindingHostTableTests
 
         Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken));
         await restarted.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
-        await logs.Thrown.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the logger did throw on that event
+        await logs.Thrown.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         Assert.Equal(1.0, Read(table, 1));
 
         await host.DisposeAsync();
@@ -332,7 +317,7 @@ public class BindingHostTableTests
         var source = new ScriptedSource(async (_, _, token) =>
         {
             loading.SetResult();
-            await WaitForCancellation(token, returned); // never completes its first load
+            await WaitForCancellation(token, returned);
         });
         using var lease = host.OpenLease();
         lease.Acquire(Spec(source));
@@ -341,7 +326,7 @@ public class BindingHostTableTests
 
         await host.DisposeAsync();
 
-        Assert.True(returned.Task.IsCompleted); // the host waited for the source to return
+        Assert.True(returned.Task.IsCompleted);
         var failure = Assert.Single(await waiting.WaitAsync(Wait, TestContext.Current.CancellationToken));
         Assert.Contains("stopped before the load completed", failure.Message);
         Assert.Throws<ObjectDisposedException>(() => host.OpenLease());
@@ -363,7 +348,7 @@ public class BindingHostTableTests
             token.Register(() =>
             {
                 entered.TrySetResult();
-                gate.Wait(); // a source's cleanup that hangs
+                gate.Wait();
             });
             await WaitForCancellation(token, returned);
         });
@@ -375,12 +360,10 @@ public class BindingHostTableTests
             // Called off the test thread, so a call that blocks fails the test instead of hanging it.
             if (releasedFirst)
             {
-                // What a plan swap does with the tables only the replaced plan read: it returns, the callback runs elsewhere.
                 await Task.Run(lease.Dispose, TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
                 await entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
             }
 
-            // Shutdown waits for the released table too, and gives up after its timeout.
             await Task.Run(() => host.DisposeAsync().AsTask(), TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
             await entered.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
@@ -392,7 +375,7 @@ public class BindingHostTableTests
             gate.Set();
         }
 
-        await returned.Task.WaitAsync(Wait, TestContext.Current.CancellationToken); // the source still ends once its callback does
+        await returned.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         lease.Dispose();
     }
 
@@ -432,8 +415,8 @@ public class BindingHostTableTests
     [Fact]
     public async Task ACallbackAndItsLogBothFailing_StillLeaveShutdownWaitingForTheSource()
     {
-        // The failed callback is logged (event 1206), and here that log throws too. The stop must still wait for the run:
-        // a shutdown that returned now would let the caller free what the source is still cleaning up.
+        // The stop must still wait for the run: a shutdown that returned now would let the caller free what the source
+        // is still cleaning up.
         var logs = new ListLoggerFactory(throwOn: 1206);
         var host = new BindingHost(new BindingHostOptions { ShutdownTimeout = TimeSpan.FromSeconds(30) }, logs);
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -450,7 +433,7 @@ public class BindingHostTableTests
             catch (OperationCanceledException)
             {
                 cancelled.TrySetResult();
-                await cleanup.Task; // the source accepted the cancellation and cleans up asynchronously
+                await cleanup.Task;
             }
             finally
             {
@@ -465,7 +448,6 @@ public class BindingHostTableTests
         await cancelled.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
         await logs.Thrown.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
 
-        // A shutdown that stopped waiting completes right after the failed log; this one has 30 s and the source runs on.
         Assert.NotSame(disposal, await Task.WhenAny(disposal, Task.Delay(200, TestContext.Current.CancellationToken)));
         Assert.False(returned.Task.IsCompleted);
 
@@ -488,7 +470,7 @@ public class BindingHostTableTests
         var table = lease.Acquire(Spec(new ScriptedSource(Load(1))));
         Assert.Empty(await lease.WaitLoadedAsync(TestContext.Current.CancellationToken));
         Assert.True(table.IsLoaded);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => lease.WaitLoadedAsync(cancelled.Token)); // ready already
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => lease.WaitLoadedAsync(cancelled.Token));
 
         using var unloaded = new BindingHost(new BindingHostOptions { Load = false });
         using var never = unloaded.OpenLease();
@@ -509,8 +491,6 @@ public class BindingHostTableTests
         Assert.False(table.IsLoaded);
     }
 
-    /// <summary>The spec of a local table loaded by a source of <paramref name="factory"/>; a <see cref="ScriptedSource"/>
-    /// is its own factory, so the specs of one source share a table.</summary>
     private static LocalTableSpec Spec(IBindingFactory<IFeatureUpdateSource> factory, string maxBytes = "1MiB")
     {
         var entity = StrataRec.Features.Catalog.EntityDefinition.Of(
@@ -523,7 +503,6 @@ public class BindingHostTableTests
             schema, new LocalFeatureTableOptions { MaxBytes = bytes }, binding, factory, "item_store", "bindings:test", "/sources/item_store", null);
     }
 
-    /// <summary>Writes <paramref name="count"/> scores to a cache's table as its writer does, on this thread.</summary>
     private static void WriteScores(LocalFeatureTable table, int from, int count)
     {
         var cache = table.Cache!;
@@ -548,7 +527,6 @@ public class BindingHostTableTests
         cache.WriteQueued(table.Writer);
     }
 
-    /// <summary>The spec of a cache's table whose records come from <paramref name="origin"/>, for the engine <paramref name="owner"/> stands for.</summary>
     private static LocalTableSpec CacheSpec(
         object owner, string origin = "0123456789abcdef", long maxBytes = 1 << 20, long ttlMs = 60_000, bool memory = true, string kind = "source")
     {
@@ -557,7 +535,6 @@ public class BindingHostTableTests
         return LocalTableSpec.CreateCache(schema, options, origin, kind, owner, "bindings:test", "/sources/item_store", null);
     }
 
-    /// <summary>A run that loads item 1 with <paramref name="score"/> in one reload and returns.</summary>
     private static Func<UpdatePosition, IFeatureTableWriter, CancellationToken, Task> Load(double score) => (_, writer, _) =>
     {
         writer.BeginReload();
@@ -598,13 +575,11 @@ public class BindingHostTableTests
         }
     }
 
-    /// <summary>A source's exception whose message cannot be read: describing it throws.</summary>
     private sealed class UnreadableException : Exception
     {
         public override string Message => throw new InvalidOperationException("the message failed");
     }
 
-    /// <summary>A factory that hands out the given sources in order, one per spec (the last one again if asked for more).</summary>
     private sealed class Sources(params IFeatureUpdateSource[] sources) : IBindingFactory<IFeatureUpdateSource>
     {
         private int _created;
@@ -617,8 +592,8 @@ public class BindingHostTableTests
     }
 
     /// <summary>
-    /// Runs its scripted runs in order (the last one again if it is run more often); counts runs. Also its own factory, so
-    /// every spec of one source has one owner, and shares the table, as the specs of one engine's plans do.
+    /// Also its own factory, so every spec of one source has one owner, and shares the table, as the specs of one
+    /// engine's plans do.
     /// </summary>
     private sealed class ScriptedSource(params Func<UpdatePosition, IFeatureTableWriter, CancellationToken, Task>[] runs)
         : IFeatureUpdateSource, IBindingFactory<IFeatureUpdateSource>
@@ -642,14 +617,12 @@ public class BindingHostTableTests
         }
     }
 
-    /// <summary>Records every log entry; with <paramref name="throwOn"/>, the log call for that event id throws instead.</summary>
     private sealed class ListLoggerFactory(int? throwOn = null) : ILoggerFactory
     {
         private readonly int? _throwOn = throwOn;
 
         public ConcurrentQueue<LogEntry> Entries { get; } = new();
 
-        /// <summary>Completes when a log call has thrown.</summary>
         public TaskCompletionSource Thrown { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ILogger CreateLogger(string categoryName) => new ListLogger(this);

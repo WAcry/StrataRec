@@ -11,13 +11,13 @@ namespace StrataRec.Models;
 /// <c>activation(bias + Σ weight_i · input_i)</c> over float32 <c>[batch]</c> inputs.
 /// </summary>
 /// <remarks>
-/// <para>Intended for local development, tests, replay fixtures and as a cheap fallback model. Its signature declares every
-/// input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> sends every column as its declared type,
-/// so it feeds float32 columns and writes float32 ones, and reports a column of another type mapped to it at load time
-/// (a float64, bool or int one weighs in through a float32 derived feature, e.g. <c>is_new ? 1.0 : 0.0</c>). A call of no
-/// batch (<see cref="ServiceCall.BatchSize"/> 0) whose inputs are float32 scalars (shape <c>[]</c>) is computed once, one
-/// value per output: what a feature source in mode <c>service</c> sends for the features of an entity with args (IO step
-/// 5). A call with another tensor fails. Settings:</para>
+/// <para>Intended for local development, tests, replay fixtures and as a cheap fallback model. Its signature declares
+/// every input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> sends every column as its
+/// declared type, so it feeds float32 columns and writes float32 ones, and reports a column of another type mapped to
+/// it at load time (a float64, bool or int one weighs in through a float32 derived feature, e.g. <c>is_new ? 1.0 :
+/// 0.0</c>). A call of no batch (<see cref="ServiceCall.BatchSize"/> 0) whose inputs are float32 scalars (shape
+/// <c>[]</c>) is computed once, one value per output: what a feature source in mode <c>service</c> sends for the
+/// features of an entity with args. A call with another tensor fails. Settings:</para>
 /// <code>
 /// { "client": "linear@1",
 ///   "outputs": { "p_click": { "bias": -2.0, "weights": { "smoothed_ctr": 8.0 }, "activation": "sigmoid" } },
@@ -32,9 +32,8 @@ public sealed class LinearModelClient : IServiceClient
     private readonly IReadOnlyList<LinearOutput> _outputs;
 
     /// <summary>
-    /// Each output's weights by input name (ordinal): the order they are added in. A float32 sum depends on its order, and
-    /// the settings are a JSON object, whose members' order is not content (two bindings with the same content id must
-    /// score alike).
+    /// A float32 sum depends on its order, and the settings are a JSON object, whose members' order is not content (two
+    /// bindings with the same content id must score alike).
     /// </summary>
     private readonly KeyValuePair<string, double>[][] _weights;
     private readonly IReadOnlyList<string> _inputs;
@@ -123,7 +122,6 @@ public sealed class LinearModelClient : IServiceClient
             return ServiceStatus.Failed($"The call's batch size is {batch}; it must not be negative.");
         }
 
-        // A call of no batch is one row of scalars: one value per output.
         var scalars = batch == 0;
         if (scalars)
         {

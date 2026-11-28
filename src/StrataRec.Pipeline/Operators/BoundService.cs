@@ -31,6 +31,5 @@ public sealed class BoundService
     /// <summary>The binding's <c>timeout_ms</c>: the most one call may take, within the node's budget; null for none.</summary>
     public int? TimeoutMs { get; }
 
-    /// <summary>The binding's cache (<c>cache</c>), which every call of the service reads first; null for none.</summary>
     internal ServiceCache? Cache { get; }
 }

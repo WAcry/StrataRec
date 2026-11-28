@@ -191,38 +191,18 @@ public readonly struct ComputedByOutputs
 /// (<c>stale_if_error_ms</c>): the calling node is degraded.</param>
 public sealed record CachedFrom(string RequestId, long TimeMs, string CalledBy, bool Stale = false);
 
-/// <summary>
-/// One run of a cached result's computation that had experiments: the called pipeline's, or one of a pipeline it called.
-/// A request served the result was exposed to these arms as the request that computed it was.
-/// </summary>
-/// <param name="Path">The calls from the called pipeline down to this run (<c>rank/recall#0</c>); null for the called pipeline's own run.</param>
-/// <param name="From">For a run that did not happen in the computing request either, because a cache answered its call
-/// there: the run that did compute it. Null for a run of the computing request.</param>
 internal sealed record CallExposure(
     string PipelineId, string ManifestId, string? Path, IReadOnlyList<string> Arms, IReadOnlyList<string> Triggered, CachedFrom? From = null);
 
-/// <summary>A cached result as a record holds it.</summary>
 /// <param name="WrittenMs">When its computation started, by the cache's clock: what its freshness is judged from.</param>
 internal sealed record CachedCall(
     ResultColumns Columns, ResultValues Values, CachedFrom From, long WrittenMs, IReadOnlyList<CallExposure> Exposures);
 
-/// <summary>What a read of a tier found of one key.</summary>
 /// <param name="Fresh">A result within the reader's <c>ttl_ms</c>.</param>
 /// <param name="Stale">A result past it and within <c>stale_if_error_ms</c>: kept for a failure of the pipeline.</param>
-/// <param name="CutOff">The read was cut off by the node's budget or the caller: the call ends so (rule 8 of the bounded wait).</param>
+/// <param name="CutOff">The read was cut off by the node's budget or the caller: the call ends as an unsent call does.</param>
 internal readonly record struct CachedCallRead(CachedCall? Fresh, CachedCall? Stale, Exception? CutOff = null);
 
-/// <summary>
-/// The cache of one node's calls of one pipeline: the node's times and version, over the tiers its environment keeps
-/// the pipeline's results in (shared by every node that calls it). The engine, which runs the calls, asks it in tier
-/// order and hands it what a run returned.
-/// </summary>
-/// <remarks>
-/// A record is a whole result in the layout every table of whole answers has (<see cref="ServiceCache.Schema"/>), each
-/// value with a tag of what it is, so it reads back as the value it was. What the result is of is in its key
-/// (<see cref="Format"/>), the declared output included: a record is decoded only under the key it was written with,
-/// by the code that wrote it.
-/// </remarks>
 internal sealed class PipelineCallCache
 {
     /// <summary>The entity of every pipeline's table: its metric tag <c>stratarec.entity</c> and its keyspace's middle part.</summary>
@@ -249,10 +229,8 @@ internal sealed class PipelineCallCache
         Version = version;
     }
 
-    /// <summary>The node's <c>ttl_ms</c> and <c>stale_if_error_ms</c>.</summary>
     public CachePolicy Policy { get; }
 
-    /// <summary>The node's <c>cache.version</c>; null when the cache follows the called pipeline's configuration.</summary>
     public string? Version { get; }
 
     public bool HasDistributed => _tiers.Distributed is not null;
@@ -260,10 +238,8 @@ internal sealed class PipelineCallCache
     /// <summary>The table of the pipeline's results: what the calls of a request that share a result are found by (<see cref="RequestReads"/>).</summary>
     public object Table => _tiers.Table;
 
-    /// <summary>The cache's clock, in Unix milliseconds: what a record's write time and its age are told by.</summary>
     public long NowMs() => _tiers.TableCache.NowMs();
 
-    /// <summary>The in-process tier's record of <paramref name="key"/>, when it is a result of <paramref name="shape"/> the reader can still use.</summary>
     public CachedCallRead ReadMemory(UInt128 key, PipelineInterface shape)
     {
         if (!_tiers.TableCache.Memory)
@@ -298,11 +274,6 @@ internal sealed class PipelineCallCache
         return new CachedCallRead(null, result);
     }
 
-    /// <summary>
-    /// The distributed tier's record of <paramref name="key"/>, in one read bounded by the tier's <c>timeout_ms</c> within
-    /// <paramref name="bound"/>. A fresh result goes to the in-process tier too. A read that fails or is late finds
-    /// nothing: the pipeline runs.
-    /// </summary>
     /// <param name="memory">
     /// The calling run's request memory, held for the read: a store that answers after the wait ended is still in use,
     /// and the plan's bindings, the store among them, are not released while a request of the plan holds its memory.
@@ -339,7 +310,6 @@ internal sealed class PipelineCallCache
             return default;
         }
 
-        // Judged when the read answered, by the cache's clock, as a source's and a service's records are.
         var freshness = Policy.Classify(decoded.WrittenMs, (ulong)key, answeredAt[0]);
         if (freshness == CacheFreshness.Expired)
         {
@@ -369,10 +339,6 @@ internal sealed class PipelineCallCache
         return new CachedCallRead(result, null);
     }
 
-    /// <summary>
-    /// Whether the result another call of the request computed (<see cref="RequestReads"/>) answers this one: when it
-    /// is fresh by this node's times, as a tier's record is. Counted in the request tier.
-    /// </summary>
     public bool TakeShared(UInt128 key, CachedCall computed)
     {
         var fresh = Policy.Classify(computed.WrittenMs, (ulong)key, NowMs()) == CacheFreshness.Fresh;
@@ -380,22 +346,19 @@ internal sealed class PipelineCallCache
         return fresh;
     }
 
-    /// <summary>Whether a stale result may serve now: still within the node's <c>stale_if_error_ms</c>.</summary>
     public bool Usable(UInt128 key, CachedCall stale) => Policy.Classify(stale.WrittenMs, (ulong)key, NowMs()) != CacheFreshness.Expired;
 
-    /// <summary>A stale result served because the pipeline failed: counted in the tier it came from.</summary>
     public void CountStale(bool distributed) => Count(distributed ? CacheTier.Distributed : CacheTier.Memory, CacheKeyOutcome.Stale);
 
     /// <summary>
-    /// Hands a run's result to the tiers without waiting, to be served for this node's times; a full queue drops it,
-    /// counted. The result's arrays are kept as they are: a result is not changed once returned.
+    /// The result's arrays are kept as they are: a result is not changed once returned.
     /// </summary>
     /// <param name="startedMs">When the run started, by <see cref="NowMs"/>.</param>
     public void Write(UInt128 key, ResultColumns columns, ResultValues values, CachedFrom from, IReadOnlyList<CallExposure> exposures, long startedMs)
     {
         if (!_tiers.Kept)
         {
-            return; // the request's own calls have the result as it is: no record is built for tiers the cache does not have
+            return;
         }
 
         var builder = new ServiceRecordBuilder(_tiers, 1, startedMs);
@@ -502,10 +465,6 @@ internal sealed class PipelineCallCache
         }
     }
 
-    /// <summary>
-    /// One column: the tag every value has, when they all have one and it is no list (a column of scores is its values and
-    /// one integer); otherwise <see cref="PerValue"/> and each value's tag, a list's followed by its length.
-    /// </summary>
     private static void EncodeColumn(ServiceRecordBuilder builder, ReadOnlySpan<ScalarValue> values)
     {
         var uniform = values.Length > 0 ? TagOf(values[0]) : Tag.Missing;
@@ -566,9 +525,8 @@ internal sealed class PipelineCallCache
 
     /// <summary>
     /// The result a record holds, as a result of <paramref name="shape"/>; false for a record this code did not write
-    /// whole for that shape (another kind, counts that do not add up, a value left over, ids of the other key type, a
-    /// value that is not of its column's type or a fixed-length list of another length): nothing of it is used. A
-    /// record whose counts were changed so that they still add up would otherwise move values between rows.
+    /// whole for that shape: nothing of it is used. A record whose counts were changed so that they still add up would
+    /// otherwise move values between rows.
     /// </summary>
     internal static bool TryDecode<TRecord>(TRecord record, PipelineInterface shape, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CachedCall? result)
         where TRecord : IServiceRecord
@@ -644,11 +602,6 @@ internal sealed class PipelineCallCache
         return true;
     }
 
-    /// <summary>
-    /// Whether a value written with <paramref name="tag"/> is one a column of <paramref name="type"/> holds: no value,
-    /// or a value of the type's kind (an integer of either declared width, a float of either width: the widths are the
-    /// writer's), a list of its element kind.
-    /// </summary>
     private static bool Fits(Tag tag, ColumnType type) => tag == Tag.Missing || (type.ValueKind, type.IsList) switch
     {
         (StorageKind.Bool, false) => tag == Tag.Bool,
@@ -699,9 +652,8 @@ internal sealed class PipelineCallCache
     }
 
     /// <summary>
-    /// Reads a record's lists in the order <see cref="Encode"/> wrote them. A read past a list's end breaks the reader
-    /// (<see cref="Broken"/>) and returns nothing of the record, so a record cut short or of other counts is told, never
-    /// read as other values.
+    /// A read past a list's end breaks the reader (<see cref="Broken"/>) and returns nothing of the record, so a record
+    /// cut short or of other counts is told, never read as other values.
     /// </summary>
     private ref struct Reader<TRecord>
         where TRecord : IServiceRecord
@@ -738,7 +690,6 @@ internal sealed class PipelineCallCache
 
         public readonly int Int64sLeft => _int64s.Length - _int64At;
 
-        /// <summary>Every list was read to its end: the record holds what was read and nothing more.</summary>
         public readonly bool AtEnd => _layoutAt == Layout.Length && _boolAt == _bools.Length && _int64At == _int64s.Length
             && _float32At == _float32s.Length && _float64At == _float64s.Length && _stringAt == _strings && _record.Int32s.IsEmpty;
 
@@ -783,7 +734,6 @@ internal sealed class PipelineCallCache
             return strings;
         }
 
-        /// <summary>The position of the next <paramref name="count"/> values of a list of <paramref name="length"/>, or -1 (and broken) when it has not that many.</summary>
         private int Take(ref int at, int length, int count)
         {
             if (Broken || count < 0 || count > length - at)
@@ -798,7 +748,6 @@ internal sealed class PipelineCallCache
         }
     }
 
-    /// <summary>The distributed tier's read of one key as a bounded call, which holds the calling run's request memory until the store has answered.</summary>
     private readonly struct StoreRead(DistributedCacheTier tier, LocalTableCache table, string[] keys, ReadOnlyMemory<byte>[] records, long[] answeredAt)
         : IBoundedCall<bool>
     {

@@ -13,13 +13,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Interleaving and fixed-position injection are business logic, written as custom operators against the public operator
-/// API; the framework has no slot operator. These two are reference implementations, and the tests pin down what the
-/// framework guarantees them: an injector after ranking calls a recall service through the context (bounded, recorded,
-/// replayed), appends what it got, gives those rows their score in the column the ranking wrote (a row source
-/// writes its rows into the current version), and puts them at fixed positions; an interleaver only reorders.
-/// </summary>
 public sealed class CustomPlacementTests
 {
     private const string Sources = """
@@ -33,8 +26,6 @@ public sealed class CustomPlacementTests
     [Fact]
     public async Task AnInjectorAfterRanking_PutsASourcesNewCandidatesAtFixedPositions_WithTheirScore_AsInAReplay()
     {
-        // TopK keeps 1–4. The injector asks 'ads' for candidates, skips 3 (shown already), appends 21 and 22 and
-        // places them 2nd and 4th, with their source score in score.final, which TopK ranked by.
         var plan = Compile("""
             "recall": { "order": 10, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas" } },
             "score": { "order": 20, "op": "ExpressionScorer@1", "config": { "output_col": "score.final", "expr": "col.recall.best_score ?? 0.0" } },
@@ -54,8 +45,6 @@ public sealed class CustomPlacementTests
     [Fact]
     public async Task AnInjector_PlacesWhatItGot_AndAFailedSourceInjectsNothing()
     {
-        // TopK keeps 1 and 2, so 3, which it dropped, is a candidate like 21. A slot past the end puts the candidate last;
-        // with the source failing, the ranking is served as it was, degraded.
         var plan = Compile("""
             "recall": { "order": 10, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas" } },
             "score": { "order": 20, "op": "ExpressionScorer@1", "config": { "output_col": "score.final", "expr": "col.recall.best_score ?? 0.0" } },
@@ -79,18 +68,11 @@ public sealed class CustomPlacementTests
         Assert.True(degraded.Degraded);
     }
 
-    /// <summary>
-    /// A candidate TopK dropped and an injector brought back is found, and explained, at its new row
-    /// (the table found its dropped row, so a second injector took it for not shown and appended it
-    /// again, and its explanation said TopK dropped it, unless the table was compacted in between); whether it was makes
-    /// no difference.
-    /// </summary>
     [Theory]
     [InlineData("never")]
     [InlineData("always")]
     public async Task ACandidateAnInjectorBringsBack_IsShownOnce_AndExplainedWhereItIs(string compact)
     {
-        // TopK keeps 1 and 2. The first injector brings 3 back 3rd; the second skips it, as shown, and puts 21 1st.
         var plan = Compile($$"""
             "recall": { "order": 10, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas" } },
             "score": { "order": 20, "op": "ExpressionScorer@1", "config": { "output_col": "score.final", "expr": "col.recall.best_score ?? 0.0" } },
@@ -113,8 +95,6 @@ public sealed class CustomPlacementTests
     [Fact]
     public async Task AnInterleaver_MixesTheSourcesByAPattern_KeepingEachSourcesOrder()
     {
-        // Ranked by score, 'organic' fills the top. The pattern takes two organic rows, then one fresh, and again; when a
-        // source runs out the others continue in their order.
         var plan = Compile("""
             "recall": { "order": 10, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas" } },
             "score": { "order": 20, "op": "ExpressionScorer@1", "config": { "output_col": "score.final", "expr": "col.recall.best_score ?? 0.0" } },
@@ -191,10 +171,6 @@ public sealed class CustomPlacementTests
         public required string ScoreCol { get; init; }
     }
 
-    /// <summary>
-    /// <c>SlotInjector@1</c> (RowSource | RowOrder): calls a recall service, appends the candidates that are not in the
-    /// table yet, at most one per slot, writes their score, and moves them to the slots; the other rows keep their order.
-    /// </summary>
     private sealed class SlotInjectorFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } =
@@ -235,7 +211,6 @@ public sealed class CustomPlacementTests
                 for (var i = 0; i < buffer.Count && ids.Count < slots.Length; i++)
                 {
                     var key = buffer.Keys[i];
-                    // Skip what the ranking shows already; a candidate a filter dropped may be injected.
                     var row = context.Table.FindRow(key);
                     if (!key.IsString && (row < 0 || !context.Table.IsAlive(row)) && !ids.Contains(key.Int64Value))
                     {
@@ -249,7 +224,7 @@ public sealed class CustomPlacementTests
                     return;
                 }
 
-                // Appended at the end of the ranking. The column is the version TopK ranked by: the rows join it.
+                // The column is the version TopK ranked by: the rows join it.
                 var first = context.AppendRows(CollectionsMarshal.AsSpan(ids));
                 var column = (ScalarColumn<double>)context.Output(score);
                 for (var i = 0; i < ids.Count; i++)
@@ -285,10 +260,6 @@ public sealed class CustomPlacementTests
         public required string[] Pattern { get; init; }
     }
 
-    /// <summary>
-    /// <c>Interleave@1</c> (RowOrder): takes the next row of each source the pattern names in turn, keeping each source's
-    /// order; rows of sources the pattern does not name, and those left when the pattern's sources run out, follow in order.
-    /// </summary>
     private sealed class InterleaveFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } =
@@ -347,7 +318,6 @@ public sealed class CustomPlacementTests
         }
     }
 
-    /// <summary><c>failing@1</c>: a recall service that always fails.</summary>
     private sealed class FailingSourceFactory : IBindingFactory<IServiceClient>
     {
         public string Type => "failing@1";

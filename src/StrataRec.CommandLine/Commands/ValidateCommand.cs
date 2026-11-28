@@ -6,11 +6,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec validate</c>: every static check CI runs — schemas, types, data flow, patch
-/// footprints and conflicts, per-arm and combination checks — for every pipeline in an environment, and that the
-/// workspace's <c>schemas/</c> are the ones this binary writes (<see cref="SchemaFiles.Check"/>).
-/// </summary>
 internal static class ValidateCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -27,7 +22,6 @@ internal static class ValidateCommand
         return command;
     }
 
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static int Run(PlanEnvironment provided, string config, string environment, string? pipeline, string format, bool warningsAsErrors, TextWriter output)
     {
         var diagnostics = new DiagnosticBag();
@@ -87,7 +81,6 @@ internal static class ValidateCommand
             workspace.CheckFallbackInputs(ids, id => schemas.GetValueOrDefault(id), diagnostics);
         }
 
-        // The JSON Schemas the files name for editors: those of this binary's config types and operators.
         SchemaFiles.Check(config, provided, diagnostics);
 
         var code = Output.Diagnostics(diagnostics.Items, format, output, warningsAsErrors, DiagnosticLocator.ForWorkspace(config));

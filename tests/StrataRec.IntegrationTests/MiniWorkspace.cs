@@ -7,13 +7,11 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>A workspace of one pipeline with only recall services bound, written to a temp directory and compiled.</summary>
 internal static class MiniWorkspace
 {
     /// <param name="candidateSources">The members of the bindings' <c>services</c> object.</param>
     /// <param name="pipeline">The pipeline artifact; its id must be <c>p</c>.</param>
     /// <param name="files">Other files (e.g. a source's <c>data_file</c>) by path relative to the workspace root.</param>
-    /// <param name="operators">The operators available; the standard library by default.</param>
     public static ExecutionPlan Compile(
         string candidateSources, string pipeline, BindingRegistry? bindings = null, IReadOnlyDictionary<string, string>? files = null,
         OperatorRegistry? operators = null)

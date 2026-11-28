@@ -13,19 +13,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec run</c>: executes a request locally against a workspace (fixtures via <c>memory@1</c> and friends) or a
-/// release manifest, and prints the result as JSON (<see cref="RecResultJson"/>, the document a service answers with):
-/// items, assignment and trigger record, with <c>--trace</c> every node's outcome and the node that produced each output
-/// column, and with <c>--explain</c> the explained candidates. <c>--format text</c> prints the same for
-/// reading (<see cref="ResultText"/>).
-/// </summary>
-/// <remarks>
-/// A manifest is loaded as a node loads it (<see cref="RecEngine.LoadManifestAsync"/>): its capabilities checked, its
-/// bindings loaded, relative paths in them resolving against the current directory (<see cref="ConfigRef"/>), so a
-/// release can be tried before and after it is published. Only the manifest's pipeline is loaded: a plan that falls back
-/// to another pipeline is warned about, since a request that fails here does not fall back.
-/// </remarks>
 internal static class RunCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -91,10 +78,6 @@ internal static class RunCommand
         return command;
     }
 
-    /// <summary>
-    /// The ids of <c>--explain</c> (comma or space separated) read as the pipeline's key type; null, after reporting, when
-    /// one is not an id of that type. None given is null: nothing to explain.
-    /// </summary>
     internal static IReadOnlyList<EntityKey>? ParseExplainIds(string[]? args, EntityKeyType keyType, string pipelineId, out string? error)
     {
         error = null;
@@ -116,10 +99,6 @@ internal static class RunCommand
         return ids.Count == 0 ? null : ids;
     }
 
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
-    /// <param name="config">The workspace (<c>-c</c>); with <paramref name="manifest"/> null too, the workspace <c>config</c>.</param>
-    /// <param name="errors">Where diagnostics and progress go; standard error by default.</param>
-    /// <param name="manifest">A manifest id or file (<c>--manifest</c>), read with <paramref name="store"/>.</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string? config, string environment, string requestPath, string[] arms, bool trace, TextWriter output,
         CancellationToken cancellationToken, bool logs = false, string? recordPath = null, int? deadlineMs = null, TextWriter? errors = null,
@@ -134,7 +113,6 @@ internal static class RunCommand
             return 2;
         }
 
-        // Mistakes in the request file are reported like configuration errors, at file:line:column.
         var locator = (reference!.Locator() ?? new DiagnosticLocator()).AddFile(requestPath);
         var file = await ReadRequestAsync(requestPath, reference.IsManifest ? null : reference.Text, problems, cancellationToken).ConfigureAwait(false);
         if (file is null)
@@ -154,7 +132,6 @@ internal static class RunCommand
                 return 1;
             }
 
-            // The request names the pipeline it runs: one the manifest does not release is the request's mistake.
             if (release.Value.Manifest.PipelineId != pipelineId)
             {
                 problems.Error("REQUEST_INVALID", requestPath, "/pipeline_id",
@@ -165,8 +142,6 @@ internal static class RunCommand
             }
         }
 
-        // The engine loads the local feature tables and instances the plan binds before it serves; disposing
-        // it stops their sources.
         await using var engine = new RecEngine(reference.PlanEnvironment());
         var (diagnostics, notices) = await LoadAsync(engine, reference, release, environment, pipelineId, cancellationToken).ConfigureAwait(false);
         if (diagnostics.HasErrors || !engine.TryGetRequestSchema(pipelineId, out var schema))
@@ -185,7 +160,6 @@ internal static class RunCommand
             Output.Diagnostics(notices, "text", errors);
         }
 
-        // The inputs as a service reads them (RequestSchema.TryRead): the same rules and words, here at file:line:column.
         if (!schema.TryRead(file.Inputs ?? default, out var inputs, out var inputErrors))
         {
             foreach (var error in inputErrors)
@@ -197,7 +171,6 @@ internal static class RunCommand
             return 2;
         }
 
-        // The ids as the pipeline keys its candidates: 42 is an int64 for an int64-keyed pipeline, a string otherwise.
         engine.TryGetPipeline(pipelineId, out var loaded);
         var explainIds = ParseExplainIds(explain, loaded.Plan.TableSchema.KeyType, pipelineId, out var explainError);
         if (explainError is not null)
@@ -206,8 +179,8 @@ internal static class RunCommand
             return 2;
         }
 
-        // --arms wins over the file's force_arms. A present force_arms is forced even when empty (the baseline), as an
-        // empty DebugOptions.ForceArms is to the engine: presence, not length, decides.
+        // A present force_arms is forced even when empty (the baseline), as an empty DebugOptions.ForceArms is to the
+        // engine: presence, not length, decides.
         var cliArms = ExplainPlanCommand.SplitArms(arms);
         IReadOnlyList<string>? forced = cliArms.Count > 0 ? cliArms : file.ForceArms;
 
@@ -237,7 +210,6 @@ internal static class RunCommand
         var result = await engine.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
         if (!result.Succeeded && deadlineMs is null && System.Diagnostics.Stopwatch.GetElapsedTime(started) >= request.Deadline * 0.9)
         {
-            // A one-shot process compiles what it runs on its first request: the deadline may be spent on that.
             errors.WriteLine($"the request used its whole deadline ({request.Deadline.TotalMilliseconds} ms); the first request of a process " +
                              "includes compiling the code it runs. Rerun with --deadline-ms 5000 to rule out the clock.");
         }
@@ -271,7 +243,6 @@ internal static class RunCommand
         }
         else
         {
-            // The document a service answers with (RecResultJson), plus the lineage --trace asks for.
             var options = new RecResultJsonOptions { IncludeColumnProducers = trace };
             output.WriteLine(Output.ToJson(json => RecResultJson.Write(json, result, options)));
         }
@@ -297,11 +268,6 @@ internal static class RunCommand
         _ => ReplayCommandLine(reference.Text, bundle),
     };
 
-    /// <summary>
-    /// Loads what the request runs into <paramref name="engine"/>: its pipeline (and the one it falls back to) from a
-    /// workspace, or the manifest read already (<paramref name="release"/>), as a node loads it. Every diagnostic of the
-    /// load, and the warning that a manifest's fallback is not loaded, if it has one.
-    /// </summary>
     private static async Task<(DiagnosticBag Diagnostics, List<ConfigDiagnostic> Notices)> LoadAsync(
         RecEngine engine, ConfigRef reference, (ReleaseManifest Manifest, string Id, IArtifactStore Store)? release, string environment, string pipelineId,
         CancellationToken cancellationToken)
@@ -341,13 +307,6 @@ internal static class RunCommand
 
     private static string AsPath(string path) => path.StartsWith('-') ? "./" + path : path;
 
-    /// <summary>
-    /// Reads and binds the request file strictly, like an artifact (<see cref="ArtifactSerializer.TryBind{T}"/>): a
-    /// misspelled member is an error with a did-you-mean rather than a key silently ignored, and a member given twice is
-    /// an error at its line (<see cref="Jsonc"/>) rather than one of the two values. A top-level <c>$schema</c> is the
-    /// editor's, as in a workspace file (<see cref="ArtifactSchemas.TryRemoveSchemaMember"/>). Null after reporting.
-    /// </summary>
-    /// <param name="config">The workspace, whose <c>schemas/</c> the hint about <c>$schema</c> names; null for a manifest.</param>
     private static async Task<RequestFile?> ReadRequestAsync(string requestPath, string? config, DiagnosticBag problems, CancellationToken cancellationToken)
     {
         JsonNode? document;
@@ -401,7 +360,6 @@ internal static class RunCommand
         return problems.HasErrors ? null : file;
     }
 
-    /// <summary>Every arm id is a string <c>experiment/arm</c>; JSON null is not one.</summary>
     private static void CheckArms(List<string>? arms, string pointer, string requestPath, DiagnosticBag problems)
     {
         for (var i = 0; arms is not null && i < arms.Count; i++)
@@ -433,9 +391,9 @@ internal static class RunCommand
         public List<string>? ForceArms { get; init; }
 
         /// <summary>
-        /// A configuration to try on this request alone: an RFC 7396 merge patch of the pipeline as an experiment arm writes
-        /// one (params, nodes, log_taps, columns, param_schema, funnel_groups, features, derived_features), applied after the
-        /// arms, so it wins over them. The plan is compiled for the request; its taps are captured, never written.
+        /// A configuration to try on this request alone: an RFC 7396 merge patch of the pipeline as an experiment arm
+        /// writes one (params, nodes, log_taps, columns, param_schema, funnel_groups, features, derived_features),
+        /// applied after the arms, so it wins over them; its taps are captured, never written.
         /// </summary>
         public JsonObject? ConfigOverride { get; init; }
 

@@ -5,7 +5,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>Malformed replay bundles are rejected with the JSON pointer of the problem and a hint.</summary>
 public sealed class ReplayBundleFileTests
 {
     private const string Minimal = """
@@ -31,25 +30,6 @@ public sealed class ReplayBundleFileTests
     [Fact]
     public void ABundleOfThePreviousFormat_IsRejectedAtTheFormat()
     {
-        // 2026-11-27.2 records how each pipeline call is named and whether what it returned was degraded;
-        // 2026-11-27.1 records where a pipeline call's cached result comes from;
-        // 2026-11-26.1 numbers a node's pipeline calls over its run and records how many each attempt made; 2026-11-25.1
-        // records the calls of other pipelines; 2026-11-22.1 records the result's request-level values;
-        // 2026-11-21.15 adds what an item saw of an input of more than sixteen numbers or bools, or of strings, to its digest
-        // as a digest of its own; 2026-11-21.14 of more than four, or of strings; 2026-11-21.13 of more than sixteen values;
-        // 2026-11-21.12 added every one so;
-        // 2026-11-21.11 digests an item by what it saw of each input;
-        // 2026-11-21.10 records the entity of a source's call;
-        // 2026-11-21.9 records the outputs each call asked for, and a source's call carries the request's seed;
-        // 2026-11-21.8 records a feature source's service call with its source;
-        // 2026-11-21.7 digests every call without its limit again and records the items a service dropped past the limit;
-        // 2026-11-21.6 digests an output-reading call with its limit and a per-item missing input by its rows, and records a
-        // call's degraded reason; .5 sent a recall query of -0.0 or a declared float32 otherwise, so it could replay identical
-        // to a changed run.
-        // 2026-11-21.5 is .4's layout where a service sees only its call's inputs (in .4 a recall could read a request field no
-        // digest covers); 2026-11-21.4 records model and recall calls as service calls, by the digest of their inputs; 2026-11-21.3 records
-        // request inputs at the host's types, which 2026-11-21.2 (laid out alike) recorded at the primary's; .2 replays a float32 request input as the nearest float, which .1 replayed as the double given;
-        // 2026-11-20.3 has float32 model outputs only, as bare arrays. There are no old readers.
         foreach (var previous in new[] { "2026-11-27.1", "2026-11-26.1", "2026-11-25.1", "2026-11-22.1", "2026-11-21.15", "2026-11-21.14", "2026-11-21.13", "2026-11-21.12", "2026-11-21.11", "2026-11-21.10", "2026-11-21.9", "2026-11-21.8", "2026-11-21.7", "2026-11-21.6", "2026-11-21.5", "2026-11-21.4", "2026-11-21.3", "2026-11-21.2", "2026-11-21.1", "2026-11-20.3" })
         {
             var error = Assert.Throws<ReplayBundleException>(() => ReplayBundleFile.Parse(Minimal.Replace("2026-11-27.2", previous, StringComparison.Ordinal)));
@@ -127,7 +107,7 @@ public sealed class ReplayBundleFileTests
         var bundle = ReplayBundleFile.Parse(Edit(b =>
         {
             b["result"]!["error"] = null;
-            b["result"]!["items"]![0]!["columns"]!["score"] = null; // a missing value
+            b["result"]!["items"]![0]!["columns"]!["score"] = null;
             b["request"]!["inputs"] = JsonNode.Parse("""{ "user_id": { "type": "int64?", "value": null } }""");
             b["runs"]![0]!["feature_calls"]![0]!["error"] = null;
         }));
@@ -189,7 +169,6 @@ public sealed class ReplayBundleFileTests
     [InlineData("format")] // read before the structure, to check the version
     public void AStringThatIsNotValidUnicode_IsRejectedAsMalformed_NotThrownAsAnotherException(string member)
     {
-        // "\uD800" (an unpaired surrogate escape) escaped as InvalidOperationException.
         var unpaired = "\"" + (char)92 + "uD800\"";
         var json = member == "seed"
             ? """{"format":"stratarec.replay_bundle/2026-11-27.2","request":{"seed":""" + unpaired + "}}"

@@ -5,11 +5,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec schema</c>: the JSON Schema (2020-12) of each kind of file and of each operator's config, generated from
-/// the C# types that deserialize them with the operators and binding types of the binary that runs it (<see cref="ArtifactSchemas"/>), so editors and agents validate against exactly what the engine accepts. <c>--out</c> writes the schemas
-/// a workspace's files name in <c>$schema</c> (<see cref="SchemaFiles"/>).
-/// </summary>
 internal static class SchemaCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -44,8 +39,6 @@ internal static class SchemaCommand
         return command;
     }
 
-    /// <summary>Prints the schema of <paramref name="kind"/> (or of the config of operator <paramref name="op"/>), as <c>--out</c> writes it.</summary>
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static int Run(PlanEnvironment provided, string kind, string? op, TextWriter output, TextWriter error)
     {
         JsonObject? schema;
@@ -75,10 +68,6 @@ internal static class SchemaCommand
         return 0;
     }
 
-    /// <summary>
-    /// Writes the schema of each kind of workspace file into <paramref name="directory"/> (<see cref="SchemaFiles"/>):
-    /// the same bytes every time for the same binary, so a committed copy is compared with what it would write.
-    /// </summary>
     internal static int Write(PlanEnvironment provided, string directory, TextWriter output, TextWriter error)
     {
         var files = SchemaFiles.Generate(provided);

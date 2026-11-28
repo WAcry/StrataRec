@@ -8,19 +8,12 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// The write contract of a table slot (<see cref="CandidateTable"/>): a slot starts with every row missing, and after a
-/// writer ran, exactly the rows it wrote a value into are present, holding that value; every other row is still missing.
-/// </summary>
-/// <remarks>Test writers against real table slots with this helper. A buffer made directly counts every row valid, so a
-/// writer that writes values in bulk and forgets to mark them passes there and leaves table rows missing.</remarks>
+/// <remarks>A buffer made directly counts every row valid, so a writer that writes values in bulk and forgets to mark
+/// them passes there and leaves table rows missing.</remarks>
 internal static class TableWrites
 {
-    /// <summary>One non-nullable column type of each <see cref="StorageKind"/>; a new kind fails here until it has one.</summary>
     public static readonly string[] EveryStorageType = Enum.GetValues<StorageKind>().SelectMany(kind => kind switch
     {
-        // Every element type of a list, so each one's write path is covered, and fixed-length lists (an embedding) of the
-        // samples' lengths.
         StorageKind.List => new[]
         {
             "list<bool>", "list<int32>", "list<int64>", "list<float32>", "list<float64>", "list<string>",
@@ -40,7 +33,6 @@ internal static class TableWrites
         _ => throw new NotSupportedException($"Add a column type of storage kind {kind} to the write contract tests."),
     };
 
-    /// <summary>A present value of the type, different for each <paramref name="n"/> (bool alternates), stored exactly.</summary>
     public static ScalarValue Sample(ColumnType type, int n) => type.Kind switch
     {
         StorageKind.Bool => ScalarValue.FromBool(n % 2 == 0),
@@ -57,10 +49,6 @@ internal static class TableWrites
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, null),
     };
 
-    /// <summary>
-    /// Asserts every physical row of <paramref name="slot"/>: present with the value in <paramref name="expected"/>, or
-    /// missing where that is missing (written as missing, or never written).
-    /// </summary>
     public static void AssertRows(ColumnBuffer slot, IReadOnlyList<ScalarValue> expected, string label)
     {
         for (var row = 0; row < expected.Count; row++)
@@ -74,7 +62,6 @@ internal static class TableWrites
     private static string Describe(in ScalarValue value) => value.IsMissing ? "missing" : value.ToString();
 }
 
-/// <summary>Hands out new arrays filled with 0xA5 bytes (references stay null), like a pool holding an earlier request's data.</summary>
 internal sealed class DirtyPool : IBufferPool
 {
     public T[] Rent<T>(int minimumLength)

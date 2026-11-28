@@ -40,17 +40,16 @@ public sealed class PairwiseRankerConfig : ModelCallConfig
 /// model that compares two rows at a time.
 /// </summary>
 /// <remarks>
-/// <para>Every pair (i, j), i &lt; j, of the first n = min(window, rows) rows is sent once, the higher-ranked row first,
-/// in order of i then j; batches of <c>batch_size</c> pairs are called concurrently, and nothing is applied unless every
-/// call succeeded. A column input whose rows give T <c>[rows]</c> (or <c>[rows, N]</c>) is sent as T <c>[pairs, 2]</c>
-/// (<c>[pairs, 2, N]</c>); a context value as T <c>[pairs]</c> (<c>[pairs, N]</c>); see <see cref="ModelTensorRule"/>.</para>
+/// <para>Every pair (i, j), i &lt; j, of the first n = min(window, rows) rows is sent once, the higher-ranked row
+/// first, in order of i then j; batches of <c>batch_size</c> pairs are called concurrently, and nothing is applied
+/// unless every call succeeded. A column input whose rows give T <c>[rows]</c> (or <c>[rows, N]</c>) is sent as T
+/// <c>[pairs, 2]</c> (<c>[pairs, 2, N]</c>); a context value as T <c>[pairs]</c> (<c>[pairs, N]</c>).</para>
 /// <para>The output is the probability p that the first row is preferred, so the pair (i, j) gives i a win of p and j a
-/// win of 1 − p. A row's score is the sum of its wins (its expected number of wins, a Borda count): unlike counting
-/// p &gt; 0.5, it keeps how sure the model was, and it needs no tie rule per pair. A preference that is NaN or outside
-/// [0, 1] fails the node rather than being clamped: a model that returns logits would otherwise rank by noise. The
-/// window is reordered by score (ties by <c>entity_id</c>); rows after it keep their order.</para>
-/// <para>Calls are recorded and replayed by the digest of each whole call (no per-row keys), since an output belongs to
-/// a pair, not a row. Each call's pairs are its rows: <c>stratarec.io.keys</c> of the model counts them, per call sent.</para>
+/// win of 1 − p. A row's score is the sum of its wins (its expected number of wins, a Borda count). A preference that
+/// is NaN or outside [0, 1] fails the node rather than being clamped. The window is reordered by score (ties by
+/// <c>entity_id</c>); rows after it keep their order.</para>
+/// <para>Calls are recorded and replayed by the digest of each whole call (no per-row keys). Each call's pairs are its
+/// rows: <c>stratarec.io.keys</c> of the model counts them, per call sent.</para>
 /// </remarks>
 public sealed class PairwiseRankerFactory : IOperatorFactory
 {
@@ -92,8 +91,6 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
             return null;
         }
 
-        // The two rows of every pair are gathered into one buffer per input: beyond this a request could not hold them,
-        // and fails at load rather than on its first request.
         if (config.MaxPairs > MaxPairsLimit)
         {
             context.Error("/max_pairs", "RANKER_MAX_PAIRS",
@@ -159,7 +156,7 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
                 }
             }
 
-            var stride = Batching.Size(pairs, batchSize); // the fewest batches, even
+            var stride = Batching.Size(pairs, batchSize);
             var inputs = call.Inputs;
             var values = new GatheredInput[inputs.Length];
             for (var k = 0; k < inputs.Length; k++)
@@ -216,13 +213,12 @@ public sealed class PairwiseRankerFactory : IOperatorFactory
         private static int PairCount(int n) => checked((int)((long)n * (n - 1) / 2));
 
         /// <summary>
-        /// Adds each pair's preference to its rows' scores, walking the pairs in the order they were sent; false after
-        /// failing the node on an output that is missing, short, or not a probability.
+        /// Adds each pair's preference to its rows' scores, walking the pairs in the order they were sent.
         /// </summary>
         private bool Aggregate(OperatorContext context, int[] rows, int n, ServiceResponse[] writers, double[] scores)
         {
             var pairs = PairCount(n);
-            var stride = Batching.Size(pairs, batchSize); // as the batches were sent
+            var stride = Batching.Size(pairs, batchSize);
             var batch = 0;
             var index = 0;
             var inBatch = 0;
@@ -285,12 +281,12 @@ public sealed class ListwiseRerankerConfig : ModelCallConfig
 /// model call that sees them together, and reorders them by the scores.
 /// </summary>
 /// <remarks>
-/// <para>One call per request, batch size 1: a column input whose rows give T <c>[rows]</c> (or <c>[rows, N]</c>) is sent
-/// as T <c>[1, n]</c> (<c>[1, n, N]</c>), in rank order; a context value as T <c>[1]</c> (<c>[1, N]</c>); see
-/// <see cref="ModelTensorRule"/>. The window is reordered by score as a sort by a column is (higher first, NaN last, ties
-/// by <c>entity_id</c>); rows after it keep their order. Nothing is applied unless the call succeeded.</para>
-/// <para>No batch size and no cap: the list is the model's unit, so splitting it would change what the model sees, and
-/// <c>window</c> bounds the call. The call is recorded and replayed by the digest of its whole input.</para>
+/// <para>One call per request, batch size 1: a column input whose rows give T <c>[rows]</c> (or <c>[rows, N]</c>) is
+/// sent as T <c>[1, n]</c> (<c>[1, n, N]</c>), in rank order; a context value as T <c>[1]</c> (<c>[1, N]</c>). The
+/// window is reordered by score as a sort by a column is (higher first, NaN last, ties by <c>entity_id</c>); rows after
+/// it keep their order. Nothing is applied unless the call succeeded.</para>
+/// <para>No batch size and no cap, and <c>window</c> bounds the call. The call is recorded and replayed by the digest
+/// of its whole input.</para>
 /// </remarks>
 public sealed class ListwiseRerankerFactory : IOperatorFactory
 {
@@ -383,13 +379,8 @@ public sealed class ListwiseRerankerFactory : IOperatorFactory
     }
 }
 
-/// <summary>The keys the model rankers share besides the model call: the output they read and the optional score column.</summary>
 internal static class RankerColumns
 {
-    /// <summary>
-    /// Checks <c>output</c> and resolves <c>score_col</c>: a nullable float column, since rows outside the window get no
-    /// score; an undeclared one is <c>float32?</c>. False after reporting an error.
-    /// </summary>
     public static bool TryCompile(OperatorCompileContext context, string? output, string? name, out OutputColumn? column)
     {
         column = null;
@@ -448,21 +439,12 @@ internal static class RankerColumns
     }
 }
 
-/// <summary>
-/// What the model operators accept of a tensor output the client wrote: for a ranker, a score
-/// (<see cref="ModelTensorRule.IsScore"/>), read at the width written; for every operator, exactly the elements of the
-/// output's shape.
-/// </summary>
 /// <remarks>
 /// A ranker reads the width the client wrote, not the one its signature declares for the version: the load checks the
 /// signature, both widths rank correctly, and a replay, which loads no client, has only what was written.
 /// </remarks>
 internal static class ModelOutputs
 {
-    /// <summary>
-    /// The <paramref name="count"/> scores of output <paramref name="name"/>, float32 or float64; false after failing the
-    /// node when the client wrote none, another type or another number of them.
-    /// </summary>
     public static bool TryReadScores(
         OperatorContext context, string model, ServiceResponse writer, string name, int count, string entry,
         out bool single, out ReadOnlySpan<float> singles, out ReadOnlySpan<double> doubles)
@@ -501,10 +483,6 @@ internal static class ModelOutputs
         return true;
     }
 
-    /// <summary>
-    /// The failure of an output that does not have exactly the <paramref name="expected"/> elements of its shape (one or a
-    /// list's width per <paramref name="entry"/>: row, pair, row of the list); null when it has.
-    /// </summary>
     public static string? WrongLength(string model, string name, in TensorValues values, int expected, string entry) =>
         values.Length == expected
             ? null

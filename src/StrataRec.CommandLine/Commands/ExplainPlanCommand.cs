@@ -11,13 +11,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec explain-plan</c>: the unified plan's timeline, node variants, experiment sites and
-/// parameter overrides; with <c>--arms</c>, exactly what a request with those arms executes (<see cref="EffectivePlan"/>,
-/// the view <c>diff</c> compares). A plan without experiments has one combination, which is what it shows: there are
-/// no variants or sites to survey, and what each node reads and writes is in that view. Reads a workspace or a release
-/// manifest (<see cref="ConfigRef"/>).
-/// </summary>
 internal static class ExplainPlanCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -47,10 +40,6 @@ internal static class ExplainPlanCommand
         return command;
     }
 
-    /// <param name="config">The workspace (<c>-c</c>); with <paramref name="manifest"/> null too, the workspace <c>config</c>.</param>
-    /// <param name="manifest">A manifest id or file (<c>--manifest</c>), read with <paramref name="store"/>.</param>
-    /// <param name="errors">Where diagnostics go; standard error by default.</param>
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string? config, string environment, string? pipeline, string format, string[] armArgs, TextWriter output,
         CancellationToken cancellationToken, string? manifest = null, string? store = null, TextWriter? errors = null)
@@ -151,7 +140,6 @@ internal static class ExplainPlanCommand
                     arms.Add(plan.Arms[a].ArmName);
                 }
 
-                // Who reviews it (policy.jsonc owners of what its arms touch); per arm in --json.
                 var owners = new SortedSet<string>(StringComparer.Ordinal);
                 foreach (var arm in report.Arms)
                 {
@@ -164,7 +152,6 @@ internal static class ExplainPlanCommand
                 o.WriteLine($"  {e.Id,-32} layer {plan.Layers[e.LayerIndex].Name,-10} arms {string.Join(", ", arms)}{(owners.Count > 0 ? "  owners " + string.Join(", ", owners) : string.Empty)}");
             }
 
-            // What a yield costs and what it buys: the review that it is meant.
             foreach (var y in report.Yields)
             {
                 o.WriteLine($"  {y.Experiment} yields to {y.To}: does not run on {y.To}'s traffic; keeps apart "
@@ -225,7 +212,6 @@ internal static class ExplainPlanCommand
         }
     }
 
-    /// <summary>The plan of one arm combination (<see cref="EffectivePlan"/>): what <c>diff</c> compares, in the same terms.</summary>
     private static void WriteSelectedText(TextWriter o, ExecutionPlan plan, EffectivePlan selected, DiagnosticLocator? locator)
     {
         o.WriteLine($"timeline for {PlanDiff.Label(selected.ArmIds)}:");
@@ -249,7 +235,6 @@ internal static class ExplainPlanCommand
                 }
             }
 
-            // The data flow of this plan: which node a column comes from and which nodes read it.
             var (reads, writes) = Flow(plan, node.Node);
             o.WriteLine($"         {"<- reads",-24} {(reads.Count == 0 ? "(no columns)" : string.Join(", ", reads))}");
             o.WriteLine($"         {"-> writes",-24} {(writes.Count == 0 ? "(no columns)" : string.Join(", ", writes))}");
@@ -326,11 +311,8 @@ internal static class ExplainPlanCommand
     }
 
     /// <summary>
-    /// The columns a node reads (but the entity id, which every row has), in name order, and those it writes, as the
-    /// compiled node declares them: what the executor fetches before it, and versions after it. Reads are sorted by name,
-    /// not listed by column id: a feature's id is the order the plan first read it in, which says nothing. The
-    /// request columns it reads and writes follow, as <c>req.&lt;name&gt;</c>, and the pipelines it calls, as
-    /// <c>pipeline:&lt;id&gt;</c>.
+    /// Reads are sorted by name, not listed by column id: a feature's id is the order the plan first read it in, which
+    /// says nothing.
     /// </summary>
     private static (List<string> Reads, List<string> Writes) Flow(ExecutionPlan plan, CompiledNode node)
     {
@@ -354,7 +336,6 @@ internal static class ExplainPlanCommand
         requestReads.Sort(StringComparer.Ordinal);
         reads.AddRange(requestReads);
 
-        // The pipelines it calls, as what it reads last: pipeline:<id>.
         var called = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var call in node.Calls)
         {
@@ -426,9 +407,9 @@ internal static class ExplainPlanCommand
     }
 
     /// <summary>
-    /// The experiments reaching a position triggers, and when: the OR of the <c>when</c> of each arm's node
-    /// there, together with <paramref name="arms"/> in the other layers (the selected combination; none for the overview,
-    /// where another layer's arm may still change it). A fallback triggers whenever it is invoked.
+    /// The experiments reaching a position triggers, and when: the OR of the <c>when</c> of each arm's node there,
+    /// together with <paramref name="arms"/> in the other layers (the selected combination; none for the overview,
+    /// where another layer's arm may still change it).
     /// </summary>
     private static string Sites(ExecutionPlan plan, TimelineSlot slot, bool fallback, RequestArms arms = default)
     {
@@ -557,12 +538,6 @@ internal static class ExplainPlanCommand
         json.WriteEndObject();
     }
 
-    /// <summary>
-    /// The plan of one arm combination: <c>combination</c>, <c>timeline</c> and <c>fallbacks</c> with each node's merged
-    /// definition, and <c>params</c>, <c>taps</c>, <c>funnel_groups</c> and <c>output</c> exactly as
-    /// <see cref="EffectivePlan.ToDocument"/> has them, so a <c>diff</c> pointer such as <c>/taps/served/columns/final</c>
-    /// reads the same here.
-    /// </summary>
     private static void WriteSelectedJson(Utf8JsonWriter json, ExecutionPlan plan, EffectivePlan selected)
     {
         WriteStrings(json, "combination", selected.ArmIds);

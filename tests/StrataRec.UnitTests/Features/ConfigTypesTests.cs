@@ -3,28 +3,24 @@ using StrataRec.Features.Catalog;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// <see cref="ConfigTypes"/>: a type a place does not accept is answered with the spelling meant (a typo, another case,
-/// another language's name) and the spellings valid there.
-/// </summary>
 public class ConfigTypesTests
 {
     [Theory]
     [InlineData("int46", TypeSite.Column, "int64")]
-    [InlineData("int46?", TypeSite.Column, "int64?")] // a column keeps its '?'
+    [InlineData("int46?", TypeSite.Column, "int64?")]
     [InlineData("int46", TypeSite.Parameter, "int64")]
-    [InlineData("Int64", TypeSite.Column, "int64")] // only the case differs
+    [InlineData("Int64", TypeSite.Column, "int64")]
     [InlineData("long", TypeSite.Column, "int64")]
     [InlineData("integer?", TypeSite.Column, "int64?")]
     [InlineData("short", TypeSite.Column, "int32")]
     [InlineData("float", TypeSite.Column, "float32")]
-    [InlineData("float", TypeSite.Parameter, "float64")] // a parameter has no float32
+    [InlineData("float", TypeSite.Parameter, "float64")]
     [InlineData("double", TypeSite.Parameter, "float64")]
     [InlineData("boolean", TypeSite.Feature, "bool")]
     [InlineData("str", TypeSite.Column, "string")]
     [InlineData("strng", TypeSite.Parameter, "string")]
     [InlineData("flaot64", TypeSite.Feature, "float64")]
-    [InlineData("array<double,64>", TypeSite.Column, "list<float64,64>")] // the length written is kept
+    [InlineData("array<double,64>", TypeSite.Column, "list<float64,64>")]
     [InlineData("array<float,8>", TypeSite.Feature, "list<float32,8>")]
     public void AnUnknownType_SuggestsTheSpellingMeant_AndListsTheValidOnes(string written, TypeSite site, string suggestion)
     {
@@ -35,7 +31,7 @@ public class ConfigTypesTests
     }
 
     [Theory]
-    [InlineData("vec<float32,4>", TypeSite.Column, "list<float32,4>")] // the length written is kept
+    [InlineData("vec<float32,4>", TypeSite.Column, "list<float32,4>")]
     [InlineData("vec<float32,4>?", TypeSite.Column, "list<float32,4>?")]
     [InlineData("vec<float64,64>", TypeSite.Feature, "list<float64,64>")]
     [InlineData("vec<float32,16>", TypeSite.Feature, "list<float32,16>")]
@@ -98,7 +94,6 @@ public class ConfigTypesTests
     [InlineData("map<string,int32>", "'int32' is not a parameter type.", "write 'map<string,int64>'; parameter types: ")]
     [InlineData("list<int64>", "'list<int64>' is not a parameter type.", "parameter types: ")]
     [InlineData("int64?", "Parameter types are written without '?': a parameter always has a value (got 'int64?').", "write 'int64'; parameter types: ")]
-    // Both mistakes at once were answered with "write 'int32'", which parameters do not take either.
     [InlineData("int32?", "Parameter types are written without '?': a parameter always has a value (got 'int32?').", "write 'int64'; parameter types: ")]
     [InlineData("float32?", "Parameter types are written without '?': a parameter always has a value (got 'float32?').", "write 'float64'; parameter types: ")]
     [InlineData("map<string,int32?>", "Parameter types are written without '?': a parameter always has a value (got 'map<string,int32?>').",

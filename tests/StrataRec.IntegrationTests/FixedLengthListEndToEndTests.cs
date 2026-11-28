@@ -9,16 +9,11 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// <c>list&lt;E,N&gt;</c> derived features and node outputs end to end: a list of another length takes
-/// the declared default, or becomes missing, and is counted as an int32 overflow is, in
-/// <see cref="PipelineResult.OutOfRangeValues"/> and the out-of-range metric; a non-nullable one without a default fails;
-/// a default or a constant of another length is a configuration error at its pointer. In the listener collection: one test
-/// reads the out-of-range metric.
+/// In the listener collection: one test reads the out-of-range metric.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public class FixedLengthListEndToEndTests
 {
-    /// <summary>Item 1 gets a list of 2, items 2 and 3 a list of 3.</summary>
     private const string Mixed = "col.entity_id > 1 ? [1.0, 2.0, 3.0] : [0.5, 0.25]";
 
     [Fact]
@@ -33,12 +28,10 @@ public class FixedLengthListEndToEndTests
         var byId = result.Items.ToDictionary(i => i.Id.Int64Value, i => i.Columns);
         Assert.Equal(new long[] { 1, 2, 3 }, byId.Keys.Order());
 
-        // The derived feature, with a default.
         Assert.Equal(new[] { 0.5, 0.25 }, byId[1]["feature"].AsFloat64List().ToArray());
         Assert.Equal(new[] { 9.0, 9.0 }, byId[2]["feature"].AsFloat64List().ToArray());
         Assert.Equal(new[] { 9.0, 9.0 }, byId[3]["feature"].AsFloat64List().ToArray());
 
-        // The node outputs: the column's default, or missing.
         Assert.Equal(new[] { 0.5, 0.25 }, byId[1]["vec"].AsFloat64List().ToArray());
         Assert.Equal(new[] { 7.0, 7.0 }, byId[2]["vec"].AsFloat64List().ToArray());
         Assert.Equal(new[] { 7.0, 7.0 }, byId[3]["vec"].AsFloat64List().ToArray());
@@ -81,8 +74,8 @@ public class FixedLengthListEndToEndTests
     }
 
     [Theory]
-    [InlineData("[1.0, 2.0, 3.0]", "EXPR_TYPE_MISMATCH", "declare the site as list<float32,3>, or write a list of 2")] // its type has the length
-    [InlineData("let v = [1, 2, 3]; col.entity_id > 0 ? v : v", "EXPR_TYPE_MISMATCH", "declare the site as list<float32,3>, or write a list of 2")] // a choice of such lists
+    [InlineData("[1.0, 2.0, 3.0]", "EXPR_TYPE_MISMATCH", "declare the site as list<float32,3>, or write a list of 2")]
+    [InlineData("let v = [1, 2, 3]; col.entity_id > 0 ? v : v", "EXPR_TYPE_MISMATCH", "declare the site as list<float32,3>, or write a list of 2")]
     public void AConstantOfAnotherLength_ForAFixedLengthColumn_IsAConfigurationError_AtItsPointer(string expr, string code, string hint)
     {
         var root = Workspace(vecExpr: expr);

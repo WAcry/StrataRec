@@ -7,13 +7,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Benchmarks;
 
-/// <summary>
-/// One home_feed request with a wide candidate tap after coarse_score (3,284 of 5,000 rows survive the safety filter):
-/// six scalar columns (five float32, the int64 entity id) and the item embedding (<c>list&lt;float32,D&gt;</c>), the
-/// request with and without log capture. What a sampled request pays for its taps: the rows' columns copied at their
-/// declared width.
-/// </summary>
-/// <remarks>Run: <c>dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*TapCaptureBenchmarks*'</c>.</remarks>
 [MemoryDiagnoser]
 public class TapCaptureBenchmarks
 {

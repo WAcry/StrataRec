@@ -7,10 +7,6 @@ using StrataRec.UnitTests.Artifacts;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// <see cref="RequestSchema"/>: one set of rules for a request's inputs, read from JSON (<see cref="RequestSchema.TryRead"/>)
-/// or checked as typed values (<see cref="RequestSchema.Check"/>), every problem at its pointer, in the words of the JSON.
-/// </summary>
 public sealed class RequestSchemaTests
 {
     private static readonly RequestSchema Schema = new("home_feed", new Dictionary<string, ColumnType>
@@ -31,7 +27,7 @@ public sealed class RequestSchemaTests
         Assert.Equal(7, Schema.Count);
         Assert.Equal(new[] { "a/b", "emb", "flag", "n32", "region", "tags", "user_id" }, Schema.Names);
         Assert.True(Schema.TryGetType("n32", out var n32));
-        Assert.Equal("int32?", n32.ToString()); // as declared; values are held promoted
+        Assert.Equal("int32?", n32.ToString());
         Assert.False(Schema.TryGetType("nope", out _));
         Assert.True(Schema.Contains("region"));
         Assert.False(Schema.Contains("Region"));
@@ -45,11 +41,11 @@ public sealed class RequestSchemaTests
 
         Assert.Equal(1001L, inputs["user_id"].AsInt64());
         Assert.Equal("us", inputs["region"].AsString());
-        Assert.Equal(7L, inputs["n32"].AsInt64()); // promoted
+        Assert.Equal(7L, inputs["n32"].AsInt64());
         Assert.Equal(new long[] { 1, 2 }, inputs["tags"].AsInt64List());
         Assert.Equal(new[] { 0.5, 1, -2 }, inputs["emb"].AsFloat64List().ToArray());
         Assert.True(inputs["flag"].AsBool());
-        Assert.False(inputs.TryGetValue("a/b", out _)); // null: missing, never a default
+        Assert.False(inputs.TryGetValue("a/b", out _));
 
         var minimal = Read("""{ "user_id": 1 }""");
         Assert.Single(minimal);
@@ -59,7 +55,7 @@ public sealed class RequestSchemaTests
     public void TryRead_AnExactInteger_IsAnInteger_AndBeyondInt64IsAnError()
     {
         Assert.Equal(9007199254740993L, Read("""{ "user_id": 9007199254740993 }""")["user_id"].AsInt64());
-        Assert.Equal(9007199254740993L, Read("""{ "user_id": 9007199254740993.0 }""")["user_id"].AsInt64()); // not rounded through double
+        Assert.Equal(9007199254740993L, Read("""{ "user_id": 9007199254740993.0 }""")["user_id"].AsInt64());
 
         var fraction = Errors("""{ "user_id": 9007199254740992.5 }""");
         Assert.Equal("Input 'user_id' must be an integer (int64), got the number 9007199254740992.5.", Assert.Single(fraction).Message);
@@ -85,7 +81,6 @@ public sealed class RequestSchemaTests
     [InlineData("""{ "user_id": 1, "a/b": 2 }""", "/inputs/a~1b", "Input 'a/b' must be a string, got the number 2.", null)]
     [InlineData("""[1]""", "/inputs", "'inputs' must be an object of input values by name, got an array.",
         "declared inputs: 'a/b', 'emb', 'flag', 'n32', 'region', 'tags' and 'user_id'")]
-    // What System.Text.Json parses but a request must not hold, at its pointer.
     [InlineData("""{ "user_id": 1, "user_id": 2 }""", "/inputs/user_id", "Member 'user_id' is given more than once.",
         "give each member once: which of two values would count is not defined")]
     [InlineData("""{ "user_id": 1, "region": "\uD800" }""", "/inputs/region", "The string \"\\uD800\" is not valid Unicode: an escape is an unpaired surrogate.",
@@ -120,7 +115,7 @@ public sealed class RequestSchemaTests
         var errors = Errors("""{ "zzz": 1, "n32": "x", "region": 3 }""");
 
         Assert.Equal(new[] { "/inputs/zzz", "/inputs/n32", "/inputs/region", "/inputs/user_id" }, errors.Select(e => e.Pointer));
-        Assert.Equal("declared inputs: 'a/b', 'emb', 'flag', 'n32', 'region', 'tags' and 'user_id'", errors[0].Hint); // nothing close to 'zzz'
+        Assert.Equal("declared inputs: 'a/b', 'emb', 'flag', 'n32', 'region', 'tags' and 'user_id'", errors[0].Hint);
         Assert.All(errors, AssertNoDotNetNames);
     }
 
@@ -144,7 +139,6 @@ public sealed class RequestSchemaTests
     [Fact]
     public void TryRead_MatchesEscapedNames()
     {
-        // "user\u005fid" is "user_id": the name is compared after unescaping, as any JSON reader would.
         var inputs = Read("""{ "user\u005fid": 5 }""");
 
         Assert.Equal(5L, inputs["user_id"].AsInt64());
@@ -189,7 +183,7 @@ public sealed class RequestSchemaTests
     public void Check_ValidInputs_AllocateNothing()
     {
         var inputs = new RequestInputs().Set("user_id", ScalarValue.FromInt64(1)).Set("region", ScalarValue.FromString("us")).Set("tags", ScalarValue.FromInt64List(new long[] { 1 }));
-        Assert.Null(Schema.Check(inputs)); // warm
+        Assert.Null(Schema.Check(inputs));
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         var error = Schema.Check(inputs);
@@ -233,35 +227,34 @@ public sealed class RequestSchemaTests
     }
 
     [Theory]
-    [InlineData("tenant_id", "int64", null, "FALLBACK_INPUT_UNDECLARED")] // required by the fallback, unknown to the primary
-    [InlineData("tenant_id", "int64?", null, null)] // optional in the fallback: a request without it is served
-    [InlineData("region", "string?", "string?", null)] // the same declaration
-    [InlineData("region", "string", "string?", "FALLBACK_INPUT_OPTIONAL")] // optional in the primary, required in the fallback
-    [InlineData("region", "string?", "string", null)] // the fallback is more lenient
-    [InlineData("region", "int64", "string", "FALLBACK_INPUT_TYPE")] // another type
+    [InlineData("tenant_id", "int64", null, "FALLBACK_INPUT_UNDECLARED")]
+    [InlineData("tenant_id", "int64?", null, null)]
+    [InlineData("region", "string?", "string?", null)]
+    [InlineData("region", "string", "string?", "FALLBACK_INPUT_OPTIONAL")]
+    [InlineData("region", "string?", "string", null)]
+    [InlineData("region", "int64", "string", "FALLBACK_INPUT_TYPE")]
     [InlineData("region", "int64?", "string?", "FALLBACK_INPUT_TYPE")]
-    // Judged by what the fallback's binding converts (int32 → int64 was flagged, though the fallback served it).
-    [InlineData("n", "int64", "int32", null)] // every int32 is an int64
+    [InlineData("n", "int64", "int32", null)]
     [InlineData("n", "int64?", "int32", null)]
-    [InlineData("n", "int32", "int64", "FALLBACK_INPUT_TYPE")] // beyond the int32 range fails
+    [InlineData("n", "int32", "int64", "FALLBACK_INPUT_TYPE")]
     [InlineData("x", "float64", "float32", null)]
-    [InlineData("x", "float32", "float64", "FALLBACK_INPUT_TYPE")] // beyond the float32 range fails
-    [InlineData("x", "float64", "int64", null)] // an integer converts to the nearest double, as for any float input
+    [InlineData("x", "float32", "float64", "FALLBACK_INPUT_TYPE")]
+    [InlineData("x", "float64", "int64", null)]
     [InlineData("x", "float32", "int32", null)]
-    [InlineData("n", "int64", "float64", "FALLBACK_INPUT_TYPE")] // a fraction fails
+    [InlineData("n", "int64", "float64", "FALLBACK_INPUT_TYPE")]
     [InlineData("n", "int32", "string", "FALLBACK_INPUT_TYPE")]
     [InlineData("b", "bool", "bool", null)]
     [InlineData("b", "bool", "int32", "FALLBACK_INPUT_TYPE")]
-    [InlineData("l", "list<int64>", "list<int32>", null)] // elements as scalars
+    [InlineData("l", "list<int64>", "list<int32>", null)]
     [InlineData("l", "list<int32>", "list<int64>", "FALLBACK_INPUT_TYPE")]
-    [InlineData("l", "list<float64>", "list<float32,4>", null)] // a fixed length into any length, a wider element
+    [InlineData("l", "list<float64>", "list<float32,4>", null)]
     [InlineData("l", "list<float32,4>", "list<float32,4>", null)]
-    [InlineData("l", "list<float32,3>", "list<float32,4>", "FALLBACK_INPUT_TYPE")] // no list converts
-    [InlineData("l", "list<float32,4>", "list<float32>", "FALLBACK_INPUT_TYPE")] // other lengths fail
+    [InlineData("l", "list<float32,3>", "list<float32,4>", "FALLBACK_INPUT_TYPE")]
+    [InlineData("l", "list<float32,4>", "list<float32>", "FALLBACK_INPUT_TYPE")]
     [InlineData("l", "list<float32,4>", "list<float64,4>", "FALLBACK_INPUT_TYPE")]
-    [InlineData("l", "list<int64>", "int64", "FALLBACK_INPUT_TYPE")] // a scalar is no list
+    [InlineData("l", "list<int64>", "int64", "FALLBACK_INPUT_TYPE")]
     [InlineData("l", "int64", "list<int64>", "FALLBACK_INPUT_TYPE")]
-    [InlineData("n", "int64", "int32?", "FALLBACK_INPUT_OPTIONAL")] // nullability apart: the type widens
+    [InlineData("n", "int64", "int32?", "FALLBACK_INPUT_OPTIONAL")]
     public void CheckFallback_WarnsAboutWhatTheFallbackWouldFailARequestOn(string name, string fallbackType, string? primaryType, string? code)
     {
         var primaryInputs = new Dictionary<string, ColumnType> { ["user_id"] = ColumnType.Parse("int64") };
@@ -318,7 +311,6 @@ public sealed class RequestSchemaTests
         Assert.Equal(("FALLBACK_INPUT_TYPE", message, hint), (warning.Code, warning.Message, warning.Hint));
     }
 
-    /// <summary>A narrower type and a required input are two failures, each reported: the type no longer hides the other.</summary>
     [Fact]
     public void CheckFallback_ReportsTheTypeAndTheNullabilityApart()
     {
@@ -329,13 +321,6 @@ public sealed class RequestSchemaTests
         Assert.Equal(new[] { "FALLBACK_INPUT_TYPE", "FALLBACK_INPUT_OPTIONAL" }, diagnostics.Items.Select(d => d.Code));
     }
 
-    /// <summary>
-    /// <see cref="RequestSchema.ConversionFailure"/> says exactly what the fallback's binding fails at run time
-    /// (<see cref="ScalarValue.TryConvert"/>): for every pair of types, every value an input of the first accepted (typed
-    /// values of every kind a host may pass, at the edges of each range) converts to the second when it says none fails,
-    /// and one does not when it says some do. So the check can neither flag a fallback that serves every request nor miss
-    /// one that fails some.
-    /// </summary>
     [Fact]
     public void ConversionFailure_AgreesWithTheConversionTheFallbackRuns()
     {
@@ -363,7 +348,6 @@ public sealed class RequestSchemaTests
     private static RequestSchema Single(string pipeline, string type) =>
         new(pipeline, new Dictionary<string, ColumnType> { ["n"] = ColumnType.Parse(type) });
 
-    /// <summary>Typed values of every kind, at the edges of every range, and lists of them of several lengths.</summary>
     private static List<ScalarValue> Probes()
     {
         long[] integers = [0, 1, -1, int.MaxValue, int.MinValue, int.MaxValue + 1L, int.MinValue - 1L, long.MaxValue, long.MinValue, 9_007_199_254_740_993];

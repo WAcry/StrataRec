@@ -8,33 +8,17 @@ using StrataRec.Features.Cache;
 
 namespace StrataRec.Redis;
 
-/// <summary>
-/// <c>redis@1</c>: the distributed tier of sources' and services' caches in Redis, through StackExchange.Redis. One string value per (source, entity, key) under
-/// <c>{key_prefix}{source}:{entity}:{origin}:{key}</c> (<see cref="CacheKeyspace.Prefix"/>, where the origin says which
-/// connector and settings the source's values come from, then the key's text, <see cref="CacheKeyspace.KeyText"/>:
-/// <c>10042</c>, or <c>10042:US</c> for a key of two parts; a service's answers are under
-/// <c>{key_prefix}{service}:answers:</c> and the two halves of their hash), holding the engine's encoded record, with the time to live the engine
-/// gives (the record's lifetime and its <c>stale_if_error_ms</c> window).
-/// </summary>
 /// <remarks>
-/// <para><b>Settings:</b> <see cref="RedisSettings"/>.</para>
-/// <para><b>Round trips.</b> A read is one round trip per chunk: one <c>MGET</c> on a standalone server; on a cluster, whose
-/// <c>MGET</c> cannot span hash slots, pipelined <c>GET</c>s, sent together. A write is one pipelined batch of
-/// <c>SET … PX</c>. Keys are not hash-tagged, so a keyspace spreads over the cluster's shards.</para>
-/// <para><b>Failing fast.</b> The connection is made at load, but a server that is down then does not fail the load: the
-/// tier is an optimisation, so the plan serves from the connector (or the service) while the client reconnects in the background, and
-/// commands sent while it is disconnected fail at once rather than queue. Credentials the server refuses (a wrong password
-/// or user, or none where the server requires one) and a missing secret do fail the load: they are a wrong setting, which
-/// reconnecting does not fix (<see cref="LoadAsync"/> says how they are told apart). A server that accepts connections
-/// and does not answer holds a load up to three connect timeouts of 2 s. Commands time out after one second; the engine
-/// stops waiting for a read much earlier (the tier's <c>timeout_ms</c>), and a read that throws or is late sends its keys
-/// on to the connector (or the service) while there is time left to (<see cref="ICacheStore"/>).</para>
+/// <para>The connection is made at load, but a server that is down then does not fail the load: the plan serves from
+/// the connector (or the service) while the client reconnects in the background, and commands sent while it is
+/// disconnected fail at once rather than queue. Credentials the server refuses (a wrong password or user, or none where
+/// the server requires one) and a missing secret do fail the load (<see cref="LoadAsync"/> says how they are told
+/// apart).</para>
 /// </remarks>
 public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
 {
     public const string Type = "redis@1";
 
-    /// <summary>How long a command may take before the client fails it.</summary>
     private const int CommandTimeoutMs = 1000;
 
     /// <summary>
@@ -49,8 +33,6 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
     private IDatabase? _database;
     private volatile bool _cluster;
 
-    /// <param name="settings">The checked settings.</param>
-    /// <param name="connect">Connects; tests pass one they can hold.</param>
     internal RedisCacheStore(RedisStoreSettings settings, Func<ConfigurationOptions, Task<ConnectionMultiplexer>>? connect = null)
     {
         _settings = settings;
@@ -61,18 +43,8 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
 
     /// <summary>Resolves the password and connects. A server that cannot be reached does not fail the load (see remarks).</summary>
     /// <remarks>
-    /// <para>Whether the server refuses the store is read from a connection that saw it. StackExchange.Redis records a
-    /// refusal on its connection before it ends the connect, and publishes it (to the connection's failure events and to
-    /// the failures of later commands) only after: a connect that returns disconnected may not
-    /// show yet why, and a probe made afterwards can fail, from a timeout or a reset, before it reads a refusal of its own.
-    /// But a connect that must succeed reports, when it gives up, the refusal its own connection recorded. So the store
-    /// first connects that way (<see cref="StrictConnects"/> times at most, one attempt each), and that connection, once
-    /// up, is the store's: one command then tells whether the server accepts the credentials
-    /// (<see cref="CommandRefusalAsync"/>).</para>
-    /// <para>Only when every such connect failed without a refusal is the server taken for down: then a connection that
-    /// reconnects in the background, whose failure, if it shows one already, is still read. A server that drops two
-    /// connections before it answers their handshakes and refuses the third is the one case not told from a server that is
-    /// down; it is then served as one: from the connector.</para>
+    /// <para>A server that drops two connections before it answers their handshakes and refuses the third is the one
+    /// case not told from a server that is down; it is then served as one: from the connector.</para>
     /// </remarks>
     public async ValueTask LoadAsync(CancellationToken cancellationToken)
     {
@@ -107,8 +79,6 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
             connection = await ConnectAsync(strict, cancellationToken).ConfigureAwait(false);
         }
 
-        // Every connect that must succeed failed, and none was refused: the server is down, for all the load can tell. A
-        // connect that need not succeed returns its connection, up or not.
         connection ??= (await ConnectAsync(options, cancellationToken).ConfigureAwait(false))!;
         if (await CommandRefusalAsync(connection).ConfigureAwait(false) is { } refused)
         {
@@ -120,10 +90,6 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
         _cluster = IsCluster(connection);
     }
 
-    /// <summary>
-    /// Connects with <paramref name="options"/>. A connect that must succeed (<c>AbortOnConnectFail</c>) and fails throws
-    /// the refusal it saw, if any (<see cref="RefusalIn"/>), and returns null otherwise.
-    /// </summary>
     /// <remarks>
     /// The connect itself cannot be cancelled: a cancelled load stops waiting for it, and the store keeps it, so that its
     /// disposal waits for a connection that completes later and disposes it. The store keeps the latest one:
@@ -144,15 +110,9 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Why the server refuses a connection, by one command, if it does:
-    /// <list type="bullet">
-    /// <item>With a <c>user</c> and connected: <c>ACL WHOAMI</c>. A server whose default user needs no password accepts the
-    /// connection even when it refused the user's credentials (<c>AUTH</c> failed, the connection stays the default
-    /// user's). A server that cannot answer it (before Redis 6, or a user not allowed to ask) is trusted.</item>
-    /// <item>Otherwise: a <c>PING</c>, answered <c>NOAUTH</c> by a server that requires a password; on a connection that is
-    /// down, it fails at once with the failure the connection published, if any.</item>
-    /// </list>
-    /// Anything else (a server that is down, or cannot tell) is no refusal.
+    /// Why the server refuses a connection, if it does: with a <c>user</c>, <c>ACL WHOAMI</c> (a server whose default
+    /// user needs no password accepts a connection whose <c>AUTH</c> failed); otherwise a <c>PING</c> answered
+    /// <c>NOAUTH</c>. Anything else (down, or cannot tell) is no refusal.
     /// </summary>
     private async Task<BindingException?> CommandRefusalAsync(ConnectionMultiplexer connection)
     {
@@ -165,7 +125,7 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
             }
 
             await database.PingAsync().ConfigureAwait(false);
-            return null; // the server answers this connection
+            return null;
         }
         catch (Exception ex)
         {
@@ -197,17 +157,11 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
             ? $"check the secret '{secret.Name}'" + (_settings.User is null ? string.Empty : " and the user") + ": the server does not accept them"
             : "the server requires a password: add \"password\": \"secret://<name>\"");
 
-    /// <summary>
-    /// Whether a failure, anywhere in its tree (inner exceptions, and every branch of an aggregate), is the server
-    /// refusing the credentials: the client's authentication failure, or the server's own <c>NOAUTH</c> /
-    /// <c>WRONGPASS</c> reply.
-    /// </summary>
     private static bool IsRefusal(Exception failure) => Find(failure, static e =>
         e is RedisConnectionException { FailureType: ConnectionFailureType.AuthenticationFailure }
         || (e is RedisServerException server
             && (server.Message.StartsWith("NOAUTH", StringComparison.Ordinal) || server.Message.StartsWith("WRONGPASS", StringComparison.Ordinal)))) is not null;
 
-    /// <summary>The first exception of <paramref name="failure"/>'s tree that matches, depth first.</summary>
     private static Exception? Find(Exception? failure, Func<Exception, bool> match)
     {
         for (; failure is not null; failure = failure.InnerException)
@@ -234,7 +188,6 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
         return null;
     }
 
-    /// <summary>Whether the connection is to a cluster (whose multi-key commands cannot span hash slots).</summary>
     private static bool IsCluster(ConnectionMultiplexer connection)
     {
         foreach (var server in connection.GetServers())
@@ -278,7 +231,6 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
         await Task.WhenAll(Send(database, _settings.KeyPrefix + keyspace.Prefix, entries.Span)).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Sends one <c>SET … PX</c> per entry in one pipelined batch.</summary>
     private static Task<bool>[] Send(IDatabase database, string prefix, ReadOnlySpan<CacheStoreEntry> entries)
     {
         var batch = database.CreateBatch();
@@ -310,7 +262,7 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
         }
         catch (Exception)
         {
-            return; // it made no connection
+            return;
         }
 
         await connection.CloseAsync(allowCommandsToComplete: false).ConfigureAwait(false);

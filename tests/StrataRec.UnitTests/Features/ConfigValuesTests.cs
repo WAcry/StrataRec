@@ -6,10 +6,6 @@ using StrataRec.Features.Catalog;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// <see cref="ConfigValues"/>: a default, parameter value, enum value, table entry or request input of the wrong kind is
-/// told in the words of the JSON written, as the end of a sentence whose subject the caller names.
-/// </summary>
 public class ConfigValuesTests
 {
     [Theory]
@@ -34,7 +30,7 @@ public class ConfigValuesTests
     }
 
     [Theory]
-    [InlineData("3.0", "int64", 3L)] // an integral number written with a fraction is an integer
+    [InlineData("3.0", "int64", 3L)]
     [InlineData("3e2", "int64", 300L)]
     public void AnIntegralNumber_IsAnInteger(string json, string type, long expected)
     {
@@ -42,8 +38,6 @@ public class ConfigValuesTests
 
         Assert.Equal(expected, value.AsInt64());
     }
-
-    // ---- integers, exactly (through a double, 9007199254740993.0 became 9007199254740992) ----------------
 
     /// <summary>A request's integers (a <see cref="JsonElement"/>) are read as written: a request is never stored canonical.</summary>
     [Theory]
@@ -91,7 +85,7 @@ public class ConfigValuesTests
         "must be an array of integers within the int64 range [-9223372036854775808, 9223372036854775807]; element 1 is the number 9223372036854775808.0")]
     [InlineData("2147483648.0", "int32",
         "must be within the int32 range [-2147483648, 2147483647], got the number 2147483648.0; declare the type as int64 for larger values")]
-    [InlineData("1e19", "int32", "must be within the int32 range [-2147483648, 2147483647], got the number 1e19")] // int64 would not hold it either
+    [InlineData("1e19", "int32", "must be within the int32 range [-2147483648, 2147483647], got the number 1e19")]
     [InlineData("[2.147483648e9]", "list<int32>",
         "must be an array of integers within the int32 range [-2147483648, 2147483647]; element 0 is the number 2.147483648e9; declare the type as list<int64> for larger values")]
     public void AnIntegerOutOfRange_SaysTheRange(string json, string type, string error)
@@ -140,13 +134,6 @@ public class ConfigValuesTests
         Assert.Equal(expected, value.AsInt64());
     }
 
-    /// <summary>
-    /// Configuration is stored canonical (RFC 8785), where a number written with a fraction or an exponent is a
-    /// double. Past ±2^53 its canonical form can be another integer: an int64 parameter written <c>1152921504606846976.0</c>
-    /// validated, a run from the workspace returned 2^60 and a run from the manifest built from it 1152921504606847000. In
-    /// configuration such an integer is an error, scalar or element, in the canonicalizer's words; a request reads it as
-    /// written.
-    /// </summary>
     [Theory]
     [InlineData("1152921504606846976.0", "int64",
         "must be an integer (int64) that RFC 8785 represents exactly, got the number 1152921504606846976.0, whose canonical form would be 1152921504606847000, a different integer; write integers beyond ±2^53 (9007199254740992) as strings, of a string type")]
@@ -166,9 +153,7 @@ public class ConfigValuesTests
     }
 
     /// <summary>
-    /// An integer its canonical form keeps is configuration like any other: up to 2^53 every one, past it one whose
-    /// shortest double digits are itself. Plain digits past 2^53 are the canonicalizer's to refuse, where the artifact or
-    /// override holding them is hashed.
+    /// Plain digits past 2^53 are the canonicalizer's to refuse, where the artifact or override holding them is hashed.
     /// </summary>
     [Theory]
     [InlineData("1e18", 1_000_000_000_000_000_000L)]
@@ -271,7 +256,6 @@ public class ConfigValuesTests
             Convert(ScalarValue.FromInt64List(new long[] { 3_000_000_000 }), "list<int32>"));
         Assert.Equal("must be an array of 4 numbers (list<float32,4>), got 1 element", Convert(ScalarValue.FromFloat32List(new float[] { 1 }), "list<float32,4>"));
         Assert.Equal("must be an array of 2 integers (list<int32,2>), got 3 elements", Convert(ScalarValue.FromInt64List(new long[] { 1, 2, 3_000_000_000 }), "list<int32,2>"));
-        // A host's string[] can hold a null, which JSON cannot: a list's elements are values, so a model is never sent one.
         Assert.Equal("must be an array of 2 strings (list<string,2>); element 1 is null: a list's elements are values",
             Convert(ScalarValue.FromStringList(new[] { "present", null! }), "list<string,2>"));
 

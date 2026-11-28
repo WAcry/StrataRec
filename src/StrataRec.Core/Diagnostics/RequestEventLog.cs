@@ -66,13 +66,11 @@ public enum RequestEvent : byte
 /// of its calls in a window failed, and a line is written only when that verdict flips.
 /// </summary>
 /// <remarks>
-/// <para>The request path only increments counters in a slot found by a dictionary lookup on keys that already exist;
-/// it allocates only the first time a pair is seen. Samples are references to strings the request already has.</para>
-/// <para>Requests that returned while calls they abandoned still hold their buffers are watched (<see cref="WatchHeld"/>):
-/// a flush reports each one still held <see cref="HeldAfter"/> after it returned, once, and stops watching it. Only such
-/// requests are watched, so the list is bounded by their rate times <see cref="HeldAfter"/> plus a window.</para>
-/// <para>A timer flushes the windows. It holds the log only weakly, so an engine that is dropped stops flushing and its
-/// timer is finalized; <see cref="Dispose"/> flushes the last partial window.</para>
+/// <para>Requests that returned while calls they abandoned still hold their buffers are watched
+/// (<see cref="WatchHeld"/>): a flush reports each one still held <see cref="HeldAfter"/> after it returned, once, and
+/// stops watching it.</para>
+/// <para>A timer flushes the windows. It holds the log only weakly, so an engine that is dropped stops flushing;
+/// <see cref="Dispose"/> flushes the last partial window.</para>
 /// </remarks>
 public sealed partial class RequestEventLog : IDisposable
 {
@@ -80,8 +78,7 @@ public sealed partial class RequestEventLog : IDisposable
     public static readonly TimeSpan DefaultWindow = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Default <see cref="HeldAfter"/>. A call abandoned at a timeout normally ends within milliseconds of its
-    /// cancellation; one still running half a minute later is ignoring its token.
+    /// Default <see cref="HeldAfter"/>.
     /// </summary>
     public static readonly TimeSpan DefaultHeldAfter = TimeSpan.FromSeconds(30);
 
@@ -95,7 +92,7 @@ public sealed partial class RequestEventLog : IDisposable
 
     /// <param name="logger">Where summaries and health changes go.</param>
     /// <param name="window">Summary window; <see cref="DefaultWindow"/> when null.</param>
-    /// <param name="autoFlush">False leaves flushing to the caller (tests).</param>
+    /// <param name="autoFlush">False leaves flushing to the caller.</param>
     /// <param name="heldAfter"><see cref="HeldAfter"/>; <see cref="DefaultHeldAfter"/> when null.</param>
     public RequestEventLog(ILogger logger, TimeSpan? window = null, bool autoFlush = true, TimeSpan? heldAfter = null)
     {
@@ -184,7 +181,7 @@ public sealed partial class RequestEventLog : IDisposable
                 var calls = health.Take(out var failures, out var error);
                 if (calls == 0)
                 {
-                    continue; // no evidence either way
+                    continue;
                 }
 
                 var failing = failures * 2 >= calls;
@@ -212,7 +209,6 @@ public sealed partial class RequestEventLog : IDisposable
         Flush();
     }
 
-    /// <summary>Reports the watched requests held for <see cref="HeldAfter"/> or more and stops watching them and the returned ones.</summary>
     private void ReportHeld(long now)
     {
         lock (_held)
@@ -270,7 +266,6 @@ public sealed partial class RequestEventLog : IDisposable
 
     private readonly record struct HeldMemory(RequestMemory Memory, string Subject, string? RequestId, long Since);
 
-    /// <summary>Occurrences of one (event, subject) in the current window, plus the window's sample.</summary>
     private sealed class EventWindow
     {
         private long _count;
@@ -311,11 +306,9 @@ public sealed partial class RequestEventLog : IDisposable
         }
     }
 
-    /// <summary>Calls and failures of one dependency in the current window, and the verdict of the last window with calls.</summary>
     /// <remarks>
-    /// A call and its failure are added and taken under one lock: counted separately, a flush between the two increments
-    /// moves the failure into the next window without its call, and the verdicts of both windows go wrong.
-    /// The lock is per dependency and held for a few instructions.
+    /// A call and its failure are added and taken under one lock: counted separately, a flush between the two
+    /// increments moves the failure into the next window without its call, and the verdicts of both windows go wrong.
     /// </remarks>
     private sealed class HealthWindow
     {

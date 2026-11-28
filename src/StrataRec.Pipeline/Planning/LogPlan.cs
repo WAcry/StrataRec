@@ -36,8 +36,7 @@ public enum TapScope : byte
 }
 
 /// <summary>
-/// One compiled variant of a log tap: row selection, sampling and column expressions are fixed at
-/// load time, so capture on the request thread is row selection plus copying.
+/// One compiled variant of a log tap: row selection, sampling and column expressions are fixed at load time.
 /// </summary>
 public sealed class CompiledTap
 {
@@ -80,7 +79,7 @@ public sealed class CompiledTap
     /// </summary>
     public ImmutableArray<int> RequestReads { get; init; } = [];
 
-    /// <summary>Every name the tap's expressions bind (<see cref="CompiledNode.Requires"/>): a tap compiles after every node.</summary>
+    /// <summary>Every name the tap's expressions bind (<see cref="CompiledNode.Requires"/>).</summary>
     public ImmutableArray<NameRef> Requires { get; init; } = [];
 
     /// <summary>Candidate feature indices the tap reads; must have been fetched before the attach point.</summary>

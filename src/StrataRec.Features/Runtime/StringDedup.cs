@@ -6,38 +6,23 @@ namespace StrataRec.Features.Runtime;
 /// <summary>
 /// Scoped string deduplication for decoding: within one scope (a connector call's writer, one cache read's fill), equal
 /// values decoded from characters or UTF-8 come back as the same instance, so a category repeated across 5,000 keys is
-/// one string, not 5,000. The one place this logic lives: <see cref="StagingBuffer"/> (<c>IFeatureBatchWriter.Intern</c>)
-/// and the cache's record decoding both use it.
+/// one string, not 5,000.
 /// </summary>
 /// <remarks>
-/// <para>Not <c>string.Intern</c>, which keeps every string for the life of the process: for data values
-/// that is a leak. The table here goes away with its owner, and holds at most <see cref="MaxValues"/> values; past that a
-/// value it does not hold is returned as a new string each time, so a scope full of distinct values (titles, ids) costs a
-/// bounded table and no more.</para>
-/// <para>A lookup allocates nothing (an alternate lookup by span); a value it does not hold costs its string and, below the
-/// bound, a table entry. UTF-8 is decoded on the stack up to <see cref="OnStack"/> bytes and into a rented buffer beyond,
-/// invalid bytes becoming U+FFFD as <see cref="Encoding.UTF8"/> decodes them. Not thread-safe: one scope is written by one
-/// thread at a time.</para>
+/// <para>Not thread-safe: one scope is written by one thread at a time.</para>
 /// </remarks>
 internal sealed class StringDedup
 {
-    /// <summary>Distinct values kept at most.</summary>
     public const int MaxValues = 4096;
 
-    /// <summary>UTF-8 bytes decoded on the stack; a longer value is decoded into a rented buffer.</summary>
     internal const int OnStack = 256;
 
-    private HashSet<string>? _values; // made by the first value, so a scope that decodes no string costs this object only
+    private HashSet<string>? _values;
 
-    /// <summary>Number of distinct values held.</summary>
     public int Count => _values?.Count ?? 0;
 
-    /// <summary>Starts a new scope: drops the values held (the strings stay with whoever was handed them), keeping the
-    /// table's capacity, so a scope reusing this object sees neither the previous scope's values nor its use of
-    /// <see cref="MaxValues"/>.</summary>
     public void Clear() => _values?.Clear();
 
-    /// <summary>A string with these characters: the held instance when an equal value was seen in this scope.</summary>
     public string Intern(ReadOnlySpan<char> value)
     {
         if (value.IsEmpty)

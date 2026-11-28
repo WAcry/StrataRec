@@ -7,8 +7,7 @@ namespace StrataRec.UnitTests.Llm;
 
 /// <summary>
 /// The Mustache specification's own tests (vendored under <c>MustacheSpec/</c>, MIT) for what prompt templates support:
-/// interpolation, sections, inverted sections and comments, with the standalone-line rules. The generic renderer is
-/// driven with the tests' JSON data through a context stack, as the specification describes name resolution.
+/// interpolation, sections, inverted sections and comments, with the standalone-line rules.
 /// </summary>
 public sealed class MustacheSpecTests
 {
@@ -64,10 +63,6 @@ public sealed class MustacheSpecTests
     private static JsonDocument Load(string file) =>
         JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Llm", "MustacheSpec", file + ".json")));
 
-    /// <summary>
-    /// The specification's data model: a context stack of JSON values; a dotted name resolves its first part against the
-    /// stack, top first, and the rest against the result; a miss renders nothing and is falsey.
-    /// </summary>
     private sealed class JsonData(JsonElement root) : IMustacheData
     {
         private readonly List<JsonElement> _stack = new() { root };
@@ -134,7 +129,6 @@ public sealed class MustacheSpecTests
     }
 }
 
-/// <summary>The parser: the tree it builds, the standalone-line rule on its edges, and every error with its offset.</summary>
 public sealed class MustacheParserTests
 {
     [Fact]
@@ -153,13 +147,13 @@ public sealed class MustacheParserTests
     }
 
     [Theory]
-    [InlineData("A\n  {{#s}}  \r\nB\n\t{{/s}}\nC", "A\nB\nC")] // indented, \r\n and \n line ends
-    [InlineData("{{#s}}\nB\n{{/s}}", "B\n")] // the first line and the last, without a newline
-    [InlineData("A {{#s}}\nB\n{{/s}}", "A \nB\n")] // text before the tag on its line: not standalone
-    [InlineData("{{#s}}{{/s}}\nB", "\nB")] // two tags on a line: neither is standalone
-    [InlineData("A\n{{x}}\nB", "A\nX\nB")] // a variable never is
-    [InlineData("A\n  {{!\n multi-line\n }}  \nB", "A\nB")] // a comment spanning lines
-    [InlineData("A\n{{#s}}\r{{/s}}", "A\n\r")] // a lone \r is not a line end
+    [InlineData("A\n  {{#s}}  \r\nB\n\t{{/s}}\nC", "A\nB\nC")]
+    [InlineData("{{#s}}\nB\n{{/s}}", "B\n")]
+    [InlineData("A {{#s}}\nB\n{{/s}}", "A \nB\n")]
+    [InlineData("{{#s}}{{/s}}\nB", "\nB")]
+    [InlineData("A\n{{x}}\nB", "A\nX\nB")]
+    [InlineData("A\n  {{!\n multi-line\n }}  \nB", "A\nB")]
+    [InlineData("A\n{{#s}}\r{{/s}}", "A\n\r")]
     public void TheStandaloneRule_RemovesALineHoldingOnlyABlockTag(string source, string expected)
     {
         Assert.True(MustacheTemplate.TryParse(source, out var template, out var error), error.Message);
@@ -194,7 +188,6 @@ public sealed class MustacheParserTests
     [Fact]
     public void SectionsNestedDeeperThanMaxDepth_AreAnError_AtTheFirstTooDeepTag()
     {
-        // Binding and rendering recurse per level, and 15,000 levels overflowed the stack at load.
         static string Nested(int depth) => string.Concat(Enumerable.Repeat("{{#s}}", depth)) + "x" + string.Concat(Enumerable.Repeat("{{/s}}", depth));
 
         Assert.True(MustacheTemplate.TryParse(Nested(MustacheTemplate.MaxDepth), out _, out _));
@@ -207,7 +200,6 @@ public sealed class MustacheParserTests
     private static IEnumerable<MustacheNode> Flatten(IEnumerable<MustacheNode> nodes) =>
         nodes.SelectMany(n => n is MustacheTag tag ? new[] { n }.Concat(Flatten(tag.Children)) : new[] { n });
 
-    /// <summary>Every section renders once; every variable renders its name in capitals.</summary>
     private struct FlagData : IMustacheData
     {
         public readonly void Write(MustacheTag variable, StringBuilder output) => output.Append(variable.Name.ToUpperInvariant());

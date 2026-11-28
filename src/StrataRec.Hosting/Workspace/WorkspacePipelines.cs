@@ -6,15 +6,9 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Hosting.Workspace;
 
 /// <summary>
-/// A workspace's pipelines as one of them may call the others (<see cref="IPipelineDirectory"/>): a called pipeline is
-/// compiled when first asked for, as its release has it (its catalog, bindings and experiments), without loading
-/// anything. Its experiments cannot change its interface, but an arm may add a call, and a cycle is one whichever arms
-/// its calls are in; each arm is not validated on its own again, which its own compile does.
+/// Its experiments cannot change its interface, but an arm may add a call, and a cycle is one whichever arms its calls
+/// are in; each arm is not validated on its own again, which its own compile does.
 /// </summary>
-/// <remarks>
-/// One per pipeline being compiled, linked to the one of the pipeline that called for it: the pipelines being compiled
-/// from the first to this one are how a cycle is found, and what was found of a pipeline is kept for the whole compile.
-/// </remarks>
 internal sealed class WorkspacePipelines : IPipelineDirectory
 {
     private readonly ConfigWorkspace _workspace;

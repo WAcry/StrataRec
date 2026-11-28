@@ -32,7 +32,6 @@ public class CandidateTableTests
 
         feature.SetMissing(3);
 
-        // Drop rows 1 and 2, reverse the rest.
         table.Rows.Replace(new[] { 4, 3, 0 }, allowDrop: true);
         Assert.Equal(3, table.Rows.Count);
         Assert.False(table.Rows.IsAlive(1));
@@ -70,10 +69,9 @@ public class CandidateTableTests
             Bits.Set(table.GetFilled(2), r);
         }
 
-        table.Rows.Retain(new[] { true, false, true }); // an earlier node filtered 2 out
+        table.Rows.Retain(new[] { true, false, true });
         Assert.Equal(1, table.FindRow(EntityKey.FromInt64(2)));
 
-        // The attempt appends 7 and 8, writes and fills them, looks them up, and re-ranks and drops rows.
         var checkpoint = table.Checkpoint();
         Assert.Equal(3, table.AppendRows(new long[] { 7, 8 }));
         for (var r = 3; r < 5; r++)
@@ -93,30 +91,28 @@ public class CandidateTableTests
         Assert.Equal(new[] { true, false, true, false, false }, Enumerable.Range(0, 5).Select(table.Rows.IsAlive));
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(7)));
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(8)));
-        Assert.Equal(1, table.FindRow(EntityKey.FromInt64(2))); // filtered before the checkpoint: still known, never revived
+        Assert.Equal(1, table.FindRow(EntityKey.FromInt64(2)));
         for (var r = 3; r < 5; r++)
         {
-            // Released rows hold nothing: missing and unfilled in every slot.
             Assert.False(score.IsValid(r));
             Assert.False(feature.IsValid(r));
             Assert.False(Bits.Get(table.GetFilled(2), r));
             Assert.False(Bits.Get(table.GetFilled(TableSchema.EntityIdSlot), r));
         }
 
-        Assert.Equal((2.0, 2f), (score[2], feature[2])); // rows from before keep their state
+        Assert.Equal((2.0, 2f), (score[2], feature[2]));
         Assert.True(table.IsFilledForLiveRows(2));
 
-        // The released capacity is appended again, into the same physical rows, and the released keys may come back.
         Assert.Equal(3, table.AppendRows(new long[] { 8, 7, 9 }));
         Assert.Equal(new[] { 3, 4, 5 }, new long[] { 8, 7, 9 }.Select(id => table.FindRow(EntityKey.FromInt64(id))));
         for (var r = 3; r < 6; r++)
         {
-            Assert.False(score.IsValid(r)); // not the attempt's values
-            Assert.False(Bits.Get(table.GetFilled(2), r)); // to be fetched again
+            Assert.False(score.IsValid(r));
+            Assert.False(Bits.Get(table.GetFilled(2), r));
         }
 
         Assert.False(table.IsFilledForLiveRows(2));
-        Assert.Throws<InvalidOperationException>(() => table.AppendRows(new long[] { 10 })); // and no more than that
+        Assert.Throws<InvalidOperationException>(() => table.AppendRows(new long[] { 10 }));
         memory.Release();
     }
 
@@ -126,9 +122,7 @@ public class CandidateTableTests
     [InlineData(25)]
     public void StringIds_AppendedInBatches_AllocateNothingOnceThePoolIsWarm(int batch)
     {
-        // String ids are distinct, so they are stored one string per row in pooled arrays: as a dictionary they took about
-        // 200 KB a request for 5,000 ids that were not pooled (583 KB grown step by step), and duplicated the
-        // key index. Measured on this thread, which runs the code under test alone; the first round warms the pools.
+        // Measured on this thread, which runs the code under test alone; the first round warms the pools.
         var ids = Enumerable.Range(0, 5000).Select(i => "id-" + i).ToArray();
         var batches = Enumerable.Range(0, (ids.Length + batch - 1) / batch)
             .Select(b => (IReadOnlyList<string>)new ArraySegment<string>(ids, b * batch, Math.Min(batch, ids.Length - (b * batch)))).ToArray();
@@ -247,23 +241,20 @@ public class CandidateTableTests
     public void FindRow_IndexesRowsAppendedAfterTheFirstLookup_ADroppedKeyBroughtBackAtItsNewRow()
     {
         var table = NewTable(16, out var memory);
-        Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(10))); // empty table
+        Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(10)));
 
         table.AppendRows(new long[] { 10, 20, 30 });
         Assert.Equal(1, table.FindRow(EntityKey.FromInt64(20)));
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(40)));
 
-        // 20 dropped and brought back: found at its new, live row (the first row
-        // was found, the dropped one, so an injector took 20 for not shown and appended it a third time).
         table.Rows.Retain(new[] { true, false, true });
         table.AppendRows(new long[] { 40, 20, 50 });
         Assert.Equal(3, table.FindRow(EntityKey.FromInt64(40)));
         Assert.Equal(4, table.FindRow(EntityKey.FromInt64(20)));
         Assert.True(table.Rows.IsAlive(4));
         Assert.Equal(5, table.FindRow(EntityKey.FromInt64(50)));
-        Assert.Equal(-1, table.FindRow(EntityKey.FromString("20"))); // other key type
+        Assert.Equal(-1, table.FindRow(EntityKey.FromString("20")));
 
-        // Dropped rows are still found until Compact; afterwards keys map to their new rows.
         table.Rows.Replace(new[] { 5, 0, 3 }, allowDrop: true);
         Assert.Equal(4, table.FindRow(EntityKey.FromInt64(20)));
         Assert.Equal(2, table.FindRow(EntityKey.FromInt64(30)));
@@ -281,10 +272,6 @@ public class CandidateTableTests
         memory.Release();
     }
 
-    /// <summary>
-    /// A key whose row a compaction released is still a key the request has seen, across
-    /// several compactions and both key types; keys a rollback released were never appended.
-    /// </summary>
     [Theory]
     [InlineData(EntityKeyType.Int64)]
     [InlineData(EntityKeyType.String)]
@@ -306,23 +293,23 @@ public class CandidateTableTests
         }
 
         Append(1, 2, 3, 4);
-        table.Rows.Retain(new[] { false, true, false, false }); // only 2 stays
-        Assert.True(table.ContainsKey(K(1))); // dropped, not yet released
+        table.Rows.Retain(new[] { false, true, false, false });
+        Assert.True(table.ContainsKey(K(1)));
         table.Compact();
 
-        Assert.Equal(-1, table.FindRow(K(1))); // no row any more
+        Assert.Equal(-1, table.FindRow(K(1)));
         Assert.True(table.ContainsKey(K(1)) && table.ContainsKey(K(3)) && table.ContainsKey(K(4)) && table.ContainsKey(K(2)));
         Assert.False(table.ContainsKey(K(5)));
-        Assert.False(table.ContainsKey(keyType == EntityKeyType.Int64 ? EntityKey.FromString("k1") : EntityKey.FromInt64(1))); // other key type
+        Assert.False(table.ContainsKey(keyType == EntityKeyType.Int64 ? EntityKey.FromString("k1") : EntityKey.FromInt64(1)));
 
         var checkpoint = table.Checkpoint();
         Append(6);
         Assert.True(table.ContainsKey(K(6)));
         table.Rollback(checkpoint);
-        Assert.False(table.ContainsKey(K(6))); // a failed attempt's key was never appended
+        Assert.False(table.ContainsKey(K(6)));
 
         Append(5, 6);
-        table.Rows.Retain(new[] { true, false, true }); // 2 and 6 stay; 5 is dropped
+        table.Rows.Retain(new[] { true, false, true });
         table.Compact();
         Assert.Equal(-1, table.FindRow(K(5)));
         Assert.True(table.ContainsKey(K(5)) && table.ContainsKey(K(1)) && table.ContainsKey(K(6)));
@@ -339,7 +326,7 @@ public class CandidateTableTests
         Assert.Equal(0, table.FindRow(EntityKey.FromString("a")));
         Assert.Equal(1, table.FindRow(EntityKey.FromString("B")));
         Assert.Equal(2, table.FindRow(EntityKey.FromString("A")));
-        Assert.Equal(-1, table.FindRow(EntityKey.FromString("b"))); // ordinal
+        Assert.Equal(-1, table.FindRow(EntityKey.FromString("b")));
         Assert.Equal(-1, table.FindRow(EntityKey.FromInt64(0)));
 
         table.AppendRows(new[] { "c" });

@@ -9,8 +9,6 @@ public enum DiagnosticSeverity : byte
 
 /// <summary>
 /// A configuration problem located by artifact and RFC 6901 pointer, with a stable code and a fix hint.
-/// Every validation layer (schema, catalog, pipeline, experiments, policy) reports through this type so that
-/// humans, CI and AI agents get uniform, actionable output.
 /// </summary>
 /// <remarks>
 /// The artifact and pointer are the location every producer knows. A tool that has the artifact's file turns them into a
@@ -119,7 +117,7 @@ public sealed class DiagnosticBag
     public void AddRange(IEnumerable<ConfigDiagnostic> diagnostics)
     {
         ArgumentNullException.ThrowIfNull(diagnostics);
-        HashSet<ConfigDiagnostic>? held = null; // built at the first one: linear in both lists, and nothing for none
+        HashSet<ConfigDiagnostic>? held = null;
         foreach (var diagnostic in diagnostics)
         {
             held ??= new HashSet<ConfigDiagnostic>(_items);

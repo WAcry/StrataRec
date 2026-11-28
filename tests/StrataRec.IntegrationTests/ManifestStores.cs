@@ -7,7 +7,6 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>Copies of the home_feed sample built into artifact stores, as <c>stratarec build --store</c> builds them.</summary>
 internal static class ManifestStores
 {
     /// <summary>
@@ -36,7 +35,6 @@ internal static class ManifestStores
 
     public static string NewStore() => Directory.CreateTempSubdirectory("stratarec-store-").FullName;
 
-    /// <summary>Builds <paramref name="root"/> into <paramref name="store"/>: the manifest's content id, and the manifest file build wrote.</summary>
     public static async Task<(string Id, string File)> BuildAsync(string root, string store)
     {
         var file = Path.Combine(store, $"manifest-{Guid.NewGuid():N}.json");
@@ -48,11 +46,9 @@ internal static class ManifestStores
 
     public static ReleaseManifest Read(string file) => ArtifactSerializer.Deserialize<ReleaseManifest>(File.ReadAllText(file), file);
 
-    /// <summary>Stores a manifest (as a release controller would) and returns its content id.</summary>
     public static async Task<string> PutAsync(string store, ReleaseManifest manifest) =>
         await new FileSystemArtifactStore(store).PutAsync(ArtifactSerializer.ToNode(manifest));
 
-    /// <summary>The manifest with <c>previous</c> set.</summary>
     public static ReleaseManifest WithPrevious(ReleaseManifest manifest, string? previous) => new()
     {
         PipelineId = manifest.PipelineId,
@@ -65,7 +61,6 @@ internal static class ManifestStores
         Revoked = manifest.Revoked,
     };
 
-    /// <summary>The errors of a <c>--format json</c> diagnostics report: code, artifact, pointer and hint.</summary>
     public static List<(string Code, string Artifact, string Pointer, string? Hint)> Errors(string json)
     {
         using var report = JsonDocument.Parse(json);

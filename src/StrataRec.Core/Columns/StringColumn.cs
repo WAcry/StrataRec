@@ -7,13 +7,6 @@ namespace StrataRec.Core.Columns;
 /// A <c>string</c> column: one string reference per row, in an array rented from the request.
 /// </summary>
 /// <remarks>
-/// <para>Plain references rather than dictionary codes. A dictionary per column and request was allocated (a map and a
-/// list, from hundreds of bytes for a category to hundreds of kilobytes for a high-cardinality column) and saved nothing:
-/// a value is a string before it is looked up, so the strings exist either way, and where they come from decides how many
-/// there are. A local table hands out its own dictionary's instances, and a connector deduplicates what it decodes (see
-/// <c>IFeatureBatchWriter.Intern</c>), so a category repeated across rows is one shared instance whatever the column does.
-/// What codes bought was comparing integers instead of strings, and <see cref="string.Equals(string, string)"/> on shared
-/// instances stops at the reference check.</para>
 /// <para>A row never written holds null, read as the empty string: the array is rented, so every row is structurally
 /// readable, and validity says whether the row has a value.</para>
 /// </remarks>

@@ -47,7 +47,7 @@ public sealed class CoordinatedSamplingTests
         var kept = CoordinatedSampling.Select(rows, priorities, rate: 1.0, maxRows: 2, out var probability);
 
         Assert.Equal(2, kept);
-        Assert.Equal(new[] { 11, 13 }, rows[..2]); // original order of the two smallest
+        Assert.Equal(new[] { 11, 13 }, rows[..2]);
         Assert.Equal(0.5, probability);              // τ = third smallest priority
     }
 
@@ -186,12 +186,9 @@ public sealed class LogPipelineTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("context").GetProperty("user_id").ValueKind);
     }
 
-    // ---- Cancellation, limits and drains ---------------------------------------------------------------------------
-
     [Fact]
     public async Task FullDurableQueueReportsTheLossOrSpills()
     {
-        // A full durable queue must not drop silently.
         var sink = new BlockingSink();
         var spilled = new List<LogBatch>();
         await using (var plain = new LogPipeline(sink, new LogPipelineOptions { DurableMaxBytes = OneBatch, MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(50) }))
@@ -211,7 +208,7 @@ public sealed class LogPipelineTests
             Assert.DoesNotContain(LogAdmission.Dropped, admissions);
             Assert.Contains(LogAdmission.Spilled, admissions);
             Assert.Equal(0, spilling.DurableOverflow);
-            Assert.All(spilled, b => Assert.True(b.Seq > 0)); // spilled batches keep their sequence number
+            Assert.All(spilled, b => Assert.True(b.Seq > 0));
         }
 
         sink.Release();
@@ -219,10 +216,6 @@ public sealed class LogPipelineTests
 
     private static long OneBatch => Batch("served", LogDelivery.Durable).ApproximateBytes;
 
-    /// <summary>
-    /// The queues are bounded by the memory their batches hold, not by their number: behind a stuck sink, wide candidate
-    /// taps (here about 1 MiB each) stop at the default 256 MiB, where a bound of 65,536 batches let them take 64 GiB.
-    /// </summary>
     [Fact]
     public async Task AStuckSink_FillsTheQueuesByteBudget_NotMemory()
     {
@@ -237,7 +230,6 @@ public sealed class LogPipelineTests
         Assert.Equal(admissions.Count(a => a == LogAdmission.Dropped), pipeline.DurableOverflow);
         Assert.InRange(pipeline.DurableQueuedBytes, 0, 256L << 20);
 
-        // Written batches give their bytes back; a batch larger than the whole budget still goes into an empty queue.
         sink.Release();
         await pipeline.FlushAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal(0, pipeline.DurableQueuedBytes);
@@ -255,12 +247,6 @@ public sealed class LogPipelineTests
         sink.Release();
     }
 
-    /// <summary>
-    /// A string many values point to (a dictionary-encoded column, a constant) is counted once per batch, not
-    /// per row, which overstated 1,024 rows sharing a 4 KB string 158 times and dropped durable batches that fit; and the
-    /// envelope's maps count per entry, where a fixed 256 bytes let zero-row batches of 100 node outcomes overrun the
-    /// budget 13 times.
-    /// </summary>
     [Fact]
     public void TheEstimate_CountsASharedStringOnce_AndTheEnvelopesMapsPerEntry()
     {
@@ -282,7 +268,6 @@ public sealed class LogPipelineTests
         Assert.True(outcomes.ApproximateBytes >= bare.ApproximateBytes + 100 * 32, $"{outcomes.ApproximateBytes} for 100 outcomes");
     }
 
-    /// <summary>Two 4 KB strings in different slots of the estimate's 256-slot table, and two in the same slot.</summary>
     private static (string[] Apart, string[] Together) TwoPairs()
     {
         var bySlot = new Dictionary<int, string>();
@@ -330,7 +315,6 @@ public sealed class LogPipelineTests
     [Fact]
     public async Task PermanentlyRejectedBatchDoesNotBlockTheDurableStream()
     {
-        // One poison batch used to be retried forever, blocking everything behind it.
         var sink = new RejectingSink(poisonTap: "poison");
         var rejected = new List<LogBatch>();
         await using (var pipeline = new LogPipeline(sink, new LogPipelineOptions { MaxBatchesPerWrite = 1, Rejected = (b, _) => rejected.Add(b) }))
@@ -378,7 +362,6 @@ public sealed class LogPipelineTests
             RowProbability = batch.RowProbability, Context = batch.Context,
             Columns = new[]
             {
-                // Values are held promoted (int64 lists), like any int32 value; the column stores its declared type.
                 LogColumn.FromValues("tags", ColumnType.List(StorageKind.Int32).AsNullable(), new[] { ScalarValue.FromInt64List(new long[] { 1, int.MinValue, int.MaxValue }), ScalarValue.Missing }),
             },
         };
@@ -393,10 +376,6 @@ public sealed class LogPipelineTests
         Assert.False(root.GetProperty("int_cols").TryGetProperty("tags", out _));
     }
 
-    /// <summary>
-    /// A bool is 0/1 wherever a log writes it (decisions: bool columns are int_cols), in a column, a list and the
-    /// context alike. The typed column encoder wrote true/false for columns and lists while the context kept 0/1.
-    /// </summary>
     [Fact]
     public void Bools_AreZeroOrOne_InColumnsListsAndContext()
     {
@@ -421,10 +400,6 @@ public sealed class LogPipelineTests
         Assert.Equal("1", root.GetProperty("context").GetProperty("fresh").GetRawText());
     }
 
-    /// <summary>
-    /// A schema id names one record. A context field whose type changed (the request field it reads did) got the
-    /// same id, so a reader holding the record by id read it with the old type; the id now hashes the record itself.
-    /// </summary>
     [Fact]
     public void ASchemaId_ChangesWithAnythingTheRecordSays_AndOnlyWithThat()
     {
@@ -443,21 +418,17 @@ public sealed class LogPipelineTests
         var writer = new StringWriter();
         using var sink = new JsonLinesLogSink(writer);
         var bad = Batch("bad", LogDelivery.Durable);
-        bad.Columns[0] = LogColumn.FromValues(null!, ColumnType.Float64, new[] { ScalarValue.FromFloat64(1), ScalarValue.Missing }); // malformed: no name
+        bad.Columns[0] = LogColumn.FromValues(null!, ColumnType.Float64, new[] { ScalarValue.FromFloat64(1), ScalarValue.Missing });
 
         var thrown = await Assert.ThrowsAsync<LogBatchRejectedException>(async () =>
             await sink.WriteAsync(new[] { Batch("a", LogDelivery.Durable), bad, Batch("b", LogDelivery.Durable) }, CancellationToken.None));
 
         Assert.Same(bad, Assert.Single(thrown.Batches));
         var lines = writer.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal(3, lines.Length); // the schema's record, then the two batches
+        Assert.Equal(3, lines.Length);
         Assert.StartsWith("{\"log_schema\":", lines[0], StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// The id a batch records names a schema record. The sink writes each schema's record once, before the
-    /// first batch naming it, with every column's type and expression; it was hashed and never published.
-    /// </summary>
     [Fact]
     public async Task JsonLinesSink_WritesEachSchemaRecordOnce_BeforeItsFirstBatch()
     {
@@ -490,7 +461,6 @@ public sealed class LogPipelineTests
     [Fact]
     public async Task DisposeIsBoundedEvenWhenTheSinkIgnoresCancellation()
     {
-        // DrainTimeout must bound shutdown even if a write never completes.
         var stuck = new TaskCompletionSource();
         var sink = new StuckSink(stuck.Task);
         var pipeline = new LogPipeline(sink, new LogPipelineOptions { DrainTimeout = TimeSpan.FromMilliseconds(20) });
@@ -498,7 +468,7 @@ public sealed class LogPipelineTests
         await sink.Started.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         // The write never completes until the end of the test, so returning at all is the bound at work; the 30 s only
-        // keeps a regression from hanging the run (a busy runner has stalled for seconds).
+        // keeps a regression from hanging the run.
         await pipeline.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         stuck.SetResult();
     }
@@ -506,8 +476,6 @@ public sealed class LogPipelineTests
     [Fact]
     public async Task DrainTimeout_SettlesUnreadBatchesAsDropped()
     {
-        // Batches still queued when the drain timeout cancels the loop were never settled, so pending (and
-        // the queue-depth series) stayed up and FlushAsync waited forever.
         var sink = new BlockingSink(); // honors cancellation
         var pipeline = new LogPipeline(sink, new LogPipelineOptions { MaxBatchesPerWrite = 1, DrainTimeout = TimeSpan.FromMilliseconds(20) });
         for (var i = 0; i < 3; i++)
@@ -521,10 +489,6 @@ public sealed class LogPipelineTests
         Assert.Contains(pipeline.Stats(), s => s is { TapId: "served", Delivered: 0, Dropped: 3 });
     }
 
-    /// <summary>
-    /// Once a batch is delivered and a flush completed, the pipeline holds nothing of it. The
-    /// consumer cleared its list only when the next batch came, so an idle queue kept its last write's batches alive.
-    /// </summary>
     [Fact]
     public async Task ADeliveredBatch_IsNotKeptAlive_ByAnIdleConsumer()
     {
@@ -551,11 +515,6 @@ public sealed class LogPipelineTests
         return new WeakReference(batch);
     }
 
-    /// <summary>
-    /// Options that cannot work fail before the consumers start, naming the option, both where
-    /// the pipeline is made and where a host registers it. No batches per write left a consumer handing the sink empty
-    /// lists forever with the pending count never reaching 0; a negative one failed the consumer as it started.
-    /// </summary>
     [Theory]
     [InlineData(0, 10_000, 5_000, "MaxBatchesPerWrite")]
     [InlineData(-1, 10_000, 5_000, "MaxBatchesPerWrite")]
@@ -576,7 +535,6 @@ public sealed class LogPipelineTests
         Assert.Equal((option, option), (made.ParamName, registered.ParamName));
     }
 
-    /// <summary>The smallest write size works: every batch is delivered, one per write.</summary>
     [Fact]
     public async Task OneBatchPerWrite_DeliversEveryBatch()
     {

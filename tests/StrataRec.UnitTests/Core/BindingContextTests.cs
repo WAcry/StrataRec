@@ -5,11 +5,6 @@ using StrataRec.Core.Memory;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// What a factory gets for a binding: local file settings resolved by one rule, credentials only by
-/// reference, and secret values that never show in a message. Settings members of type <see cref="LocalFile"/> and
-/// <see cref="SecretReference"/> are bound by the context (<see cref="BindingSettings"/>).
-/// </summary>
 public sealed class BindingContextTests
 {
     private static readonly string Root = Path.Combine(Path.GetTempPath(), "stratarec-config");
@@ -90,7 +85,7 @@ public sealed class BindingContextTests
         var reference = Secrets("""{ "credentials": "secret://ctr-token" }""", store).Credentials!;
 
         Assert.Equal(("ctr-token", "/credentials", "secret://ctr-token"), (reference.Name, reference.Pointer, reference.ToString()));
-        Assert.Empty(store.Asked); // a reference is read at create time; the store is asked at load
+        Assert.Empty(store.Asked);
 
         var secret = await reference.ResolveAsync(CancellationToken.None);
 
@@ -125,7 +120,6 @@ public sealed class BindingContextTests
     [Fact]
     public void ACredentialInANestedSetting_IsAnErrorAtItsOwnPointer_ThatDoesNotQuoteIt()
     {
-        // The converter finds the value's pointer from its offset in the settings being bound.
         var error = Assert.Throws<BindingException>(() =>
             BindingSettings.Bind<Dictionary<string, List<SecretReference>>>(Context("""{ "a": [], "b/c": ["secret://ok", "hunter2"] }"""), "secrets@1"));
 
@@ -164,10 +158,10 @@ public sealed class BindingContextTests
         _ = memory.Rent<float>(16);
         memory.Hold(); // a call the request abandoned
 
-        Assert.Equal(1, memory.Release()); // the request returned
+        Assert.Equal(1, memory.Release());
         Assert.Equal(0, observer.Ended);
 
-        Assert.Equal(0, memory.Release()); // the call returned
+        Assert.Equal(0, memory.Release());
         Assert.Equal((1, true), (observer.Ended, observer.ReturnedWhenTold));
     }
 
@@ -178,7 +172,7 @@ public sealed class BindingContextTests
         var memory = new RequestMemory(new ThrowingPool(), observer);
         _ = memory.Rent<float>(16);
 
-        Assert.Equal(0, memory.Release()); // the pool's failure is reported, never thrown (RequestMemoryEventTests)
+        Assert.Equal(0, memory.Release());
         Assert.Equal(1, observer.Ended);
     }
 

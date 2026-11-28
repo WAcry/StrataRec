@@ -11,11 +11,9 @@ namespace StrataRec.Pipeline.Execution;
 public readonly record struct NodeOutcome(string NodeId, NodeOutcomeKind Kind, string? Detail, string? ProducedBy, double DurationMs, int RowsIn, int RowsOut);
 
 /// <summary>
-/// What happened at one timeline position. One vocabulary everywhere a node outcome appears: results and
-/// traces, the <c>stratarec.outcome</c> tag of metrics and spans, log envelopes, recordings and replay reports, all spelled
-/// by <see cref="NodeOutcomeNames.Name"/>. It used to be four: these eight categories for metrics and recordings, four
-/// coarser kinds in results and traces, PascalCase kinds in log envelopes with a fallback written as two entries, and a
-/// mapping between them that every comparison had to go through.
+/// What happened at one timeline position. One vocabulary everywhere a node outcome appears: results and traces, the
+/// <c>stratarec.outcome</c> tag of metrics and spans, log envelopes, recordings and replay reports, all spelled by
+/// <see cref="NodeOutcomeNames.Name"/>.
 /// </summary>
 public enum NodeOutcomeKind : byte
 {
@@ -50,7 +48,6 @@ public static class NodeOutcomeNames
     private static readonly string[] Names =
         { string.Empty, "succeeded", "degraded", "fallback", "skipped_when", "skipped_deadline", "skipped_input", "failed", "aborted" };
 
-    /// <summary>The highest value of <see cref="NodeOutcomeKind"/>, for tables indexed by it.</summary>
     internal const int MaxKind = (int)NodeOutcomeKind.Aborted;
 
     /// <summary>The name of <paramref name="kind"/>, e.g. <c>skipped_when</c>.</summary>

@@ -5,23 +5,8 @@ using StrataRec.Expressions;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>
-/// Lists of every element type in ColumnExpr: <c>list&lt;float32&gt;</c> and <c>list&lt;float64&gt;</c>
-/// read as <c>list&lt;float64&gt;</c> (float32 storage in place), <c>list&lt;bool&gt;</c>, and the list functions on each.
-/// </summary>
-/// <remarks><see cref="ExprAssert.Rows"/> checks each expected value three ways: full-range (zero-copy column reads),
-/// gather (one row at a time) and the reference interpreter.</remarks>
 public class ListElementTests
 {
-    /// <summary>
-    /// <code>
-    /// row | w32 (list&lt;float32&gt;?) | w64 (list&lt;float64&gt;) | b (list&lt;bool&gt;?) | x (float64) | i (int64)
-    /// 0   | [0.5, 1.5]           | [1.5, 2]           | [true, false]  | 1.5         | 2
-    /// 1   | []                   | [0.25]             | []             | 0.25        | 1
-    /// 2   | missing              | [-1, -1, 3]        | missing        | 3           | 3
-    /// 3   | [2, 2, 2]            | []                 | [false]        | 2           | 2
-    /// </code>
-    /// </summary>
     private static ExprFixture Lists()
     {
         var f = new ExprFixture(capacity: 8)
@@ -62,10 +47,9 @@ public class ListElementTests
         Assert.Equal(ColumnType.List(StorageKind.Float64).AsNullable(), f.Compile("col.w32").ResultType);
         Assert.Equal(ColumnType.List(StorageKind.Float64), f.Compile("col.w64").ResultType);
         Assert.Equal(ColumnType.List(StorageKind.Bool).AsNullable(), f.Compile("col.b").ResultType);
-        // A literal's length is known: it is a fixed-length list, which stands wherever a list of any length does.
         Assert.Equal(ColumnType.List(StorageKind.Float64, fixedLength: 2), f.Compile("[0.5, 1]").ResultType);
         Assert.Equal(ColumnType.List(StorageKind.Bool, fixedLength: 2), f.Compile("[true, false]").ResultType);
-        Assert.Equal(ColumnType.List(StorageKind.Float64), f.Compile("col.i > 2 ? [0.5, 1] : [1.5]").ResultType); // lengths differ
+        Assert.Equal(ColumnType.List(StorageKind.Float64), f.Compile("col.i > 2 ? [0.5, 1] : [1.5]").ResultType);
     }
 
     [Fact]
@@ -75,7 +59,7 @@ public class ListElementTests
         ExprAssert.Rows(f, "size(col.w32)", 2, 0, null, 3);
         ExprAssert.Rows(f, "size(col.w64)", 2, 1, 3, 0);
         ExprAssert.Rows(f, "size(col.b)", 2, 0, null, 1);
-        ExprAssert.Rows(f, "size(col.w32 ?? col.w64)", 2, 0, 3, 3); // lazy select of mixed widths
+        ExprAssert.Rows(f, "size(col.w32 ?? col.w64)", 2, 0, 3, 3);
         ExprAssert.Scalar(f, "size(ctx.weights)", 3);
         ExprAssert.Scalar(f, "size([0.5, 1.5]) + size([true])", 3);
     }
@@ -86,7 +70,7 @@ public class ListElementTests
         var f = Lists();
         ExprAssert.Rows(f, "col.x in col.w32", true, false, null, true);
         ExprAssert.Rows(f, "contains(col.w64, col.x)", true, true, true, false);
-        ExprAssert.Rows(f, "col.i in col.w64", true, false, true, false); // an int64 compares as a float64, as in ==
+        ExprAssert.Rows(f, "col.i in col.w64", true, false, true, false);
         ExprAssert.Rows(f, "col.x in (col.w32 ?? col.w64)", true, false, true, true);
         ExprAssert.Rows(f, "col.x in ctx.weights", false, true, false, true);
         ExprAssert.Rows(f, "col.x in [1.5, 2]", true, false, false, true);
@@ -101,7 +85,7 @@ public class ListElementTests
         var f = Lists();
         ExprAssert.Rows(f, "overlap_count(col.w32, col.w64)", 1, 0, null, 0);
         ExprAssert.Rows(f, "overlap_count(col.w64, ctx.weights)", 1, 1, 0, 0);
-        ExprAssert.Rows(f, "overlap_count(col.w32, col.w32)", 2, 0, null, 3); // with multiplicity
+        ExprAssert.Rows(f, "overlap_count(col.w32, col.w32)", 2, 0, null, 3);
         ExprAssert.Rows(f, "overlap_count(col.b, ctx.flags)", 1, 0, null, 0);
     }
 
@@ -145,7 +129,7 @@ public class ListElementTests
         var value = ColumnValues.Get(column, 0);
         Assert.True(value.IsFloat32List);
         Assert.Equal("[0.1, 2.5]", value.ToString());
-        Assert.Equal(ScalarValue.FromFloat64List(new[] { (double)0.1f, 2.5 }), value); // equality is the doubles'
+        Assert.Equal(ScalarValue.FromFloat64List(new[] { (double)0.1f, 2.5 }), value);
     }
 
     [Theory]
@@ -165,7 +149,6 @@ public class ListElementTests
     {
         var f = Lists();
 
-        // As a float list site's value, in '??' and '?:' with a float list, and in overlap_count with one.
         var expression = f.Compile("[1, 2]", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Float32) });
         Assert.Equal(ColumnType.List(StorageKind.Float64, fixedLength: 2), expression.ResultType);
         ExprAssert.Rows(f, "col.w32 ?? [0]", new[] { 0.5, 1.5 }, Array.Empty<double>(), new[] { 0.0 }, new double[] { 2, 2, 2 });
@@ -173,7 +156,6 @@ public class ListElementTests
         ExprAssert.Rows(f, "overlap_count(col.w64, [2, 3])", 1, 0, 1, 0);
         ExprAssert.Rows(f, "size([3] ?? col.w64)", 1, 1, 1, 1);
 
-        // So is a choice between integer list literals, let-bound or not.
         var choice = f.Compile("col.i > 2 ? [1, 2] : [3]", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Float32) });
         Assert.Equal(ColumnType.List(StorageKind.Float64), choice.ResultType);
         ExprAssert.Rows(f, "let d = [0]; col.w32 ?? (col.i > 2 ? [1, 2] : d)", new[] { 0.5, 1.5 }, Array.Empty<double>(), new double[] { 1, 2 }, new double[] { 2, 2, 2 });
@@ -211,7 +193,7 @@ public class ListElementTests
         Assert.Contains("[-3.4028235E+38, 3.4028235E+38]", error.Message, StringComparison.Ordinal);
         Assert.Contains("declare the column as " + ColumnType.Parse(type).Promoted(), error.Hint, StringComparison.Ordinal);
         Lists().Compile(source.Replace("e300", "e30", StringComparison.Ordinal).Replace("e39", "e38", StringComparison.Ordinal),
-            new CompileOptions { ExpectedType = ColumnType.Parse(type) }); // within the range: compiles
+            new CompileOptions { ExpectedType = ColumnType.Parse(type) });
     }
 
     [Fact]

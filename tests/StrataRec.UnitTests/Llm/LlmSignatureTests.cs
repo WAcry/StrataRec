@@ -3,10 +3,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
-/// <summary>
-/// <c>LlmAnnotator@1</c> and <c>GenerativeRetriever@1</c> check every version a request may call against the prompts they
-/// send and the output they read, as <c>LlmReranker@1</c> does (<see cref="LlmRerankerTests"/>); v2 differs in each way.
-/// </summary>
 public sealed class LlmSignatureTests
 {
     public static TheoryData<string, string, string, string, string> Mismatches()

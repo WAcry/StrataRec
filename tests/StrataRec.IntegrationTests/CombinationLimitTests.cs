@@ -7,10 +7,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The compile-time bounds on arm combinations: a space too large to compile or check is a located
-/// error, never an exception and never a plan that serves unchecked combinations.
-/// </summary>
 public sealed class CombinationLimitTests
 {
     [Fact]
@@ -44,13 +40,12 @@ public sealed class CombinationLimitTests
     [Fact]
     public void PastTheLimit_ANullableColumnsSecondProducer_ThatOnlyThreeArmsTogetherCreate_IsFound()
     {
-        // Joint writes the nullable, non-flow column x only when arms of layers a and b both switch it on;
-        // c adds another writer of x. Every arm and every pair is legal, the three together give x two producers. Ten
-        // more layers, each adding a harmless filter, make 2^13 combinations: past the default limit of 4096.
+        // Joint writes the nullable, non-flow column x only when arms of layers a and b both switch it on; c adds
+        // another writer of x. Ten more layers, each adding a harmless filter, make 2^13 combinations: past the default
+        // limit of 4096.
         var (request, environment) = JointWriterRequest(extraLayers: 10);
         Assert.Equal(4096, request.MaxCombinationsChecked);
 
-        // The control: each combination compiled on its own.
         foreach (var pair in new[] { new[] { "a/t", "b/t" }, new[] { "a/t", "c/t" }, new[] { "b/t", "c/t" } })
         {
             var merged = PlanCompiler.CompileMerged(request, pair, environment);
@@ -81,7 +76,6 @@ public sealed class CombinationLimitTests
         var error = Assert.Single(unified.Diagnostics, d => d.Code == "COMBINATION_CHECK_LIMIT" && d.Pointer == "/columns/x");
         Assert.True(error.IsError);
         Assert.Contains("8 combinations", error.Message);
-        // Each layer names the node it decides, which is what the author moves between layers.
         Assert.Contains("layer_a (changes node 'joint'); layer_b (changes node 'joint'); layer_c (changes node 'other')", error.Message);
         Assert.Contains("layer", error.Hint);
     }
@@ -89,7 +83,6 @@ public sealed class CombinationLimitTests
     [Fact]
     public void PastTheLimit_AnOrderDependencyThatOnlyThreeArmsTogetherCreate_IsFound()
     {
-        // Not a column rule: q writes y at order 870; a moves p there, and p reads y only when b and c both switch it on.
         // Only the three together put two dependent nodes at one order. y and z are nullable: no producer is needed.
         var host = HomeFeedTestHost.Load();
         var pipeline = host.Request.Pipeline;
@@ -126,7 +119,6 @@ public sealed class CombinationLimitTests
         Assert.Equal("ORDER_DEPENDENCY", Assert.Single(unified.Diagnostics, d => d.IsError).Code);
     }
 
-    /// <summary>A joint-writer space, with <paramref name="extraLayers"/> independent filter layers.</summary>
     private static (PlanCompileRequest Request, PlanEnvironment Environment) JointWriterRequest(int extraLayers, int? maxCombinationsChecked = null)
     {
         var host = HomeFeedTestHost.Load();
@@ -143,11 +135,9 @@ public sealed class CombinationLimitTests
         return (With(host.Request, placements, maxCombinationsChecked), JointEnvironment(host));
     }
 
-    /// <summary>The sample's environment with <c>Joint@1</c>.</summary>
     internal static PlanEnvironment JointEnvironment(HomeFeedTestHost host) =>
         new() { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new JointFactory()) };
 
-    /// <summary>Layers whose one arm adds a filter that keeps every row, each at its own order.</summary>
     internal static IEnumerable<ExperimentPlacement> Filters(int count)
     {
         for (var i = 0; i < count; i++)
@@ -156,7 +146,6 @@ public sealed class CombinationLimitTests
         }
     }
 
-    /// <summary>An experiment in its own layer (named after it) with one arm, <c>t</c>.</summary>
     internal static ExperimentPlacement Treatment(string id, string patch) =>
         new(Experiment(id, new JsonObject { ["t"] = JsonNode.Parse(patch) }), "layer_" + id);
 
@@ -172,8 +161,7 @@ public sealed class CombinationLimitTests
     }
 
     /// <summary>
-    /// A node whose data flow two options decide together, so it depends on two layers at once. Without an input it
-    /// writes its output only when both are on; with one it always writes its output, reading the input only then.
+    /// A node whose data flow two options decide together, so it depends on two layers at once.
     /// </summary>
     private sealed class JointFactory : IOperatorFactory
     {
@@ -223,7 +211,6 @@ public sealed class CombinationLimitTests
         ["arms"] = arms,
     }.ToJsonString());
 
-    /// <summary>The sample's request with <paramref name="placements"/> instead of its experiments, by default without each arm's own compile.</summary>
     internal static PlanCompileRequest With(
         PlanCompileRequest r, IReadOnlyList<ExperimentPlacement> placements, int? maxCombinationsChecked = null, bool validateArmsIndependently = false) => new()
     {

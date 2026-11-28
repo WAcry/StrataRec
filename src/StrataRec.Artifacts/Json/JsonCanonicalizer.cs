@@ -8,9 +8,8 @@ using System.Text.Json.Nodes;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// <see href="https://www.rfc-editor.org/rfc/rfc8785">RFC 8785</see> JSON Canonicalization Scheme (JCS): a unique
-/// byte representation of a JSON value, so that the same content always hashes to the same artifact id regardless
-/// of key order, whitespace, comments or number spelling.
+/// <see href="https://www.rfc-editor.org/rfc/rfc8785">RFC 8785</see> JSON Canonicalization Scheme (JCS): a unique byte
+/// representation of a JSON value.
 /// </summary>
 /// <remarks>
 /// <para>The output follows RFC 8785 section 3.2:</para>
@@ -31,19 +30,9 @@ namespace StrataRec.Artifacts.Json;
 ///   <item>Object members are sorted by name, comparing UTF-16 code units (section 3.2.3).</item>
 ///   <item>The result is encoded as UTF-8 (section 3.2.4).</item>
 /// </list>
-/// <para>
-/// RFC 8785 assumes I-JSON input (RFC 7493). Values outside it are rejected with a
-/// <see cref="JsonCanonicalizationException"/> naming the offending pointer instead of being silently altered:
-/// NaN and infinities, numbers that overflow a double or underflow to zero, and strings with unpaired surrogates.
-/// Integer literals (no fraction or exponent) beyond ±2^53 are rejected unless their canonical form denotes the
-/// same integer: artifacts are stored canonicalized, and a reader binding <see cref="long"/> must get back what the
-/// author wrote, not <c>1152921504606847000</c> for 2^60. Numbers written with a fraction or exponent are rounded
-/// to the nearest double as the RFC specifies, so <c>0.1</c>, <c>0.10</c> and <c>1e-1</c> canonicalize identically.
-/// </para>
-/// <para>
-/// Leaf values may be backed by any CLR type <see cref="JsonValue"/> supports; numbers are read from their JSON
-/// text, so a <see cref="float"/> <c>0.1f</c> canonicalizes as <c>0.1</c>, not as its widened double value.
-/// </para>
+/// <para>Values outside I-JSON (RFC 7493) throw <see cref="JsonCanonicalizationException"/> at their pointer, never
+/// altered silently: NaN and infinities, numbers a double cannot hold, unpaired surrogates, and integer literals beyond
+/// ±2^53 whose canonical form is another integer.</para>
 /// </remarks>
 public static class JsonCanonicalizer
 {
@@ -243,9 +232,8 @@ public static class JsonCanonicalizer
 
         private void WriteValue(JsonValue value)
         {
-            // GetValueKind reports Number for a NaN double, so non-finite CLR values must be caught first, before they are
-            // written (a Half threw JsonReaderException there). A parsed number's range is checked by
-            // ParseNumber against binary64, which is what RFC 8785 uses.
+            // GetValueKind reports Number for a NaN double, so non-finite CLR values must be caught first, before they
+            // are written.
             if (JsonNodeUtilities.IsNonFiniteNumber(value, out _))
             {
                 throw Error(
@@ -272,7 +260,6 @@ public static class JsonCanonicalizer
                     _text.Append("null");
                     break;
                 case JsonValueKind.Object or JsonValueKind.Array:
-                    // A JsonValue wrapping a CLR object or a JsonElement container: canonicalize its JSON form.
                     WriteNode(JsonNode.Parse(ReadJsonText(value)));
                     break;
                 default:
@@ -289,7 +276,6 @@ public static class JsonCanonicalizer
                     return text;
                 }
 
-                // CLR types that serialize as JSON strings (char, Guid, DateTime, ...): use their JSON form.
                 using var document = JsonDocument.Parse(ReadJsonText(value));
                 return document.RootElement.GetString()!;
             }
@@ -321,9 +307,6 @@ public static class JsonCanonicalizer
             var number = ParseNumber(literal);
             var canonical = FormatNumber(number);
 
-            // Artifacts are stored in canonical form, so a reader binding an integer type must get back the integer
-            // the author wrote. Up to 2^53 that always holds; beyond it the shortest round-trip digits may denote a
-            // different integer (2^60 is written 1152921504606847000), or the literal may not be a double at all.
             // Compare with >=: 2^53 + 1 rounds down to exactly 2^53.
             if (Math.Abs(number) >= TwoPow53 &&
                 literal.AsSpan().IndexOfAny('.', 'e', 'E') < 0 &&
@@ -338,7 +321,6 @@ public static class JsonCanonicalizer
             return canonical;
         }
 
-        /// <summary>Exact integer denoted by a canonical number that has no fractional part ("123", "-1.5e+22").</summary>
         private static BigInteger IntegerValueOf(string canonical)
         {
             var text = canonical.AsSpan();

@@ -99,11 +99,10 @@ public sealed class DistinctHeadsFactory : IOperatorFactory
 
             var value = context.Param(head);
             var most = value.IsMissing ? 0 : (int)value.AsInt64();
-            var shown = new HashSet<long>(); // the items in the heads of the rows above
+            var shown = new HashSet<long>();
             var order = new List<int>();
             foreach (var row in context.LiveRows) // in rank order
             {
-                // The head: the first items no row above shows first. Then the others, in their order.
                 var items = ids.Get(row);
                 order.Clear();
                 for (var i = 0; i < items.Length && order.Count < most; i++)
@@ -128,7 +127,6 @@ public sealed class DistinctHeadsFactory : IOperatorFactory
                     shown.Add(items[order[i]]);
                 }
 
-                // Every list takes the same positions. One of another length than the ids is not theirs to follow.
                 var positions = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(order);
                 for (var c = 0; c < into.Length; c++)
                 {

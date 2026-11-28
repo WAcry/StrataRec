@@ -3,13 +3,8 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Experiments;
 
-/// <summary>
-/// The rules for the arms an experimentation platform sends: unknown ids and same-layer conflicts are
-/// ignored and reported, repeats count once, and nothing depends on the order of the platform's list.
-/// </summary>
 public sealed class ExternalArmsTests
 {
-    // Layer "rerank" holds two experiments the platform keeps exclusive (exp_mmr, exp_rerank); layer "params" one.
     private static readonly LayerInfo[] Layers = { new(0, "rerank"), new(1, "params") };
 
     private static readonly ArmInfo[] Arms =
@@ -27,13 +22,12 @@ public sealed class ExternalArmsTests
         var arms = Resolve(new[] { "exp_quality/strong", "exp_mmr/mmr" }, out var ignored);
 
         Assert.Equal(new[] { 1, 3 }, Assigned(arms));
-        Assert.Same(Array.Empty<IgnoredArm>(), ignored); // no allocation when every id applies
+        Assert.Same(Array.Empty<IgnoredArm>(), ignored);
     }
 
     [Fact]
     public void AnIdThePlanDoesNotHave_IsIgnoredAsUnknown_AndTheRestApplies()
     {
-        // Not in this release, a misspelled arm, an experiment the platform ramped before the release arrived.
         var arms = Resolve(new[] { "exp_new/treatment", "exp_mmr/mmr", "exp_mmr/MMR", "exp_quality" }, out var ignored);
 
         Assert.Equal(new[] { 1, -1 }, Assigned(arms));
@@ -48,17 +42,17 @@ public sealed class ExternalArmsTests
         var arms = Resolve(new[] { "exp_mmr/mmr", "exp_quality/control", "exp_mmr/mmr", "exp_new/x", "exp_new/x" }, out var ignored);
 
         Assert.Equal(new[] { 1, 2 }, Assigned(arms));
-        Assert.Equal(new[] { new IgnoredArm("exp_new/x", IgnoredArmReason.Unknown) }, ignored); // an unknown repeat is one id too
+        Assert.Equal(new[] { new IgnoredArm("exp_new/x", IgnoredArmReason.Unknown) }, ignored);
     }
 
     [Theory]
-    [InlineData("exp_mmr/control", "exp_mmr/mmr")] // two arms of one experiment
-    [InlineData("exp_mmr/mmr", "exp_rerank/new")] // arms of two experiments sharing a layer
+    [InlineData("exp_mmr/control", "exp_mmr/mmr")]
+    [InlineData("exp_mmr/mmr", "exp_rerank/new")]
     public void TwoArmsOfOneLayer_LeaveThatLayerOnItsBaseline_AndAreBothIgnored(string first, string second)
     {
         var arms = Resolve(new[] { first, "exp_quality/strong", second }, out var ignored);
 
-        Assert.Equal(new[] { -1, 3 }, Assigned(arms)); // the other layer is unaffected
+        Assert.Equal(new[] { -1, 3 }, Assigned(arms));
         var expected = new[] { new IgnoredArm(first, IgnoredArmReason.LayerConflict), new IgnoredArm(second, IgnoredArmReason.LayerConflict) };
         Assert.Equal(expected.OrderBy(i => i.Id, StringComparer.Ordinal), ignored);
     }
@@ -77,7 +71,6 @@ public sealed class ExternalArmsTests
     [Fact]
     public void TheOutcome_DoesNotDependOnTheOrderOfThePlatformsList()
     {
-        // The list order is no contract: every permutation gives the same arms and the same report, conflict included.
         string[] ids = { "exp_mmr/mmr", "exp_quality/strong", "exp_rerank/new", "exp_new/x", "exp_quality/strong" };
         var expected = Resolve(ids, out var expectedIgnored);
 

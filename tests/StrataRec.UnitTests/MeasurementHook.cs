@@ -5,9 +5,8 @@ namespace StrataRec.UnitTests;
 
 /// <summary>
 /// A host's <see cref="MeterListener"/> that runs an action for every measurement of one StrataRec instrument carrying
-/// the given tags, on the thread that records it, as a host's listener runs: to throw where the engine calls listeners,
-/// or to move a clock there. Tests that use it belong to <see cref="Features.Cache.MetricMeasurement"/>, so no other test's measurement
-/// reaches it.
+/// the given tags, on the thread that records it. Tests that use it belong to
+/// <see cref="Features.Cache.MetricMeasurement"/>, so no other test's measurement reaches it.
 /// </summary>
 internal sealed class MeasurementHook : IDisposable
 {
@@ -16,7 +15,6 @@ internal sealed class MeasurementHook : IDisposable
     private readonly Action _measured;
     private int _calls;
 
-    /// <param name="tags">Tags a measurement must all carry, with these values.</param>
     public MeasurementHook(string instrument, Action measured, params (string Key, object Value)[] tags)
     {
         _tags = tags;
@@ -33,10 +31,8 @@ internal sealed class MeasurementHook : IDisposable
         _listener.Start();
     }
 
-    /// <summary>The measurements that matched (the action ran for each).</summary>
     public int Calls => Volatile.Read(ref _calls);
 
-    /// <summary>A listener that throws for each matching measurement.</summary>
     public static MeasurementHook Throwing(string instrument, params (string Key, object Value)[] tags) =>
         new(instrument, static () => throw new InvalidOperationException("a host's metric listener failed"), tags);
 

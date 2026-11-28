@@ -12,25 +12,23 @@ namespace StrataRec.Features.Cache;
 /// instance: shared by identity, loaded before a plan serves (the store's own load), disposed once nothing can call it.
 /// </summary>
 /// <remarks>
-/// <para><b>Writes never wait.</b> A read hands what the connector returned to <see cref="TryWrite"/>, which queues it and
-/// returns; one background loop per instance writes the queued batches one after another, one store round trip each.
-/// Past <see cref="QueueBytes"/> waiting bytes (records, keys and entries) a batch is dropped and counted (<c>stratarec.cache.writes</c>,
-/// outcome <c>dropped</c>): the keys are fetched again on their next miss, which is what the tier exists to avoid, so
-/// the metric says when the store cannot keep up. An empty queue takes even a batch larger than the whole limit
-/// (<see cref="WriteQueueBudget"/>). A failed write is counted (<c>failed</c>) and forgotten.</para>
+/// <para><b>Writes never wait.</b> A read hands what the connector returned to <see cref="TryWrite"/>, which queues it
+/// and returns; one background loop per instance writes the queued batches one after another, one store round trip
+/// each. Past <see cref="QueueBytes"/> waiting bytes (records, keys and entries) a batch is dropped and counted
+/// (<c>stratarec.cache.writes</c>, outcome <c>dropped</c>). An empty queue takes even a batch larger than the whole
+/// limit. A failed write is counted (<c>failed</c>) and forgotten.</para>
 /// <para><b>The queue belongs to the instance, not to a table.</b> Plans that share the instance share its queue, and
 /// the store is disposed only after the loop stopped, so no write runs on a disposed store; what is still queued then
 /// is dropped.</para>
 /// <para><b>The loop never faults.</b> It catches what the store throws, and what an observer throws: a metric listener
-/// that throws when a batch is counted. Such a failure is kept and reported by <see cref="DisposeAsync"/> (the host logs
-/// it); the loop goes on writing.</para>
+/// that throws when a batch is counted. Such a failure is kept and reported by <see cref="DisposeAsync"/>; the loop
+/// goes on writing.</para>
 /// </remarks>
 public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 {
     /// <summary>
-    /// The most bytes waiting to be written: 16 MiB, a few seconds of misses at a high miss rate. A batch is charged what it
-    /// holds, its records' bytes and its entries with their key texts: a long key text with a short record holds more in
-    /// its key.
+    /// The most bytes waiting to be written: 16 MiB. A batch is charged what it holds, its records' bytes and its
+    /// entries with their key texts.
     /// </summary>
     public const long DefaultQueueBytes = 16L << 20;
 
@@ -53,9 +51,8 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     public ICacheStore Store { get; }
 
     /// <summary>
-    /// One read of the store (<see cref="ICacheStore.GetAsync"/>), for a bounded call's send: true once it answered, its
-    /// failure thrown. The store's task is consumed once, also when it completed at once: a store may pool what backs it
-    /// and take it back only then (a service's cache read a completed one's status only).
+    /// The store's task is consumed once, also when it completed at once: a store may pool what backs it and take it
+    /// back only then.
     /// </summary>
     internal ValueTask<bool> ReadAsync(CacheKeyspace keyspace, ReadOnlyMemory<string> keys, Memory<ReadOnlyMemory<byte>> records, CancellationToken cancellationToken)
     {
@@ -84,7 +81,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
     /// <summary>Bytes queued and not written yet, as charged (records, entries and key texts).</summary>
     public long QueuedBytes => Interlocked.Read(ref _queuedBytes);
 
-    /// <summary>Loads the store (connects, resolves its credentials) when it needs it.</summary>
+    /// <summary>Loads the store when it needs it.</summary>
     public ValueTask LoadAsync(CancellationToken cancellationToken) =>
         Store is ILoadable loadable ? loadable.LoadAsync(cancellationToken) : ValueTask.CompletedTask;
 
@@ -127,8 +124,6 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
         return true;
     }
 
-    /// <summary>The loop starts with the first write, so an instance that never writes (a plan compiled to validate, a
-    /// replay) never runs one.</summary>
     private void StartWriter()
     {
         lock (_gate)
@@ -145,7 +140,6 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
         var reader = _queue.Reader;
         try
         {
-            // Once the disposal began, nothing more is sent: what is still queued is dropped by DisposeAsync, counted.
             while (!_stopping.IsCancellationRequested && await reader.WaitToReadAsync(_stopping.Token).ConfigureAwait(false))
             {
                 while (!_stopping.IsCancellationRequested && reader.TryRead(out var write))
@@ -159,9 +153,6 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
                     }
                     catch (Exception)
                     {
-                        // Only an optimisation failed: the keys are fetched again on their next miss. The store's errors
-                        // reach the operator through the metric and the store's reads, which fail the same way. A write
-                        // the disposal cancelled is a dropped one.
                         outcome = _stopping.IsCancellationRequested ? CacheWriteOutcome.Dropped : CacheWriteOutcome.Failed;
                     }
 
@@ -171,15 +162,13 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
         }
         catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
         {
-            // Disposed: what is still queued is dropped by DisposeAsync.
         }
         catch (Exception ex)
         {
-            Observed(ex); // not expected; the loop must not fault all the same (see remarks)
+            Observed(ex);
         }
     }
 
-    /// <summary>Counts a batch's outcome; a metric listener that throws is reported at disposal, not by the caller.</summary>
     private void Count(in PendingWrite write, CacheWriteOutcome outcome)
     {
         try
@@ -196,9 +185,9 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 
     /// <summary>
     /// Stops the write loop (cancelling a write in progress, and sending no further batch), waits until it really
-    /// exited, drops what is still queued (counted), then disposes the store, exactly once whatever failed before. Throws,
-    /// after all that, what went wrong on the way (a callback the store registered on the cancelled token, a metric
-    /// listener, the store's disposal), so that the host logs it.
+    /// exited, drops what is still queued (counted), then disposes the store, exactly once whatever failed before.
+    /// Throws, after all that, what went wrong on the way (a callback the store registered on the cancelled token, a
+    /// metric listener, the store's disposal).
     /// </summary>
     public async ValueTask DisposeAsync()
     {
@@ -229,7 +218,7 @@ public sealed class DistributedCacheTier : ILoadable, IAsyncDisposable
 
             if (writer is not null)
             {
-                await writer.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing); // never faults: see remarks
+                await writer.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             }
         }
         finally

@@ -67,12 +67,6 @@ public class LocalFeatureTableTests
         }
     }
 
-    /// <summary>
-    /// The same data served by a connector (staging, then backfill) and by a local table (lookup, then fill) must give
-    /// the request identical columns: values, defaults for absent keys and fields, missing values, NaN/±∞ replaced for
-    /// float features and float lists (an embedding, list&lt;float32,4&gt;, as a whole), and a list of another length than a
-    /// fixed-length feature's replaced and counted out of range.
-    /// </summary>
     [Fact]
     public async Task ServesTheSameColumnsAsTheFetchPath()
     {
@@ -89,8 +83,6 @@ public class LocalFeatureTableTests
             ["ls"] = ScalarValue.FromStringList(new[] { "d" }),
         };
 
-        // Key 3 has no record; key 5 has every field missing; NaN and ±∞ appear in floats and in float lists; keys 7 and
-        // 11 have an embedding of another length (the table and the connector store what they were given).
         Dictionary<string, ScalarValue>? Data(long key)
         {
             if (key == 3)
@@ -123,7 +115,6 @@ public class LocalFeatureTableTests
             return values;
         }
 
-        // Fetch path.
         var rig = new FeatureTestRig().Source("item_store", new ValueConnector(Data));
         var features = new int[AllTypes.Length];
         for (var f = 0; f < AllTypes.Length; f++)
@@ -144,7 +135,6 @@ public class LocalFeatureTableTests
         var fill = await request.EnsureAsync(features);
         Assert.Equal(FeatureState.Ok, fill.State);
 
-        // Local path, with the same absent value per feature: its default, or missing.
         var table = Table();
         for (var key = 1L; key <= Keys; key++)
         {
@@ -183,7 +173,7 @@ public class LocalFeatureTableTests
         Assert.Equal(request.Fetcher.NonFiniteReplaced, replaced);
         Assert.Equal(15, replaced); // keys 4, 8 and 12, in f32, f64 and the float lists (each list as a whole, v too)
         Assert.Equal(request.Fetcher.Counters.OutOfRange, outOfRange);
-        Assert.Equal(2, outOfRange); // keys 7 and 11 in v
+        Assert.Equal(2, outOfRange);
         Assert.Equal(defaults["v"], request.Value(features[Array.FindIndex(AllTypes, t => t.Name == "v")], 6));
         memory.Release();
         request.Memory.Release();
@@ -197,7 +187,6 @@ public class LocalFeatureTableTests
         var full = Values(7);
         Write(table.Writer, key, 1, full);
 
-        // Touch one fixed field, one string, one list; clear the text.
         var builder = table.Writer.Begin(key, 2);
         builder.SetFloat64(table.Schema.FieldIndex("f64"), 99.5);
         builder.SetString(table.Schema.FieldIndex("s"), "changed");
@@ -215,7 +204,6 @@ public class LocalFeatureTableTests
         AssertRecord(expected, table.Schema, ReadRecord(table.Pin(), table.Schema, key));
         AssertRecord(expected, table.Schema, FillAll(table.Pin(), table.Schema, new[] { key })[0]);
 
-        // A partial update of a key with no record leaves every other field missing.
         var fresh = EntityKey.FromInt64(43);
         builder = table.Writer.Begin(fresh, 1);
         builder.SetBool(table.Schema.FieldIndex("b"), false);
@@ -230,16 +218,14 @@ public class LocalFeatureTableTests
         var key = EntityKey.FromInt64(1);
         Assert.True(Write(table.Writer, key, 10, Values(10)));
 
-        // Older and equal versions: ignored, whether full or partial.
         Assert.False(Write(table.Writer, key, 9, Values(9)));
         Assert.False(Write(table.Writer, key, 10, Values(11)));
         var builder = table.Writer.Begin(key, 5);
         Assert.True(builder.IsIgnored);
-        builder.SetInt64(table.Schema.FieldIndex("i64"), 0); // still accepted
+        builder.SetInt64(table.Schema.FieldIndex("i64"), 0);
         Assert.False(builder.Commit());
         AssertRecord(Values(10), table.Schema, ReadRecord(table.Pin(), table.Schema, key));
 
-        // Out-of-order delivery converges on the newest version.
         Assert.True(Write(table.Writer, key, 12, Values(12)));
         Assert.False(Write(table.Writer, key, 11, Values(11)));
         AssertRecord(Values(12), table.Schema, ReadRecord(table.Pin(), table.Schema, key));
@@ -257,18 +243,15 @@ public class LocalFeatureTableTests
         Assert.Equal(0, table.Pin().RecordCount);
         Assert.Equal(1, table.Pin().TombstoneCount);
 
-        // An update older than the delete arrives late: the key stays deleted. A stale delete is ignored too.
         Assert.False(Write(table.Writer, key, 2, Values(2)));
         Assert.False(table.Writer.Delete(key, 1));
         Assert.False(table.Pin().Find(key).Found);
 
-        // A newer update brings it back, with no field carried over from before the delete.
         var builder = table.Writer.Begin(key, 3);
         builder.SetInt64(table.Schema.FieldIndex("i64"), 33);
         Assert.True(builder.Commit());
         AssertRecord(new Dictionary<string, ScalarValue> { ["i64"] = ScalarValue.FromInt64(33) }, table.Schema, ReadRecord(table.Pin(), table.Schema, key));
 
-        // A delete that arrives before the key's first update still blocks older updates.
         var early = EntityKey.FromInt64(8);
         Assert.True(table.Writer.Delete(early, 5));
         Assert.False(Write(table.Writer, early, 4, Values(4)));
@@ -299,7 +282,6 @@ public class LocalFeatureTableTests
         Assert.False(i64.IsValid(1));
         Assert.False(i64.IsValid(2));
 
-        // The record exists but has no f32: the default, like a key absent from the table.
         var f32 = (ScalarColumn<float>)ColumnBuffer.Create(ColumnType.Float32, 3, memory);
         version.Fill(table.Schema.FieldIndex("f32"), records, rows, f32, ScalarValue.FromFloat64(0.25));
         Assert.Equal(new[] { 0.25f, 0.25f, 0.25f }, f32.Span.ToArray());
@@ -310,7 +292,6 @@ public class LocalFeatureTableTests
     [Fact]
     public void StringKeys_WithCollidingHashes_AreToldApart()
     {
-        // Every key hashes to the same value: the index must compare the stored keys.
         var table = Table(EntityKeyType.String, new LocalFeatureTableOptions { KeyHasher = static _ => 42 });
         var keys = new List<EntityKey>();
         for (var id = 1; id <= 100; id++)
@@ -338,7 +319,6 @@ public class LocalFeatureTableTests
             AssertRecord(Values(i == 9 ? 1000 : i + 1), table.Schema, filled[i]);
         }
 
-        // Keys of the other type are never found.
         Assert.False(version.Find(1L).Found);
         Assert.Equal(0, version.Lookup(new long[] { 1, 2 }, new LocalRecordRef[2]));
         Assert.Equal(1, version.Lookup(new string?[] { null, "k-2", "nope" }, new LocalRecordRef[3]));
@@ -347,7 +327,6 @@ public class LocalFeatureTableTests
     [Fact]
     public void StringKeys_PartialCollisions_SurviveGrowthAndCompaction()
     {
-        // Four hash values for 2,000 keys: long probe chains, several index growths, then a compaction.
         var table = Table(EntityKeyType.String, new LocalFeatureTableOptions
         {
             KeyHasher = static key => (ulong)(key[^2] % 4), // the low byte of the last UTF-16 code unit
@@ -416,10 +395,8 @@ public class LocalFeatureTableTests
             AssertRecord(Values(5000 + id), table.Schema, filled[id - 1]);
         }
 
-        // Tombstones survived: a late update older than the delete is still ignored.
         Assert.False(Write(table.Writer, EntityKey.FromInt64(1), 5, Values(1)));
 
-        // The version pinned before the compaction still reads its own (older) data.
         AssertRecord(Values(5002), table.Schema, ReadRecord(before, table.Schema, EntityKey.FromInt64(2)));
         Assert.True(stringsBefore.Found);
     }
@@ -430,7 +407,6 @@ public class LocalFeatureTableTests
         var table = Table(options: new LocalFeatureTableOptions { PageSize = 4096, CompactionMinBytes = 16 * 1024 });
         for (var version = 1; version <= 400; version++)
         {
-            // One key, rewritten with a new string every time: every string but the last becomes unused.
             var builder = table.Writer.Begin(EntityKey.FromInt64(1), version);
             builder.SetString(table.Schema.FieldIndex("s"), "value-" + version);
             builder.SetStringList(table.Schema.FieldIndex("ls"), new[] { "a-" + version, "b" });
@@ -512,7 +488,6 @@ public class LocalFeatureTableTests
     [Fact]
     public void MaxBytes_CompactsBeforeFailing()
     {
-        // Rewriting 50 keys over and over fits, because superseded records are compacted away when the limit is reached.
         var table = Table(options: new LocalFeatureTableOptions { MaxBytes = 128 * 1024, PageSize = 4096, CompactionMinBytes = long.MaxValue });
         for (var round = 1; round <= 200; round++)
         {
@@ -543,7 +518,6 @@ public class LocalFeatureTableTests
         Assert.Throws<InvalidOperationException>(() => table.Writer.Checkpoint(UpdatePosition.Single(11)));
         for (var id = 5; id <= 15; id++)
         {
-            // Versions start afresh: the reload does not compare with the old table.
             Write(table.Writer, EntityKey.FromInt64(id), 1, Values(id * 100));
         }
 
@@ -554,11 +528,10 @@ public class LocalFeatureTableTests
         var after = table.Pin();
         Assert.NotSame(before, after);
         Assert.Equal(UpdatePosition.Single(20), table.Position);
-        Assert.False(after.Find(1L).Found); // not in the new snapshot: gone
+        Assert.False(after.Find(1L).Found);
         AssertRecord(Values(1500), table.Schema, ReadRecord(after, table.Schema, EntityKey.FromInt64(15)));
         AssertRecord(Values(1), table.Schema, ReadRecord(before, table.Schema, EntityKey.FromInt64(1)));
 
-        // An aborted reload leaves the current version alone; writes go to it again afterwards.
         table.Writer.BeginReload();
         Write(table.Writer, EntityKey.FromInt64(99), 1, Values(99));
         table.Writer.AbortReload();
@@ -575,8 +548,6 @@ public class LocalFeatureTableTests
         var builder = table.Writer.Begin(EntityKey.FromInt64(1), 1);
         var wrongType = Assert.Throws<InvalidOperationException>(() => builder.SetInt64(table.Schema.FieldIndex("i32"), 1));
         Assert.Contains("SetInt32", wrongType.Message, StringComparison.Ordinal);
-        // A fixed-length field takes a list of any length from the typed setter (the read replaces it); a value set as a
-        // whole is checked, as an int32 is.
         builder.SetFloat32List(table.Schema.FieldIndex("v"), new float[3]);
         var wrongLength = Assert.Throws<ArgumentOutOfRangeException>(() => builder.Set(table.Schema.FieldIndex("v"), ScalarValue.FromFloat32List(new float[3])));
         Assert.Contains("a list of 3 elements, not 4", wrongLength.Message, StringComparison.Ordinal);
@@ -587,7 +558,6 @@ public class LocalFeatureTableTests
         var outOfRange = Assert.Throws<ArgumentOutOfRangeException>(() => builder.Set(table.Schema.FieldIndex("i32"), ScalarValue.FromInt64(1L << 40)));
         Assert.Contains("int64", outOfRange.Message, StringComparison.Ordinal);
 
-        // A later Begin discards the builder; using it throws.
         var next = table.Writer.Begin(EntityKey.FromInt64(2), 1);
         Assert.Throws<InvalidOperationException>(() => builder.SetBool(0, true));
         Assert.Throws<InvalidOperationException>(() => builder.Commit());
@@ -654,7 +624,7 @@ public class LocalFeatureTableTests
         var rows = new int[keys.Length];
         for (var i = 0; i < rows.Length; i++)
         {
-            rows[i] = (i * 7) % rows.Length; // a permutation: rows need not follow keys
+            rows[i] = (i * 7) % rows.Length;
         }
 
         var fields = new List<int>();
@@ -728,7 +698,6 @@ public class LocalFeatureTableTests
             version.Fill(0, records, rows, column, ScalarValue.Missing);
         }
 
-        // The rows were [1, 0] when the call began: key 1 went to row 1 and key 2 to row 0, and nothing else was written.
         Assert.Equal(8, values[1]);
         Assert.Equal(99, values[0]);
         for (var i = 2; i < values.Length; i++)
@@ -857,13 +826,12 @@ public class LocalFeatureTableTests
         Assert.Equal(EntityKeyType.String, users.KeyType);
         Assert.Equal(ColumnType.List(StorageKind.Float32, fixedLength: 8), users.Fields[0].Type);
 
-        var cross = LocalTableSchema.FromCatalog(catalog, "ui", "user_item", LocalTableMode.Cache); // a key of two parts is a table's too
+        var cross = LocalTableSchema.FromCatalog(catalog, "ui", "user_item", LocalTableMode.Cache);
         Assert.Null(cross.KeyType);
         Assert.Equal("(string,int64)", cross.Key.TypeText);
         Assert.Contains("did you mean 'i_clk'", Assert.Throws<KeyNotFoundException>(() => items.FieldIndex("i_clck")).Message, StringComparison.Ordinal);
     }
 
-    /// <summary>Writes the values of <c>data(key)</c> for every key and requested field (absent = not written).</summary>
     private sealed class ValueConnector(Func<long, Dictionary<string, ScalarValue>?> data) : StrataRec.Features.Connectors.IFeatureSourceConnector
     {
         public string ConnectorType => TestConnectorFactory.TypeName;

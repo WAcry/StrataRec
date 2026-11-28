@@ -11,12 +11,8 @@ using JsonSchema = global::Json.Schema.JsonSchema;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The schemas editors check workspace files with, checked as an editor checks them: by a JSON Schema
-/// 2020-12 validator (JsonSchema.Net) against real documents. Every file of the samples and of <c>init</c> validates
-/// against the schema it names in <c>$schema</c>; a misspelled config key, a value of the wrong type, a missing required
-/// member and an unknown operator are rejected, as the engine rejects them; an experiment's arms are accepted as merge
-/// patches and their mistakes rejected; the engine ignores <c>$schema</c>; the schema files are byte-stable, and
-/// <c>validate</c> warns when a workspace's are not the binary's.
+/// The schemas editors check workspace files with, checked as an editor checks them: by a JSON Schema 2020-12 validator
+/// (JsonSchema.Net) against real documents.
 /// </summary>
 public sealed class EditorSchemaTests
 {
@@ -24,7 +20,6 @@ public sealed class EditorSchemaTests
 
     private static readonly string[] Directories = { "catalog", "bindings", "pipelines", "experiments", "releases", "tables", "requests" };
 
-    /// <summary>The kind of a workspace file, by its path relative to the workspace.</summary>
     internal static string KindOf(string path) => path switch
     {
         "policy.jsonc" or "policy.json" => "policy",
@@ -39,8 +34,7 @@ public sealed class EditorSchemaTests
     };
 
     /// <summary>
-    /// Every file of a sample names the schema of its kind in the sample's schemas/, first, and validates against it. The
-    /// host sample's request is an HTTP body for curl (no pipeline_id), not a 'stratarec run' request file: the
+    /// The host sample's request is an HTTP body for curl (no pipeline_id), not a 'stratarec run' request file: the
     /// service's endpoint is strict and would reject a "$schema" in it.
     /// </summary>
     [Theory]
@@ -99,11 +93,6 @@ public sealed class EditorSchemaTests
         }
     }
 
-    /// <summary>
-    /// A mistake in a node is an error in the editor where the engine reports one: the schema checks a node's config
-    /// against the operator its "op" names. Each edit of the sample's TopK node is rejected by the schema at the pointer,
-    /// and by 'stratarec validate'.
-    /// </summary>
     [Theory]
     [InlineData("misspelled key", "/nodes/coarse_top_k/config/scor_col", "")]
     [InlineData("wrong type", "/nodes/coarse_top_k/config/k", "type")]
@@ -159,11 +148,6 @@ public sealed class EditorSchemaTests
         }
     }
 
-    /// <summary>
-    /// A binding's own settings are checked in the editor as the engine binds them: the schema describes each type's
-    /// settings, generated from the settings type its factory declares, where it used to take any member. Each edit of the
-    /// sample's bindings is rejected by the schema at the pointer, and by 'stratarec validate' at the same one.
-    /// </summary>
     [Theory]
     [InlineData("misspelled setting", "/services/ctr_model/lantency_ms", "")]
     [InlineData("misspelled nested setting", "/services/ctr_model/outputs/p_click/activaton", "")]
@@ -221,10 +205,6 @@ public sealed class EditorSchemaTests
         }
     }
 
-    /// <summary>
-    /// An entity declares a key or args, exactly one, and args has an argument: the catalog schema says so as the catalog
-    /// does (with both members optional, an editor took an entity the engine refuses).
-    /// </summary>
     [Theory]
     [InlineData("""{ "key": "ctx.request.user_id" }""", true)]
     [InlineData("""{ "args": { "q": "ctx.request.query" } }""", true)]
@@ -263,9 +243,8 @@ public sealed class EditorSchemaTests
     }
 
     /// <summary>
-    /// An arm is a merge patch: null deletes, an object names only what it changes, and whether a node is new depends on
-    /// the baseline, which the schema does not see. So every patch the engine may accept is valid; a key no node has, a
-    /// value of the wrong type, an unknown operator or section is not.
+    /// An arm is a merge patch: null deletes, an object names only what it changes, and whether a node is new depends
+    /// on the baseline, which the schema does not see.
     /// </summary>
     [Theory]
     [InlineData("""{ "nodes": { "diversity_cap": null } }""")]
@@ -273,7 +252,7 @@ public sealed class EditorSchemaTests
     [InlineData("""{ "nodes": { "safety_filter": { "config": { "predicate": "true" } } } }""")]
     [InlineData("""{ "nodes": { "fusion": { "config": { "multipliers": { "bookmark": "1.0", "quality": null } } } } }""")]
     [InlineData("""{ "nodes": { "ctr_ranker": { "timeout_ms": null, "on_failure": "skip" } } }""")]
-    [InlineData("""{ "nodes": { "top": { "order": 600, "op": "TopK@1", "config": { "k": 3 } } } }""")] // complete or not: the baseline decides
+    [InlineData("""{ "nodes": { "top": { "order": 600, "op": "TopK@1", "config": { "k": 3 } } } }""")]
     [InlineData("""{ "nodes": { "top": { "op": "TopK@1", "config": { "k_param": null } } } }""")]
     [InlineData("""{ "params": { "recall_quotas": { "cf": 2000 } }, "param_schema": { "w": { "type": "float64", "min": 0 } } }""")]
     [InlineData("""{ "log_taps": { "served": { "columns": { "bookmark_rate": "col.item.bookmark_rate" } } } }""")]
@@ -303,10 +282,6 @@ public sealed class EditorSchemaTests
         Assert.True(errors.Any(e => e.At == at && e.Keyword == keyword), $"expected '{keyword}' at {at}, got:\n{string.Join("\n", errors)}");
     }
 
-    /// <summary>
-    /// "$schema" is the editor's: a workspace whose files name their schemas has the content ids of one whose files do not,
-    /// so adding or removing it changes no release. Only a string at the top level: otherwise it is an error at its place.
-    /// </summary>
     [Fact]
     public void TheEngine_IgnoresTheSchemaMember_InContentIds()
     {
@@ -398,7 +373,6 @@ public sealed class EditorSchemaTests
         }
     }
 
-    /// <summary>The same binary writes the same bytes: what --out writes is what 'schema &lt;kind&gt;' prints, and writing again changes nothing.</summary>
     [Fact]
     public async Task SchemaFiles_AreByteStable_AndWhatSchemaPrints()
     {
@@ -412,7 +386,7 @@ public sealed class EditorSchemaTests
         {
             Assert.DoesNotContain("\r", f.Text, StringComparison.Ordinal);
             Assert.EndsWith("}\n", f.Text, StringComparison.Ordinal);
-            Assert.DoesNotContain("$ref", f.Text, StringComparison.Ordinal); // self-contained, so an editor resolves nothing else
+            Assert.DoesNotContain("$ref", f.Text, StringComparison.Ordinal);
             Assert.Contains("\"allowComments\": true", f.Text, StringComparison.Ordinal);
         });
 
@@ -453,11 +427,6 @@ public sealed class EditorSchemaTests
         Assert.Contains(message, error.ToString(), StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// 'validate' warns when schemas/ is not what this binary writes (a file that differs or is missing), with the
-    /// command that writes them as the hint; --warnings-as-errors makes CI fail on it. Without schemas/, or with only line
-    /// ends changed (a checkout's), there is nothing to say.
-    /// </summary>
     [Fact]
     public void Validate_WarnsWhenTheWorkspaceSchemasAreNotThisBinarys()
     {
@@ -470,7 +439,7 @@ public sealed class EditorSchemaTests
 
             var pipeline = Path.Combine(root, "schemas", "pipeline.schema.json");
             File.WriteAllText(pipeline, File.ReadAllText(pipeline).Replace("\n", "\r\n", StringComparison.Ordinal));
-            Assert.Equal(0, Validate(root, strict: true, out _)); // line ends only
+            Assert.Equal(0, Validate(root, strict: true, out _));
 
             File.WriteAllText(pipeline, File.ReadAllText(pipeline).Replace("TopK@1", "TopK@0", StringComparison.Ordinal));
             File.Delete(Path.Combine(root, "schemas", "table.schema.json"));
@@ -484,7 +453,7 @@ public sealed class EditorSchemaTests
             Assert.Equal(0, Validate(root, strict: true, out _));
 
             Directory.Delete(Path.Combine(root, "schemas"), recursive: true);
-            Assert.Equal(0, Validate(root, strict: true, out _)); // a workspace without schemas/ is not checked
+            Assert.Equal(0, Validate(root, strict: true, out _));
         }
         finally
         {
@@ -492,7 +461,6 @@ public sealed class EditorSchemaTests
         }
     }
 
-    /// <summary>A binary with other operators writes other schemas: a host's own operator is in its pipeline schema.</summary>
     [Fact]
     public void ThePipelineSchema_ListsTheOperatorsOfTheBinary()
     {
@@ -523,7 +491,6 @@ public sealed class EditorSchemaTests
         ["arms"] = new JsonObject { ["a"] = new JsonObject(), ["b"] = JsonNode.Parse(arm) },
     };
 
-    /// <summary>The files of a workspace that name a schema: policy, every file of the artifact directories, and the requests.</summary>
     private static List<string> WorkspaceFiles(string root, bool requestsAreRunFiles)
     {
         var files = new List<string>();
@@ -585,7 +552,6 @@ public sealed class EditorSchemaTests
         return code;
     }
 
-    /// <summary>A copy of the home_feed sample as written, which the test deletes.</summary>
     private static string CopyOfHomeFeed()
     {
         var from = Path.Combine(Samples, "home_feed");
@@ -604,15 +570,13 @@ public sealed class EditorSchemaTests
     }
 }
 
-/// <summary>JsonSchema.Net, as the tests use it: a schema of its own registry, and the errors of a document at their places.</summary>
 internal static class SchemaCheck
 {
     public static JsonSchema Load(string text) =>
         JsonSchema.FromText(text, new global::Json.Schema.BuildOptions { SchemaRegistry = new global::Json.Schema.SchemaRegistry() });
 
     /// <summary>
-    /// Each error as (instance location, keyword, message); none when the document is valid. The errors of an <c>if</c>
-    /// that did not hold are not errors of the document.
+    /// The errors of an <c>if</c> that did not hold are not errors of the document.
     /// </summary>
     public static List<(string At, string Keyword, string Message)> Errors(JsonSchema schema, JsonNode document)
     {

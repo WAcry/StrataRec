@@ -18,15 +18,12 @@ public class SnapshotFilesUpdateSourceTests
     {
         using var dir = new TempDirectory();
         dir.Write("part-0.jsonl", "﻿" + FullLine + "\r\n" +
-            // Fields the table does not hold are skipped, whatever their shape; null is missing; NaN strings are kept.
             """{"version": 1, "fields": {"unknown": {"deep": [1, {"x": null}]}, "f32": "NaN", "f64": "-Infinity", "v": ["Infinity", 0, 0, 0], "s": null}, "key": 2}""" + "\n" +
             "\n   \n" +
-            // A line without fields is a record with no values; a later line of the same key with an older version is ignored.
             """{"key": 3, "version": 9}""" + "\n" +
             """{"key": 3, "version": 8, "fields": {"i64": 1}}""" + "\n" +
             """{"key": 4, "version": 1, "fields": {"i64": 4}}""" + "\n" +
             """{"key": 4, "version": 2, "deleted": true}""");
-        // A number beyond float32 reads as +∞, exactly as memory@1 reads it; the read path replaces it.
         dir.Write("more/part-1.jsonl", """{"key": 5, "version": 1, "fields": {"i64": 5, "t": "😀", "f32": 1e39}}""");
         dir.Write("snapshot.json", """{"format": "jsonl", "position": {"0": 120, "3": 7}, "files": ["part-0.jsonl", "more/part-1.jsonl"]}""");
 
@@ -130,7 +127,6 @@ public class SnapshotFilesUpdateSourceTests
         Assert.Contains(hint, error.Reason + " " + error.Hint, StringComparison.Ordinal);
         Assert.StartsWith(file + ":3" + (pointer.Length == 0 ? ":" : " " + pointer + ":"), error.Message, StringComparison.Ordinal);
 
-        // The failed load was a reload: nothing of it is visible and the writer accepts the next one.
         Assert.False(table.Writer.IsReloading);
         Assert.Equal(0, table.Pin().RecordCount);
         Assert.True(table.Position.IsEmpty);
@@ -144,7 +140,7 @@ public class SnapshotFilesUpdateSourceTests
         { "{\"files\": [], \"position\": {\"0\": -1}}", "/position/0", "partition" },
         { "{\"files\": [], \"format\": \"parquet\"}", "/format", "jsonl" },
         { "{\"files\": [], \"generation\": 3}", "/generation", "'files'" },
-        { "{\"files\": [], \"a/b~c\": 1}", "/a~1b~0c", "'files'" }, // The member's name escaped
+        { "{\"files\": [], \"a/b~c\": 1}", "/a~1b~0c", "'files'" },
         { "{\"position\": {}}", "", "list the data files" },
         { "[]", "", "\"files\"" },
         { "{\"files\": [\"missing.jsonl\"]}", "", "before the manifest" },
@@ -185,7 +181,6 @@ public class SnapshotFilesUpdateSourceTests
         source.Load(table.Writer, TestContext.Current.CancellationToken);
         var first = table.Pin();
 
-        // The next generation drops keys 1-50 and adds 101-150; versions start afresh.
         dir.Write("gen-2.jsonl", Lines(51, 150, version: 0));
         dir.Write("snapshot.json", """{"position": {"0": 250}, "files": ["gen-2.jsonl"]}""");
         source.Load(table.Writer, TestContext.Current.CancellationToken);
@@ -196,9 +191,8 @@ public class SnapshotFilesUpdateSourceTests
         Assert.False(second.Find(1L).Found);
         Assert.True(second.Find(150L).Found);
         Assert.Equal(UpdatePosition.Single(250), table.Position);
-        Assert.True(first.Find(1L).Found); // a request that pinned the old version keeps reading it
+        Assert.True(first.Find(1L).Found);
 
-        // A broken generation: the load fails at its line, and the table keeps the second generation.
         dir.Write("gen-3.jsonl", Lines(1, 10, version: 1) + "\n{\"key\": 11}");
         dir.Write("snapshot.json", """{"position": {"0": 300}, "files": ["gen-3.jsonl"]}""");
         var error = Assert.Throws<FeatureUpdateException>(() => source.Load(table.Writer, TestContext.Current.CancellationToken));
@@ -219,7 +213,6 @@ public class SnapshotFilesUpdateSourceTests
         await source.RunAsync(UpdatePosition.Empty, table.Writer, CancellationToken.None);
         Assert.Equal(10, table.Pin().RecordCount);
 
-        // Resuming a table that already covers the snapshot's position does not rebuild it.
         var resumed = Table();
         await source.RunAsync(UpdatePosition.Single(10), resumed.Writer, CancellationToken.None);
         Assert.Equal(0, resumed.Pin().RecordCount);
@@ -246,7 +239,6 @@ public class SnapshotFilesUpdateSourceTests
         await WaitFor(() => table.Pin().RecordCount == 8);
         Assert.NotSame(loaded, table.Pin());
 
-        // An unchanged manifest is not reloaded: the version stays the same across several periods.
         var current = table.Pin();
         await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.Same(current, table.Pin());
@@ -273,14 +265,14 @@ public class SnapshotFilesUpdateSourceTests
     [InlineData("""{"uri": "s3://features/items/"}""", "/uri", "local directory")]
     [InlineData("""{"uri": ""}""", "/uri", "file://")]
     [InlineData("""{"uri": 5}""", "/uri", "file://")]
-    [InlineData("""{"reload": "PT1H"}""", "", "'uri': ")] // what the required setting means, from its documentation
+    [InlineData("""{"reload": "PT1H"}""", "", "'uri': ")]
     [InlineData("""{"uri": "x", "reload": "1h"}""", "/reload", "PT1H")]
     [InlineData("""{"uri": "x", "reload": "-PT1H"}""", "/reload", "PT1H")]
     [InlineData("""{"uri": "x", "reload": 3600}""", "/reload", "stratarec schema bindings")]
     [InlineData("""{"uri": "x", "reload": "P60D"}""", "/reload", "P49D")] // longer than a timer waits
     [InlineData("""{"uri": "x", "reload": "P1000000000D"}""", "/reload", "P49D")] // longer than a TimeSpan holds
     [InlineData("""{"uri": "x", "reloads": "PT1H"}""", "/reloads", "did you mean 'reload'?")]
-    [InlineData("""{"uri": "x", "a/b~c": 1}""", "/a~1b~0c", "reload")] // The setting's name escaped
+    [InlineData("""{"uri": "x", "a/b~c": 1}""", "/a~1b~0c", "reload")]
     public void Factory_SettingErrors_NameTheSetting(string settings, string pointer, string hint)
     {
         var error = Assert.Throws<BindingException>(() => new SnapshotFilesUpdateSourceFactory().Create(Context(settings)));
@@ -291,7 +283,6 @@ public class SnapshotFilesUpdateSourceTests
     [Fact]
     public void Factory_ATypeMismatch_SaysWhatTheSettingTakes()
     {
-        // Before typed settings, 3600 got the duration hint without saying a string was wanted.
         var error = Assert.Throws<BindingException>(() => new SnapshotFilesUpdateSourceFactory().Create(Context("""{"uri": "x", "reload": 3600}""")));
 
         Assert.Equal("'reload' must be a string or null, got the number 3600.", error.Reason);
@@ -315,8 +306,6 @@ public class SnapshotFilesUpdateSourceTests
     [MemberData(nameof(LongStrings))]
     public void Load_StringsThatGrowTheDecodeBuffer_ReadBackExactly(string json, string value)
     {
-        // Each value is a key, a string, a text and list items. The line before has short values; the line after has
-        // the value twice and three times over, so the buffers grow again and are reused at every size.
         using var dir = new TempDirectory();
         dir.Write("a.jsonl",
             "{\"key\": \"short\", \"version\": 1, \"fields\": {\"s\": \"x\", \"t\": \"y\", \"ls\": [\"z\"]}}\n" +
@@ -384,7 +373,7 @@ public class SnapshotFilesUpdateSourceTests
         var writer = new CancellingWriter(table.Writer, cancel, cancelAtBegin: 1);
 
         Assert.Throws<OperationCanceledException>(() => source.Load(writer, cancel.Token));
-        Assert.Equal(2, writer.Begins); // b.jsonl finished; c.jsonl never opened
+        Assert.Equal(2, writer.Begins);
         AssertUnchanged(table, loaded, source);
     }
 
@@ -406,7 +395,6 @@ public class SnapshotFilesUpdateSourceTests
         Assert.False(table.Writer.IsReloading);
     }
 
-    /// <summary>Loads a first generation (keys 1-3, position 3), then publishes a second two-line one to be cancelled.</summary>
     private static (LocalFeatureTable Table, SnapshotFilesUpdateSource Source, TableVersion Loaded) LoadFirstGeneration(TempDirectory dir)
     {
         dir.Write("gen-1.jsonl", Lines(1, 3, version: 1));
@@ -419,7 +407,6 @@ public class SnapshotFilesUpdateSourceTests
         return (table, source, table.Pin());
     }
 
-    /// <summary>The first generation is still current and complete; then the same snapshot loads without cancellation.</summary>
     private static void AssertUnchanged(LocalFeatureTable table, TableVersion loaded, SnapshotFilesUpdateSource source)
     {
         Assert.Same(loaded, table.Pin());
@@ -434,7 +421,6 @@ public class SnapshotFilesUpdateSourceTests
         Assert.False(table.Pin().Find(1L).Found);
     }
 
-    /// <summary>Passes every call to the table's writer and cancels the token at the n-th <c>Begin</c>.</summary>
     private sealed class CancellingWriter(IFeatureTableWriter inner, CancellationTokenSource cancel, int cancelAtBegin) : IFeatureTableWriter
     {
         public int Begins { get; private set; }
@@ -501,7 +487,6 @@ public class SnapshotFilesUpdateSourceTests
         return string.Join("\n", lines);
     }
 
-    /// <summary>The context an update source's factory gets: the bootstrap's settings, no secret store.</summary>
     private static BindingContext Context(string json, string? baseDirectory = null)
     {
         using var document = JsonDocument.Parse(json);
@@ -514,7 +499,6 @@ public class SnapshotFilesUpdateSourceTests
         return new BindingContext("item_store", settings, BindingContext.PinBaseDirectory(baseDirectory), secrets: null);
     }
 
-    /// <summary>Waits for a condition the background source makes true; the timeout only bounds a broken run.</summary>
     private static async Task WaitFor(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);

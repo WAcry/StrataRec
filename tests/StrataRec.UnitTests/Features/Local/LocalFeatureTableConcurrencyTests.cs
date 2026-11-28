@@ -9,20 +9,10 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.UnitTests.Features.Local;
 
-/// <summary>
-/// One writer thread updates, partially updates, deletes and compacts while reader threads look records up and fill
-/// columns, as requests do. Every value of a record is derived from a stamp, so a reader can check
-/// that what it read is one complete record of the key it asked for: a torn record, a record of another key, a stale
-/// directory or a half-built index would break an invariant or throw.
-/// </summary>
 /// <remarks>
 /// <para>Fields come in two groups. A full update writes both from one stamp; a partial update writes only group P, so a
 /// record may combine a Q stamp with a newer P stamp, but within a group all fields share one stamp, which is never
 /// newer than the record's version.</para>
-/// <para>Dedicated threads and a fixed amount of writer work: readers start first and keep reading until the writer has
-/// finished, so the two overlap however the scheduler runs them (CI has two cores; also run under <c>taskset -c 0,1</c>).
-/// Small pages, a small compaction threshold, a growing key range and thousands of distinct strings make the index, the
-/// page directory and the dictionary grow many times, and the writer compacts many times.</para>
 /// </remarks>
 public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
 {
@@ -43,7 +33,7 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         new("q", ColumnType.Int64),         // key << 32 | stamp
         new("q_f64", ColumnType.Float64),
         new("q_i32", ColumnType.Int32),
-        new("q_text", ColumnType.String), // distinct per write: the dictionary grows while readers read
+        new("q_text", ColumnType.String),
         new("q_vec", ColumnType.List(StorageKind.Float32, fixedLength: 8)),
         new("q_li64", ColumnType.List(StorageKind.Int64)),
         new("q_ls", ColumnType.List(StorageKind.String)),
@@ -68,7 +58,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
                 PageSize = 1024, // a few records per page: the page directory grows often
                 CompactionMinBytes = 64 * 1024,
 
-                // 2,048 hash values for 12,000 string keys: collisions everywhere, on top of the probe chains.
                 KeyHasher = keyType == EntityKeyType.String ? static key => XxHash3.HashToUInt64(key) % 2048 : null,
             });
         var writer = table.Writer;
@@ -123,7 +112,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         output.WriteLine($"{table.Compactions} compactions, generation {stats.Generation}, {stats.StringCount} strings, {stats.PageCount} pages, " +
             $"{stats.Index.SlotCount} index slots; reader batches {string.Join("/", iterations)}, found {string.Join("/", found)}");
 
-        // The work really exercised growth and compaction, and the readers really read.
         Assert.True(table.Compactions >= 8, $"{table.Compactions} compactions");
         var final = table.Pin();
         Assert.True(final.Generation >= 8);
@@ -135,7 +123,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
             Assert.True(iterations[r] >= MinReaderIterations && found[r] > iterations[r] * Batch / 4, $"reader {r}: {iterations[r]} batches, {found[r]} found");
         }
 
-        // The final table is exactly what the writer meant to write.
         foreach (var (key, expected) in model)
         {
             var record = final.Find(KeyOf(keyType, key));
@@ -169,7 +156,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
             }
             else if (action < 34)
             {
-                // Group P only: group Q keeps its stamp, or stays missing on a new or deleted key.
                 var builder = writer.Begin(KeyOf(keyType, key), version);
                 WriteP(builder, key, version);
                 Assert.True(builder.Commit());
@@ -177,7 +163,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
             }
             else if (action < 37 && known)
             {
-                // A stale or duplicate delivery: ignored, and the record does not change.
                 var builder = writer.Begin(KeyOf(keyType, key), current.Version - random.Next(2));
                 Assert.True(builder.IsIgnored);
                 WriteP(builder, key, version);
@@ -259,7 +244,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         {
             iterations++;
 
-            // Mostly the current version; every few batches, one pinned many batches ago (compactions may have replaced it).
             var version = held is not null && iterations % 7 == 0 ? held : table.Pin();
             if (iterations % 97 == 1)
             {
@@ -279,7 +263,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
             var memory = new RequestMemory();
             try
             {
-                // Both read paths: one fill per field, and all fields in one blocked fill.
                 var columns = new ColumnBuffer[Fields.Length];
                 var reads = new LocalFieldRead[Fields.Length];
                 for (var f = 0; f < Fields.Length; f++)
@@ -322,7 +305,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         }
     }
 
-    /// <summary>The invariants of one record read through the columns.</summary>
     private static void Check(long key, long version, ColumnBuffer[] columns, int row, bool stable)
     {
         var q = Group(columns, row, key, Q, QF64, QI32, QText, QVec, QLi64, QLs);
@@ -383,8 +365,6 @@ public class LocalFeatureTableConcurrencyTests(ITestOutputHelper output)
         }
     }
 
-    /// <summary>The group's stamp (from its int64 field, which must name the key), or -1 when the whole group is missing.
-    /// A group with some fields present and others missing is a torn record.</summary>
     private static long Group(ColumnBuffer[] columns, int row, long key, int stampField, params int[] others)
     {
         var present = columns[stampField].IsValid(row);

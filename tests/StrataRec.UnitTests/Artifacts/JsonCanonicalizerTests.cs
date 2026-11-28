@@ -250,7 +250,7 @@ public class JsonCanonicalizerTests
     [InlineData("[9007199254740994]", "[9007199254740994]")]
     [InlineData("[295147905179352830000]", "[295147905179352830000]")]
     [InlineData("[10000000000000000000000]", "[1e+22]")]
-    [InlineData("[1152921504606846976.0]", "[1152921504606847000]")] // fraction syntax: ordinary double rounding
+    [InlineData("[1152921504606846976.0]", "[1152921504606847000]")]
     [InlineData("[1.152921504606846976e18]", "[1152921504606847000]")]
     public void Canonicalize_LargeIntegerWithSameCanonicalValue_IsAccepted(string text, string expected)
     {
@@ -344,11 +344,6 @@ public class JsonCanonicalizerTests
         Assert.Throws<JsonCanonicalizationException>(() => JsonCanonicalizer.Canonicalize(new JsonObject { ["f"] = float.NaN }));
     }
 
-    /// <summary>
-    /// A Half that is not finite was not checked as a double or float is, and writing it threw
-    /// JsonReaderException ('N' is an invalid start of a value), not a canonicalization error at its pointer. It is
-    /// rejected as they are, boxed or not; a finite Half is a number.
-    /// </summary>
     [Fact]
     public void Canonicalize_ClrNonFiniteHalf_IsRejectedAtItsPointer()
     {

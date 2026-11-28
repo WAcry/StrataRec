@@ -3,10 +3,6 @@ using System.Text.Json.Nodes;
 
 namespace StrataRec.Artifacts.Json;
 
-/// <summary>
-/// The strict checks StrataRec layers on top of RFC 7396 and the path footprint of a patch
-///.
-/// </summary>
 /// <remarks>
 /// <para>
 /// Plain RFC 7396 silently ignores a <c>null</c> for a missing key and silently creates partial objects under a
@@ -33,8 +29,8 @@ namespace StrataRec.Artifacts.Json;
 ///   <item>An object for an existing object recurses member by member, down to the leaves.</item>
 /// </list>
 /// <para>
-/// Paths in the result are relative to the base document. Policy checks (which roots are patchable or add-only,
-/// owners) and schema validation of additions are the caller's job; this class only knows JSON.
+/// Paths in the result are relative to the base document. Policy checks (which roots are patchable or add-only, owners)
+/// and schema validation of additions are the caller's job.
 /// </para>
 /// </remarks>
 public static class MergePatchAnalyzer
@@ -95,7 +91,6 @@ public static class MergePatchAnalyzer
                 conflicts.Add(new FootprintConflict(operation, b[i]));
             }
 
-            // Entries of b at this path or below it form a contiguous run in sorted order (JsonPointer.CompareTo).
             for (var i = LowerBound(b, operation.Path); i < b.Length && operation.Path.IsPrefixOf(b[i].Path); i++)
             {
                 conflicts.Add(new FootprintConflict(operation, b[i]));
@@ -142,7 +137,6 @@ public static class MergePatchAnalyzer
         return sorted;
     }
 
-    /// <summary>Index of the first entry whose path is not less than <paramref name="target"/>.</summary>
     private static int LowerBound(PatchOperation[] sorted, JsonPointer target)
     {
         int low = 0, high = sorted.Length;
@@ -198,8 +192,6 @@ public static class MergePatchAnalyzer
                 return;
             }
 
-            // Merging into a missing key or a non-object starts from {} (RFC 7396 section 2), so the effective value
-            // is the patch value with its nested nulls dropped.
             var kind = exists ? PatchOpKind.Replace : PatchOpKind.Add;
             _operations.Add(new PatchOperation(path, kind, JsonMergePatch.Apply(null, patchValue)));
             ReportNullsInNewValue(patchValue, path);
@@ -241,7 +233,6 @@ public static class MergePatchAnalyzer
             var message =
                 $"The patch deletes '{path}', which does not exist in the base document; RFC 7396 would silently ignore it.";
 
-            // Walk the base document to the first token of the path that is missing.
             var current = _baseRoot;
             var parent = JsonPointer.Root;
             var depth = 0;

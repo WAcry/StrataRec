@@ -4,18 +4,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec init</c>: writes a new workspace (<see cref="InitTemplates"/>) that validates without warnings and runs
-/// offline, and prints the commands to try next, so that a new pipeline starts from a small working one rather than
-/// from a pruned copy of the sample.
-/// </summary>
-/// <remarks>
-/// It never deletes and, without <c>--force</c>, never writes into a directory that has anything in it but hidden entries:
-/// a mistyped directory must not end up with a workspace scattered over its files, while a repository just made with
-/// <c>git init</c> (<c>.git</c>, <c>.gitignore</c>, an editor's settings) is where a workspace is meant to start. With
-/// <c>--force</c> it writes its own files over files of the same names and leaves every other file as it is; it never
-/// writes through a symbolic link inside the workspace, which would change a file elsewhere.
-/// </remarks>
 internal static class InitCommand
 {
     private const string SchemasDescription = "the JSON Schema of each kind of file above, which it names in \"$schema\": an editor completes and checks it as you type";
@@ -47,11 +35,6 @@ internal static class InitCommand
         return command;
     }
 
-    /// <summary>
-    /// What init writes: the workspace (<see cref="InitTemplates"/>), then <c>schemas/</c>, the schemas of the binary that
-    /// runs it (<see cref="SchemaFiles"/>), which the files name in <c>$schema</c>: a workspace opened in an editor completes
-    /// and checks its files, a host binary's operators included, with no setup.
-    /// </summary>
     internal static InitFile[] Files(PlanEnvironment provided, string pipeline)
     {
         var templates = InitTemplates.Files(pipeline);
@@ -66,13 +49,11 @@ internal static class InitCommand
         return files;
     }
 
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>): the operators the schemas describe.</param>
-    /// <param name="directory">The directory as the user typed it; null for the current directory.</param>
     internal static int Run(PlanEnvironment provided, string? directory, string pipeline, bool force, TextWriter output, TextWriter errors)
     {
         var shown = Shown(directory);
         var root = Path.GetFullPath(string.IsNullOrEmpty(directory) ? "." : directory);
-        var label = shown == "." ? root : shown; // what diagnostics name: "." would say little
+        var label = shown == "." ? root : shown;
         var diagnostics = new DiagnosticBag();
         if (!IsValidId(pipeline))
         {
@@ -82,7 +63,7 @@ internal static class InitCommand
         }
 
         var files = Files(provided, pipeline);
-        var existing = new List<string>(); // the files init would overwrite
+        var existing = new List<string>();
         try
         {
             if (!Check(root, label, files, force, existing, diagnostics))
@@ -117,7 +98,6 @@ internal static class InitCommand
         var where = shown == "." ? "the current directory" : shown;
         output.WriteLine($"Created a StrataRec workspace in {where}:");
 
-        // The workspace's files one by one, then schemas/ on one line.
         var listed = new List<(string Path, string Description, bool Overwritten)>();
         var schemasOverwritten = false;
         foreach (var file in files)
@@ -166,10 +146,9 @@ internal static class InitCommand
     }
 
     /// <summary>
-    /// The checks before anything is written: the directory is one, it is empty unless <paramref name="force"/>, and every
-    /// path of the workspace is free, with no symbolic link on the way (a link would take a write outside the workspace).
-    /// Fills <paramref name="existing"/> with the files init would overwrite; false when a check failed, with its
-    /// diagnostic. Throws what the file system throws.
+    /// The checks before anything is written: the directory is one, it is empty unless <paramref name="force"/>, and
+    /// every path of the workspace is free, with no symbolic link on the way (a link would take a write outside the
+    /// workspace).
     /// </summary>
     private static bool Check(string root, string label, InitFile[] files, bool force, List<string> existing, DiagnosticBag diagnostics)
     {
@@ -198,8 +177,6 @@ internal static class InitCommand
             return false;
         }
 
-        // A symbolic link on the way, a path of the workspace that a directory takes, or a directory a file takes: reported
-        // before anything is written.
         foreach (var file in files)
         {
             if (Linked(root, file.Path) is { } linked)
@@ -220,8 +197,8 @@ internal static class InitCommand
     }
 
     /// <summary>
-    /// The rule of experiment ids. The engine does not restrict pipeline ids, but init writes this one into file names
-    /// and JSON strings, which the rule keeps plain: no separators, no escapes.
+    /// The engine does not restrict pipeline ids, but init writes this one into file names and JSON strings, which the
+    /// rule keeps plain: no separators, no escapes.
     /// </summary>
     internal static bool IsValidId(string id)
     {
@@ -271,7 +248,6 @@ internal static class InitCommand
         return entries[0];
     }
 
-    /// <summary>A directory where the file would go, or a file where one of its directories would; null when the path is free.</summary>
     private static string? Blocked(string root, string relative)
     {
         if (Directory.Exists(Path.Combine(root, relative)))
@@ -294,7 +270,6 @@ internal static class InitCommand
         return null;
     }
 
-    /// <summary>The first path on the way to the file (its directories, then itself) that is a symbolic link; null when none is.</summary>
     private static string? Linked(string root, string relative)
     {
         var slash = relative.IndexOf('/', StringComparison.Ordinal);
@@ -341,7 +316,6 @@ internal static class InitCommand
         return false;
     }
 
-    /// <summary>The directory as typed, without trailing separators; <c>.</c> for the current directory.</summary>
     private static string Shown(string? directory)
     {
         if (string.IsNullOrEmpty(directory))
@@ -353,7 +327,6 @@ internal static class InitCommand
         return trimmed.Length == 0 || trimmed.EndsWith(':') ? directory : trimmed; // "/" and "C:\" stay as they are
     }
 
-    /// <summary>A workspace path as the user would type it from where they ran init.</summary>
     private static string Join(string shown, string relative)
     {
         var native = relative.Replace('/', Path.DirectorySeparatorChar);
@@ -361,9 +334,8 @@ internal static class InitCommand
     }
 
     /// <summary>
-    /// The argument as a POSIX shell reads it back: as it is when every character is plain, else in single quotes, inside
-    /// which a shell expands nothing (a quote itself is closed, escaped and reopened: <c>'\''</c>). Double quotes
-    /// still expanded <c>$</c> and backquotes.
+    /// The argument as a POSIX shell reads it back: as it is when every character is plain, else in single quotes,
+    /// inside which a shell expands nothing (a quote itself is closed, escaped and reopened: <c>'\''</c>).
     /// </summary>
     internal static string Quote(string argument)
     {

@@ -120,9 +120,6 @@ public sealed class PipelineColumnsEntry
 /// <para>The calls are started in rank order and run at once. A row whose call fails gets no values and the node is
 /// degraded; the node fails when every call fails. A row without a value has an empty list in a list column that is not
 /// nullable and is missing in a nullable one; a column that is not a list must be nullable.</para>
-/// <para>Like <c>PipelineSource@1</c>, it uses only what any operator may
-/// (<see cref="OperatorCompileContext.TryCallPipeline"/>, <see cref="OperatorContext.CallPipelineAsync"/>): what to do
-/// with the lists beyond keeping them is an operator of one's own.</para>
 /// </remarks>
 public sealed class PipelineColumnsFactory : IOperatorFactory
 {
@@ -189,7 +186,6 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
 
         if (config.Cache is not null && config.Pipeline is null)
         {
-            // Said here: left alone it was read by nothing, and a wrong one (no ttl_ms, no tier bound) loaded and cached nothing.
             context.Error("/cache", "PIPELINE_COLUMNS_CONFIG", "'cache' is the cache of the calls of 'pipeline', and there is none.",
                 "give each entry of 'pipelines' its cache under the entry");
             ok = false;
@@ -251,12 +247,10 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
         return names;
     }
 
-    /// <summary>One pipeline the node calls, with what it passes and where what it returned goes.</summary>
     /// <param name="Ids">The target that gets the ids; -1 for none.</param>
     private sealed record Callee(
         PipelineCall Call, (string Name, CompiledExpression Expression)[] Inputs, int Ids, (int Target, string From)[] Columns, (int Target, string From)[] Values);
 
-    /// <summary>Resolves the node's and its entries' declarations: a column several pipelines fill is resolved once.</summary>
     private sealed class Builder(OperatorCompileContext context)
     {
         private readonly Dictionary<string, int> _targets = new(StringComparer.Ordinal);
@@ -273,7 +267,6 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
 
             var ok = true;
 
-            // How a pipeline is called is its own: the node's inputs are those of the node's pipeline.
             var inputs = new List<(string Name, CompiledExpression Expression)>();
             foreach (var (name, source, key) in entry is null ? Merged(node.Inputs, "/inputs/", null, null!) : Merged(null, null!, entry.Inputs, entryAt + "/inputs/"))
             {
@@ -284,12 +277,10 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                     continue;
                 }
 
-                // The declared type of what it reads, as PipelineSource@1 passes it: an int32 passed on is an int32.
                 ok &= context.TryCallInput(call, name, key, context.Schema.DeclaredType(expression));
                 inputs.Add((name, expression));
             }
 
-            // What the node writes is every pipeline's; an entry's of the same name replaces it, reported where it is written.
             var ids = -1;
             var idsColumn = entry?.Ids ?? node.Ids;
             if (idsColumn is not null)
@@ -330,7 +321,7 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                 }
                 else
                 {
-                    ok &= context.TryCallColumn(call, source, key, type.ElementType); // an element is never missing
+                    ok &= context.TryCallColumn(call, source, key, type.ElementType);
                     columns.Add((target, source));
                 }
             }
@@ -371,7 +362,6 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
             return false;
         }
 
-        /// <summary>The column a result's part goes to, resolved the first time any pipeline names it.</summary>
         private bool Target(string name, string key, out int target, out ColumnType type)
         {
             type = default;
@@ -396,7 +386,6 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
             return true;
         }
 
-        /// <summary>The node's entries with the entry's own, by name: (name, what it is set to, where it is written).</summary>
         private static List<(string Name, string Source, string Key)> Merged(
             Dictionary<string, string>? node, string nodeAt, Dictionary<string, string>? entry, string entryAt)
         {
@@ -473,7 +462,7 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                 Array.Clear(written);
                 if (calls[i] is { } call)
                 {
-                    var result = await call.ConfigureAwait(false); // completed above
+                    var result = await call.ConfigureAwait(false);
                     if (!result.Succeeded)
                     {
                         failed++;
@@ -486,7 +475,6 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
                     }
                     else
                     {
-                        // Which run computed the row's result: this request's, or the one whose result the cache answered with.
                         computedBy.Write(context, rows[i], 1, result);
                     }
                 }
@@ -544,7 +532,7 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
 
                 if (callee is null)
                 {
-                    continue; // a row of no kind the node has a pipeline for
+                    continue;
                 }
 
                 RequestInputs? given = null;
@@ -646,7 +634,7 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
 
                 if (value.IsMissing)
                 {
-                    continue; // no value: the row is left as one whose call returned none
+                    continue;
                 }
 
                 var into = buffers[target];
@@ -661,10 +649,6 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
             return null;
         }
 
-        /// <summary>
-        /// Makes the row's list the values, each converted to the element type as the check allows (an integer read into a
-        /// float list), without a list in between. False with the first value that is missing or does not convert.
-        /// </summary>
         private static bool TrySetList(ListColumn into, int row, ReadOnlySpan<ScalarValue> values, out ScalarValue misfit)
         {
             var element = into.Type.ElementType;
@@ -761,7 +745,6 @@ public sealed class PipelineColumnsFactory : IOperatorFactory
         }
 
         /// <summary>
-        /// A row's columns that got nothing: a list that is not nullable is empty, every other column is left missing.
         /// Written, not left as the buffer is: a row an earlier attempt of the node wrote has that attempt's extent.
         /// </summary>
         private void Blank(int row, ColumnBuffer[] buffers, bool[] written)

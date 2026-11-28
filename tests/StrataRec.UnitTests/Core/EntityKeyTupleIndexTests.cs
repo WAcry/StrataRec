@@ -28,7 +28,6 @@ public class EntityKeyTupleIndexTests
         Assert.True(index.TryGetValue(Tuple(8, "US"), out var value));
         Assert.Equal(2, value);
 
-        // Tuples that differ in one part, or only in a part's type, are other keys.
         Assert.False(index.TryGetValue(Tuple(8, "DE"), out _));
         Assert.False(index.TryGetValue([EntityKey.FromString("7"), EntityKey.FromString("US")], out _));
         Assert.False(index.TryGetValue([EntityKey.FromInt64(0), EntityKey.FromString("US")], out _));
@@ -40,7 +39,7 @@ public class EntityKeyTupleIndexTests
     public void Growth_And_Reset_KeepEveryTuple_AndReuseTheArrays()
     {
         var memory = new RequestMemory();
-        var index = new EntityKeyTupleIndex(3, 0, memory); // grows from the smallest table
+        var index = new EntityKeyTupleIndex(3, 0, memory);
         for (var i = 0; i < 1_000; i++)
         {
             index.GetOrAdd([EntityKey.FromString("s" + (i % 7)), EntityKey.FromInt64(i), EntityKey.FromString(i % 2 == 0 ? "US" : "DE")], i, out _);
@@ -54,7 +53,6 @@ public class EntityKeyTupleIndexTests
             Assert.Equal(EntityKey.FromInt64(i), index.PartKeys(1)[i]);
         }
 
-        // Reset to fewer parts, then to more than before: empty each time, and as many tuples as asked for.
         index.Reset(2, 100);
         Assert.Equal(0, index.Count);
         Assert.False(index.TryGetValue(Tuple(1, "US"), out _));
@@ -84,7 +82,7 @@ public class EntityKeyTupleIndexTests
         var index = new EntityKeyTupleIndex(2, keys.Length, memory);
         foreach (var key in keys)
         {
-            index.GetOrAdd(key, index.Count, out _); // warm-up: JIT
+            index.GetOrAdd(key, index.Count, out _);
         }
 
         index.Reset(2, keys.Length);

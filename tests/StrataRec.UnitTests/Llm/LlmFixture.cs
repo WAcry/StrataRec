@@ -13,24 +13,12 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Llm;
 
-/// <summary>
-/// A workspace of one pipeline in a temp directory for the generative operators: a recall of <see cref="Incoming"/>
-/// (int64 keys) or of string keys, then the node <c>rank</c> with the operator under test, bound to a capturing text
-/// model (<see cref="TextModels"/>). The catalog has a feature of every kind a template may name, nullable ones included.
-/// </summary>
 internal static class LlmFixture
 {
-    /// <summary>The order the recall leaves the rows in: what the reranker sees.</summary>
     public static readonly long[] Incoming = { 30, 10, 50, 20, 40, 70, 60 };
 
     public static readonly string[] StringKeys = { "sku-c", "sku-a", "sku-e", "sku-b", "sku-d" };
 
-    /// <summary>
-    /// The items: title (string), blurb (a longer string, missing for 20 and 40), price (float64), score (float32), stock (int64),
-    /// fresh (bool), tags (list&lt;string&gt;?, missing for 50), codes (list&lt;int64&gt;), rating (float32?, missing for
-    /// 10), emb (list&lt;float32,2&gt;), extra (string, named only by some templates), weights (list&lt;float32&gt;, only 10)
-    /// and clicks (list&lt;bool&gt;, only 10).
-    /// </summary>
     private const string Items = """
         {
           "10": { "title": "Red \"shoes\"", "blurb": "Bright & bold", "price": 19.99, "score": 0.1, "stock": 3, "fresh": true, "tags": ["red", "shoe"], "codes": [7, -9007199254740993], "emb": [1, 2], "extra": "x10", "weights": [0.1, -2.5], "clicks": [true, false] },
@@ -45,19 +33,13 @@ internal static class LlmFixture
 
     public const string AllowedVersions = "\"llm_version\": { \"type\": \"string\", \"enum\": [\"v1\", \"v2\"] }";
 
-    /// <summary>The output's columns unless a test names others: each row's title.</summary>
     public const string DefaultOutput = "\"title\": \"col.item.title\"";
 
-    /// <summary>
-    /// The recall's attribution columns declared nullable: a row source after the recall (<c>GenerativeRetriever@1</c>)
-    /// appends rows without them, which non-nullable columns refuse at load (<c>ROW_SOURCE_AFTER_COLUMN</c>).
-    /// </summary>
     public const string NullableRecallColumns = """
         "recall.sources_mask": { "type": "int64?" }, "recall.best_rank": { "type": "int64?" },
         "recall.best_score": { "type": "float64?" }, "recall.primary_source": { "type": "string?" }
         """;
 
-    /// <summary>The default request: a user with a name, a query, a budget (float32), vip, interests and a nullable nickname missing.</summary>
     public static RequestInputs Inputs() => new RequestInputs()
         .Set("user_id", 7L)
         .Set("query", "gifts for \"dad\"")
@@ -68,12 +50,6 @@ internal static class LlmFixture
         .Set("weights", new[] { 0.1, 1e-7 })
         .Set("flags", new[] { false, true });
 
-    /// <summary>
-    /// Compiles the workspace with node <c>rank</c> running <paramref name="op"/> with <paramref name="config"/>; returns
-    /// the compilation (check <see cref="PlanCompilation.Succeeded"/>).
-    /// </summary>
-    /// <param name="columns">Declarations under the pipeline's <c>columns</c>, e.g. <see cref="NullableRecallColumns"/>.</param>
-    /// <param name="output">The output's columns (the default shows each row's title).</param>
     public static PlanCompilation TryCompile(
         TextModels models, string config, string op = "LlmReranker@1", string onFailure = "fail_request", bool stringKeys = false,
         OperatorRegistry? operators = null, long[]? recall = null, string columns = "", string output = DefaultOutput, string nodes = "")
@@ -149,7 +125,6 @@ internal static class LlmFixture
         return compilation.Plan!;
     }
 
-    /// <summary>The single error of a compilation that must fail.</summary>
     public static ConfigDiagnostic Error(PlanCompilation compilation)
     {
         Assert.False(compilation.Succeeded);
@@ -168,19 +143,18 @@ internal static class LlmFixture
 
     public static long[] IdsOf(PipelineResult result) => result.Items.Select(i => i.Id.Int64Value).ToArray();
 
-    /// <summary>An <c>LlmReranker@1</c> config with one prompt, <c>user</c>; <paramref name="extra"/> adds keys (start it with a comma).</summary>
+    /// <summary><paramref name="extra"/> adds keys (start it with a comma).</summary>
     public static string Rerank(string template, string answer = "rank", int window = 3, string extra = "") =>
         $$"""{ "model": "llm", "output": "answer", "answer": "{{answer}}", "window": {{window}}, "prompts": { "user": {{System.Text.Json.JsonSerializer.Serialize(template)}} }{{extra}} }""";
 
-    /// <summary>An <c>LlmAnnotator@1</c> config with one prompt, <c>user</c>, writing <c>llm.note</c>; <paramref name="extra"/> adds keys (start it with a comma).</summary>
+    /// <summary><paramref name="extra"/> adds keys (start it with a comma).</summary>
     public static string Annotate(string template, int window = 3, string extra = "") =>
         $$"""{ "model": "llm", "output": "answer", "column": "llm.note", "window": {{window}}, "prompts": { "user": {{System.Text.Json.JsonSerializer.Serialize(template)}} }{{extra}} }""";
 
-    /// <summary>A <c>GenerativeRetriever@1</c> config with one prompt, <c>user</c>; <paramref name="extra"/> adds keys (start it with a comma).</summary>
+    /// <summary><paramref name="extra"/> adds keys (start it with a comma).</summary>
     public static string Retrieve(string template, int maxItems = 3, string extra = "") =>
         $$"""{ "model": "llm", "output": "answer", "max_items": {{maxItems}}, "prompts": { "user": {{System.Text.Json.JsonSerializer.Serialize(template)}} }{{extra}} }""";
 
-    /// <summary>Replays <paramref name="recorded"/>'s recording on <paramref name="plan"/>, with the replay to read its gaps from.</summary>
     public static async Task<(PipelineResult Result, RunReplay Replay)> Replay(ExecutionPlan plan, PipelineResult recorded, RequestInputs? inputs = null)
     {
         var replay = RunReplay.Create(recorded.Recording!, "/runs/0");
@@ -195,11 +169,9 @@ internal static class LlmFixture
         return (result, replay);
     }
 
-    /// <summary>The value of output column <paramref name="column"/> per item, by entity id; null where missing.</summary>
     public static Dictionary<long, object?> Values(PipelineResult result, string column) =>
         result.Items.ToDictionary(i => i.Id.Int64Value, i => Value(i.Columns[column]));
 
-    /// <summary>A result value as a plain object: string, bool, long or double; null when missing.</summary>
     public static object? Value(ScalarValue value) => value.Kind switch
     {
         0 => null,
@@ -209,7 +181,6 @@ internal static class LlmFixture
         _ => value.AsString(),
     };
 
-    /// <summary>The outcome of node <c>rank</c>.</summary>
     public static NodeOutcome Rank(PipelineResult result) => Assert.Single(result.Outcomes, o => o.NodeId == "rank");
 
     private static void Write(string root, string path, string content)
@@ -220,13 +191,8 @@ internal static class LlmFixture
     }
 }
 
-/// <summary>A call as <see cref="TextModels"/> received it.</summary>
 internal sealed record TextCall(string? Version, int BatchSize, long? Seed, int? MaxOutputTokens, IReadOnlyDictionary<string, string> Prompts);
 
-/// <summary>
-/// <c>text_test@1</c>: declares a signature per version (text inputs and output by default), keeps every call, and
-/// answers with what <c>answer</c> returns: the text of output <c>answer</c> (none when null) and the status.
-/// </summary>
 internal sealed class TextModels(Func<TextCall, (string? Text, ServiceStatus Status)> answer, Func<string?, ServiceSignature>? signature = null)
     : IBindingFactory<IServiceClient>, IServiceClient
 {

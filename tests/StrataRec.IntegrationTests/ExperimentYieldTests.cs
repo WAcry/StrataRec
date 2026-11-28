@@ -12,11 +12,6 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// One experiment yielding to another of a different layer (a release's <c>yields_to</c>): on a
-/// request in both, the one that yields runs in none of its arms, so a conflict between them is no error, and what a
-/// request in both runs is what the experiment it yields to runs alone.
-/// </summary>
 public sealed class ExperimentYieldTests
 {
     /// <summary>exp_short_feed (its own layer) shortens the feed to 5; exp_quality_weight/strong sets the same parameter to 8.</summary>
@@ -57,10 +52,6 @@ public sealed class ExperimentYieldTests
         Assert.Equal(["PATCH_CONFLICT /params/final_top_k"], yield.Resolves);
     }
 
-    /// <summary>
-    /// On a request in both, the experiment that yields runs in none of its arms, its control included, and is recorded
-    /// as yielded; whatever assigned the arms, forced arms too. A request in only one of them runs it as before.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -81,12 +72,11 @@ public sealed class ExperimentYieldTests
         Assert.Equal(8, alone.Items.Count);
         Assert.Empty(alone.Experiments.Ignored);
 
-        Assert.Equal(5, both.Items.Count); // exp_short_feed's value: exp_quality_weight/strong did not run
+        Assert.Equal(5, both.Items.Count);
         Assert.Equal(["exp_short_feed/short"], both.Experiments.Assigned);
         Assert.Equal([new IgnoredArm("exp_quality_weight/strong", IgnoredArmReason.Yielded)], both.Experiments.Ignored);
         Assert.DoesNotContain("exp_quality_weight", both.Experiments.Triggered);
 
-        // The control yields as the treatment does: the experiment's arms stay comparable.
         Assert.Equal(["exp_short_feed/control"], controls.Experiments.Assigned);
         Assert.Equal([new IgnoredArm("exp_quality_weight/control", IgnoredArmReason.Yielded)], controls.Experiments.Ignored);
     }
@@ -106,10 +96,6 @@ public sealed class ExperimentYieldTests
         Assert.Null(plan.NeverRunTogether(plan.ArmsFromIds(["exp_quality_weight/strong", "exp_freshness_calibration/calibrated"])));
     }
 
-    /// <summary>
-    /// A recording of a request in both, made where they ran together (no yield, no conflict), replays on a plan where one
-    /// yields without it, as a request in them runs there now; and a recording with a yielded arm replays as recorded.
-    /// </summary>
     [Fact]
     public async Task Replays_RunTheArmsAsTheReplayedPlanDoes_AndReadAYieldedArm()
     {
@@ -126,7 +112,7 @@ public sealed class ExperimentYieldTests
         var replayed = await after.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(together.Recording!)), cancellationToken: token);
         Assert.Contains("arm 'exp_quality_weight/strong' yields to 'exp_short_feed' in the replayed plan; replayed without it", replayed.Report.Notes);
         Assert.Equal(5, replayed.Result.Items.Count);
-        Assert.Equal([new IgnoredArm("exp_quality_weight/strong", IgnoredArmReason.Yielded)], replayed.Result.Experiments.Ignored); // as a request now records it
+        Assert.Equal([new IgnoredArm("exp_quality_weight/strong", IgnoredArmReason.Yielded)], replayed.Result.Experiments.Ignored);
 
         var yielded = await after.ExecuteAsync(Request("req-yielded", forced: false, "exp_quality_weight/strong", "exp_short_feed/short", record: true), token);
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(yielded.Recording!));
@@ -136,12 +122,6 @@ public sealed class ExperimentYieldTests
         Assert.Equal([new IgnoredArm("exp_quality_weight/strong", IgnoredArmReason.Yielded)], again.Result.Experiments.Ignored);
     }
 
-    /// <summary>
-    /// A replay resolves the yields of the replayed plan over the arms the recording was assigned, those that yielded
-    /// included: a recording where the quality experiment yielded, replayed where the short feed yields to
-    /// it instead, runs as a request in both runs there now, and differs from the recording. Arms passed to the replay
-    /// yield the same way.
-    /// </summary>
     [Fact]
     public async Task AReplay_ResolvesTheRecordedAssignment_OverTheYieldsOfTheReplayedPlan()
     {
@@ -174,12 +154,6 @@ public sealed class ExperimentYieldTests
         Assert.Equal([new IgnoredArm("exp_short_feed/short", IgnoredArmReason.Yielded)], withArms.Result.Experiments.Ignored);
     }
 
-    /// <summary>
-    /// A recording of the platform's arms replays through the platform's rule: where the replayed plan puts
-    /// the two experiments into one layer, both arms are a layer conflict and the request runs the baseline, as a request
-    /// in them would now, not an invalid request; an arm the replayed plan does not have is ignored as unknown. Forced
-    /// arms stay strict, as in a request.
-    /// </summary>
     [Fact]
     public async Task AReplayOfThePlatformsArms_IgnoresThemAsTheReplayedPlanWould()
     {
@@ -221,11 +195,6 @@ public sealed class ExperimentYieldTests
         Assert.Equal(RecErrorKind.InvalidRequest, strict.Result.ErrorKind);
     }
 
-    /// <summary>
-    /// A replay's arms come from the request's assignment record: an edited assignment replays as edited and
-    /// shows as replayed arms that differ from those the primary run recorded, rather than replaying the run's arms
-    /// silently; an ignored id listed twice runs once and is noted once.
-    /// </summary>
     [Fact]
     public async Task AReplay_RunsTheAssignmentRecord_AndNotesAnIdOnce()
     {
@@ -254,9 +223,8 @@ public sealed class ExperimentYieldTests
     }
 
     /// <summary>
-    /// A yield changes what a request in both experiments runs, which no combination the default diff compares shows, so
-    /// it is a structural change; a reversed one is one removed and one added. An effective plan is the one a
-    /// request in the arms runs, without the arm that yields, as the executor runs it.
+    /// A yield changes what a request in both experiments runs, which no combination the default diff compares shows,
+    /// so it is a structural change; a reversed one is one removed and one added.
     /// </summary>
     [Fact]
     public void ADiff_ReportsAYieldAddedOrReversed_AndAnEffectivePlanRunsWithoutTheArmThatYields()
@@ -307,8 +275,7 @@ public sealed class ExperimentYieldTests
     }
 
     /// <summary>
-    /// A manifest carries the yields (and none when there are none, so manifests without them keep their ids); a node
-    /// compiles them from it; a revocation of the experiment yielded to removes the entry's yield, which yields nothing.
+    /// A manifest carries the yields (and none when there are none, so manifests without them keep their ids).
     /// </summary>
     [Fact]
     public async Task AManifest_CarriesTheYields_AndARevocationOfTheOtherExperimentDropsThem()
@@ -323,7 +290,7 @@ public sealed class ExperimentYieldTests
         var manifest = ManifestStores.Read(file);
         Assert.Equal(["exp_short_feed"], manifest.Experiments["exp_quality_weight"].YieldsTo);
         Assert.Null(manifest.Experiments["exp_mmr_diversity"].YieldsTo);
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(file), "\"yields_to\"")); // none written where none is declared
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(file), "\"yields_to\""));
 
         var token = TestContext.Current.CancellationToken;
         var artifacts = new FileSystemArtifactStore(store);
@@ -353,7 +320,6 @@ public sealed class ExperimentYieldTests
     }
 }
 
-/// <summary>What a declared yield may and may not do, compiled from experiments placed in code.</summary>
 public sealed class ExperimentYieldDeclarationTests
 {
     private const string Top5 = """{ "params": { "final_top_k": 5 } }""";
@@ -400,7 +366,6 @@ public sealed class ExperimentYieldDeclarationTests
         Assert.Empty(compilation.Report.Yields);
     }
 
-    /// <summary>An added name has one meaning everywhere: two definitions are an error even where the two never run together.</summary>
     [Fact]
     public void ADifferentDefinitionOfOneAddedName_IsStillAnError()
     {
@@ -411,10 +376,6 @@ public sealed class ExperimentYieldDeclarationTests
         Assert.Contains(compilation.Diagnostics, d => d.Code == "ADD_CONFLICT");
     }
 
-    /// <summary>
-    /// Two layers changing one multiplier of fusion differently: a node defined by both is never compiled, and a request
-    /// in both runs fusion as the experiment yielded to defines it, the same as that arm alone and as the merged compile.
-    /// </summary>
     [Fact]
     public async Task ANodeBothChange_RunsAsTheExperimentYieldedTo_OnARequestInBoth()
     {
@@ -446,8 +407,7 @@ public sealed class ExperimentYieldDeclarationTests
     }
 
     /// <summary>
-    /// The sample's boost writes score.final beside calibration and before MMR reads it: two interactions, which yielding
-    /// to both experiments keeps apart, with no warning; the report lists them.
+    /// The sample's boost writes score.final beside calibration and before MMR reads it.
     /// </summary>
     [Fact]
     public void AnExperimentYieldingToThoseItInteractsWith_IsNotWarnedAbout()
@@ -467,10 +427,8 @@ public sealed class ExperimentYieldDeclarationTests
     }
 
     /// <summary>
-    /// The combination limit counts the combinations that run: a yield removes those with both experiments, as one layer
-    /// would, so declaring it instead of merging two layers costs no more checks. Three layers changing one
-    /// multiplier of fusion, each yielding to those after it, run 4 of the 8 combinations; with one yield between two of
-    /// three layers changing fusion, 6 run.
+    /// Three layers changing one multiplier of fusion, each yielding to those after it, run 4 of the 8 combinations;
+    /// with one yield between two of three layers changing fusion, 6 run.
     /// </summary>
     [Fact]
     public void TheCombinationLimit_CountsTheCombinationsThatRun()
@@ -492,7 +450,6 @@ public sealed class ExperimentYieldDeclarationTests
         Assert.Contains("yield", limit.Hint, StringComparison.Ordinal);
     }
 
-    /// <summary>A review of an interaction that a yield keeps apart is unused; the hint names the yield, since the two are in different layers.</summary>
     [Fact]
     public void AReviewOfAnInteractionAYieldKeepsApart_IsUnused_AndTheHintNamesTheYield()
     {

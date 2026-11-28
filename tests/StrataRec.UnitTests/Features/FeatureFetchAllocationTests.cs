@@ -9,11 +9,6 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>
-/// A candidate fetch must not allocate per key or per synchronously answered chunk: the key set, its
-/// index and the per-chunk arrays are rented from the request memory, the chunks share one staging area and one
-/// cancellation source, and <c>memory@1</c> looks int64 keys up without formatting them.
-/// </summary>
 [Collection(AllocationMeasurement.Name)]
 public class FeatureFetchAllocationTests
 {
@@ -29,18 +24,14 @@ public class FeatureFetchAllocationTests
         var smallBytes = Measure(rig, features, Small);
         var largeBytes = Measure(rig, features, Large);
 
-        // Before the rented key index, 3,900 more keys cost ~570 KB (dictionary, key list and a string per key); now both
-        // sizes allocate the same.
         Assert.True(largeBytes - smallBytes < 1024, $"{Small} keys: {smallBytes} B, {Large} keys: {largeBytes} B");
     }
 
     [Fact]
     public void SynchronouslyAnsweredChunk_AllocatesNothing()
     {
-        // The same 2,000 keys in 100 or in 200 chunks. A request sends hundreds of chunks (candidates / max_batch); one
-        // answered synchronously used to cost ~420 B (keys, staging buffer and columns, cancellation source and timer,
-        // lease, task). Any object per chunk is at least 24 B, so 100 more chunks would show as 2.4 KB or more. The
-        // connector is not an async method: Debug builds compile async state machines as classes, one per call.
+        // Any object per chunk is at least 24 B, so 100 more chunks would show as 2.4 KB or more. The connector is not
+        // an async method: Debug builds compile async state machines as classes, one per call.
         const int Keys = 2_000;
         var fewer = Measure(SynchronousRig(maxBatch: 20), Keys);
         var more = Measure(SynchronousRig(maxBatch: 10), Keys);
@@ -49,13 +40,10 @@ public class FeatureFetchAllocationTests
     }
 
     /// <summary>
-    /// A chunk whose connector answers later costs its wait and no more: the task of its answer, the lease that holds the
-    /// request memory until the connector has completed, the continuation that releases it, the wait's timer and the
-    /// state machine that awaits it, besides the connector's own async method. Measured over every thread, since the
-    /// continuations run on the pool; the same 2,000 keys in 100 or in 200 chunks, so the difference is 100 chunks' worth.
-    /// About 1.19 KB a chunk on .NET 10, the yielding connector's own included; 1.14 KB before the waits were merged into
-    /// one, 1.31 KB when the merged wait's state machine also kept the result, the memory and the client's
-    /// token across the wait.
+    /// Measured over every thread, since the continuations run on the pool; the same 2,000 keys in 100 or in 200
+    /// chunks, so the difference is 100 chunks' worth. About 1.19 KB a chunk on.NET 10, the yielding connector's own
+    /// included; 1.14 KB before the waits were merged into one, 1.31 KB when the merged wait's state machine also kept
+    /// the result, the memory and the client's token across the wait.
     /// </summary>
     [Fact]
     public async Task AnAsynchronouslyAnsweredChunk_CostsItsWaitAlone()
@@ -71,14 +59,12 @@ public class FeatureFetchAllocationTests
     [Fact]
     public void LocalRead_AllocatesNothing_AtAnyKeyCount()
     {
-        // A local read is one lookup and one multi-field fill into the request's columns, with every buffer
-        // rented from the request memory: neither the read nor its key count may cost an object. Measured against a
-        // second ensure of the same features, which has nothing to read, so the ensure's own cost (in Debug, its async
-        // state machine) cancels out. Foreign-key and int64 / float32 / float64 / bool fields, with misses and defaults.
+        // Measured against a second ensure of the same features, which has nothing to read, so the ensure's own cost
+        // (in Debug, its async state machine) cancels out.
         const int Items = 4_000;
         var rig = new FeatureTestRig().LocalSource("item_store", writer =>
         {
-            for (var id = 1; id <= Items; id += 2) // odd items only: half the keys miss
+            for (var id = 1; id <= Items; id += 2)
             {
                 var builder = writer.Begin(id, 1);
                 builder.Set(writer.Schema.FieldIndex("score"), ScalarValue.FromFloat64(id * 0.5));
@@ -115,9 +101,6 @@ public class FeatureFetchAllocationTests
     [Fact]
     public void CompositeKeyLocalRead_AllocatesNothing_AtAnyKeyCount()
     {
-        // Keys of two parts, both ways their parts can vary: [entity_id, ctx.request.country] (a shared request part beside
-        // one column: one value per row deduplicated) and [entity_id, item.category] (two varying parts: the tuple index,
-        // encoded, hashed and compared per key). Neither may cost an object per key.
         const int Items = 4_000;
         var byCountry = EntityDefinition.Of(
             "item_country", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.RequestInput("country", EntityKeyType.String));
@@ -133,7 +116,7 @@ public class FeatureFetchAllocationTests
             }
         }).LocalSource("ic_store", writer =>
         {
-            for (var id = 1; id <= Items; id += 2) // odd items only: half the keys miss
+            for (var id = 1; id <= Items; id += 2)
             {
                 var builder = writer.Begin([EntityKey.FromInt64(id), EntityKey.FromString("US")], 1);
                 builder.Set(writer.Schema.FieldIndex("boost"), ScalarValue.FromFloat64(id));
@@ -159,9 +142,9 @@ public class FeatureFetchAllocationTests
 
         void Check(TestRequest request)
         {
-            Assert.Equal(0.5, request.Value(features[0], 0).AsFloat64()); // item 1, category c1
-            Assert.Equal(1.0, request.Value(features[2], 0).AsFloat64()); // item 1 in US
-            Assert.Equal(-1.0, request.Value(features[2], 1).AsFloat64()); // item 2 has no US record
+            Assert.Equal(0.5, request.Value(features[0], 0).AsFloat64());
+            Assert.Equal(1.0, request.Value(features[2], 0).AsFloat64());
+            Assert.Equal(-1.0, request.Value(features[2], 1).AsFloat64());
         }
 
         var small = MeasureLocalRead(rig, features, 100, request => request.Context[country] = ScalarValue.FromString("US"), Check);
@@ -173,7 +156,6 @@ public class FeatureFetchAllocationTests
     [Fact]
     public void CompositeKeyFetch_AllocationDoesNotGrowWithTheKeyCount()
     {
-        // [entity_id, ctx.request.country]: the batch carries the country once, the rows' ids deduplicated as one part.
         var byCountry = EntityDefinition.Of(
             "item_country", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.RequestInput("country", EntityKeyType.String));
         var rig = new FeatureTestRig().Source("ic_store", new SynchronousConnector(), maxBatch: 10_000);
@@ -191,8 +173,6 @@ public class FeatureFetchAllocationTests
     [Fact]
     public void AFetchKeyedByAContextFeature_AllocationDoesNotGrowWithTheKeyCount()
     {
-        // [entity_id, ctx.user.segment]: the segment is stored by the context prefetch (a synchronous memory@1 source) and
-        // carried once per batch, as a request input is; the rows' ids are deduplicated as one part.
         var bySegment = EntityDefinition.Of(
             "item_segment", EntityKeyPartDefinition.EntityId(EntityKeyType.Int64), EntityKeyPartDefinition.ContextFeature("user.segment", EntityKeyType.String));
         var rig = new FeatureTestRig()
@@ -215,7 +195,6 @@ public class FeatureFetchAllocationTests
         Assert.True(largeBytes - smallBytes < 1024, $"100 keys: {smallBytes} B, 4000 keys: {largeBytes} B");
     }
 
-    /// <summary>Bytes the first ensure of <paramref name="features"/> allocates beyond a second one: best of three after a warm-up.</summary>
     private static long MeasureLocalRead(
         FeatureTestRig rig, int[] features, int keys, Action<TestRequest>? setup = null, Action<TestRequest>? check = null)
     {
@@ -246,9 +225,9 @@ public class FeatureFetchAllocationTests
             else
             {
                 Assert.Equal(0.5, request.Value(features[0], 0).AsFloat64());
-                Assert.True(request.Value(features[0], 1).IsMissing); // item 2 has no record
-                Assert.Equal(-1.0, request.Value(features[4], 1).AsFloat64()); // item 2 has no record, so no author
-                Assert.Equal(10.0, request.Value(features[4], 0).AsFloat64()); // item 1: author 1
+                Assert.True(request.Value(features[0], 1).IsMissing);
+                Assert.Equal(-1.0, request.Value(features[4], 1).AsFloat64());
+                Assert.Equal(10.0, request.Value(features[4], 0).AsFloat64());
             }
 
             request.Memory.Release();
@@ -279,10 +258,6 @@ public class FeatureFetchAllocationTests
         return (rig, new[] { score, clicks });
     }
 
-    /// <summary>
-    /// Bytes one request fetching for keys 1..<paramref name="keys"/> allocates on every thread, until the fill has
-    /// completed and the request memory is released: the best of five rounds after a warm-up.
-    /// </summary>
     private static async Task<long> MeasureAllThreadsAsync((FeatureTestRig Rig, int[] Features) setup, int keys)
     {
         var (rig, features) = setup;
@@ -331,9 +306,8 @@ public class FeatureFetchAllocationTests
     private static long Measure((FeatureTestRig Rig, int[] Features) setup, int keys) => Measure(setup.Rig, setup.Features, keys);
 
     /// <summary>
-    /// Bytes one request fetching <paramref name="features"/> for keys 1..<paramref name="keys"/> allocates on this thread:
-    /// the best of three rounds after a warm-up. The first rents fill the array pool and JIT-compile the path; an
-    /// allocation per key or per chunk shows up in every round.
+    /// The first rents fill the array pool and JIT-compile the path; an allocation per key or per chunk shows up in
+    /// every round.
     /// </summary>
     private static long Measure(FeatureTestRig rig, int[] features, int keys, Action<TestRequest>? setup = null)
     {
@@ -363,7 +337,6 @@ public class FeatureFetchAllocationTests
         return best;
     }
 
-    /// <summary>Answers as <see cref="SynchronousConnector"/> does, after yielding: every call completes after it returned.</summary>
     private sealed class YieldingConnector : IFeatureSourceConnector
     {
         private readonly SynchronousConnector _answer = new();
@@ -380,12 +353,11 @@ public class FeatureFetchAllocationTests
         }
     }
 
-    /// <summary>Answers every key at once (score = key × 0.5, clicks = key) without allocating.</summary>
     private sealed class SynchronousConnector : IFeatureSourceConnector
     {
         public string ConnectorType => TestConnectorFactory.TypeName;
 
-        public bool Supports(EntityKeyLayout layout) => !layout[0].IsShared; // keyed by the first part
+        public bool Supports(EntityKeyLayout layout) => !layout[0].IsShared;
 
         public ValueTask<FetchStatus> FetchAsync(
             EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)

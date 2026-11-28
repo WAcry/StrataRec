@@ -9,12 +9,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// A failed row-source attempt leaves the candidate table as it was before the attempt (<c>CandidateTable.Rollback</c>): the rows the primary appended are gone, so the fallback may append the same ids and
-/// gets their capacity back (the table reserves max(primary, fallback) per position), and a replay, which skips a primary
-/// recorded as timed out instead of running it, serves the same result. Rows filtered out earlier stay known, so no row
-/// source revives them.
-/// </summary>
 /// <remarks>
 /// The primary is <c>MultiSourceRecall@1</c> itself, wrapped so that it fails in a given way once its standard merge has
 /// appended its candidates: every failure path of a node attempt ends in the same rollback.
@@ -56,8 +50,7 @@ public sealed class RowSourceFallbackTests
     [InlineData(true)]
     public async Task TheFallback_ReturnsItsWholeQuota_WhenThePrimarysQuotaIsSmaller(bool primaryAppended)
     {
-        // The position reserves max(primary 1, fallback 3) rows. A primary that appended its one row before failing gives
-        // it back, so the fallback still fits [11, 22, 33]; without that it was cut to [11, 22].
+        // The position reserves max(primary 1, fallback 3) rows.
         var plan = Compile(primaryAppended ? "fails" : null, seed: false, primary: "[7]", backup: "[11, 22, 33]", backupQuota: 3);
 
         var result = await Execute(plan);
@@ -70,11 +63,6 @@ public sealed class RowSourceFallbackTests
     [Fact]
     public async Task AFailedRowSource_WithFeaturesPrefetchedAcrossIt_EndsAsIfOnlyItsFallbackHadRun()
     {
-        // home_feed with a second row source between recall and safety_filter. It is no fetch barrier, so the item features
-        // safety_filter reads are prefetched after recall, for recall's rows, and are still to be backfilled when the new
-        // row source has appended 42 and 43 and failed. Its fallback appends 43, 45, 48 and 49 into the rows it gave back.
-        // Every candidate is served (no diversity cap, k = 100), so every row's features and scores are compared with a
-        // run where the fallback is the row source itself.
         var (failing, failingEngine) = await RunHomeFeed(primaryFails: true);
         var (reference, _) = await RunHomeFeed(primaryFails: false);
 
@@ -87,8 +75,6 @@ public sealed class RowSourceFallbackTests
         Assert.Equal(Served(reference.Items), Served(failing.Items));
         Assert.Equal(reference.Trace!.Select(n => (n.NodeId, n.RowsIn, n.RowsOut)), failing.Trace!.Select(n => (n.NodeId, n.RowsIn, n.RowsOut)));
 
-        // The premise: the prefetch was sent before the failed attempt, for the rows that existed then; the fallback's rows
-        // were fetched afterwards, and the failed primary's own row never.
         var run = failing.Recording!.Runs[0];
         var attempt = run.ServiceCalls.FindAll(c => c.Role == "recall").Single(c => c.Service == "extra_primary").Seq;
         var items = run.FeatureCalls.Where(c => c.Source == "item_store").ToList();
@@ -212,11 +198,6 @@ public sealed class RowSourceFallbackTests
     private static List<(string, NodeOutcomeKind, string?, string?, int, int)> Outcomes(PipelineResult result) =>
         result.Outcomes.Select(o => (o.NodeId, o.Kind, o.Detail, o.ProducedBy, o.RowsIn, o.RowsOut)).ToList();
 
-    /// <summary>
-    /// <c>FailingRecall@1</c>: <c>MultiSourceRecall@1</c> that fails once it has appended its candidates: it reports a
-    /// failure, throws, returns only after its budget ran out, or leaves its non-nullable <c>recall.best_score</c> missing
-    /// so that its commit fails.
-    /// </summary>
     private sealed class FailingRecallFactory(string how) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } =
@@ -236,7 +217,7 @@ public sealed class RowSourceFallbackTests
                 var before = context.Table.PhysicalRowCount;
                 await recall.ExecuteAsync(context);
                 Assert.True(context.Table.PhysicalRowCount > before, "the primary appended nothing");
-                Assert.Equal(before, context.Table.FindRow(context.Table.GetKey(before))); // its own row is now in the table's index
+                Assert.Equal(before, context.Table.FindRow(context.Table.GetKey(before)));
                 switch (how)
                 {
                     case "fails":
@@ -245,7 +226,7 @@ public sealed class RowSourceFallbackTests
                     case "throws":
                         throw new InvalidOperationException("broke after appending");
                     case "returns late":
-                        Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience)); // returns after its budget, as a success
+                        Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience));
                         break;
                     default:
                         context.Output(score).SetMissing(before);

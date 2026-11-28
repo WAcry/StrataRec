@@ -8,10 +8,8 @@ using StrataRec.Core.Services;
 namespace StrataRec.Pipeline.Operators.Standard;
 
 /// <summary>
-/// The config keys every model operator shares: which model, which of its versions, and the columns and
-/// context values that feed it. One definition, so <c>ModelScorer@1</c>, <c>PairwiseRanker@1</c> and
-/// <c>ListwiseReranker@1</c> accept them with the same meaning, codes and messages. Ordered first in each operator's
-/// JSON Schema, before the operator's own keys.
+/// The config keys every model operator shares: which model, which of its versions, and the columns and context values
+/// that feed it. Ordered first in each operator's JSON Schema, before the operator's own keys.
 /// </summary>
 public abstract class ModelCallConfig
 {
@@ -28,19 +26,17 @@ public abstract class ModelCallConfig
     public string? VersionParam { get; init; }
 
     /// <summary>
-    /// Model input name → column or context reference (<c>col.*</c> / <c>ctx.*</c>) of a non-nullable type, a list only of
-    /// a fixed length (<c>list&lt;E,N&gt;</c>); its declared type is the tensor's (<see cref="ModelTensorRule"/>).
+    /// Model input name → column or context reference (<c>col.*</c> / <c>ctx.*</c>) of a non-nullable type, a list only
+    /// of a fixed length (<c>list&lt;E,N&gt;</c>); its declared type is the tensor's.
     /// </summary>
     [JsonPropertyOrder(-1)]
     public required Dictionary<string, string> Inputs { get; init; }
 }
 
 /// <summary>
-/// Compiles what every model operator shares, in the order the operators report it: the model's binding and the
-/// versions a request may use (<see cref="Begin"/>, through <see cref="BoundModel"/>), the inputs
-/// (<see cref="CompileInputs"/>), and the load-time check of every version's signature against the tensors the operator's
-/// layout builds (<see cref="Finish"/>). Between those steps each operator checks its own keys, so a config with errors
-/// reports them as before.
+/// What every model operator compiles, in the order they report it: binding and versions (<see cref="Begin"/>), inputs
+/// (<see cref="CompileInputs"/>), signatures (<see cref="Finish"/>). Each operator checks its own keys between the
+/// steps.
 /// </summary>
 internal sealed class ModelCallCompiler
 {
@@ -59,20 +55,12 @@ internal sealed class ModelCallCompiler
         _model = model;
     }
 
-    /// <summary>
-    /// Resolves the model's binding and its versions: <c>version</c>, or every value of the <c>enum</c> of the parameter
-    /// <c>version_param</c> names, since each is checked at load time. Null after reporting an error.
-    /// </summary>
     public static ModelCallCompiler? Begin(OperatorCompileContext context, ModelCallConfig config, TensorLayout layout)
     {
         var model = BoundModel.Resolve(context, config.Model, config.Version, config.VersionParam);
         return model is null ? null : new ModelCallCompiler(context, config, layout, model);
     }
 
-    /// <summary>
-    /// Compiles every input in ordinal order of its name: a plain column or context reference of a type the rule can send.
-    /// Reports each input that is not; false when any was not.
-    /// </summary>
     public bool CompileInputs()
     {
         var names = new List<string>(_config.Inputs.Keys);
@@ -102,7 +90,6 @@ internal sealed class ModelCallCompiler
                 continue;
             }
 
-            // The type the user declared decides the tensor, as it decides every boundary's type (PlanSchema.DeclaredType).
             var symbol = expr.Reads[0];
             var declared = _context.Schema.DeclaredType(expr);
             if (!ModelTensorRule.TryGetInputTensor(declared, out var tensor))
@@ -121,8 +108,8 @@ internal sealed class ModelCallCompiler
     }
 
     /// <summary>
-    /// Checks the signature of every version against the inputs and <paramref name="outputs"/>, after the
-    /// operator compiled its own keys without errors. Null after reporting a mismatch.
+    /// Checks the signature of every version against the inputs and <paramref name="outputs"/>, after the operator
+    /// compiled its own keys without errors.
     /// </summary>
     public CompiledModelCall? Finish(IReadOnlyList<ModelTensorRule.MappedOutput> outputs)
     {
@@ -160,8 +147,7 @@ internal sealed class ModelCallCompiler
 }
 
 /// <summary>
-/// The model a tensor operator calls, compiled: the bound model (its client, and the version fixed or chosen per request
-/// by a parameter), the inputs, and the outputs the operator reads. Immutable and shared by every request of the node.
+/// Immutable and shared by every request of the node.
 /// </summary>
 internal sealed class CompiledModelCall
 {
@@ -182,7 +168,6 @@ internal sealed class CompiledModelCall
         NamedInputs = named;
     }
 
-    /// <summary>The logical model name.</summary>
     public string Model => _model.Model;
 
     /// <summary>In ordinal order of their names.</summary>
@@ -191,14 +176,8 @@ internal sealed class CompiledModelCall
     /// <summary>Model input name → source, for log taps' <c>columns_from</c>.</summary>
     public IReadOnlyDictionary<string, string> NamedInputs { get; }
 
-    /// <summary>The version this request calls.</summary>
     public string? Version(OperatorContext context) => _model.Version(context);
 
-    /// <summary>
-    /// Sends one call through <see cref="OperatorContext.CallAsync"/>, with the request's seed and the outputs the operator
-    /// reads. <paramref name="rows"/> are the physical rows of the batch for a call whose outputs are per row (its items),
-    /// or empty for a call answered as a whole (see that method).
-    /// </summary>
     public Task<ServiceStatus> InvokeAsync(
         OperatorContext context, string? version, NamedInput[] inputs, int batchSize, ServiceResponse response, ReadOnlySpan<int> rows) =>
         _model.InvokeAsync(context, version, inputs, batchSize, response, rows, _outputs);

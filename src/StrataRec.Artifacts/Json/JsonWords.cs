@@ -47,9 +47,9 @@ public static class JsonWords
     }
 
     /// <summary>
-    /// <see cref="Value(JsonNode?)"/> for a value read without building nodes (a request body read once); the same words
-    /// for the same JSON, a string that is not valid Unicode included. An absent value (<see cref="JsonValueKind.Undefined"/>)
-    /// is <c>nothing</c>.
+    /// <see cref="Value(JsonNode?)"/> for a value read without building nodes; the same words for the same JSON, a
+    /// string that is not valid Unicode included. An absent value (<see cref="JsonValueKind.Undefined"/>) is
+    /// <c>nothing</c>.
     /// </summary>
     public static string Value(in JsonElement element) => element.ValueKind switch
     {
@@ -84,7 +84,7 @@ public static class JsonWords
         var end = Math.Min(text.Length, MaxQuotedLength);
         if (end < text.Length && char.IsHighSurrogate(text[end - 1]))
         {
-            end--; // never split a surrogate pair
+            end--;
         }
 
         for (var i = 0; i < end; i++)

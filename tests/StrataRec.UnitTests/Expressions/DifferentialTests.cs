@@ -7,11 +7,6 @@ using StrataRec.Expressions;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>
-/// Differential tests: random well-typed expressions over random tables — missing values, NaN, ±∞,
-/// extreme integers, garbage in dead rows, varying live ratios — must give the same result on the vectorized backend
-/// (optimized IR) as on the row-at-a-time reference interpreter (unoptimized IR) for every listed row.
-/// </summary>
 public class DifferentialTests(ITestOutputHelper output)
 {
     private enum K
@@ -42,7 +37,7 @@ public class DifferentialTests(ITestOutputHelper output)
         ("col.b2", "bool?", K.Bool),
         ("col.s1", "string", K.Str),
         ("col.s2", "string?", K.Str),
-        ("col.t1", "string?", K.Text), // a string column of longer, non-ASCII values
+        ("col.t1", "string?", K.Text),
         ("col.v1", "list<float32,4>?", K.Vec),
         ("col.v2", "list<float32,4>", K.Vec),
         ("col.v3", "list<float64,4>?", K.Vec),
@@ -160,10 +155,8 @@ public class DifferentialTests(ITestOutputHelper output)
                 failures.Add($"{source}: expected {expected}, got {actual}");
             }
 
-            // Broadcast through Evaluate as well.
             if (kind is K.Float or K.Int or K.Bool)
             {
-                // An int value broadcast into int32 storage must be missing on every row when it does not fit.
                 var narrow = kind == K.Int && random.Next(2) == 0;
                 var d = ColumnBuffer.Create(narrow ? ColumnType.Int32.AsNullable() : expression.ResultType.AsNullable(), f.Capacity, f.Memory);
                 expression.Evaluate(f.Context, f.Table.Rows.Order, d);
@@ -194,9 +187,6 @@ public class DifferentialTests(ITestOutputHelper output)
             rows = live.Take(1).ToArray();
         }
 
-        // Int and int-list results sometimes go to int32 storage: values outside the int32 range (int results reach
-        // ±2^63) must then be missing, never wrapped. Float lists sometimes go to float32 storage, which
-        // rounds each element as a float32 column does.
         var resultType = expression.ResultType.AsNullable();
         var narrow = (resultType.Kind == StorageKind.Int64 || resultType == ColumnType.List(StorageKind.Int64, nullable: true)) && random.Next(3) == 0;
         var single = resultType == ColumnType.List(StorageKind.Float64, nullable: true) && random.Next(3) == 0;
@@ -245,7 +235,6 @@ public class DifferentialTests(ITestOutputHelper output)
         }
     }
 
-    /// <summary>The comparison the two back ends are held to tells a finite result from an infinite one, and the infinities apart.</summary>
     [Theory]
     [InlineData(1.0, 1.0 + 1e-13, true)]
     [InlineData(1.0, 4.0, false)]
@@ -334,7 +323,7 @@ public class DifferentialTests(ITestOutputHelper output)
             var nullable = type.EndsWith('?');
             if (nullable && random.Next(15) == 0)
             {
-                continue; // never written: the whole column reads as missing
+                continue;
             }
 
             var buffer = f.Table.GetOrCreateSlot(f.SlotOf(name));
@@ -462,7 +451,6 @@ public class DifferentialTests(ITestOutputHelper output)
         _ => ScalarValue.FromStringList(RandomStrings(random)),
     };
 
-    /// <summary>Generates well-typed ColumnExpr source of a requested kind.</summary>
     private sealed class Generator(Random random, bool rowLevel)
     {
         private int _lets;
@@ -586,9 +574,7 @@ public class DifferentialTests(ITestOutputHelper output)
         private string Num(int depth) => Gen(random.Next(3) == 0 ? K.Int : K.Float, depth);
 
         /// <summary>
-        /// An argument of dot, cosine or l2_norm: mostly a <c>list&lt;float32,4&gt;</c> or <c>list&lt;float64,4&gt;</c>, mixed;
-        /// sometimes a float list of any length (its rows of another length than 4 give missing, never NaN) or a literal
-        /// of 4. Never a literal of another length: two declared lengths that differ do not compile.
+        /// Never a literal of another length: two declared lengths that differ do not compile.
         /// </summary>
         private string VecArg(int depth) => random.Next(6) switch
         {
@@ -598,10 +584,10 @@ public class DifferentialTests(ITestOutputHelper output)
         };
 
         /// <summary>
-    /// A divisor the binder knows is 0 (a literal, <c>int(0)</c>, a let of one) is a compile error; a 0 that
-    /// only folding or the data finds gives missing. So a divisor that is not a non-zero literal is written as
-    /// <c>(d + 0)</c>, the same value but never a constant to the binder (<c>% int(0)</c> stopped seed 88), and
-    /// a non-zero literal stays, for the non-nullable path.
+    /// A divisor the binder knows is 0 (a literal, <c>int(0)</c>, a let of one) is a compile error; a 0 that only
+    /// folding or the data finds gives missing. So a divisor that is not a non-zero literal is written as <c>(d +
+    /// 0)</c>, the same value but never a constant to the binder, and a non-zero literal stays, for the non-nullable
+    /// path.
     /// </summary>
     private static string Divisor(string divisor) =>
         long.TryParse(divisor.Trim('(', ')', ' '), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value) && value != 0
@@ -648,8 +634,8 @@ public class DifferentialTests(ITestOutputHelper output)
                 K.Str => Pick("'a'", "'b'", "''", "'zz'"),
                 K.ListInt => "[1, 2, 7]",
                 K.ListStr => "['a', 'zz']",
-                // An integer element of a float list literal is a float; a list of integers only is list<int64> wherever it
-                // stands (in the list of 'x in [2, 1]', say), so it is not a float list leaf (seeds 60, 96 of 100).
+                // An integer element of a float list literal is a float; a list of integers only is list<int64>
+                // wherever it stands, so it is not a float list leaf.
                 K.ListFloat => Pick("[0.5, 1.0, -1.0]", "[2, 0.5]", "[2, 1.0]"),
                 K.ListBool => "[true]",
                 _ => null,

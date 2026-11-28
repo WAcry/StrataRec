@@ -36,7 +36,7 @@ public static class CoordinatedSampling
         return StableHash.ToUnit(hash.Finish()) < rate;
     }
 
-    /// <summary>Hash of the request id, computed once per request and shared by all row priorities.</summary>
+    /// <summary>Hash of the request id.</summary>
     public static long RequestHash(string requestId) => StableHash.SeedFromSalt(requestId);
 
     /// <summary>Row priority <c>u = hash01(groupSeed, request, entity)</c>, identical across taps of a group.</summary>

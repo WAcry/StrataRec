@@ -12,9 +12,6 @@ using StrataRec.Expressions.Ir;
 
 namespace StrataRec.Expressions.Runtime;
 
-/// <summary>
-/// The scalar semantics of every IR operation: one value in, one value out, total for all inputs.
-/// </summary>
 /// <remarks>This is the single definition used by constant folding, the once-per-request scalar program and the
 /// reference interpreter. The vectorized kernels must agree with it (checked by differential tests).</remarks>
 internal static class ScalarOps
@@ -22,7 +19,6 @@ internal static class ScalarOps
     /// <summary>True when any missing argument makes the result missing (C#-style lifting).</summary>
     public static bool IsLifted(IrOp op) => op is not (IrOp.And or IrOp.Or or IrOp.Conditional or IrOp.Coalesce or IrOp.Has or IrOp.Lookup);
 
-    /// <summary>Applies a non-symbol node to already evaluated argument values.</summary>
     public static ScalarValue Apply(IrNode node, ReadOnlySpan<ScalarValue> args, ExpressionCounters? counters)
     {
         switch (node.Op)
@@ -137,13 +133,11 @@ internal static class ScalarOps
         }
     }
 
-    /// <summary>Elements a float32 <c>dot</c>, <c>cosine</c> or <c>l2_norm</c> narrows on the stack (1 KB a list).</summary>
     private const int StackElements = 256;
 
     /// <summary>
-    /// <c>dot</c>, <c>cosine</c> or <c>l2_norm</c> in the node's precision (<see cref="VectorOps"/>). Lists are float64
-    /// here; a float32 call's lists were declared float32, so they hold float32 values, narrowed back exactly to call the
-    /// function the vectorized backend calls on their storage (on the stack up to <see cref="StackElements"/>).
+    /// Lists are float64 here; a float32 call's lists were declared float32, so they hold float32 values, narrowed back
+    /// exactly to call the function the vectorized backend calls on their storage.
     /// </summary>
     private static ScalarValue ListFunction(IrNode node, ReadOnlySpan<ScalarValue> args)
     {
@@ -213,7 +207,6 @@ internal static class ScalarOps
 
     public static ScalarValue And(in ScalarValue a, in ScalarValue b)
     {
-        // Kleene: false wins over missing.
         if ((!a.IsMissing && !a.AsBool()) || (!b.IsMissing && !b.AsBool()))
         {
             return ScalarValue.FromBool(false);
@@ -224,7 +217,6 @@ internal static class ScalarOps
 
     public static ScalarValue Or(in ScalarValue a, in ScalarValue b)
     {
-        // Kleene: true wins over missing.
         if ((!a.IsMissing && a.AsBool()) || (!b.IsMissing && b.AsBool()))
         {
             return ScalarValue.FromBool(true);
@@ -344,7 +336,6 @@ internal static class ListOps
         return false;
     }
 
-    /// <summary>float64 membership in float32 storage, each element compared as the float64 it reads as.</summary>
     public static bool Contains(ReadOnlySpan<float> list, double value)
     {
         foreach (var v in list)
@@ -374,7 +365,6 @@ internal static class ListOps
         return count;
     }
 
-    /// <inheritdoc cref="Overlap(ReadOnlySpan{bool}, ReadOnlySpan{bool})"/>
     public static long Overlap(ReadOnlySpan<double> a, ReadOnlySpan<double> b)
     {
         long count = 0;
@@ -402,7 +392,6 @@ internal static class ListOps
         return false;
     }
 
-    /// <summary>Number of elements of <paramref name="a"/> (with multiplicity) that occur in <paramref name="b"/>.</summary>
     public static long Overlap(ReadOnlySpan<long> a, ReadOnlySpan<long> b)
     {
         long count = 0;
@@ -417,13 +406,8 @@ internal static class ListOps
         return count;
     }
 
-    // int32 list storage (list<int32> is a storage type, its elements mean int64 values). These overloads
-    // compare in place, without widening a list into a temporary buffer.
-
-    /// <summary>int64 membership in int32 storage: a value outside the int32 range cannot be an element.</summary>
     public static bool Contains(ReadOnlySpan<int> list, long value) => Int32Range.Fits(value) && list.Contains((int)value);
 
-    /// <inheritdoc cref="Overlap(ReadOnlySpan{long}, ReadOnlySpan{long})"/>
     public static long Overlap(ReadOnlySpan<int> a, ReadOnlySpan<int> b)
     {
         long count = 0;
@@ -438,7 +422,6 @@ internal static class ListOps
         return count;
     }
 
-    /// <inheritdoc cref="Overlap(ReadOnlySpan{long}, ReadOnlySpan{long})"/>
     public static long Overlap(ReadOnlySpan<int> a, ReadOnlySpan<long> b)
     {
         long count = 0;
@@ -453,7 +436,6 @@ internal static class ListOps
         return count;
     }
 
-    /// <inheritdoc cref="Overlap(ReadOnlySpan{long}, ReadOnlySpan{long})"/>
     public static long Overlap(ReadOnlySpan<long> a, ReadOnlySpan<int> b)
     {
         long count = 0;
@@ -485,7 +467,6 @@ internal static class ListOps
 
 internal static class TextOps
 {
-    /// <summary>Length in Unicode code points (CEL <c>size(string)</c>).</summary>
     public static long CodePointCount(string? s)
     {
         if (s is null)
@@ -507,10 +488,8 @@ internal static class TextOps
     }
 }
 
-/// <summary>Reads symbol values: request-level values from <see cref="EvalContext"/> and single cells from columns.</summary>
 internal static class ValueAccess
 {
-    /// <summary>Reads a <c>ctx.*</c> or <c>param.*</c> value converted to the symbol's expression type.</summary>
     public static ScalarValue ReadRequestValue(IrNode node, in EvalContext context)
     {
         var symbol = node.Symbol;
@@ -524,7 +503,6 @@ internal static class ValueAccess
         return Normalize(values[symbol.Id], node.Type, symbol.Name);
     }
 
-    /// <summary>Converts a stored value to an expression type (int64↔float64, string↔text).</summary>
     public static ScalarValue Normalize(in ScalarValue value, ExprType type, string name)
     {
         if (value.IsMissing)
@@ -556,7 +534,6 @@ internal static class ValueAccess
         }
     }
 
-    /// <summary>The physical slot of a column symbol in this request, or -1 when unresolved.</summary>
     public static ColumnBuffer? ResolveColumn(in EvalContext context, in Symbol symbol)
     {
         var table = context.Table;
@@ -581,8 +558,8 @@ internal static class ValueAccess
     public static InvalidOperationException ColumnTypeMismatch(in Symbol symbol, ColumnBuffer buffer) =>
         new($"Column '{symbol.Name}' is declared {symbol.Type} but its buffer holds {buffer.Type}.");
 
-    /// <summary>Reads one cell (reference interpreter). Non-nullable symbols ignore validity, like the vectorized
-    /// backend, which never reads validity for statically non-nullable inputs.</summary>
+    /// <summary>Non-nullable symbols ignore validity, like the vectorized backend, which never reads validity for
+    /// statically non-nullable inputs.</summary>
     public static ScalarValue ReadCell(IrNode node, in EvalContext context, int row)
     {
         var symbol = node.Symbol;

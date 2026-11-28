@@ -65,7 +65,6 @@ public readonly struct TableCheckpoint
 
     internal int PhysicalRows { get; }
 
-    /// <summary>Rows appended in the request so far, which bounds what may still be appended.</summary>
     internal int Appended { get; }
 
     /// <summary>How many times the table had been compacted: a rollback cannot cross a Compact.</summary>
@@ -85,16 +84,11 @@ public readonly struct TableCheckpoint
 /// new slot is missing and unfilled, including rows appended before the slot existed (a row source's column that an
 /// earlier row source did not write); a row is missing and unfilled in every existing slot when it is appended; and
 /// <see cref="Rollback"/> makes the rows it releases so again. Writers mark what they write (the <c>Set</c> methods of
-/// the column buffers, or one of the bulk <c>SetValid</c> overloads after a bulk write), so a value nobody wrote
-/// (pooled data, a rolled-back attempt's, the <c>''</c> or <c>0</c> of a never-written row) is never read as valid,
-/// and a writer that forgets to mark leaves its rows missing rather than wrong.</para>
+/// the column buffers, or one of the bulk <c>SetValid</c> overloads after a bulk write).</para>
 /// <para>Data no successful attempt wrote is never visible either: <see cref="Rollback"/> drops every slot created since
 /// its checkpoint (a failed node's own outputs, or a shared row-source slot it started) and releases the rows the attempt
 /// appended in the slots that existed before, which keep everything else. A dropped slot reads as never written, through
 /// any read path (the current version or a pinned <c>col.x@node</c>), exactly as in a replay that skips the attempt.</para>
-/// <para>A slot that has a buffer is not written again by a later attempt of the node it belongs to (a fallback node
-/// that runs for several nodes): the attempt fills a buffer of its own (<see cref="CreateDetached"/>), which becomes the
-/// slot's when the attempt commits (<see cref="ReplaceSlot"/>), so a failed one leaves the slot untouched too.</para>
 /// <para>Rows at or past <see cref="PhysicalRowCount"/> carry nothing that is read: a row's state in every slot is reset
 /// when it is appended, and <see cref="Rollback"/> releases the rows a failed attempt appended, so the next append
 /// reuses them.</para>
@@ -111,7 +105,7 @@ public sealed class CandidateTable
     private int _indexedRows;
     private int _compactions;
     private long[]? _releasedInt64; // keys of the rows Compact released, in release order (int64 keys); rented on the first release
-    private string[]? _releasedStrings; // the same for string keys
+    private string[]? _releasedStrings;
     private int _released;
     private EntityKeyIndex? _releasedIndex; // the first _releasedIndexed released keys; built on the first ContainsKey that needs it
     private int _releasedIndexed;
@@ -243,7 +237,7 @@ public sealed class CandidateTable
 
     /// <summary>
     /// True when each of <paramref name="rows"/> (physical rows) is filled in the slot: the check of a fill that covers
-    /// some rows only (the output's returned rows), one bit per row rather than a word of every live row.
+    /// some rows only (the output's returned rows).
     /// </summary>
     public bool IsFilled(int slot, ReadOnlySpan<int> rows)
     {
@@ -265,8 +259,7 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// Number of live rows that have no value in the slot: all of them when the slot was never created. Checked a word of
-    /// rows at a time, so a slot with a value on every live row costs no per-row work.
+    /// Number of live rows that have no value in the slot: all of them when the slot was never created.
     /// </summary>
     public int CountMissingLiveRows(int slot) => _slots[slot] is { } buffer ? CountMissingLiveRows(buffer) : Rows.Count;
 
@@ -296,8 +289,7 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Gives back <paramref name="rows"/> of the append budget (at most <see cref="FreeRows"/>): a row source that has
-    /// finished below its limit. Slots created afterwards, and a <see cref="Compact"/>, are sized without them, so the
-    /// columns written after a recall that found a quarter of its quota are a quarter of the size.
+    /// finished below its limit. Slots created afterwards, and a <see cref="Compact"/>, are sized without them.
     /// </summary>
     public void ReleaseRowBudget(int rows)
     {
@@ -309,9 +301,9 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Appends rows with the given int64 keys at the end of the ranking. Returns the first new physical row. A key is
-    /// appended only while it is not live, once: a row source that may bring back a dropped key skips the live
-    /// ones (<see cref="FindRow"/> and <see cref="RowSelection.IsAlive"/>), and the built-in ones skip every key the request
-    /// has seen (<see cref="ContainsKey"/>). The table does not check it, which would hash every appended key.
+    /// appended only while it is not live, once: a row source that may bring back a dropped key skips the live ones
+    /// (<see cref="FindRow"/> and <see cref="RowSelection.IsAlive"/>), and the built-in ones skip every key the request
+    /// has seen (<see cref="ContainsKey"/>). The table does not check it.
     /// </summary>
     public int AppendRows(ReadOnlySpan<long> keys)
     {
@@ -349,9 +341,7 @@ public sealed class CandidateTable
     /// <see cref="Compact"/> released has no row any more; <see cref="ContainsKey"/> still knows it.
     /// </summary>
     /// <remarks>
-    /// The index is built on the first call and rented from the request memory, sized to <see cref="StorageCapacity"/>
-    /// so it never grows; rows appended later are indexed on the next call, so appends cost nothing when nobody looks
-    /// keys up again. A key of the other key type is never found.
+    /// A key of the other key type is never found.
     /// </remarks>
     public int FindRow(in EntityKey key)
     {
@@ -370,14 +360,8 @@ public sealed class CandidateTable
 
     /// <summary>
     /// Whether the key was appended in this request: a live or a dropped row, or a row a <see cref="Compact"/> released
-    /// (rows a <see cref="Rollback"/> released were never appended). The built-in row sources test this, not
-    /// <see cref="FindRow"/>, so that they never append a key a filter dropped, whether or not the table was compacted
-    /// since: compaction changes where rows are, never which entities the request has seen.
+    /// (rows a <see cref="Rollback"/> released were never appended).
     /// </summary>
-    /// <remarks>
-    /// Compact copies the released keys aside; they are indexed on the first call that does not find the key in a row, so
-    /// a request whose row sources all run before its compactions never hashes them.
-    /// </remarks>
     public bool ContainsKey(in EntityKey key)
     {
         if (FindRow(key) >= 0)
@@ -416,7 +400,6 @@ public sealed class CandidateTable
         _releasedIndexed = _released;
     }
 
-    /// <summary>Copies aside the keys of the rows the coming Compact releases (every physical row not alive).</summary>
     private void RecordReleasedKeys()
     {
         // Every released row was appended once and never rolled back, so all of them together fit in Capacity (a key
@@ -458,7 +441,7 @@ public sealed class CandidateTable
             {
                 if (!index.TryAdd(ids[r], r))
                 {
-                    index.TryReplace(ids[r], r); // a dropped key brought back: found at its new row
+                    index.TryReplace(ids[r], r);
                 }
             }
         }
@@ -519,7 +502,7 @@ public sealed class CandidateTable
         Rows.ResetIdentity(count);
         _compactions++;
 
-        // Rows moved: re-index lazily. Compact never raises StorageCapacity, so the index's arrays still fit.
+        // Compact never raises StorageCapacity, so the index's arrays still fit.
         _keyIndex?.Clear();
         _indexedRows = 0;
     }
@@ -587,8 +570,8 @@ public sealed class CandidateTable
         ClearRowState(first, appended);
         if (_indexedRows > first)
         {
-            // Keys of released rows must not be found. Rebuilt lazily from row 0 in append order, as on first use, so a key
-            // brought back by the attempt is found at its row from before it again.
+            // Rebuilt lazily from row 0 in append order, as on first use, so a key brought back by the attempt is found
+            // at its row from before it again.
             _keyIndex!.Clear();
             _indexedRows = 0;
         }
@@ -612,11 +595,6 @@ public sealed class CandidateTable
         return first;
     }
 
-    /// <summary>
-    /// Makes appended rows live. The key column is filled; every other existing slot has the new rows missing and
-    /// unfilled, so values written before the append (pooled data, or a rolled-back attempt's) are never read for them.
-    /// A row source that writes those columns sets them afterwards.
-    /// </summary>
     private void PublishAppended(int first, int count)
     {
         ClearRowState(first, count);
@@ -624,7 +602,6 @@ public sealed class CandidateTable
         Rows.AppendRange(first, count);
     }
 
-    /// <summary>Rows <c>[first, first + count)</c> hold nothing: missing in every slot but the key column, unfilled in every slot.</summary>
     private void ClearRowState(int first, int count)
     {
         for (var s = 0; s < _slots.Length; s++)

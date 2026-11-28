@@ -6,10 +6,6 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// A result column by column, and its items as rows: the same ids, ranks and values; the rows made once, whoever reads
-/// them first; each column's declared type; a result made by hand from rows has the same columns.
-/// </summary>
 public sealed class ResultColumnsTests
 {
     private static readonly (string, ColumnType)[] SampleColumns = [("score", ColumnType.Parse("float64?")), ("category", ColumnType.String)];
@@ -30,11 +26,11 @@ public sealed class ResultColumnsTests
         Assert.Equal(2, columns.Count);
         Assert.Equal([7L, 3L], rows.Select(r => r.Id.Int64Value));
         Assert.Equal([1, 2], rows.Select(r => r.Rank));
-        Assert.Equal(["score", "category"], rows[0].Columns.Keys); // the output's order
+        Assert.Equal(["score", "category"], rows[0].Columns.Keys);
         Assert.Equal(0.9, rows[0].Columns["score"].AsFloat64());
         Assert.True(rows[1].Columns["score"].IsMissing);
         Assert.Equal("tech", columns["category"][1].AsString());
-        Assert.Same(rows, columns.Rows); // made once
+        Assert.Same(rows, columns.Rows);
     }
 
     [Fact]
@@ -42,7 +38,7 @@ public sealed class ResultColumnsTests
     {
         var columns = Sample();
 
-        Assert.False(columns.TryGetColumn("Score", out _)); // names are ordinal
+        Assert.False(columns.TryGetColumn("Score", out _));
         Assert.Equal(-1, columns.IndexOf("Score"));
         Assert.Throws<KeyNotFoundException>(() => columns["missing"].Length);
     }
@@ -54,7 +50,7 @@ public sealed class ResultColumnsTests
 
         Assert.Equal(["float64?", "string"], columns.Types.Select(t => t.ToString()));
         Assert.Equal(ColumnType.String, columns.Types[columns.IndexOf("category")]);
-        Assert.Throws<ArgumentException>(() => new ResultColumns([], ["a"], [], [[]])); // a type per name
+        Assert.Throws<ArgumentException>(() => new ResultColumns([], ["a"], [], [[]]));
     }
 
     [Fact]
@@ -69,7 +65,7 @@ public sealed class ResultColumnsTests
         Assert.Equal(columns.Ids.ToArray(), copy.Ids.ToArray());
         Assert.Equal(columns.Column(1).ToArray(), copy.Column(1).ToArray());
         Assert.Same(ResultColumns.Empty, ResultColumns.FromItems([], []));
-        Assert.Equal(["score", "category"], ResultColumns.FromItems(SampleColumns, []).Names); // no items, still the output's columns
+        Assert.Equal(["score", "category"], ResultColumns.FromItems(SampleColumns, []).Names);
         var mismatched = new[]
         {
             new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue> { ["a"] = ScalarValue.FromInt64(1) }),
@@ -78,17 +74,17 @@ public sealed class ResultColumnsTests
         Assert.Contains("Item 1 has a column 'b', which the output does not", Assert.Throws<ArgumentException>(() => ResultColumns.FromItems([("a", ColumnType.Int64)], mismatched)).Message);
         var two = new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue> { ["x"] = ScalarValue.FromInt64(1), ["y"] = ScalarValue.FromInt64(7) });
         Assert.Contains("Column 'x' is defined twice", Assert.Throws<ArgumentException>(
-            () => ResultColumns.FromItems([("x", ColumnType.Int64), ("x", ColumnType.Int64)], [two])).Message); // x twice, y dropped
+            () => ResultColumns.FromItems([("x", ColumnType.Int64), ("x", ColumnType.Int64)], [two])).Message);
         var ignoringCase = new RankedItem(EntityKey.FromInt64(1), 1,
             new Dictionary<string, ScalarValue>(StringComparer.OrdinalIgnoreCase) { ["x"] = ScalarValue.FromInt64(1), ["y"] = ScalarValue.FromInt64(7) });
         Assert.Contains("has a column 'y', which the output does not", Assert.Throws<ArgumentException>(
-            () => ResultColumns.FromItems([("x", ColumnType.Int64), ("X", ColumnType.Int64)], [ignoringCase])).Message); // 'X' finds x
+            () => ResultColumns.FromItems([("x", ColumnType.Int64), ("X", ColumnType.Int64)], [ignoringCase])).Message);
     }
 
     [Theory]
-    [InlineData("int32", 4294967296L)] // outside the int32 range
-    [InlineData("float64", 1L)] // an int64, not a float64
-    [InlineData("int64", null)] // missing in a non-nullable column
+    [InlineData("int32", 4294967296L)]
+    [InlineData("float64", 1L)]
+    [InlineData("int64", null)]
     public void FromItems_RejectsAValueThatIsNotOneOfItsColumnsType(string type, long? value)
     {
         var item = new RankedItem(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue>

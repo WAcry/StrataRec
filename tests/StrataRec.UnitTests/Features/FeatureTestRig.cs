@@ -30,9 +30,8 @@ internal sealed class FeatureTestRig
     public const int UserIdContext = 0;
 
     /// <summary>
-    /// The default source budget and request deadline: a minute, longer than any test's work on any machine, and short
-    /// enough that a hung call still fails its test. A test that is about a budget passes its own; one that needs some
-    /// calls cut off while others answer cuts them off itself (the caller's token), since a budget is the whole fetch's.
+    /// A test that is about a budget passes its own; one that needs some calls cut off while others answer cuts them
+    /// off itself (the caller's token), since a budget is the whole fetch's.
     /// </summary>
     public const int UntimedMs = 60_000;
 
@@ -57,10 +56,6 @@ internal sealed class FeatureTestRig
             .Add(new TestCacheStoreFactory(_cacheStores));
     }
 
-    /// <summary>
-    /// The binding types the plan's sources may name: the built-in connector and update source, <c>test@1</c>,
-    /// <c>test_updates@1</c>, the distributed cache store <c>test_cache@1</c>, and what a test adds.
-    /// </summary>
     public BindingRegistry Bindings { get; }
     private int _contextCount = 1; // context id 0 is the request input user_id
     private readonly Dictionary<string, int> _inputs = new(StringComparer.Ordinal) { ["user_id"] = UserIdContext };
@@ -70,13 +65,11 @@ internal sealed class FeatureTestRig
     /// <summary>The local tables the plan reads, by source name (one entity per source in these tests).</summary>
     public IReadOnlyDictionary<string, LocalFeatureTable> Tables => _localTables.Tables;
 
-    /// <summary>The clock of the plan's cache tables: it moves only when a test moves it.</summary>
     public ManualClock Clock { get; } = new();
 
     public static EntityDefinition ForeignKey(string name, string keyFeature) =>
         EntityDefinition.Of(name, EntityKeyPartDefinition.Feature(keyFeature, EntityKeyType.Int64));
 
-    /// <summary>Binds a source to a test connector instance.</summary>
     public FeatureTestRig Source(string name, IFeatureSourceConnector connector, int timeoutMs = UntimedMs, int? maxBatch = null)
     {
         _connectors[name] = connector;
@@ -84,7 +77,6 @@ internal sealed class FeatureTestRig
         return this;
     }
 
-    /// <summary>Binds a source to the built-in <c>memory@1</c> connector with inline data.</summary>
     public FeatureTestRig MemorySource(string name, string json, int timeoutMs = UntimedMs, int? maxBatch = null)
     {
         using var document = JsonDocument.Parse(json);
@@ -99,8 +91,8 @@ internal sealed class FeatureTestRig
     }
 
     /// <summary>
-    /// Binds a source with mode <c>local</c>. Its table is loaded with <paramref name="load"/> (one complete reload) when
-    /// the plan is built; with no <paramref name="load"/> it is never loaded.
+    /// Its table is loaded with <paramref name="load"/> (one complete reload) when the plan is built; with no
+    /// <paramref name="load"/> it is never loaded.
     /// </summary>
     public FeatureTestRig LocalSource(string name, Action<IFeatureTableWriter>? load, string maxBytes = "64MiB")
     {
@@ -113,8 +105,7 @@ internal sealed class FeatureTestRig
     }
 
     /// <summary>
-    /// Binds a source with a cache in front of a test connector, with <paramref name="distributed"/> as its
-    /// distributed tier when given. Its table's writer does not run: <see cref="WriteBack"/> applies what reads handed it.
+    /// Its table's writer does not run: <see cref="WriteBack"/> applies what reads handed it.
     /// </summary>
     /// <param name="maxBytes">Of the in-process tier; null binds the cache without one (then <paramref name="distributed"/> is its only tier).</param>
     /// <param name="version">The cache's <c>version</c>; null lets it follow the connector's configuration.</param>
@@ -145,7 +136,6 @@ internal sealed class FeatureTestRig
         return this;
     }
 
-    /// <summary>Binds a source with a cache in front of <c>memory@1</c> with inline data.</summary>
     public FeatureTestRig MemoryCacheSource(string name, string json, long ttlMs = 60_000, ICacheStore? distributed = null)
     {
         MemorySource(name, json);
@@ -177,7 +167,6 @@ internal sealed class FeatureTestRig
         return table.Cache!.WriteQueued(table.Writer);
     }
 
-    /// <summary>Binds a source as written, for tests of the binding checks.</summary>
     public FeatureTestRig Bind(string name, FeatureSourceBinding binding)
     {
         _sources[name] = binding;
@@ -240,7 +229,6 @@ internal sealed class FeatureTestRig
         return Plan;
     }
 
-    /// <summary>Builds the plan and returns the diagnostics instead of asserting there are none.</summary>
     public DiagnosticBag TryBuild(string? baseDirectory = null)
     {
         var diagnostics = new DiagnosticBag();
@@ -254,7 +242,6 @@ internal sealed class FeatureTestRig
         return diagnostics;
     }
 
-    /// <param name="capacity">Rows the candidate table can hold, for tests that append rows later.</param>
     public TestRequest NewRequest(
         long[] candidates, long? userId = null, IBufferPool? pool = null, int deadlineMs = UntimedMs, IFeatureCallHook? hook = null, int capacity = 0)
     {
@@ -311,7 +298,6 @@ internal sealed record TestRequest(FeaturePlan Plan, FeatureFetcher Fetcher, Can
     public bool IsFilled(int feature, int row) =>
         Table.TryGetSlot(Plan.Features[feature].Slot) is not null && Bits.Get(Table.GetFilled(Plan.Features[feature].Slot), row);
 
-    /// <summary>Value of a candidate feature at a physical row; asserts the row is filled first.</summary>
     public ScalarValue Value(int feature, int row)
     {
         Assert.True(IsFilled(feature, row), $"feature {Plan.Features[feature].Definition.Name} is not filled at row {row}");
@@ -321,7 +307,6 @@ internal sealed record TestRequest(FeaturePlan Plan, FeatureFetcher Fetcher, Can
     public ScalarValue ContextValue(int feature) => Context[Plan.Features[feature].ContextId];
 }
 
-/// <summary>Gives each local spec a new table, loaded at once by the rig's load action for the source.</summary>
 internal sealed class TestLocalTables : ILocalTableProvider
 {
     public Dictionary<string, Action<IFeatureTableWriter>?> Loads { get; } = new(StringComparer.Ordinal);
@@ -344,8 +329,7 @@ internal sealed class TestLocalTables : ILocalTableProvider
 }
 
 /// <summary>
-/// A clock a test moves by hand (cache write times and expiry); starts at 2026-01-01. Its timestamps (what the
-/// distributed tier's time is judged by) are the system's until <see cref="HoldTimestamps"/>.
+/// Its timestamps (what the distributed tier's time is judged by) are the system's until <see cref="HoldTimestamps"/>.
 /// </summary>
 internal sealed class ManualClock : TimeProvider
 {
@@ -379,7 +363,6 @@ internal sealed class ManualClock : TimeProvider
 
     private long Timestamps(TimeSpan time) => (long)((Int128)time.Ticks * TimestampFrequency / TimeSpan.TicksPerSecond);
 
-    /// <summary>Runs before each timestamp is read: a test's clock that stalls or throws there.</summary>
     public Action? BeforeTimestamp { get; set; }
 
     public override long GetTimestamp()
@@ -390,7 +373,6 @@ internal sealed class ManualClock : TimeProvider
     }
 }
 
-/// <summary><c>test_cache@1</c>: serves distributed cache stores registered by source name.</summary>
 internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, ICacheStore> stores) : IBindingFactory<ICacheStore>
 {
     public const string TypeName = "test_cache@1";
@@ -403,8 +385,7 @@ internal sealed class TestCacheStoreFactory(IReadOnlyDictionary<string, ICacheSt
 }
 
 /// <summary>
-/// An in-memory distributed cache store: records by (keyspace, key), what each call asked, and a hook that can fail or
-/// hold a read. Writes can be awaited (<see cref="WhenWrittenAsync"/>), since the tier writes in the background.
+/// Writes can be awaited (<see cref="WhenWrittenAsync"/>), since the tier writes in the background.
 /// </summary>
 internal sealed class FakeCacheStore : ICacheStore
 {
@@ -415,10 +396,8 @@ internal sealed class FakeCacheStore : ICacheStore
 
     public string StoreType => TestCacheStoreFactory.TypeName;
 
-    /// <summary>Runs before a read answers: throw to fail it, or wait to hold it.</summary>
     public Func<CancellationToken, ValueTask>? BeforeGet { get; set; }
 
-    /// <summary>The keys of each read, as written to the store (<c>{source}:{entity}:{key}</c>).</summary>
     public ConcurrentQueue<string[]> Gets { get; } = new();
 
     public int Written => Volatile.Read(ref _written);
@@ -503,7 +482,6 @@ internal sealed class FakeCacheStore : ICacheStore
     }
 }
 
-/// <summary><c>test_updates@1</c>: an update source with nothing to load (the rig loads its tables directly).</summary>
 internal sealed class TestUpdateSourceFactory : IBindingFactory<IFeatureUpdateSource>
 {
     public const string TypeName = "test_updates@1";
@@ -515,7 +493,6 @@ internal sealed class TestUpdateSourceFactory : IBindingFactory<IFeatureUpdateSo
     public IFeatureUpdateSource Create(BindingContext context) => new MemoryFeatureUpdateSource();
 }
 
-/// <summary>Serves connectors registered by source name under the connector type <c>test@1</c>.</summary>
 internal sealed class TestConnectorFactory(IReadOnlyDictionary<string, IFeatureSourceConnector> connectors) : IBindingFactory<IFeatureSourceConnector>
 {
     public const string TypeName = "test@1";
@@ -528,7 +505,6 @@ internal sealed class TestConnectorFactory(IReadOnlyDictionary<string, IFeatureS
         connectors[context.Name];
 }
 
-/// <summary>A connector whose behavior is a delegate; records every call.</summary>
 internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFeatureSourceConnector
 {
     public delegate ValueTask<FetchStatus> Handler(EntityKeyBatch keys, CompiledFieldBinding[] fields, IFeatureBatchWriter writer, CancellationToken cancellationToken);
@@ -537,10 +513,8 @@ internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFe
 
     public string ConnectorType => TestConnectorFactory.TypeName;
 
-    /// <summary>The layouts the plan asked about, in order.</summary>
     public ConcurrentQueue<EntityKeyLayout> Layouts { get; } = new();
 
-    /// <summary>Whether a layout is supported; every one by default.</summary>
     public Func<EntityKeyLayout, bool> SupportsLayout { get; init; } = static _ => true;
 
     public bool Supports(EntityKeyLayout layout)
@@ -557,7 +531,6 @@ internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFe
         return handler(keys, bindings, writer, cancellationToken);
     }
 
-    /// <summary>Synchronously writes <c>valueOf(key, field)</c> for every key and field (null = leave missing).</summary>
     public static ScriptedConnector Values(Func<long, string, object?> valueOf) => new((keys, fields, writer, _) =>
     {
         WriteAll(keys, fields, writer, valueOf);
@@ -608,10 +581,6 @@ internal sealed class ScriptedConnector(ScriptedConnector.Handler handler) : IFe
     }
 }
 
-/// <summary>
-/// One connector call: for a one-part key, <see cref="Keys"/> are the candidate keys (empty for a context key, which is
-/// <see cref="ContextKey"/>), as calls had them before keys had parts; <see cref="Tuples"/> are every key's parts.
-/// </summary>
 internal sealed record RecordedCall(EntityKey[] Keys, EntityKey ContextKey, string[] Fields, IFeatureBatchWriter Writer, EntityKey[][] Tuples)
 {
     public static RecordedCall Of(in EntityKeyBatch batch, string[] fields, IFeatureBatchWriter writer)
@@ -646,8 +615,8 @@ internal sealed class PoisoningPool : IBufferPool
     private readonly object _gate = new();
 
     /// <summary>
-    /// Arrays rented and not yet returned. A request gives its scratch buffers back as it goes
-    /// (<see cref="RequestMemory.RentScratch{T}"/>), so while something holds its memory only its ledger is out.
+    /// A request gives its scratch buffers back as it goes (<see cref="RequestMemory.RentScratch{T}"/>), so while
+    /// something holds its memory only its ledger is out.
     /// </summary>
     public int Outstanding { get; private set; }
 
@@ -690,7 +659,6 @@ internal sealed class PoisoningPool : IBufferPool
     }
 }
 
-/// <summary>Hand-written stand-in for a compiled ColumnExpr (the real compiler is not part of this branch).</summary>
 internal sealed class TestExpression(string source, ColumnType resultType, TestExpression.RowEvaluator? rows = null, Func<ScalarValue[], ScalarValue>? scalar = null)
     : CompiledExpression
 {
@@ -711,7 +679,6 @@ internal sealed class TestExpression(string source, ColumnType resultType, TestE
     public override void Evaluate(in EvalContext context, ReadOnlySpan<int> rows1, ColumnBuffer destination, in ScalarValue outOfRange) =>
         rows!(context, rows1, destination);
 
-    /// <summary><c>col.&lt;source&gt;</c> for an int64 feature in <paramref name="slot"/> (missing stays missing).</summary>
     public static TestExpression CopyInt64(string name, int slot) => new(
         "col." + name,
         ColumnType.Int64.AsNullable(),
@@ -732,7 +699,6 @@ internal sealed class TestExpression(string source, ColumnType resultType, TestE
             }
         });
 
-    /// <summary><c>col.entity_id / divisor</c>.</summary>
     public static TestExpression EntityIdDividedBy(long divisor) => new(
         "col.entity_id / " + divisor,
         ColumnType.Int64,
@@ -745,7 +711,6 @@ internal sealed class TestExpression(string source, ColumnType resultType, TestE
             }
         });
 
-    /// <summary>A float64 constant for every row (e.g. the result of <c>1.0 / 0.0</c>).</summary>
     public static TestExpression ConstantFloat64(double value, bool nullable = true) => new(
         value.ToString(System.Globalization.CultureInfo.InvariantCulture),
         ColumnType.Float64.WithNullable(nullable),
@@ -757,7 +722,6 @@ internal sealed class TestExpression(string source, ColumnType resultType, TestE
             }
         });
 
-    /// <summary>Request-level <c>ctx.&lt;feature&gt; * factor</c>.</summary>
     public static TestExpression ContextTimes(int contextId, double factor) => new(
         "ctx.x * " + factor,
         ColumnType.Float64.AsNullable(),

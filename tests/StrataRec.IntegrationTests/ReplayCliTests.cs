@@ -5,7 +5,6 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary><c>stratarec run --record</c>, <c>replay</c>, <c>compare</c> and <c>schema replay_bundle</c> on the home_feed sample.</summary>
 public sealed class ReplayCliTests
 {
     [Fact]
@@ -20,10 +19,9 @@ public sealed class ReplayCliTests
             var recorded = new StringWriter();
             Assert.Equal(0, await RunCommand.RunAsync(Tool.Environment, sample, "local", Path.Combine(sample, "requests", name + ".json"), Array.Empty<string>(), false,
                 TextWriter.Null, CancellationToken.None, recordPath: paths[^1], errors: recorded));
-            Assert.Contains($"; replay it with: stratarec replay -c {sample} {paths[^1]}", recorded.ToString()); // ready to copy
+            Assert.Contains($"; replay it with: stratarec replay -c {sample} {paths[^1]}", recorded.ToString());
         }
 
-        // Two files as arguments (what a shell glob gives), one as an argument and one with -b: the same two replays.
         foreach (var args in new[] { new[] { "replay", "-c", sample, paths[0], paths[1] }, new[] { "replay", "-c", sample, paths[0], "-b", paths[1] } })
         {
             var output = new StringWriter();
@@ -40,12 +38,10 @@ public sealed class ReplayCliTests
     [Fact]
     public async Task TheReplayCommandRunPrints_ReadsAPathThatLooksLikeAnOption_AsAPath()
     {
-        // 'run --record=-b' printed 'stratarec replay -c ws -b', where -b is the bundle option.
         Assert.Equal("stratarec replay -c ws ./-b", RunCommand.ReplayCommandLine("ws", "-b"));
         Assert.Equal("stratarec replay -c ./-ws 'my b.json'", RunCommand.ReplayCommandLine("-ws", "my b.json"));
         Assert.Equal("stratarec replay -c ws /tmp/-b", RunCommand.ReplayCommandLine("ws", "/tmp/-b"));
 
-        // As printed, the path is an argument: a missing file is reported as such, not as an option missing its value.
         var output = new StringWriter();
         var error = new StringWriter();
         Assert.Equal(2, await StrataRecCommandLine.InvokeAsync(new[] { "replay", "-c", HomeFeedTestHost.SampleRoot(), "./-b" }, Tool.Environment, output, error,
@@ -54,10 +50,6 @@ public sealed class ReplayCliTests
         Assert.Contains("./-b: not replayed", output.ToString());
     }
 
-    /// <summary>
-    /// A command line that does not parse is a usage error, exit 2, never an exception (a -b without its value
-    /// threw from the validator) nor 1, which says the configuration has errors or, for diff, that something differs.
-    /// </summary>
     [Theory]
     [InlineData("Required argument missing for option: '-b'.", "replay", "-b")]
     [InlineData("Required argument missing for option: '-b'.", "compare", "--baseline", "x", "-b")]
@@ -71,7 +63,6 @@ public sealed class ReplayCliTests
 
         Assert.Equal(2, code);
         Assert.Contains(message, error.ToString());
-        // The error and where the usage is, not the whole help after it.
         Assert.EndsWith($"See 'stratarec {args[0]} --help' for the usage.", error.ToString().TrimEnd());
         Assert.DoesNotContain("Usage:", error.ToString());
     }
@@ -88,10 +79,6 @@ public sealed class ReplayCliTests
         Assert.DoesNotContain("for the usage", error.ToString());
     }
 
-    /// <summary>
-    /// replay writes its items as run does, the output columns in their own member: a column named id or rank cannot
-    /// collide with the item's (it flattened them into the item and wrote both 'id' members).
-    /// </summary>
     [Fact]
     public async Task ReplayItems_AreTheItemsRunPrints_SoAColumnNamedIdOrRankCannotCollide()
     {
@@ -108,7 +95,7 @@ public sealed class ReplayCliTests
 
         using var replay = JsonDocument.Parse(json.ToString(), new JsonDocumentOptions { AllowDuplicateProperties = false });
         using var served = JsonDocument.Parse(run.ToString());
-        var items = replay.RootElement.GetProperty("items"); // one file: its report alone
+        var items = replay.RootElement.GetProperty("items");
         var first = items[0];
         var id = first.GetProperty("id").GetInt64();
         Assert.Equal(1, first.GetProperty("rank").GetInt64());
@@ -129,13 +116,11 @@ public sealed class ReplayCliTests
                 CancellationToken.None, recordPath: Path.Combine(bundles, name + ".json")));
         }
 
-        // One bundle, text: the result and the diff against the recording.
         var text = new StringWriter();
         Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [Path.Combine(bundles, "user_1001.json")], Array.Empty<string>(), "text",
             expectIdentical: true, text, CancellationToken.None));
         Assert.Contains("identical to the recorded result", text.ToString());
 
-        // A directory, JSON: every bundle with its report.
         var json = new StringWriter();
         Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [bundles], Array.Empty<string>(), "json", expectIdentical: true, json,
             CancellationToken.None));
@@ -224,10 +209,6 @@ public sealed class ReplayCliTests
         Assert.Equal(("failed", 0, 0), (summary.GetProperty("status").GetString(), summary.GetProperty("bundles").GetInt32(), summary.GetProperty("replayed").GetInt32()));
     }
 
-    /// <summary>
-    /// <c>compare</c> passes only when every bundle was compared; otherwise it exits with 2 and still prints its report, so a
-    /// CI step cannot pass on metrics over part of the batch, or over nothing.
-    /// </summary>
     [Theory]
     [InlineData("", 2, "failed", 0, 0)]
     [InlineData("null", 2, "failed", 0, 1)]
@@ -251,10 +232,6 @@ public sealed class ReplayCliTests
         Assert.Equal((status, compared, unreadable), (root.GetProperty("status").GetString(), root.GetProperty("compared").GetInt32(), root.GetProperty("unreadable").GetInt32()));
     }
 
-    /// <summary>
-    /// A bundle of an aborted request is reported, not replayed: its recorded reason, running node and node decisions,
-    /// and no result or diff. It is neither replayed nor an error; a set of nothing else replayed nothing, which fails.
-    /// </summary>
     [Fact]
     public async Task Replay_ReportsAnAbortedRecording_WithoutReplayingIt()
     {
@@ -304,7 +281,7 @@ public sealed class ReplayCliTests
             {
                 Assert.Equal(1, root.GetProperty(side).GetProperty("requests").GetInt32());
                 Assert.False(root.GetProperty(side).TryGetProperty("aborted", out _));
-                Assert.NotEqual("<none>", root.GetProperty(side).GetProperty("manifest").GetString()); // the first bundle replayed nothing
+                Assert.NotEqual("<none>", root.GetProperty(side).GetProperty("manifest").GetString());
             }
 
             Assert.Equal(1, root.GetProperty("requests").GetArrayLength());
@@ -317,10 +294,6 @@ public sealed class ReplayCliTests
         Assert.Contains("identical results           1 of 1", text.ToString());
     }
 
-    /// <summary>
-    /// An aborted bundle needs no configuration: replayed on what it recorded (--store alone), it is reported as not
-    /// replayed, not as a bundle whose manifest the store lacks.
-    /// </summary>
     [Fact]
     public async Task Replay_OnTheRecordedManifests_ReportsAnAbortedRecording_ThoughTheStoreLacksItsManifest()
     {
@@ -333,13 +306,12 @@ public sealed class ReplayCliTests
         var code = await StrataRecCommandLine.InvokeAsync(["replay", "-s", ManifestStores.NewStore(), aborted], Tool.Environment, output, errors,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, code); // nothing was replayed
+        Assert.Equal(2, code);
         Assert.Contains("not replayed: the recording was aborted (cancelled by the caller) while ctr_ranker ran", output.ToString());
-        Assert.DoesNotContain("aborted.json: ", errors.ToString()); // no error for the bundle
+        Assert.DoesNotContain("aborted.json: ", errors.ToString());
         Assert.DoesNotContain("without a configuration", output.ToString());
     }
 
-    /// <summary>A bundle of a home_feed request cancelled while ctr_ranker ran.</summary>
     private static string AbortedBundle => $$"""
         {
           "format": "{{StrataRec.Artifacts.Model.ReplayBundle.CurrentFormat}}",
@@ -360,7 +332,6 @@ public sealed class ReplayCliTests
         }
         """;
 
-    /// <summary>A bundle of the home_feed pipeline that ran nothing (its recorded result failed), with the given runs.</summary>
     internal static string MinimalBundle(string runs) => $$"""
         {
           "format": "{{StrataRec.Artifacts.Model.ReplayBundle.CurrentFormat}}",

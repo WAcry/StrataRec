@@ -5,7 +5,6 @@ using StrataRec.Logging;
 
 namespace StrataRec.UnitTests.Logging;
 
-/// <summary><see cref="LogBatchJson.TryReadValue"/> is the inverse of <see cref="LogBatchJson.WriteValue"/> given the type.</summary>
 public sealed class LogValueReadTests
 {
     public static TheoryData<string, ScalarValue> Values() => new()
@@ -14,10 +13,10 @@ public sealed class LogValueReadTests
         { "bool", ScalarValue.FromBool(false) },
         { "int32", ScalarValue.FromInt64(-7) },
         { "int64", ScalarValue.FromInt64(long.MaxValue) },
-        { "float32", ScalarValue.FromFloat64(0.1f) }, // the promoted float32 survives exactly
+        { "float32", ScalarValue.FromFloat64(0.1f) },
         { "float64", ScalarValue.FromFloat64(Math.PI) },
         { "string", ScalarValue.FromString("ü \"quoted\"") },
-        { "string", ScalarValue.FromString(new string('x', 10_000)) }, // a long one
+        { "string", ScalarValue.FromString(new string('x', 10_000)) },
         { "list<float32,3>", ScalarValue.FromFloat32List(new[] { 0.5f, -1f, 0.1f }) },
         { "list<int32,2>", ScalarValue.FromInt64List(new long[] { 7, -1 }) },
         { "list<bool,1>?", ScalarValue.FromBoolList(new[] { true }) },
@@ -26,7 +25,7 @@ public sealed class LogValueReadTests
         { "list<string>", ScalarValue.FromStringList(new[] { "a", string.Empty }) },
         { "list<bool>", ScalarValue.FromBoolList(new[] { true, false }) },
         { "list<float64>", ScalarValue.FromFloat64List(new[] { 0.1, -1e300 }) },
-        { "list<float32>", ScalarValue.FromFloat32List(new[] { 0.1f, 2.5f }) }, // promoted float32 elements survive exactly
+        { "list<float32>", ScalarValue.FromFloat32List(new[] { 0.1f, 2.5f }) },
         { "list<float64>", ScalarValue.FromFloat64List(Array.Empty<double>()) },
         { "float64?", ScalarValue.Missing },
     };
@@ -43,7 +42,7 @@ public sealed class LogValueReadTests
     [Theory]
     [InlineData("0.10000000149011612", false)] // the exact double of float32 0.1, as WriteValue writes it
     [InlineData("0.1", false)] // the shortest text of float32 0.1, as a batch writes a float32 field
-    [InlineData("0.10000000149011612", true)] // in a bundle too
+    [InlineData("0.10000000149011612", true)]
     public void AFloat32Value_ReadsBackAsTheFloat_PrintedAsTheFloat(string json, bool bundle)
     {
         var value = Read(json, ColumnType.Float32, nonFiniteAsStrings: bundle);
@@ -60,7 +59,7 @@ public sealed class LogValueReadTests
     {
         var value = Read(json, ColumnType.Parse(type), nonFiniteAsStrings: bundle);
 
-        Assert.Equal(double.Parse(json, System.Globalization.CultureInfo.InvariantCulture), value.AsFloat64()); // not narrowed
+        Assert.Equal(double.Parse(json, System.Globalization.CultureInfo.InvariantCulture), value.AsFloat64());
         Assert.Equal((false, json), (value.IsFloat32, value.ToString()));
     }
 
@@ -94,14 +93,14 @@ public sealed class LogValueReadTests
     [Fact]
     public void ListElements_AreWrittenAsScalarsOfTheirType()
     {
-        Assert.Equal("[1,0]", Write(ScalarValue.FromBoolList(new[] { true, false }), nonFiniteAsStrings: false)); // as a bool column is
+        Assert.Equal("[1,0]", Write(ScalarValue.FromBoolList(new[] { true, false }), nonFiniteAsStrings: false));
         Assert.Equal("[0.10000000149011612]", Write(ScalarValue.FromFloat32List(new[] { 0.1f }), nonFiniteAsStrings: false));
 
         var read = Read("[0.10000000149011612, 2]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: false);
-        Assert.True(read.IsFloat32List); // printed as the floats it holds
+        Assert.True(read.IsFloat32List);
         Assert.Equal("[0.1, 2]", read.ToString());
-        Assert.True(Read("[0.1]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: false).IsFloat32List); // a log's floats
-        Assert.False(Read("[0.1]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: true).IsFloat32List); // a bundle's double
+        Assert.True(Read("[0.1]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: false).IsFloat32List);
+        Assert.False(Read("[0.1]", ColumnType.Parse("list<float32>"), nonFiniteAsStrings: true).IsFloat32List);
     }
 
     [Fact]
@@ -143,7 +142,7 @@ public sealed class LogValueReadTests
         Assert.Equal(json, written);
         Assert.Equal(ScalarValue.FromFloat64(value), Read(written, ColumnType.Float64, nonFiniteAsStrings: true));
         Assert.Equal(ScalarValue.FromFloat64(value), Read(written, ColumnType.Float32, nonFiniteAsStrings: true));
-        Assert.Equal("null", Write(ScalarValue.FromFloat64(value), nonFiniteAsStrings: false)); // logs are unchanged
+        Assert.Equal("null", Write(ScalarValue.FromFloat64(value), nonFiniteAsStrings: false));
     }
 
     [Fact]

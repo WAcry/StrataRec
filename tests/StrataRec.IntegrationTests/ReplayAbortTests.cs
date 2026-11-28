@@ -14,11 +14,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Requests aborted while recorded: the bundle reaches the host through the recording callback while the
-/// cancellation still reaches the caller, calls in flight are outstanding, and a replay reports the recording without
-/// executing it: an aborted request has no result to reproduce.
-/// </summary>
 /// <remarks>
 /// Nothing here depends on timing: the caller cancels once the model client says it has started, and the untimed sample's
 /// budgets and deadlines (<see cref="HomeFeedTestHost.UntimedMs"/>) are far longer than any run.
@@ -41,22 +36,20 @@ public sealed class ReplayAbortTests
         await models.Started.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         cancel.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running); // recording does not swallow the cancellation
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
         Assert.NotNull(delivered);
         Assert.Equal((false, true, "cancelled by the caller"), (delivered.Result.Succeeded, delivered.Result.Aborted, delivered.Result.Error));
         var run = Assert.Single(delivered.Runs);
         Assert.True(run.Result.Aborted);
         Assert.Equal(("ctr_ranker", "aborted"), (run.Nodes[^1].Node, run.Nodes[^1].Outcome));
         Assert.Contains(run.ServiceCalls, c => c.Role == "model");
-        Assert.All(run.ServiceCalls.FindAll(c => c.Role == "model"), call => Assert.Equal("cancelled", call.Status)); // the client honoured the cancellation
+        Assert.All(run.ServiceCalls.FindAll(c => c.Role == "model"), call => Assert.Equal("cancelled", call.Status));
 
         var outcome = await engine.ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(delivered)), cancellationToken: TestContext.Current.CancellationToken);
 
-        // The recorded reason, the node that was running and every recorded decision, for inspection.
         Assert.Equal(new RecordedAbort("cancelled by the caller", "ctr_ranker"), outcome.NotReplayed);
         Assert.Equal(run.Nodes.Select(n => (n.Node, (string?)n.Outcome, n.Detail)), outcome.Report.Nodes.Select(n => (n.Node, n.Recorded, n.RecordedDetail)));
 
-        // Nothing executed: no node ran, no feature value was asked of the recording, no client was called.
         Assert.All(outcome.Report.Nodes, n => Assert.Null(n.Replayed));
         Assert.Empty(outcome.Report.FieldStats);
         Assert.Empty(outcome.Report.Params);
@@ -69,11 +62,6 @@ public sealed class ReplayAbortTests
         Assert.False(outcome.Report.Diff.Identical);
     }
 
-    /// <summary>
-    /// The position running at the abort had already triggered an experiment: through a parameter its node read (the arm
-    /// changes the model version) or through its site (the arm patches only the node's timeout). The exposure happened, so
-    /// the recording's experiment record keeps it, and a replay does not execute the bundle.
-    /// </summary>
     [Theory]
     [InlineData("param")]
     [InlineData("site")]
@@ -134,8 +122,6 @@ public sealed class ReplayAbortTests
     [Fact]
     public async Task ACallTheCallerCutOff_IsRecordedAsTheRequestSawIt_AndWhatTheClientReturnsLaterIsNot()
     {
-        // A custom operator awaits the framework's call of a client that ignores cancellation. The call itself stops
-        // waiting when the caller cancels, so the request is aborted at once, with the call recorded as cancelled.
         var stuck = new StuckClient();
         var engine = WithStuckScorer(stuck, awaitCall: true);
         ReplayBundle? delivered = null;
@@ -153,7 +139,6 @@ public sealed class ReplayAbortTests
         Assert.Equal(30, call.Keys!.Value.GetArrayLength()); // the coarse top 30, known when the call began
         Assert.Equal(30, call.InputDigests.Count);
 
-        // The client answers after the abort; its answer is recorded nowhere.
         stuck.Release.SetResult();
         await stuck.Answered.Task.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
         Assert.Equal("cancelled", delivered.Runs[0].ServiceCalls.FindAll(c => c.Role == "model")[0].Status);
@@ -176,7 +161,6 @@ public sealed class ReplayAbortTests
         Assert.Equal(("outstanding", false), (call.Status, call.Threw));
         Assert.Equal(30, call.InputDigests.Count);
 
-        // The call completes after the snapshot; its answer is recorded nowhere.
         stuck.Release.SetResult();
         Assert.True((await stuck.Invocation!.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken)).Succeeded);
         Assert.Equal("outstanding", recorded.Recording.Runs[0].ServiceCalls.FindAll(c => c.Role == "model")[0].Status);
@@ -213,10 +197,6 @@ public sealed class ReplayAbortTests
         Assert.Equal("aborted", outcome.Report.Nodes[^1].Recorded);
     }
 
-    /// <summary>
-    /// A home_feed request recorded with its control arms, edited as if it had been aborted right after its third position
-    /// (e.g. while publishing that node), and the ids of the three nodes it finished.
-    /// </summary>
     private static async Task<(RecEngine Engine, JsonNode Bundle, string[] Finished)> RecordAbortedAfterThreePositions()
     {
         var (engine, _) = MetricsTests.LoadEngine(HomeFeedTestHost.Load());
@@ -273,15 +253,11 @@ public sealed class ReplayAbortTests
         var run = schema.RootElement.GetProperty("properties").GetProperty("runs").GetProperty("items").GetProperty("properties");
         Assert.Contains("aborted (the position running", run.GetProperty("nodes").GetProperty("items").GetProperty("properties").GetProperty("outcome")
             .GetProperty("description").GetString());
-        Assert.False(run.GetProperty("nodes").GetProperty("items").GetProperty("properties").TryGetProperty("triggered", out _)); // nothing replays an aborted node
+        Assert.False(run.GetProperty("nodes").GetProperty("items").GetProperty("properties").TryGetProperty("triggered", out _));
         var threw = run.GetProperty("service_calls").GetProperty("items").GetProperty("properties").GetProperty("threw");
         Assert.Contains("cut the call off", threw.GetProperty("description").GetString());
     }
 
-    /// <summary>
-    /// A request that captures its logs, cancelled while it runs, returns no batches and writes none, yet its
-    /// recording said they were captured. They went nowhere; the sampling decisions it made are kept.
-    /// </summary>
     [Fact]
     public async Task ACapturingRequestCancelled_RecordsThatItsBatchesWentNowhere()
     {
@@ -315,8 +291,6 @@ public sealed class ReplayAbortTests
         Debug = new DebugOptions { ForceArms = request.Debug?.ForceArms, OnRecording = onRecording, CaptureLogs = captureLogs },
     };
 
-    /// <summary>The baseline pipeline without experiments or taps, with ctr_ranker replaced by an operator that calls a stuck client.</summary>
-    /// <param name="awaitCall">Whether the operator awaits the framework's call, as it should, or returns without it.</param>
     private static RecEngine WithStuckScorer(StuckClient client, bool awaitCall)
     {
         var host = HomeFeedTestHost.Load();
@@ -340,7 +314,6 @@ public sealed class ReplayAbortTests
         return engine;
     }
 
-    /// <summary>Linear model clients that block until cancelled, honouring the cancellation.</summary>
     private sealed class BlockingModels : IBindingFactory<IServiceClient>
     {
         private readonly LinearModelClientFactory _inner = new();
@@ -371,14 +344,12 @@ public sealed class ReplayAbortTests
         }
     }
 
-    /// <summary>A model client that ignores cancellation and answers only when released.</summary>
     private sealed class StuckClient : IServiceClient
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        /// <summary>Set once the client has answered, after the test released it.</summary>
         public TaskCompletionSource Answered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>The framework's call of the client, as the operator started it.</summary>
@@ -397,7 +368,6 @@ public sealed class ReplayAbortTests
         }
     }
 
-    /// <summary>Calls the stuck client through the framework, which bounds the wait for it.</summary>
     private sealed class StuckScorerFactory(StuckClient client, bool awaitCall) : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } =

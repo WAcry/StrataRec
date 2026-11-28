@@ -6,13 +6,11 @@ using static StrataRec.UnitTests.Features.Local.LocalTableTestSupport;
 
 namespace StrataRec.UnitTests.Features.Local;
 
-/// <summary><see cref="UpdatePosition"/> and the in-memory update source.</summary>
 public class UpdateContractsTests
 {
     [Fact]
     public void UpdatePosition_EveryWayOfMakingOne_RejectsNegativeOffsets()
     {
-        // Single bypassed the checks and made {"0":-1}, which FromJson then rejected.
         Assert.Throws<ArgumentOutOfRangeException>(() => UpdatePosition.Single(-1));
         Assert.Throws<ArgumentOutOfRangeException>(() => new UpdatePosition(new[] { new PartitionOffset(0, -1) }));
         Assert.Throws<ArgumentOutOfRangeException>(() => new UpdatePosition(new[] { new PartitionOffset(-1, 0) }));
@@ -22,7 +20,6 @@ public class UpdateContractsTests
             Assert.Throws<FormatException>(() => UpdatePosition.FromJson(negative.RootElement));
         }
 
-        // What can be made reads back as itself.
         foreach (var position in new[] { UpdatePosition.Empty, UpdatePosition.Single(0), UpdatePosition.Single(long.MaxValue) })
         {
             using var json = JsonDocument.Parse(position.ToString());
@@ -45,7 +42,6 @@ public class UpdateContractsTests
         Assert.Equal(20L, table.Pin().Read(table.Schema.FieldIndex("i64"), table.Pin().Find(1L)).AsInt64());
         Assert.Equal(1, table.Pin().TombstoneCount);
 
-        // Resuming from the table's position applies nothing again.
         var resumed = Table();
         await source.RunAsync(UpdatePosition.Single(3), resumed.Writer, CancellationToken.None);
         Assert.Equal(0, resumed.Pin().RecordCount);
@@ -54,7 +50,6 @@ public class UpdateContractsTests
     [Fact]
     public async Task MemorySource_CancelledBeforeItsFirstBatch_WritesNothing()
     {
-        // A completed source with an update waiting, run with a cancelled token.
         var source = new MemoryFeatureUpdateSource();
         source.Upsert(EntityKey.FromInt64(1), 1, new Dictionary<string, ScalarValue> { ["i64"] = ScalarValue.FromInt64(1) });
         source.Complete();
@@ -70,7 +65,7 @@ public class UpdateContractsTests
     }
 
     [Theory]
-    [InlineData(1, 1)] // Cancelled while the first of three updates is applied
+    [InlineData(1, 1)]
     [InlineData(3, 3)] // cancelled while the last one is applied: the checkpoint and the successful return are next
     public async Task MemorySource_CancelledMidBatch_ThrowsAndKeepsThePosition(int cancelAtBegin, int applied)
     {
@@ -87,16 +82,14 @@ public class UpdateContractsTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => source.RunAsync(UpdatePosition.Empty, writer, cancel.Token));
         Assert.Equal(cancelAtBegin, writer.Begins);
-        Assert.Equal(applied, table.Pin().RecordCount); // what was applied before the cancellation stays...
-        Assert.Equal(UpdatePosition.Empty, table.Position); // ...but the position does not move past it
+        Assert.Equal(applied, table.Pin().RecordCount);
+        Assert.Equal(UpdatePosition.Empty, table.Position);
 
-        // A rerun from the table's position applies everything; the updates applied twice change nothing.
         await source.RunAsync(table.Position, table.Writer, CancellationToken.None);
         Assert.Equal(3, table.Pin().RecordCount);
         Assert.Equal(UpdatePosition.Single(3), table.Position);
     }
 
-    /// <summary>Passes everything to a table's writer and cancels a token on the n-th <c>Begin</c>.</summary>
     private sealed class CancellingWriter(IFeatureTableWriter inner, CancellationTokenSource cancel, int cancelAtBegin) : IFeatureTableWriter
     {
         public int Begins { get; private set; }

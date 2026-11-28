@@ -159,14 +159,13 @@ public sealed class EntityDefinition
 
     private EntityFeatureRead[]? _reads;
 
-    /// <summary>Whether the catalog wrote the key as a list (a part's pointer is then <c>/key/&lt;i&gt;</c>, even for one part).</summary>
     internal bool KeyIsList { get; init; }
 
     /// <summary>Whether a part or an argument reads a feature: the entity's features are then fetched after it, as a foreign key's are.</summary>
     public bool HasFeatureParts => FeatureReads.Count > 0;
 
-    /// <summary>Every part is a context part (a request input or a context feature), or the entity has arguments: one key
-    /// (or call) per request (asked per feature by every read, so worked out once).</summary>
+    /// <summary>Every part is a context part (a request input or a context feature), or the entity has arguments: one
+    /// key (or call) per request.</summary>
     public bool IsContextScoped
     {
         get
@@ -186,7 +185,7 @@ public sealed class EntityDefinition
         }
     }
 
-    private byte _scope; // 0 = not worked out yet, 1 = context, 2 = candidate
+    private byte _scope;
 
     /// <summary>
     /// The key's layout: each part's reference, type and shared flag, in order. Available once every part has its type
@@ -359,7 +358,7 @@ public sealed class FeatureCatalog
         IReadOnlySet<string>? unusableInputs = null)
     {
         var entities = new Dictionary<string, EntityDefinition>(StringComparer.Ordinal);
-        var broken = new HashSet<string>(StringComparer.Ordinal); // entities declared with an error, reported or inherited
+        var broken = new HashSet<string>(StringComparer.Ordinal);
         var unusable = new SortedSet<string>(StringComparer.Ordinal);
         var entityNames = new List<string>(artifact.Entities.Keys);
         entityNames.Sort(StringComparer.Ordinal);
@@ -411,7 +410,7 @@ public sealed class FeatureCatalog
                 Source = spec.Source,
                 Field = spec.Field,
                 HasDefault = hasDefault,
-                Default = ColumnValues.AsStored(def, type), // as a column of the type holds it, once, not per request
+                Default = ColumnValues.AsStored(def, type),
                 Deprecated = spec.Deprecated ?? false,
                 Owner = spec.Owner,
                 Description = spec.Description,
@@ -456,7 +455,7 @@ public sealed class FeatureCatalog
                 Entity = entity,
                 Type = hasDefault ? type : type.AsNullable(),
                 HasDefault = hasDefault,
-                Default = ColumnValues.AsStored(def, type), // as a column of the type holds it, once, not per request
+                Default = ColumnValues.AsStored(def, type),
                 Expr = spec.Expr,
                 Owner = spec.Owner,
                 Description = spec.Description,
@@ -464,23 +463,17 @@ public sealed class FeatureCatalog
             };
         }
 
-        // A key part that reads a feature takes the feature's type. An entity keyed by a feature that cannot key it (not
-        // declared, of another type, of the other scope than its reference says, or declared with an error) has no key: it
-        // and its features fail, and so does an entity keyed by one of their features.
+        // An entity keyed by a feature that cannot key it (not declared, of another type, of the other scope than its
+        // reference says, or declared with an error) has no key: it and its features fail, and so does an entity keyed
+        // by one of their features.
         ResolveFeatureParts(entities, features, unusable, diagnostics, artifactName);
         ValidateKeyCycles(entities, features, diagnostics, artifactName);
         return new FeatureCatalog(artifact.CatalogId, entities, features, unusable);
     }
 
-    /// <summary>The hint of every key that is not a list of 1 to 8 distinct references.</summary>
     private const string KeyShapeHint =
         "\"key\" is one reference or a list of 1 to 8 distinct ones, e.g. \"col.entity_id\" or [\"col.entity_id\", \"ctx.request.country\"]";
 
-    /// <summary>
-    /// Parses an entity's key: one reference, or a list of 1 to <see cref="EntityKeyLayout.MaxParts"/> references in the
-    /// order of the tuple. Every problem is an <c>ENTITY_BAD_KEY</c> at the part (<c>/key</c> for a single reference,
-    /// <c>/key/&lt;i&gt;</c> in a list) with a hint; a key feature's type is checked when the features are built.
-    /// </summary>
     private static EntityDefinition? BuildEntity(
         string name, EntitySpec spec, IReadOnlyDictionary<string, ColumnType> requestSchema, EntityKeyType entityKeyType,
         IReadOnlySet<string>? unusableInputs, DiagnosticBag diagnostics, string artifactName)
@@ -542,11 +535,6 @@ public sealed class FeatureCatalog
         return new EntityDefinition { Name = name, Key = parts, KeyIsList = list is not null };
     }
 
-    /// <summary>
-    /// An entity a service computes: its arguments, each a request input or a context feature of any type, in
-    /// declared order. Every problem is an <c>ENTITY_BAD_ARGS</c> at the argument with a hint; a context feature is typed
-    /// (and checked) when the features are built.
-    /// </summary>
     private static EntityDefinition? BuildComputedEntity(
         string name, Dictionary<string, string> args, string pointer, IReadOnlyDictionary<string, ColumnType> requestSchema,
         IReadOnlySet<string>? unusableInputs, DiagnosticBag diagnostics, string artifactName)
@@ -580,7 +568,7 @@ public sealed class FeatureCatalog
                             NameSuggestions.DidYouMean(input, requestSchema.Keys) ?? "declare the input in the pipeline's request_schema");
                     }
 
-                    return null; // an input declared with an error is reported there; the entity fails with it
+                    return null;
                 }
 
                 parsed.Add(new EntityArgDefinition(arg, EntityKeyPartKind.RequestInput, input, inputType, at));
@@ -589,7 +577,7 @@ public sealed class FeatureCatalog
 
             if (reference.StartsWith("ctx.", StringComparison.Ordinal) && reference.Length > "ctx.".Length)
             {
-                parsed.Add(new EntityArgDefinition(arg, EntityKeyPartKind.ContextFeature, reference["ctx.".Length..], null, at)); // typed with the features
+                parsed.Add(new EntityArgDefinition(arg, EntityKeyPartKind.ContextFeature, reference["ctx.".Length..], null, at));
                 continue;
             }
 
@@ -604,12 +592,6 @@ public sealed class FeatureCatalog
         return new EntityDefinition { Name = name, Key = [], Args = parsed };
     }
 
-    /// <summary>
-    /// One key part: <c>ctx.request.&lt;input&gt;</c> (an int64 or string input, int32 promoted), <c>col.entity_id</c>,
-    /// <c>col.&lt;entity&gt;.&lt;feature&gt;</c> or <c>ctx.&lt;entity&gt;.&lt;feature&gt;</c> (a candidate or a context feature,
-    /// typed later, with the features).
-    /// </summary>
-    /// <remarks>Null when the part is wrong (reported here) or reads a request input declared with an error (reported there).</remarks>
     private static EntityKeyPartDefinition? ParsePart(
         string reference, string at, IReadOnlyDictionary<string, ColumnType> requestSchema, EntityKeyType entityKeyType,
         IReadOnlySet<string>? unusableInputs, DiagnosticBag diagnostics, string artifactName)
@@ -622,7 +604,7 @@ public sealed class FeatureCatalog
             {
                 if (unusableInputs is not null && unusableInputs.Contains(input))
                 {
-                    return null; // its declaration's error is reported; the entity fails with it
+                    return null;
                 }
 
                 diagnostics.Error("ENTITY_BAD_KEY", artifactName, at,
@@ -649,19 +631,18 @@ public sealed class FeatureCatalog
 
         if (reference.StartsWith("ctx.", StringComparison.Ordinal) && reference.Length > "ctx.".Length)
         {
-            return EntityKeyPartDefinition.ContextFeature(reference["ctx.".Length..]); // typed with the features
+            return EntityKeyPartDefinition.ContextFeature(reference["ctx.".Length..]);
         }
 
         if (reference.StartsWith("col.", StringComparison.Ordinal) && reference.Length > "col.".Length)
         {
-            return EntityKeyPartDefinition.Feature(reference["col.".Length..]); // typed with the features
+            return EntityKeyPartDefinition.Feature(reference["col.".Length..]);
         }
 
         diagnostics.Error("ENTITY_BAD_KEY", artifactName, at, $"Key part '{reference}' is not a reference an entity can be keyed by.", Parts);
         return null;
     }
 
-    /// <summary>The key type a value of <paramref name="type"/> keys an entity with; null when it cannot be a key.</summary>
     private static EntityKeyType? KeyTypeOf(ColumnType type) => type.Promoted().Kind switch
     {
         StorageKind.Int64 => EntityKeyType.Int64,
@@ -669,13 +650,6 @@ public sealed class FeatureCatalog
         _ => null,
     };
 
-    /// <summary>
-    /// Types every key part that reads a feature (a key feature's type is the part's). A part whose feature is
-    /// not declared, is of the other scope than its prefix says (<c>col.</c> a candidate feature, <c>ctx.</c> a context
-    /// one) or is of another type than int64 or string is an <c>ENTITY_BAD_KEY</c> at the part; one whose feature was declared
-    /// with an error fails silently (reported there). An entity with such a part has no key: it is removed with its features,
-    /// which become unusable, and an entity keyed by one of those fails in turn.
-    /// </summary>
     private static void ResolveFeatureParts(
         Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, SortedSet<string> unusable,
         DiagnosticBag diagnostics, string artifactName)
@@ -707,7 +681,6 @@ public sealed class FeatureCatalog
         }
     }
 
-    /// <summary>Types the entity's feature parts and arguments; false (reported, or silent for a feature declared with an error) when one cannot key it.</summary>
     private static bool ResolveParts(
         EntityDefinition entity, Dictionary<string, FeatureDefinition> features, SortedSet<string> unusable, DiagnosticBag diagnostics, string artifactName)
     {
@@ -764,8 +737,6 @@ public sealed class FeatureCatalog
 
             if (keyFeature.IsContext != context)
             {
-                // The prefix names the scope: a candidate feature is col.*, a context feature ctx.* (a shared part of a
-                // candidate-scoped key, or any part of a context-scoped one).
                 diagnostics.Error("ENTITY_BAD_KEY", artifactName, at,
                     $"Key part '{part.Reference}' names {(keyFeature.IsContext ? "a context" : "a candidate")} feature, which is written {keyFeature.ExpressionName}.",
                     $"write the part as \"{keyFeature.ExpressionName}\"");
@@ -787,23 +758,16 @@ public sealed class FeatureCatalog
     }
 
     /// <summary>
-    /// Key chains must end (cycles are configuration errors): an entity whose key reads a feature of an entity
-    /// whose key leads back to one already on the way is an <c>ENTITY_KEY_CYCLE</c>, at the part that leads into it. Every
-    /// feature part is an edge, candidate (<c>col.</c>) or context (<c>ctx.</c>), so a cycle through any part of a composite
-    /// key is found. An entity found to lead into no cycle is remembered for the whole catalog and not walked again, whatever
-    /// kind of edge reached it: without it, eight parts reading eight features of the same parent walk the parent's chain
-    /// eight times each, and a valid chain of ten such entities took 6 s. A cycle that also passes through a
-    /// derived feature is found where the plan compiles the derived feature (the catalog does not compile expressions), and
-    /// reported there with the same code at a key part on the cycle: a derived feature is no edge here, since what it reads
-    /// is in its expression, not in its entity's key (an entity's argument reading a derived feature
-    /// of its own entity, computed from a request input, was a cycle).
+    /// Reports <c>ENTITY_KEY_CYCLE</c> at the key part that leads into a cycle. An entity found to lead into none is
+    /// not walked again, from any start. A cycle through a derived feature is the plan compiler's to report: the
+    /// catalog does not compile expressions.
     /// </summary>
     private static void ValidateKeyCycles(
         Dictionary<string, EntityDefinition> entities, Dictionary<string, FeatureDefinition> features, DiagnosticBag diagnostics, string artifactName)
     {
         var names = new List<string>(entities.Keys);
         names.Sort(StringComparer.Ordinal);
-        var acyclic = new HashSet<string>(StringComparer.Ordinal); // entities whose key leads into no cycle
+        var acyclic = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in names)
         {
             var entity = entities[name];
@@ -851,7 +815,6 @@ public sealed class FeatureCatalog
             features.TryGetValue(read.Feature, out var feature) && !feature.IsDerived ? feature.Entity : null;
     }
 
-    /// <summary>The pointer of key part <paramref name="part"/>: <c>/key</c> for a one-part key written as one reference.</summary>
     internal static string KeyPointer(EntityDefinition entity, int part) => entity.KeyPointer(part);
 
     private static bool TryEntity(
@@ -869,7 +832,7 @@ public sealed class FeatureCatalog
         var entityName = featureName[..dot];
         if (broken.Contains(entityName))
         {
-            return false; // the entity's declaration has an error, reported there
+            return false;
         }
 
         if (!entities.TryGetValue(entityName, out entity!))

@@ -10,25 +10,21 @@ using StrataRec.Core.Bindings;
 namespace StrataRec.Artifacts.Model;
 
 /// <summary>
-/// Binds a binding's own settings to the C# type its factory declares, as an operator's config is bound
-///: snake_case, strict, and every mistake worded by <see cref="JsonBindingErrors"/> (an unknown member with
-/// the one it resembles, a value of the wrong kind, a missing required member with what it means), here as a
-/// <see cref="BindingException"/> at its pointer within the binding, with a hint. The settings type is also the single
-/// source of the settings' JSON Schema (<see cref="ArtifactSchemas"/>): what an editor checks is what binds, and no
-/// factory parses JSON by hand.
+/// Binds a binding's own settings to the C# type its factory declares, as an operator's config is bound: snake_case,
+/// strict, and every mistake worded by <see cref="JsonBindingErrors"/> (an unknown member with the one it resembles, a
+/// value of the wrong kind, a missing required member with what it means), here as a <see cref="BindingException"/> at
+/// its pointer within the binding, with a hint. The settings type is also the single source of the settings' JSON
+/// Schema (<see cref="ArtifactSchemas"/>): what an editor checks is what binds.
 /// </summary>
 /// <remarks>
 /// <para>A member of type <see cref="LocalFile"/> or <see cref="SecretReference"/> is bound by the binding's context
 /// (<see cref="BindingContext.LocalFile"/>, <see cref="BindingContext.SecretReference"/>): a path resolved against the
 /// pinned base directory, a reference resolved through the host's store at load, each knowing its setting's pointer for
-/// the errors of the load. The serializer gives a converter no state of the call, so the binding in progress is the
-/// thread's (deserialization is synchronous), and a converter finds its value's pointer from the value's offset in the
-/// document being bound, which is why the settings are bound from bytes written here.</para>
+/// the errors of the load.</para>
 /// <para>Compile time only: factories bind when they create an instance, never on a request.</para>
 /// </remarks>
 public static class BindingSettings
 {
-    /// <summary>The hint of an error <see cref="JsonBindingErrors"/> has none for.</summary>
     private const string SchemaHint = "'stratarec schema bindings' prints the JSON Schema of bindings, which describes the settings of each type this binary has";
 
     /// <summary>The binding being bound on this thread, for the converters; null outside <see cref="Bind{T}(BindingContext, string)"/>.</summary>
@@ -119,7 +115,6 @@ public static class BindingSettings
         }
     }
 
-    /// <summary>The offset of the first number of <paramref name="utf8"/> that is not finite as a double (<c>1e400</c>); -1 if none.</summary>
     internal static long NonFiniteNumber(ReadOnlySpan<byte> utf8, out string? literal)
     {
         var reader = new Utf8JsonReader(utf8);
@@ -188,8 +183,7 @@ public static class BindingSettings
     }
 
     /// <summary>
-    /// The RFC 6901 pointer of the value that starts at byte <paramref name="offset"/> of <paramref name="utf8"/>, by
-    /// reading the document to it: the keys of the objects and the indexes of the arrays the value is in.
+    /// The RFC 6901 pointer of the value that starts at byte <paramref name="offset"/> of <paramref name="utf8"/>.
     /// </summary>
     internal static string PointerAt(ReadOnlySpan<byte> utf8, long offset)
     {
@@ -237,20 +231,16 @@ public static class BindingSettings
         return pointer.ToString();
     }
 
-    /// <summary>An object or array the reader is in: the key of its current member, or the index of its current element.</summary>
     private readonly record struct Frame(bool IsArray, int Index, string? Name);
 
-    /// <summary>The binding being bound on a thread: its context, the document's bytes and where the document is within the binding.</summary>
     private sealed class Scope(BindingContext context, ReadOnlyMemory<byte> utf8, string prefix)
     {
         public BindingContext Context { get; } = context;
 
-        /// <summary>The binding being bound on this thread.</summary>
         /// <exception cref="InvalidOperationException">None is: <paramref name="type"/> was read with <see cref="Options"/> directly.</exception>
         public static Scope Current(Type type) =>
             t_scope ?? throw new InvalidOperationException($"A {type.Name} is read only as a binding's setting, by BindingSettings.Bind.");
 
-        /// <summary>The pointer within the binding of the value at <paramref name="offset"/> of the document.</summary>
         public string PointerAt(long offset) => prefix + BindingSettings.PointerAt(utf8.Span, offset);
     }
 

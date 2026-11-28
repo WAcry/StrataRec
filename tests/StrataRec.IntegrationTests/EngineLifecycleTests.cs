@@ -12,8 +12,8 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The engine's lifecycle with local tables: loads, publishing and disposal under one lock. The
-/// sample's <c>author_store</c> is loaded by a source the test drives, so every interleaving here is forced, not timed.
+/// The sample's <c>author_store</c> is loaded by a source the test drives, so every interleaving here is forced, not
+/// timed.
 /// </summary>
 public sealed class EngineLifecycleTests
 {
@@ -35,11 +35,10 @@ public sealed class EngineLifecycleTests
         Assert.True(source.Token.IsCancellationRequested);
         Assert.False(engine.TryGetPipeline("home_feed", out _));
         Assert.Equal(0, host.TableCount);
-        await engine.DisposeAsync(); // once is enough
+        await engine.DisposeAsync();
         await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(0, host.TableCount);
 
-        // The host was passed in: the disposal left it running for its other engines.
         sources.Open();
         await using var other = new RecEngine(Environment(root, sources), bindings: host);
         Assert.True((await other.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
@@ -75,7 +74,7 @@ public sealed class EngineLifecycleTests
         Assert.True((await first.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         Assert.True((await second.LoadAsync(Compile(root), cancellationToken: TestContext.Current.CancellationToken)).Applied);
         var source = await sources.Next();
-        Assert.Equal(1, host.TableCount); // one table, held by both
+        Assert.Equal(1, host.TableCount);
 
         await first.DisposeAsync();
 
@@ -87,15 +86,13 @@ public sealed class EngineLifecycleTests
 
         Assert.True(source.Token.IsCancellationRequested);
         Assert.Equal(0, host.TableCount);
-        host.OpenLease().Dispose(); // not disposed: it is the caller's
+        host.OpenLease().Dispose();
         Assert.Equal(1, sources.Runs);
     }
 
     [Fact]
     public async Task TwoEnginesSharingAHost_WithSourceFactoriesOfTheirOwn_EachLoadAndServeTheirOwnTable()
     {
-        // The same configuration, so the same table identity, but each engine's registry has its own factory for the
-        // source type: the second engine's source must run, and its plan read what that source loaded.
         var mine = new GatedSources(followers: 5);
         var theirs = new GatedSources(followers: 7);
         mine.Open();
@@ -137,7 +134,7 @@ public sealed class EngineLifecycleTests
 
         Assert.True(engine.TryGetPipeline("home_feed", out var served));
         Assert.Equal(1, served.Sequence);
-        Assert.False(source.Token.IsCancellationRequested); // the served plan still holds the table: its source runs on
+        Assert.False(source.Token.IsCancellationRequested);
         Assert.Equal(1, host.TableCount);
         Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-after-cancel"), TestContext.Current.CancellationToken)).Succeeded);
         Assert.True((await engine.LoadAsync(Compile(root), sequence: 4, cancellationToken: TestContext.Current.CancellationToken)).Applied);
@@ -178,7 +175,7 @@ public sealed class EngineLifecycleTests
                 token.Register(() =>
                 {
                     entered.TrySetResult();
-                    cleanup.Wait(); // the first table's source cleans up slowly
+                    cleanup.Wait();
                 });
             }
         };
@@ -189,8 +186,7 @@ public sealed class EngineLifecycleTests
 
         try
         {
-            // A changed binding: a new table, and the replaced plan's table is released by the swap. Loaded off the test
-            // thread, so a swap that blocks fails the test instead of hanging it.
+            // Loaded off the test thread, so a swap that blocks fails the test instead of hanging it.
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"max_bytes\":\"16MiB\"", "\"max_bytes\":\"32MiB\"");
             var swap = await Task.Run(() => engine.LoadAsync(Compile(root))).WaitAsync(Wait, TestContext.Current.CancellationToken);
 
@@ -200,7 +196,6 @@ public sealed class EngineLifecycleTests
             Assert.Equal(1, host.TableCount);
             Assert.True((await engine.ExecuteAsync(MetricsTests.Request("req-swapped"), TestContext.Current.CancellationToken)).Succeeded);
 
-            // Shutdown is bounded by its timeout, also for the table still stopping.
             await engine.DisposeAsync();
             await Task.Run(() => host.DisposeAsync().AsTask(), TestContext.Current.CancellationToken).WaitAsync(Wait, TestContext.Current.CancellationToken);
             Assert.False(cleanup.IsSet);
@@ -211,7 +206,6 @@ public sealed class EngineLifecycleTests
         }
     }
 
-    /// <summary>A copy of the sample whose <c>author_store</c> is loaded by <see cref="GatedSources"/>.</summary>
     /// <summary>The sample with its author table loaded by <see cref="GatedSources"/>, and its other table's source,
     /// item_country_store, fetched instead (from no records): these tests are about one table's lifecycle.</summary>
     private static string Workspace() => HomeFeedTestHost.LoadModified(root =>
@@ -220,7 +214,6 @@ public sealed class EngineLifecycleTests
         SampleBindings.Rebind(root, "item_country_store", $$"""{ "connector": "memory@1", "timeout_ms": {{HomeFeedTestHost.UntimedMs}} }""");
     }).Root;
 
-    /// <summary>Author 100's followers in the table the engine's served plan reads.</summary>
     private static double Followers(RecEngine engine)
     {
         Assert.True(engine.TryGetPipeline("home_feed", out var pipeline));
@@ -243,10 +236,6 @@ public sealed class EngineLifecycleTests
         return request!;
     }
 
-    /// <summary>
-    /// Update sources the test drives: each run is announced (<see cref="Next"/>), loads author 100 (with
-    /// <paramref name="followers"/>) once the gate is open, calls <see cref="Loaded"/>, and then runs until it is cancelled.
-    /// </summary>
     private sealed class GatedSources(double followers = 5) : IBindingFactory<IFeatureUpdateSource>
     {
         public const string TypeName = "gated@1";

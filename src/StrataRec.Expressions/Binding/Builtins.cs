@@ -2,7 +2,6 @@ using StrataRec.Expressions.Syntax;
 
 namespace StrataRec.Expressions.Binding;
 
-/// <summary>The fixed function whitelist.</summary>
 internal static class Builtins
 {
     /// <summary>Function names with their arity (min, max; -1 = variadic) and a usage string for hints.</summary>
@@ -37,7 +36,6 @@ internal static class Builtins
         ["has"] = (1, 1, "has(x)"),
     };
 
-    /// <summary>Words that cannot name a let binding.</summary>
     private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
     {
         "col", "ctx", "req", "param", "true", "false", "null", "in", "let",
@@ -100,7 +98,6 @@ internal static class Builtins
     };
 }
 
-/// <summary>"Did you mean" suggestions by optimal-string-alignment edit distance.</summary>
 internal static class NameSuggester
 {
     public static string? Hint(string query, IEnumerable<string> candidates)
@@ -129,7 +126,6 @@ internal static class NameSuggester
             int distance;
             if (candidate.EndsWith("." + query, StringComparison.Ordinal))
             {
-                // The namespace prefix was forgotten, e.g. 'item.clicks_7d' for 'col.item.clicks_7d'.
                 distance = 0;
             }
             else
@@ -179,8 +175,7 @@ internal static class NameSuggester
         return name;
     }
 
-    /// <summary>Optimal string alignment distance; returns a value above <paramref name="limit"/> early when the
-    /// lengths alone rule a match out.</summary>
+    /// <summary>Optimal string alignment distance.</summary>
     internal static int Distance(string a, string b, int limit)
     {
         if (Math.Abs(a.Length - b.Length) > limit)

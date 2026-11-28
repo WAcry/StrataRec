@@ -6,20 +6,11 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec status</c>: what a store publishes, as nodes serving releases will load it. For every pointer, the
-/// manifest it names (its sequence, its floor, and whether it is a revocation), the experiments it releases and the
-/// experiments a stop in force removed (<see cref="ReleaseManifest.Revoked"/>), which <c>build</c> keeps out.
-/// </summary>
-/// <remarks>
-/// It reads the store only: what nodes applied is theirs to report. A pointer that cannot be read is
-/// reported and the others are still listed, so one damaged pointer does not hide what the rest publish.
-/// </remarks>
 internal static class StatusCommand
 {
     public static Command Create(PlanEnvironment provided)
     {
-        _ = provided; // nothing is compiled
+        _ = provided;
         var store = new Option<string>("--store", "-s")
         {
             Description = "Artifact store directory, with the pointers/<environment>/<pipeline>.json nodes read ('stratarec publish' writes them).",
@@ -38,7 +29,6 @@ internal static class StatusCommand
         return command;
     }
 
-    /// <param name="errors">Where diagnostics go; standard error by default.</param>
     internal static async Task<int> RunAsync(
         string storeRoot, string? pipelineId, string? environment, string format, TextWriter output, CancellationToken cancellationToken, TextWriter? errors = null)
     {
@@ -234,7 +224,6 @@ internal static class StatusCommand
 
     private sealed record Release(string PipelineId, string Environment, string Pointer, string Id, ReleaseManifest Manifest);
 
-    /// <summary>The stops in force, by name: a revoked experiment the manifest releases again was brought back.</summary>
     private static List<(string Name, RevokedExperiment Stop)> Stops(ReleaseManifest manifest)
     {
         var names = new List<string>(manifest.Revoked.Keys);

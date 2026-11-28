@@ -4,16 +4,10 @@ using StrataRec.Artifacts.Model;
 
 namespace StrataRec.Experiments.Compilation;
 
-/// <summary>A parameter leaf an arm overrides.</summary>
 /// <param name="Leaf">Flattened leaf name, e.g. <c>recall_quotas.cf</c>.</param>
-/// <param name="Value">The patch value.</param>
 /// <param name="Pointer">Where the value is written in the experiment artifact.</param>
 internal readonly record struct ParamOverride(string Leaf, JsonNode? Value, string Pointer);
 
-/// <summary>
-/// One experiment arm after strict analysis of its patch against the patchable view: its path
-/// footprint (without add-only no-ops), parameter overrides, add-only additions and the nodes it touches.
-/// </summary>
 internal sealed class ArmPatch
 {
     public required int Index { get; init; }
@@ -45,16 +39,13 @@ internal sealed class ArmPatch
     /// <summary>Add-only additions by section name (<c>columns</c>, <c>features</c>, …) then entry name.</summary>
     public Dictionary<string, SortedDictionary<string, (JsonNode Value, string Pointer)>> Additions { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>Parameter leaves that exist only because of this arm (new map keys, arm-declared parameters).</summary>
     public List<string> ExtraParamLeaves { get; } = new();
 
     /// <summary>Nodes with a footprint path under <c>/nodes/&lt;id&gt;</c> (they get variants).</summary>
     public SortedSet<string> TouchedNodes { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>Nodes the arm adds (absent from the baseline).</summary>
     public HashSet<string> AddedNodes { get; } = new(StringComparer.Ordinal);
 
-    /// <summary>Log taps with a footprint path under <c>/log_taps/&lt;id&gt;</c>.</summary>
     public SortedSet<string> TouchedTaps { get; } = new(StringComparer.Ordinal);
 
     /// <summary>False when the patch itself is invalid; such an arm is excluded from further checks.</summary>
@@ -62,10 +53,8 @@ internal sealed class ArmPatch
 
     public override string ToString() => Id;
 
-    /// <summary>True when the footprint touches <paramref name="pointer"/> (either is a prefix of the other).</summary>
     public bool Relates(string pointer) => JsonPointer.TryParse(pointer, out var parsed) && Relates(parsed);
 
-    /// <inheritdoc cref="Relates(string)"/>
     public bool Relates(JsonPointer parsed)
     {
         foreach (var op in Footprint)
@@ -80,10 +69,8 @@ internal sealed class ArmPatch
     }
 }
 
-/// <summary>Strict analysis of one arm's patch.</summary>
 internal static class ArmAnalyzer
 {
-    /// <summary>Stable ids of nodes, columns and parameters: they appear in pointers, expressions and logs.</summary>
     /// <summary>
     /// Node ids are plain identifiers (<c>[A-Za-z_][A-Za-z0-9_]*</c>): expressions name them in version references
     /// (<c>col.score.final@fusion</c>), where a '.' or '-' would read as field access or subtraction.
@@ -141,7 +128,6 @@ internal static class ArmAnalyzer
             var pointer = arm.PointerPrefix + op.Path;
             var tokens = op.Path.Tokens;
 
-            // 1. Schema sections only take new entries: one schema is compiled for every arm.
             if (tokens.Length >= 1 && Array.IndexOf(SchemaSections, tokens[0]) >= 0)
             {
                 if (op.Kind != PatchOpKind.Add || tokens.Length != 2)
@@ -173,7 +159,6 @@ internal static class ArmAnalyzer
                 continue;
             }
 
-            // 2. Everything else the arm may change: parameters, nodes and taps; nothing outside the patchable view.
             arm.Footprint.Add(op);
             switch (tokens.Length == 0 ? string.Empty : tokens[0])
             {
@@ -215,7 +200,6 @@ internal static class ArmAnalyzer
     /// <summary>Sections compiled once into the shared plan schema; experiments may only add to them.</summary>
     internal static readonly string[] SchemaSections = { "columns", "request_columns", "param_schema", "features", "derived_features", "funnel_groups" };
 
-    /// <summary>Re-adding an entry identical to the baseline is a no-op, e.g. after a graduation.</summary>
     private static bool IsNoOp(PatchOperation op, PatchableView view) =>
         op.Kind == PatchOpKind.Replace && op.Path.TryEvaluate(view.Document, out var existing) && JsonEquals(existing, op.Value);
 
@@ -228,8 +212,8 @@ internal static class ArmAnalyzer
     }
 
     /// <summary>
-    /// Flattens parameter patches to leaf overrides. A leaf must be declared by the baseline schema or by
-    /// a <c>param_schema</c> entry this arm adds; map parameters take new keys.
+    /// A leaf must be declared by the baseline schema or by a <c>param_schema</c> entry this arm adds; map parameters
+    /// take new keys.
     /// </summary>
     private static void AnalyzeParams(ArmPatch arm, PatchableView view, List<PatchOperation> ops, DiagnosticBag diagnostics)
     {
@@ -330,7 +314,6 @@ internal static class ArmAnalyzer
         }
     }
 
-    /// <summary>RFC 8785 equality: equal canonical forms (numbers compare by value, member order is irrelevant).</summary>
     public static bool JsonEquals(JsonNode? a, JsonNode? b) =>
         string.Equals(JsonCanonicalizer.CanonicalizeToString(a), JsonCanonicalizer.CanonicalizeToString(b), StringComparison.Ordinal);
 }

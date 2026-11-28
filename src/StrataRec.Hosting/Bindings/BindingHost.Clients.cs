@@ -15,7 +15,6 @@ public sealed partial class BindingHost
     /// <paramref name="create"/>, called outside the host's lock (a factory only reads settings, but it is not ours to
     /// trust with a lock every lease takes).
     /// </summary>
-    /// <exception cref="BindingException">The factory rejected the settings; nothing is held.</exception>
     internal ClientEntry AcquireClient<T>(BindingSpec spec, Func<BindingContext, T> create)
         where T : class
     {
@@ -40,13 +39,12 @@ public sealed partial class BindingHost
             {
                 if (_clients.TryGetValue(key, out var held) && !held.Failed)
                 {
-                    held.References++; // another plan created it meanwhile: use that one, never loaded, and drop ours
+                    held.References++;
                     acquired = held;
                 }
                 else
                 {
-                    // New, or the held one failed its load: a fresh instance, so another load really retries. The failed
-                    // one stays with the leases that hold it until they let go.
+                    // The failed one stays with the leases that hold it until they let go.
                     created.References = 1;
                     _clients[key] = created;
                     acquired = created;
@@ -62,7 +60,6 @@ public sealed partial class BindingHost
         return acquired ?? throw new ObjectDisposedException(nameof(BindingHost));
     }
 
-    /// <summary>One lease let go; the last one releases the instance: its load is cancelled, and it is disposed once that returned.</summary>
     internal void Release(ClientEntry entry)
     {
         lock (_gate)
@@ -82,7 +79,6 @@ public sealed partial class BindingHost
         entry.Release();
     }
 
-    /// <summary>A callback a client registered on a lease's signature lookups threw when they were cancelled: logged, never thrown.</summary>
     internal void LookupCancellationCallbacksFailed(Exception exception)
     {
         try
@@ -91,7 +87,6 @@ public sealed partial class BindingHost
         }
         catch (Exception)
         {
-            // A failing logger cannot report itself.
         }
     }
 
@@ -103,7 +98,6 @@ public sealed partial class BindingHost
         }
     }
 
-    /// <summary>One instance, its load and its disposal.</summary>
     internal sealed class ClientEntry
     {
         private readonly BindingHost _host;
@@ -148,10 +142,10 @@ public sealed partial class BindingHost
         public Task Disposed => _disposed.Task;
 
         /// <summary>
-        /// Starts the load once (on the thread pool: a load may do its I/O synchronously) and returns its bounded outcome:
-        /// completed when the instance can serve; faulted with <see cref="BindingLoadException"/> when the load failed or
-        /// took longer than <see cref="BindingHostOptions.LoadTimeout"/>; cancelled when the instance was released or the
-        /// host stopped first. Completed at once for an instance without a load, or when the host loads nothing.
+        /// Starts the load once (on the thread pool: a load may do its I/O synchronously) and returns its bounded
+        /// outcome: completed when the instance can serve; faulted with <see cref="BindingLoadException"/> when the
+        /// load failed or took longer than <see cref="BindingHostOptions.LoadTimeout"/>; cancelled when the instance
+        /// was released or the host stopped first.
         /// </summary>
         public Task Ready()
         {
@@ -179,10 +173,8 @@ public sealed partial class BindingHost
         }
 
         /// <summary>
-        /// Cancels the load (shutdown, or the release): the first call cancels, and every call returns that cancellation's
-        /// callbacks, which complete once they have run (never faulting; an exception of one is logged). A second
-        /// <see cref="CancellationTokenSource.CancelAsync"/> would return at once, so only the first one's task tells when
-        /// the instance's callbacks are done with it. The instance stays with the leases that hold it.
+        /// A second <see cref="CancellationTokenSource.CancelAsync"/> would return at once, so only the first one's
+        /// task tells when the instance's callbacks are done with it.
         /// </summary>
         public Task CancelLoad()
         {
@@ -203,10 +195,6 @@ public sealed partial class BindingHost
             return first.Task;
         }
 
-        /// <summary>
-        /// No lease holds the instance any more: cancels its load and disposes it, on the pool, once the load and the
-        /// callbacks of its cancellation have returned.
-        /// </summary>
         public void Release()
         {
             Task? run;
@@ -225,7 +213,6 @@ public sealed partial class BindingHost
             _ = Task.Run(() => DisposeAsync(run, callbacks), CancellationToken.None);
         }
 
-        /// <summary>Completes <paramref name="done"/> once the cancellation's callbacks have run, after logging a failure of theirs.</summary>
         private async Task ObserveCallbacksAsync(Task callbacks, TaskCompletionSource done)
         {
             try
@@ -240,7 +227,6 @@ public sealed partial class BindingHost
                 }
                 catch (Exception)
                 {
-                    // A failing logger cannot report itself, and does not end the wait for the callbacks.
                 }
             }
             finally
@@ -279,7 +265,6 @@ public sealed partial class BindingHost
             }
             catch (Exception)
             {
-                // A failing logger cannot report itself, and does not fail the load.
             }
         }
 
@@ -291,7 +276,6 @@ public sealed partial class BindingHost
             }
             catch (Exception)
             {
-                // A failing logger cannot report itself.
             }
 
             return failure;
@@ -299,15 +283,14 @@ public sealed partial class BindingHost
 
         /// <summary>
         /// Waits for the callbacks of the load's cancellation and for the load to return, then disposes the instance:
-        /// never under a load or a cancellation callback still running (a callback may end the load and go on cleaning up
-        /// with the instance), and never on the caller's thread. An instance whose load or callback never returns is never
-        /// disposed, which shutdown reports. A disposal's exception is logged.
+        /// never under a load or a cancellation callback still running (a callback may end the load and go on cleaning
+        /// up with the instance), and never on the caller's thread.
         /// </summary>
         private async Task DisposeAsync(Task? run, Task callbacks)
         {
             try
             {
-                await callbacks.ConfigureAwait(false); // never faults: see CancelLoad
+                await callbacks.ConfigureAwait(false);
                 if (run is not null)
                 {
                     try
@@ -344,7 +327,6 @@ public sealed partial class BindingHost
                     }
                     catch (Exception)
                     {
-                        // A failing logger cannot report itself.
                     }
 
                     disposed = false;
@@ -358,7 +340,6 @@ public sealed partial class BindingHost
                     }
                     catch (Exception)
                     {
-                        // A failing logger cannot report itself.
                     }
                 }
             }

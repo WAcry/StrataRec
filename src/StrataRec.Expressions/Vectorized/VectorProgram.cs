@@ -8,18 +8,6 @@ using StrataRec.Expressions.Runtime;
 
 namespace StrataRec.Expressions.Vectorized;
 
-/// <summary>
-/// A row-level expression lowered for the column-at-a-time interpreter (backend A): request-level
-/// subtrees become a <see cref="ScalarProgram"/> evaluated once per call, every row-varying node becomes one
-/// <see cref="Instr"/>, and registers are assigned at compile time by liveness so that temporaries are reused.
-/// </summary>
-/// <remarks>
-/// <para>Row domain: when the requested rows are at least half of the physical rows, every instruction runs over
-/// the full physical range <c>[0, PhysicalRowCount)</c> and column arrays are read in place; otherwise the inputs are
-/// gathered densely for the requested rows. Either way only the requested rows are written to the destination.</para>
-/// <para>Per call the program rents one array per register file (plus value slots and node locations) from
-/// <see cref="ArrayPool{T}.Shared"/> and returns them before returning: no steady-state allocation.</para>
-/// </remarks>
 internal sealed class VectorProgram
 {
     private readonly Instr[] _instrs;
@@ -126,7 +114,6 @@ internal sealed class VectorProgram
 
     public override string ToString() => string.Join("\n", (IEnumerable<Instr>)_instrs);
 
-    /// <summary>IR → instructions, with pattern fusion and register allocation.</summary>
     private sealed class Lowering
     {
         private readonly Dictionary<IrNode, int> _index = new(ReferenceEqualityComparer.Instance);
@@ -244,14 +231,11 @@ internal sealed class VectorProgram
             }
         }
 
-        /// <summary>Kinds whose results are lazy per-lane sources (<see cref="SourceKind"/>) instead of registers: lists.
-        /// An int or float list source may point at narrow or wide storage, lane by lane (see <see cref="Lanes.IntList"/>).</summary>
         private static bool IsSource(ExprType t) => t.IsList;
 
         /// <summary>
-        /// Linear-scan allocation in program order. An instruction's output registers are taken before its
-        /// operands' registers are released, so outputs never alias inputs. Retaining instructions (lazy selects)
-        /// keep their operands live until they themselves die.
+        /// An instruction's output registers are taken before its operands' registers are released, so outputs never
+        /// alias inputs. Retaining instructions (lazy selects) keep their operands live until they themselves die.
         /// </summary>
         private static int[] AllocateRegisters(Instr[] instrs)
         {
@@ -326,23 +310,8 @@ internal sealed class VectorProgram
     }
 }
 
-/// <summary>
-/// Writes evaluation results into a destination column: narrowing, validity bits, and the out-of-range
-/// rule for int32 storage and fixed-length lists.
-/// </summary>
-/// <remarks>
-/// <para>Narrowing an int64 into <c>int32</c> or <c>list&lt;int32&gt;</c> storage never wraps. A value outside the int32
-/// range gets the caller's replacement (the column's default) or becomes missing, and is counted in
-/// <see cref="ExpressionCounters.OutOfRange"/>. A list is replaced as a whole when any element is outside the range:
-/// dropping or clamping elements would write a different list. A <c>list&lt;E,N&gt;</c> destination takes a list of
-/// another length the same way: as a whole, counted, never cut or padded.</para>
-/// <para>The in-range path stays a single pass: scalar narrowing writes every value and ORs a branch-free range flag,
-/// and only when the flag is set does a second pass find and replace the offending (present) rows.</para>
-/// </remarks>
 internal static class DestinationWriter
 {
-    /// <summary>Throws when <paramref name="destination"/> cannot hold results of <paramref name="type"/>, or when the
-    /// out-of-range replacement is present but would not fit the destination itself.</summary>
     public static void Validate(ExprType type, ColumnBuffer destination, in ScalarValue outOfRange)
     {
         var ok = (type.Kind, destination) switch
@@ -371,13 +340,10 @@ internal static class DestinationWriter
     }
 
     /// <remarks>
-    /// The destination may be a column the expression itself reads (an in-place update such as <c>col.a ?? [7]</c>
-    /// written into <c>col.a</c>). Every instruction has run before this method, and the lazy list results it
-    /// resolves per lane only look at the same row of their sources, so writing a row never changes another row's
-    /// inputs. The exception is a row's own validity bit, which a lazy <c>??</c> uses as its selection mask (zero-copy
-    /// from the column in full-range mode): list and string destinations are therefore written row by row,
-    /// reading the lane before updating that row's validity. Scalar results are already materialized in registers
-    /// (or are the column's own array, row for row), so their values are copied first and validity follows.
+    /// Every instruction has run before this method, and the lazy list results it resolves per lane only look at the
+    /// same row of their sources, so writing a row never changes another row's inputs. The exception is a row's own
+    /// validity bit, which a lazy <c>??</c> uses as its selection mask: list and string destinations are therefore
+    /// written row by row, reading the lane before updating that row's validity.
     /// </remarks>
     public static void Write(ref Frame f, int root, ExprType type, ReadOnlySpan<int> rows, ColumnBuffer destination, in ScalarValue outOfRange)
     {
@@ -478,7 +444,6 @@ internal static class DestinationWriter
         }
     }
 
-    /// <summary>Copies lane values to the listed rows: lane = row in the identity domain, lane = k otherwise.</summary>
     private static void Scatter<T>(ReadOnlySpan<T> source, T[] destination, ReadOnlySpan<int> rows, bool identity)
     {
         if (identity)
@@ -524,8 +489,6 @@ internal static class DestinationWriter
         return fits;
     }
 
-    /// <summary>Second pass of an int32 write whose range flag was set: every present row whose value does not fit takes
-    /// the replacement (or becomes missing) and is counted.</summary>
     private static void ReplaceOutOfRange(ref Frame f, int root, WordView valid, bool allValid, ReadOnlySpan<int> rows, ScalarColumn<int> destination, in ScalarValue outOfRange)
     {
         var src = f.GetI(root);
@@ -544,10 +507,6 @@ internal static class DestinationWriter
         f.Context.Counters?.AddOutOfRange(replaced);
     }
 
-    /// <summary>Writes value and validity of each row in one step: the lane is read first, then <c>Set</c> marks the
-    /// row present (or <c>SetMissing</c> marks it missing), so an aliased mask still holds this row's old bit when read
-    /// (see <see cref="Write"/>). A list of another length than a <c>list&lt;E,N&gt;</c> destination's takes the
-    /// out-of-range replacement, as a list with an element outside int32 storage does.</summary>
     private static void WriteReferenceKinds(
         ref Frame f, int root, TypeKind kind, WordView valid, bool allValid, ReadOnlySpan<int> rows, ColumnBuffer destination, in ScalarValue outOfRange)
     {
@@ -605,7 +564,6 @@ internal static class DestinationWriter
         }
     }
 
-    /// <summary>Writes an int list into int64 storage, widening an int32 source while copying.</summary>
     private static void WriteList(ListColumn<long> destination, int row, IntListLane list)
     {
         if (list.IsInt32)
@@ -618,7 +576,6 @@ internal static class DestinationWriter
         }
     }
 
-    /// <summary>Writes a float list into float64 storage, widening a float32 source while copying.</summary>
     private static void WriteList(ListColumn<double> destination, int row, FloatListLane list)
     {
         if (!list.IsFloat32)
@@ -648,7 +605,7 @@ internal static class DestinationWriter
         }
     }
 
-    /// <summary>Writes an int list into int32 storage. False, leaving the row untouched, when an element does not fit.</summary>
+    /// <summary>False, leaving the row untouched, when an element does not fit.</summary>
     private static bool TryWriteList(ListColumn<int> destination, int row, IntListLane list)
     {
         if (list.IsInt32)
@@ -666,7 +623,6 @@ internal static class DestinationWriter
         return true;
     }
 
-    /// <summary>The out-of-range rule for one row: the replacement (validated to fit) or missing.</summary>
     private static void Replace(ColumnBuffer destination, int row, in ScalarValue outOfRange)
     {
         if (outOfRange.IsMissing)
@@ -679,8 +635,6 @@ internal static class DestinationWriter
         }
     }
 
-    /// <summary>False when a present value cannot be stored in int32 destination storage, or is a list of another length
-    /// than a <c>list&lt;E,N&gt;</c> destination's; true for other destinations.</summary>
     private static bool Fits(in ScalarValue value, ColumnBuffer destination) => destination switch
     {
         ScalarColumn<int> => value.Kind == StorageKind.Int64 && Int32Range.Fits(value.AsInt64()),
@@ -690,9 +644,6 @@ internal static class DestinationWriter
         _ => true,
     };
 
-    /// <summary>Writes one request-level value to every listed row. A value that does not fit int32 storage, or a list of
-    /// another length than a fixed-length destination's, is out of range for every row: each row takes
-    /// <paramref name="outOfRange"/> and is counted.</summary>
     public static void Broadcast(in ScalarValue value, ReadOnlySpan<int> rows, ColumnBuffer destination, in ScalarValue outOfRange, ExpressionCounters? counters)
     {
         var write = value;
@@ -719,14 +670,14 @@ internal static class DestinationWriter
                 case ScalarColumn<double> d: d.Set(row, write.AsFloat64()); break;
                 case ScalarColumn<float> d: d.Set(row, (float)write.AsFloat64()); break;
                 case ScalarColumn<long> d: d.Set(row, write.AsInt64()); break;
-                case ScalarColumn<int> d: d.Set(row, (int)write.AsInt64()); break; // checked by Fits above
+                case ScalarColumn<int> d: d.Set(row, (int)write.AsInt64()); break;
                 case ScalarColumn<bool> d: d.Set(row, write.AsBool()); break;
                 case StringColumn d: d.Set(row, write.AsString()); break;
                 case ListColumn<long> d: d.Set(row, write.AsInt64List()); break;
                 case ListColumn<int> d:
                 {
                     var longs = write.AsInt64List();
-                    Int32Range.Narrow(longs, d.SetUninitialized(row, longs.Length)); // checked by Fits above
+                    Int32Range.Narrow(longs, d.SetUninitialized(row, longs.Length));
                     break;
                 }
 

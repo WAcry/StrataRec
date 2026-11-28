@@ -5,10 +5,9 @@ using StrataRec.Hosting.Replay;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The sample's chain of context keys: <c>country</c> is keyed by the request's country and
-/// answers its region (geo_store); <c>region</c> is keyed by <c>ctx.country.region</c> and answers the regional weight the
-/// fusion multiplies by (region_store). Fetched, recorded with the key the upstream answered, and replayed with the key
-/// the replayed upstream answers.
+/// The sample's chain of context keys: <c>country</c> is keyed by the request's country and answers its region
+/// (geo_store); <c>region</c> is keyed by <c>ctx.country.region</c> and answers the regional weight the fusion
+/// multiplies by (region_store).
 /// </summary>
 public sealed class ChainedContextKeyEndToEndTests
 {
@@ -36,11 +35,9 @@ public sealed class ChainedContextKeyEndToEndTests
 
         Assert.True(none.Succeeded && mx.Succeeded && ca.Succeeded, none.Error ?? mx.Error ?? ca.Error);
         Assert.Equal(Scores(none), Scores(mx)); // no region key: the weight is the default, 1.0
-        Assert.Equal(Scores(none).Select(s => s.Id), Scores(ca).Select(s => s.Id)); // one weight for every item: the same order
+        Assert.Equal(Scores(none).Select(s => s.Id), Scores(ca).Select(s => s.Id));
         Assert.All(Scores(none).Zip(Scores(ca)), pair => Assert.Equal(pair.First.Score * 1.1, pair.Second.Score, 4));
 
-        // No country: neither group has a key, so neither is called. MX: the geo service is asked and has no region, so the
-        // region is not. CA: each is called once, the region with the key the geo service answered, after it.
         Assert.DoesNotContain(none.Recording!.Runs[0].FeatureCalls, c => c.Source is "geo_store" or "region_store");
         Assert.Single(mx.Recording!.Runs[0].FeatureCalls, c => c.Source == "geo_store");
         Assert.DoesNotContain(mx.Recording.Runs[0].FeatureCalls, c => c.Source == "region_store");
@@ -63,8 +60,6 @@ public sealed class ChainedContextKeyEndToEndTests
         Assert.True(replayed.Report.Diff.Identical, ReplayTests.Describe(replayed.Report));
         Assert.Empty(replayed.Report.Gaps);
 
-        // The recorded geo service answers "eu" instead: the replay keys the region by it, which the recording never asked
-        // for, so the weight is a gap and the scores differ.
         var bundle = JsonNode.Parse(text)!;
         var geo = bundle["runs"]![0]!["feature_calls"]!.AsArray().Single(c => c!["source"]!.GetValue<string>() == "geo_store")!;
         Assert.Equal("na", geo["values"]!["region"]![0]!.GetValue<string>());
@@ -75,16 +70,12 @@ public sealed class ChainedContextKeyEndToEndTests
         var gap = Assert.Single(changed.Report.Gaps, g => g.Source == "region_store");
         Assert.Equal(("feature", "boost", "not_recorded"), (gap.Kind, gap.Field, gap.Reason));
         Assert.Contains("eu", gap.Examples);
-        Assert.DoesNotContain(changed.Report.Gaps, g => g.Source == "geo_store"); // the upstream call itself is as recorded
+        Assert.DoesNotContain(changed.Report.Gaps, g => g.Source == "geo_store");
     }
 
     [Fact]
     public async Task AChainReadOnlyByAnArmsNode_IsInTheUnifiedPlan_NotTheBaseline_AndPrefetchedLikeAnyContextFeature()
     {
-        // Only exp_freshness_calibration's calibrated arm reads the regional weight (its node multiplies by it; the fusion no
-        // longer does). The unified plan compiles every arm's variants, so it holds the chain and its key; the baseline alone
-        // does not. The context prefetch is the plan's (every variant's) context features, so a control request asks the
-        // region service too, and only the arm's scores change.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             PlanFeatureClosureTests.EditJson(root, "pipelines/home_feed.jsonc", pipeline =>
@@ -93,7 +84,7 @@ public sealed class ChainedContextKeyEndToEndTests
             {
                 var arm = experiment["arms"]!["calibrated"]!.AsObject();
                 arm["nodes"]!["freshness_calibration"]!["config"]!["expr"] = "col.score.final * ctx.region.boost";
-                arm.Remove("log_taps"); // it logged the age the node no longer reads
+                arm.Remove("log_taps");
             });
         });
         var plan = host.Plan();
@@ -125,7 +116,7 @@ public sealed class ChainedContextKeyEndToEndTests
         var calibrated = await Run("exp_freshness_calibration/calibrated");
 
         var before = control.Items.ToDictionary(i => i.Id, i => i.Columns["score"].AsFloat64());
-        Assert.Equal(control.Items.Select(i => i.Id), calibrated.Items.Select(i => i.Id)); // one weight for every item
+        Assert.Equal(control.Items.Select(i => i.Id), calibrated.Items.Select(i => i.Id));
         Assert.All(calibrated.Items, i => Assert.Equal(before[i.Id] * 1.1, i.Columns["score"].AsFloat64(), 4));
         Assert.Single(control.Recording!.FeatureCalls, c => c.Source == "region_store");
         Assert.Single(calibrated.Recording!.FeatureCalls, c => c.Source == "region_store");

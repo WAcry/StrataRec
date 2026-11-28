@@ -3,14 +3,7 @@ using StrataRec.Expressions.Binding;
 
 namespace StrataRec.Expressions.Syntax;
 
-/// <summary>
-/// Recursive-descent parser with CEL precedence plus <c>let</c> and <c>??</c>.
-/// </summary>
 /// <remarks>
-/// <para>Precedence, loosest first: <c>?:</c>, <c>??</c>, <c>||</c>, <c>&amp;&amp;</c>, relations
-/// (<c>== != &lt; &lt;= &gt; &gt;= in</c>), <c>+ -</c>, <c>* / %</c>, unary <c>! -</c>, member call. <c>??</c> sits
-/// between <c>?:</c> and <c>||</c> (as in C#) and is right-associative, so <c>a ?? b ?? c</c> is
-/// <c>a ?? (b ?? c)</c> and <c>x || y ?? z</c> is <c>(x || y) ?? z</c>.</para>
 /// <para>Depth is enforced twice: a nesting counter is checked <em>before</em> descending into any
 /// nested construct, so the parser's own recursion is bounded; and every node's depth is checked when built, which
 /// bounds left-associative chains that the parser builds iteratively.</para>
@@ -28,7 +21,6 @@ internal sealed class Parser
         _maxDepth = maxDepth;
     }
 
-    /// <summary>Parses a whole expression; throws <see cref="SyntaxErrorException"/> on the first error.</summary>
     public static AstNode Parse(string source, int maxDepth)
     {
         var parser = new Parser(Lexer.Tokenize(source), Math.Max(1, maxDepth));
@@ -406,7 +398,6 @@ internal sealed class Parser
     {
         if (_nesting + 1 > _maxDepth)
         {
-            // Report at the token that opens the nested construct ('(', '!', '?', ',', ...).
             var opener = _tokens[Math.Max(0, _pos - 1)];
             throw TooDeep(opener.Start, Math.Max(1, opener.Length));
         }

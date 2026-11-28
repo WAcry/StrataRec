@@ -9,7 +9,7 @@ namespace StrataRec.Features.Runtime;
 /// The request's view of one feature connector call as it finished: what was asked, how it ended and how long it took.
 /// </summary>
 /// <param name="Group">Source and entity the call fetched from.</param>
-/// <param name="Batch">The keys; valid only during <see cref="IFeatureCallHook.Record"/> (they live in pooled buffers).</param>
+/// <param name="Batch">The keys; valid only during <see cref="IFeatureCallHook.Record"/>.</param>
 /// <param name="Fields">Requested fields; staging field i is <c>Fields[i]</c>. Read-only: they may be the plan's own.</param>
 /// <param name="Sequence">Start order within the request, from <see cref="IFeatureCallHook.Begin"/>.</param>
 /// <param name="Sent">False when the call was not sent: the fetch had no time left, or the caller had cancelled, before it.</param>
@@ -27,8 +27,7 @@ public readonly record struct FeatureCallInfo(
     TimeSpan Duration);
 
 /// <summary>Read access to what a connector wrote, for recording a completed call.</summary>
-/// <remarks>Valid only during <see cref="IFeatureCallHook.Record"/>: it is a view of one chunk of the fetch's staging,
-/// and the engine points the same object at the fetch's next chunk once the call has been recorded.</remarks>
+/// <remarks>Valid only during <see cref="IFeatureCallHook.Record"/>.</remarks>
 public interface IStagedFeatureValues
 {
     /// <summary>The value the connector wrote for (field, key), or missing when it wrote none.</summary>
@@ -36,14 +35,9 @@ public interface IStagedFeatureValues
 }
 
 /// <summary>
-/// Per-request hook at the single place feature connectors are called. A recorder sees every call when it
-/// finishes; a replayer answers calls from a recording instead of the connector, without waiting. The fetcher gets a hook
-/// only for requests that record or replay, so other requests pay one null check per call.
+/// Per-request hook at the single place feature connectors are called. A recorder sees every call when it finishes; a
+/// replayer answers calls from a recording instead of the connector, without waiting.
 /// </summary>
-/// <remarks>
-/// Hooking the call site rather than the connectors makes every connector a host registers recordable and replayable
-/// without its own support, and lets a recording read the typed staging buffer the connector decoded into.
-/// </remarks>
 public interface IFeatureCallHook
 {
     /// <summary>True when calls are answered by <see cref="Replay"/> and no connector is called.</summary>
@@ -56,7 +50,7 @@ public interface IFeatureCallHook
     /// passed to <see cref="Record"/> with this sequence; until then a recorder holds it as in flight, so a recording taken
     /// when the request is aborted lists it as outstanding.
     /// </summary>
-    /// <param name="batch">The keys; valid only during the call (they live in pooled buffers).</param>
+    /// <param name="batch">The keys; valid only during the call.</param>
     int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields);
 
     /// <summary>

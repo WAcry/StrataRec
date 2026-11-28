@@ -31,13 +31,12 @@ public sealed record BindingSchemaSource(BindingKind Kind, string Type, Type Set
 /// current.
 /// </summary>
 /// <remarks>
-/// <para>What a type cannot say is added here: each member's description (its <see cref="DescriptionAttribute"/>, else its
-/// XML documentation summary, as errors already use: <see cref="MemberDocs"/>), allowed values and patterns; in the
-/// pipeline, the config of every operator of the binary, chosen by the node's <c>op</c>; in the bindings, the settings of
-/// every client, connector, update source and cache store type of the binary, chosen by the member that names the type;
-/// in the experiment, each arm as a merge patch of the pipeline (<see cref="MergePatch"/>). A workspace file may name its
-/// schema in a top-level <c>$schema</c>, which its schema declares and the engine ignores
-/// (<see cref="TryRemoveSchemaMember"/>).</para>
+/// <para>What a type cannot say is added here: each member's description (its <see cref="DescriptionAttribute"/>, else
+/// its XML documentation summary), allowed values and patterns; in the pipeline, the config of every operator of the
+/// binary, chosen by the node's <c>op</c>; in the bindings, the settings of every client, connector, update source and
+/// cache store type of the binary, chosen by the member that names the type; in the experiment, each arm as a merge
+/// patch of the pipeline (<see cref="MergePatch"/>). A workspace file may name its schema in a top-level
+/// <c>$schema</c>, which its schema declares and the engine ignores (<see cref="TryRemoveSchemaMember"/>).</para>
 /// <para>Beyond 2020-12, the schemas carry the keywords VS Code's JSON service reads and other validators ignore as
 /// unknown keywords: <c>allowComments</c> and <c>allowTrailingCommas</c> (files are JSONC) and <c>enumDescriptions</c>
 /// (what each operator does). The text is stable (<see cref="ToText"/>): the same binary writes the same bytes, so a
@@ -131,9 +130,7 @@ public static class ArtifactSchemas
 
     /// <summary>
     /// An entity declares exactly one of <c>key</c> and <c>args</c>, and args has at least one argument, as the catalog
-    /// checks: both members are optional in the type, so an editor accepted an entity the engine refuses
-    /// (a key alone was required before). A member written as null is not declared, as for the
-    /// catalog; a key is a reference or a list of them.
+    /// checks. A member written as null is not declared, as for the catalog; a key is a reference or a list of them.
     /// </summary>
     private static JsonObject CatalogSchema(JsonObject schema)
     {
@@ -151,10 +148,8 @@ public static class ArtifactSchemas
         return schema;
     }
 
-    /// <summary>
-    /// A bundle's <c>format</c> is this build's (<see cref="ReplayBundle.CurrentFormat"/>): a format may change while the
-    /// layout stays (2026-11-20.2), so a schema check that left it a string accepted a bundle the engine refuses.
-    /// </summary>
+    /// <summary>The format is checked as this build's exact value: a format can change while the layout
+    /// stays.</summary>
     private static JsonObject ReplayBundleSchema(JsonObject schema)
     {
         if (schema["properties"] is JsonObject properties && properties["format"] is JsonObject format)
@@ -224,18 +219,11 @@ public static class ArtifactSchemas
     }
 
     /// <summary>
-    /// Turns the schema of a value into the schema of an RFC 7396 merge patch of it, in place: no member is required
-    /// (an object changes only the members it names), and every value may be <c>null</c> (which deletes it). What the
-    /// value may not be stays: an unknown key with a value, or a value of another type, is still an error. An unknown key
-    /// may be <c>null</c>: a patch that switches a node's <c>op</c> deletes the members of the old operator's config, which
-    /// the new one's schema does not have; deleting a member that is not there changes nothing. Array items
-    /// are not patches (a patch replaces an array whole), and an <c>if</c> is a condition, not a value: both are left as
-    /// they are.
+    /// An unknown key may be <c>null</c>: a patch that switches a node's <c>op</c> deletes the members of the old
+    /// operator's config, which the new one's schema does not have; deleting a member that is not there changes
+    /// nothing. Array items are not patches (a patch replaces an array whole), and an <c>if</c> is a condition, not a
+    /// value: both are left as they are.
     /// </summary>
-    /// <remarks>
-    /// Whether a patched entry is new, and must then be complete, depends on the baseline, which a schema of
-    /// a kind does not see: <c>stratarec validate</c> checks that. So a patch schema never rejects a valid patch.
-    /// </remarks>
     internal static JsonObject MergePatch(JsonObject schema)
     {
         schema.Remove("required");
@@ -314,10 +302,6 @@ public static class ArtifactSchemas
         return sorted;
     }
 
-    /// <summary>
-    /// A schema made a document: the dialect and title first; for the kind of a file a person edits
-    /// (<paramref name="editable"/>), the file's <c>$schema</c> and JSONC.
-    /// </summary>
     private static JsonObject Document(JsonObject schema, string title, string? editable)
     {
         schema.Insert(0, SchemaMember, Dialect);
@@ -356,9 +340,8 @@ public static class ArtifactSchemas
 
     /// <summary>
     /// A node's <c>op</c> lists the operators, and its <c>config</c> is checked against the one <c>op</c> names: one
-    /// <c>if</c>/<c>then</c> per operator, the construct VS Code's JSON service follows for completion, hover and errors
-    /// (it does not narrow a <c>oneOf</c> by a <c>const</c> member). An unknown <c>op</c> fails the enum, and
-    /// <c>stratarec validate</c> says which operator was meant.
+    /// <c>if</c>/<c>then</c> per operator, the construct VS Code's JSON service follows for completion, hover and
+    /// errors (it does not narrow a <c>oneOf</c> by a <c>const</c> member).
     /// </summary>
     private static void AddOperators(JsonObject node, OperatorSchemaSource[] operators)
     {
@@ -383,7 +366,7 @@ public static class ArtifactSchemas
             var then = new JsonObject { ["properties"] = new JsonObject { ["config"] = config } };
             if (config["required"] is JsonArray { Count: > 0 })
             {
-                then["required"] = new JsonArray("config"); // without one, the config is {} and misses what it requires
+                then["required"] = new JsonArray("config");
             }
             else
             {
@@ -406,17 +389,12 @@ public static class ArtifactSchemas
         node["allOf"] = branches;
     }
 
-    /// <summary>
-    /// The bindings: an entry's settings are checked against the settings type of the type it names, one <c>if</c>/<c>then</c>
-    /// per type, as a node's config is by its <c>op</c> (<see cref="AddOperators"/>).
-    /// </summary>
     private static JsonObject Bindings(IReadOnlyList<BindingSchemaSource> bindings)
     {
         var schema = Export(typeof(SourceBindingArtifact), Describe, inline: true);
         var sections = Member(schema, "properties");
         foreach (var kind in BindingKinds.All)
         {
-            // Where the kind's settings are (BindingKinds): an entry of its section, or a member of the entry.
             var entry = Member(Member(sections, kind.Section()), "additionalProperties");
             foreach (var member in kind.Member().Split('/', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -430,11 +408,9 @@ public static class ArtifactSchemas
     }
 
     /// <summary>
-    /// The settings of each type of <paramref name="kind"/>, in the entry that names one with the kind's selector:
-    /// when it names the type, the entry takes the framework's members (described where the entry declares them) and the
-    /// type's settings, and nothing else. The selector lists the types as <c>examples</c>, which editors complete, not as
-    /// an <c>enum</c>: a binding of a type this binary lacks is valid while nothing uses it
-    /// (only what a plan binds is required, <see cref="SourceBindingArtifact.AddTypes"/>), so such an entry stays open.
+    /// The selector lists the types as <c>examples</c>, which editors complete, not as an <c>enum</c>: a binding of a
+    /// type this binary lacks is valid while nothing uses it (only what a plan binds is required,
+    /// <see cref="SourceBindingArtifact.AddTypes"/>), so such an entry stays open.
     /// </summary>
     private static void AddBindingTypes(JsonObject entry, IReadOnlyList<BindingSchemaSource> bindings, BindingKind kind)
     {
@@ -515,7 +491,6 @@ public static class ArtifactSchemas
         return config;
     }
 
-    /// <summary>The experiment: each arm is a merge patch of the patchable view.</summary>
     private static JsonObject Experiment(OperatorSchemaSource[] operators)
     {
         var experiment = Export(typeof(ExperimentArtifact), Describe, inline: true);
@@ -590,7 +565,6 @@ public static class ArtifactSchemas
         return false;
     }
 
-    /// <param name="options">The options the type binds with; <see cref="ArtifactSerializer.Options"/> when null.</param>
     private static JsonObject Export(Type type, Func<JsonSchemaExporterContext, JsonNode, JsonNode> transform, bool inline, JsonSerializerOptions? options = null)
     {
         var node = JsonSchemaExporter.GetJsonSchemaAsNode(options ?? ArtifactSerializer.Options, type, new JsonSchemaExporterOptions
@@ -607,10 +581,9 @@ public static class ArtifactSchemas
     }
 
     /// <summary>
-    /// Replaces each <c>$ref</c> the exporter writes for a type it already described (a JSON pointer into the same
-    /// schema) with a copy of what it points at, so that a schema can be placed inside another (a config in a node, a
-    /// section in an arm) and patched without a pointer going stale. A type that contains itself is described to its
-    /// first repetition, below which any value is accepted.
+    /// Replaces each <c>$ref</c> with a copy of what it points at, so that a schema can be placed inside another (a
+    /// config in a node, a section in an arm) and patched without a pointer going stale. A type that contains itself is
+    /// described to its first repetition, below which any value is accepted.
     /// </summary>
     private static JsonObject Inline(JsonObject schema)
     {
@@ -637,7 +610,7 @@ public static class ArtifactSchemas
                 {
                     if (key != "$ref")
                     {
-                        resolved[key] = value?.DeepClone(); // what the referring property adds (its description) wins
+                        resolved[key] = value?.DeepClone();
                     }
                 }
 
@@ -675,12 +648,6 @@ public static class ArtifactSchemas
         return node;
     }
 
-    /// <summary>
-    /// Adds a member's description (its <see cref="DescriptionAttribute"/>, else its XML documentation summary), a type's
-    /// <see cref="DescriptionAttribute"/>, and a property's <see cref="AllowedValuesAttribute"/> and
-    /// <see cref="RegularExpressionAttribute"/> as <c>enum</c> and <c>pattern</c>, so the schema says what the engine
-    /// accepts without a hand-written copy.
-    /// </summary>
     private static JsonNode Describe(JsonSchemaExporterContext context, JsonNode schema)
     {
         // A type with [JsonExtensionData] takes members it does not declare (a connector's or update source's own

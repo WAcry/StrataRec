@@ -49,7 +49,6 @@ public sealed class WorkspaceTests
         Assert.NotNull(loaded);
         Assert.Equal(3, loaded!.Experiments.Count);
 
-        // An experiment entry pointing at another experiment's (valid) blob.
         var swapped = new Dictionary<string, ManifestExperiment>(manifest!.Experiments)
         {
             ["exp_mmr_diversity"] = new ManifestExperiment
@@ -86,7 +85,7 @@ public sealed class WorkspaceTests
             var diagnostics = new DiagnosticBag();
             ConfigWorkspace.Load(root, diagnostics);
 
-            var error = Assert.Single(diagnostics.Items, d => d.Code != "WORKSPACE_NO_PIPELINE"); // the file has its one error
+            var error = Assert.Single(diagnostics.Items, d => d.Code != "WORKSPACE_NO_PIPELINE");
             Assert.Equal("FILE_NAME_MISMATCH", error.Code);
             Assert.Equal("experiments/exp_a.jsonc", error.Artifact);
         }
@@ -112,7 +111,7 @@ public sealed class WorkspaceTests
             var diagnostics = new DiagnosticBag();
             ConfigWorkspace.Load(root, diagnostics);
 
-            var error = Assert.Single(diagnostics.Items, d => d.Code != "WORKSPACE_NO_PIPELINE"); // the file has its one error
+            var error = Assert.Single(diagnostics.Items, d => d.Code != "WORKSPACE_NO_PIPELINE");
             Assert.Equal("ARTIFACT_SCHEMA", error.Code);
             Assert.Contains("arm", error.Message);
         }
@@ -122,11 +121,6 @@ public sealed class WorkspaceTests
         }
     }
 
-    /// <summary>
-    /// Two files that define one artifact (its id with either extension) are one error, at the later file, naming both,
-    /// for every kind the workspace reads: assigning by id kept the last silently, so a workspace validated while the
-    /// other file was ignored. The policy is read as <c>policy.json</c> too, as every other file is.
-    /// </summary>
     [Theory]
     [InlineData("pipelines/home_feed.jsonc", "pipeline 'home_feed'", "/pipeline_id")]
     [InlineData("catalog/home_feed.jsonc", "catalog 'home_feed'", "/catalog_id")]
@@ -159,11 +153,6 @@ public sealed class WorkspaceTests
         }
     }
 
-    /// <summary>
-    /// <c>pipelines/home_feed.json</c>, whose final_top_k is out of range, beside the sample's
-    /// <c>.jsonc</c>. Validate, build and a host read the one workspace index, and each refuses the pair; validate used to
-    /// pass on the <c>.jsonc</c>, and report PARAM_OUT_OF_RANGE only once the <c>.jsonc</c> was removed.
-    /// </summary>
     [Fact]
     public async Task ADuplicatePipeline_FailsValidateBuildAndTheHost()
     {
@@ -196,11 +185,6 @@ public sealed class WorkspaceTests
         }
     }
 
-    /// <summary>
-    /// A directory without a pipeline is an error of validate and build, naming the directory and the layout expected:
-    /// validate reported 0 errors and 0 warnings, and a host started on it serving nothing. <c>stratarec init</c>'s
-    /// workspace validates (InitCommandTests).
-    /// </summary>
     [Fact]
     public async Task AWorkspaceWithoutAPipeline_FailsValidateAndBuild()
     {
@@ -208,7 +192,7 @@ public sealed class WorkspaceTests
         var store = Directory.CreateTempSubdirectory("stratarec-store-").FullName;
         try
         {
-            Directory.CreateDirectory(Path.Combine(root, "pipelines")); // empty, as an empty directory is
+            Directory.CreateDirectory(Path.Combine(root, "pipelines"));
 
             var validate = new StringWriter();
             Assert.Equal(1, StrataRec.CommandLine.Commands.ValidateCommand.Run(Tool.Environment, root, "local", null, "json", warningsAsErrors: false, validate));
@@ -232,7 +216,6 @@ public sealed class WorkspaceTests
         }
     }
 
-    /// <summary>A copy of the sample as written, in a directory of its own.</summary>
     private static string CopyOfSample()
     {
         var root = Directory.CreateTempSubdirectory("stratarec-ws-").FullName;

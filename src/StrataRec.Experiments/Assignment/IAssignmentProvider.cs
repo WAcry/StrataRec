@@ -4,25 +4,19 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Experiments.Assignment;
 
 /// <summary>
-/// Asks the experimentation platform which arms a request is in. Traffic allocation (ratios, ramping,
-/// salts, holdouts) is the platform's; the engine only applies the arms it answers.
+/// Traffic allocation (ratios, ramping, salts, holdouts) is the platform's; the engine only applies the arms it
+/// answers.
 /// </summary>
 /// <remarks>
 /// <para>The engine asks only for requests that do not carry the platform's answer already (<c>RecRequest.Assignment</c>)
 /// and are not forced (<c>DebugOptions.ForceArms</c>). It keeps no mapping between the platform's ids and the plan's: the
 /// provider translates, using the plan's metadata in <see cref="AssignmentContext"/>.</para>
-/// <para>The call runs inline on the request's thread, as calls to connectors and services do; the
-/// engine does not move it to the thread pool. What the provider does before it returns its <see cref="ValueTask{T}"/> is
-/// therefore not bounded: the request waits for it however long it takes. Do the platform's I/O asynchronously, or answer
-/// quickly from a local SDK. The asynchronous part shares the request's deadline: its token is cancelled at the deadline,
-/// and a provider still pending then is not waited for (the request fails as past its deadline). A provider the request
-/// stops waiting for, at the deadline or because the caller cancelled, has its token cancelled, and the token stays
-/// valid until the provider ends, so a provider that ends on its token always ends.</para>
-/// <para>An answer is used only if the engine observes it before the deadline and before the caller cancels. One it sees
-/// only later, such as a synchronous answer after blocking past the deadline, is dropped: the request fails as past its
-/// deadline, or is cancelled.</para>
-/// <para>The call is an external call like a connector's or a model's: measured as <c>assignment provider</c>
-/// (<c>stratarec.io.*</c>, a span, health), and what its token's callbacks throw is counted and summarized.</para>
+/// <para>The call runs inline on the request's thread. What the provider does before it returns its
+/// <see cref="ValueTask{T}"/> is therefore not bounded: the request waits for it however long it takes. Do the
+/// platform's I/O asynchronously, or answer quickly from a local SDK. A provider the request stops waiting for, at the
+/// deadline or because the caller cancelled, has its token cancelled, and the token stays valid until the provider
+/// ends.</para>
+/// <para>An answer is used only if the engine observes it before the deadline and before the caller cancels.</para>
 /// </remarks>
 public interface IAssignmentProvider
 {
@@ -36,9 +30,6 @@ public interface IAssignmentProvider
 
 /// <summary>What an <see cref="IAssignmentProvider"/> is told about the request it assigns.</summary>
 /// <remarks>
-/// <para>A readonly struct of references the engine holds anyway (the plan's views are built once per plan), so asking a
-/// provider allocates nothing for it. New members are added as optional init properties, so neither providers nor the
-/// tests that build contexts break when the context grows.</para>
 /// <para>The metadata is the served plan's: a layer-oriented platform can be asked for exactly these layers, and its
 /// answer translated into these arm ids. Experiments the platform runs but this release does not have are not here; an
 /// id for them is ignored.</para>

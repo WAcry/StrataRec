@@ -5,13 +5,8 @@ using StrataRec.Features.Runtime;
 
 namespace StrataRec.UnitTests.Features;
 
-/// <summary>One bounded wait: what a feature fetch keeps of a connector call that it no longer waits for.</summary>
 public sealed class FeatureFetchBoundTests
 {
-    /// <summary>
-    /// A context feature whose connector call was abandoned fails without its staging being read: the connector may
-    /// still be writing there (the value was read, and its list copied, before the failure was seen).
-    /// </summary>
     [Fact]
     public async Task AnAbandonedContextConnector_FailsItsFeatures_WithoutItsStagingBeingRead()
     {
@@ -49,11 +44,6 @@ public sealed class FeatureFetchBoundTests
         }
     }
 
-    /// <summary>
-    /// The fetch's time starts before its staging is set up: a staging that takes the time left leaves the chunk unsent
-    /// (the bound started after it, so the chunk was sent past the request's deadline and its
-    /// late answer was taken).
-    /// </summary>
     [Fact]
     public async Task AStagingThatTakesTheTimeLeft_LeavesTheChunkUnsent()
     {
@@ -82,7 +72,6 @@ public sealed class FeatureFetchBoundTests
         }
     }
 
-    /// <summary>The shared pool, but the first rent of <c>double</c> buffers after <see cref="StallMs"/> is set (the staging's column) takes that long.</summary>
     private sealed class StallingPool : IBufferPool
     {
         public int StallMs { get; set; }
@@ -103,8 +92,7 @@ public sealed class FeatureFetchBoundTests
 
     /// <summary>
     /// A connector whose call the caller cancelled while its task was pending keeps the view it was handed bound to its
-    /// own chunk: the wait ended at once, but the connector may still write through it. The fetch pointed the view at the
-    /// next chunk (one key here), which it did not even send.
+    /// own chunk: the wait ended at once, but the connector may still write through it.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -148,7 +136,7 @@ public sealed class FeatureFetchBoundTests
             Assert.NotNull(first);
             Assert.Single(connector.Calls);
             Assert.False(finish.Task.IsCompleted);
-            Assert.Equal(2, first.KeyCount); // still its own two keys
+            Assert.Equal(2, first.KeyCount);
             first.GetValues<double>(0).Span[1] = 42;
             first.SetValid(0, 1);
         }
@@ -160,10 +148,6 @@ public sealed class FeatureFetchBoundTests
         }
     }
 
-    /// <summary>
-    /// What a connector threw is read once, by the shared wait: the fetch fails with that text. The fetch read the
-    /// exception's message again, and one that could not be read twice escaped from the fetch.
-    /// </summary>
     [Theory]
     [InlineData("candidate")]
     [InlineData("context")]

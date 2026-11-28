@@ -23,7 +23,7 @@ public sealed class RequestEventLogTests
 
         logger.Entries.Clear();
         events.Flush();
-        Assert.Empty(logger.Entries); // nothing happened in this window
+        Assert.Empty(logger.Entries);
     }
 
     [Fact]
@@ -33,7 +33,6 @@ public sealed class RequestEventLogTests
         using var events = new RequestEventLog(logger, autoFlush: false);
         var source = new IoTarget(IoRoles.Recall, "ann");
 
-        // A healthy window logs nothing; occasional failures are summarized but do not flip the verdict.
         Calls(events, source, ok: 10, failed: 0);
         events.Flush();
         Assert.Empty(logger.Entries);
@@ -41,7 +40,6 @@ public sealed class RequestEventLogTests
         events.Flush();
         Assert.Equal(2001, Assert.Single(logger.Entries).EventId.Id);
 
-        // A window with at least half its calls failed flips the verdict once.
         logger.Entries.Clear();
         Calls(events, source, ok: 5, failed: 5);
         events.Flush();
@@ -53,10 +51,10 @@ public sealed class RequestEventLogTests
         logger.Entries.Clear();
         Calls(events, source, ok: 0, failed: 3);
         events.Flush();
-        Assert.DoesNotContain(logger.Entries, e => e.EventId.Id is 2002 or 2003); // still failing: no new line
+        Assert.DoesNotContain(logger.Entries, e => e.EventId.Id is 2002 or 2003);
 
         logger.Entries.Clear();
-        events.Flush(); // no calls: no evidence, no change
+        events.Flush();
         Calls(events, source, ok: 4, failed: 1);
         events.Flush();
         var recovered = Assert.Single(logger.Entries, e => e.EventId.Id == 2003);
@@ -74,7 +72,7 @@ public sealed class RequestEventLogTests
         using var errors = new MeasurementHook(StrataRecMetrics.Names.IoErrors, static () => { }, (StrataRecTags.IoRole, "lookup"), (StrataRecTags.IoTarget, "geo"));
         using var keys = new MeasurementHook(StrataRecMetrics.Names.IoKeys, static () => { }, (StrataRecTags.IoRole, "lookup"), (StrataRecTags.IoTarget, "geo"));
 
-        lookup.Start().Complete(IoOutcome.Error, keys: 2, requestId: "req-1", error: "down", events: events); // a keyed call, whatever its role
+        lookup.Start().Complete(IoOutcome.Error, keys: 2, requestId: "req-1", error: "down", events: events);
         lookup.Start().Complete(IoOutcome.Error, requestId: "req-2", error: "down", events: events);
         fetch.Start().Complete(IoOutcome.Ok, keys: 3, events: events);
         fetch.Start().Complete(IoOutcome.Ok, keys: 3, events: events);
@@ -82,7 +80,7 @@ public sealed class RequestEventLogTests
 
         Assert.Equal((2, 1), (errors.Calls, keys.Calls));
         Assert.Equal("lookup geo", Assert.Single(logger.Entries, e => e.EventId.Id == 2001).State["Subject"]);
-        var failing = Assert.Single(logger.Entries, e => e.EventId.Id == 2002); // the lookup fails; the fetch of the same name does not
+        var failing = Assert.Single(logger.Entries, e => e.EventId.Id == 2002);
         Assert.Equal(("lookup", "geo", 2L, 2L), (failing.State["Role"], failing.State["Name"], failing.State["Failures"], failing.State["Calls"]));
     }
 
@@ -152,9 +150,8 @@ public sealed class RequestEventLogTests
     [Fact]
     public void AllFailedCalls_RecordedWhileFlushing_NeverReadAsRecovery()
     {
-        // A call and its failure counted separately could land in different windows, so a window of only
-        // failed calls looked healthy ("recovered") or held more failures than calls. Producers run on dedicated threads
-        // with a fixed amount of work, so a busy thread pool (CI) cannot leave the windows empty.
+        // Producers run on dedicated threads with a fixed amount of work, so a busy thread pool (CI) cannot leave the
+        // windows empty.
         var logger = new ListLogger();
         using var events = new RequestEventLog(logger, autoFlush: false);
         var target = new IoTarget(IoRoles.Fetch, "store");

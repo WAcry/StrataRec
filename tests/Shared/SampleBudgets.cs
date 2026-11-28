@@ -9,15 +9,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Testing;
 
-/// <summary>
-/// What "untimed" means for a copy of the home_feed sample, shared by the integration tests (<c>HomeFeedTestHost</c>,
-/// which decides which tests run untimed) and the benchmarks (which measure the pipeline's work, not its fallbacks).
-/// </summary>
-/// <remarks>
-/// The sample keeps realistic budgets (ctr_ranker gives its model 50 ms), and an answer after a budget is a timeout
-/// however it arrived: on a slow machine, a run of the sample as written sometimes falls back where another
-/// does not. A relaxed copy has no budget a slow machine can hit, and its fallback wiring is as written.
-/// </remarks>
 internal static class SampleBudgets
 {
     /// <summary>
@@ -32,13 +23,6 @@ internal static class SampleBudgets
     /// <c>deadline_ms</c> (the request files). <c>on_failure</c> and everything else stay as written. The numbers are
     /// replaced in the text, so comments and layout stay and tests can go on editing the copy as text.
     /// </summary>
-    /// <remarks>
-    /// It never leaves a budget behind silently. It throws on any other <c>*_ms</c> setting but a request's
-    /// <c>time_ms</c> (a budget whose untimed value has to be decided here first, such as <c>min_remaining_ms</c>), when it
-    /// finds nothing to relax (the sample moved or changed shape), and when the compiled plan still has a node or
-    /// fetched-source budget below <see cref="UntimedMs"/> (a fetched source without <c>timeout_ms</c> gets the
-    /// framework's default of 50 ms, which must then be written into the sample).
-    /// </remarks>
     public static void Relax(string root)
     {
         var untimed = Encoding.UTF8.GetBytes(UntimedMs.ToString(CultureInfo.InvariantCulture));
@@ -81,7 +65,6 @@ internal static class SampleBudgets
         CheckCompiledBudgets(root);
     }
 
-    /// <summary>The byte ranges of the values of the budgets in one JSONC file, in order.</summary>
     private static List<(int Start, int Length)> FindBudgets(byte[] text, string file)
     {
         var offset = text.AsSpan().StartsWith(Encoding.UTF8.Preamble) ? Encoding.UTF8.Preamble.Length : 0;
@@ -132,7 +115,6 @@ internal static class SampleBudgets
         return line;
     }
 
-    /// <summary>What the framework compiled from the relaxed copy: no node or fetched-source budget a slow machine can hit.</summary>
     private static void CheckCompiledBudgets(string root)
     {
         var diagnostics = new DiagnosticBag();
@@ -159,7 +141,7 @@ internal static class SampleBudgets
 
         foreach (var group in plan.Features.Groups)
         {
-            if (group.Supply.Mode is SupplyMode.Fetch or SupplyMode.Cache && group.Supply.TimeoutMs < UntimedMs) // a cache's misses are fetched
+            if (group.Supply.Mode is SupplyMode.Fetch or SupplyMode.Cache && group.Supply.TimeoutMs < UntimedMs)
             {
                 tight.Add($"feature source '{group.SourceName}': timeout {group.Supply.TimeoutMs} ms (without timeout_ms, the framework's default)");
             }

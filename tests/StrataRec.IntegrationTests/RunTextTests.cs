@@ -3,10 +3,6 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>stratarec run --format text</c> on the home_feed sample: the result for reading, the same items in the same order as
-/// the JSON document, and what the request asked for (trace, explained candidates) in replay's layout.
-/// </summary>
 public sealed class RunTextTests
 {
     private static readonly string Sample = HomeFeedTestHost.SampleRoot();
@@ -43,7 +39,7 @@ public sealed class RunTextTests
         Assert.Contains(lines, l => l.StartsWith("  trace     recall: succeeded, ", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("  columns   ", StringComparison.Ordinal) && l.Contains("score <- ", StringComparison.Ordinal));
         Assert.Contains("  explain   17: dropped by safety_filter", lines);
-        Assert.Contains("              not live in 11 other nodes", lines); // the nodes after the filter, in one line
+        Assert.Contains("              not live in 11 other nodes", lines);
         Assert.Contains(lines, l => l.StartsWith("  values    best_score ", StringComparison.Ordinal) && l.Contains(", recalled ", StringComparison.Ordinal));
     }
 

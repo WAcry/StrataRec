@@ -5,7 +5,6 @@ namespace StrataRec.UnitTests.Artifacts;
 
 public class MergePatchAnalyzerTests
 {
-    // A trimmed patchable view of the running example.
     private const string BaseView = """
         {
           "params": { "recall_quotas": { "two_tower": 1000, "cf": 1000 }, "final_top_k": 50 },
@@ -297,7 +296,6 @@ public class MergePatchAnalyzerTests
             }
         }
 
-        // Reverting every footprint path to the base value restores the base document.
         var restored = merged!.DeepClone();
         foreach (var op in analysis.Footprint)
         {

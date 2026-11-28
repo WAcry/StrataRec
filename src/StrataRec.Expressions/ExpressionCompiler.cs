@@ -18,7 +18,7 @@ public sealed record CompileOptions
     /// <summary>True for request-level sites (<c>when</c>, funnel keys, context-only values): <c>col.*</c> is an error.</summary>
     public bool RequestLevelOnly { get; init; }
 
-    /// <summary>Maximum nesting depth, checked while parsing.</summary>
+    /// <summary>Maximum nesting depth.</summary>
     public int MaxDepth { get; init; } = 32;
 
     public static CompileOptions Any { get; } = new() { AllowNullableResult = true };
@@ -30,7 +30,7 @@ public sealed record CompileOptions
     public static CompileOptions RequestCondition { get; } = new() { ExpectedType = ColumnType.Bool, RequestLevelOnly = true };
 }
 
-/// <summary>Entry point of the ColumnExpr compiler: parse → type/nullability check → IR → optimize → backend.</summary>
+/// <summary>Entry point of the ColumnExpr compiler.</summary>
 public static partial class ExpressionCompiler
 {
     /// <summary>Compiles an expression or throws <see cref="ExpressionCompileException"/>.</summary>

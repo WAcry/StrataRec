@@ -9,10 +9,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>
-/// A small workspace (pipelines reading a <c>memory_list@1</c> fixture, then a TopK) built into a file-system store, as
-/// <c>stratarec build --store</c> builds it, with the pointers <c>stratarec publish</c> writes in the same directory.
-/// </summary>
 internal sealed class ReleaseFixture : IDisposable
 {
     public ReleaseFixture()
@@ -32,7 +28,6 @@ internal sealed class ReleaseFixture : IDisposable
             """{ "environment": "local", "services": { "s": { "client": "memory_list@1", "data_file": "fixtures/ids.json" } } }""");
     }
 
-    /// <summary>The workspace; relative paths in its bindings resolve against it.</summary>
     public string Root { get; }
 
     public string StoreRoot { get; }
@@ -41,10 +36,10 @@ internal sealed class ReleaseFixture : IDisposable
 
     public FileSystemManifestSource Pointers { get; }
 
-    /// <summary>The engine environment a node of this workspace runs with.</summary>
     public PlanEnvironment Environment => new() { BaseDirectory = Root };
 
-    /// <summary>Writes pipeline <paramref name="id"/>: its <c>k</c> makes its artifact (and its manifests) differ; <paramref name="inputs"/> are its request_schema's members.</summary>
+    /// <summary>Writes pipeline <paramref name="id"/>: its <c>k</c> makes its artifact (and its manifests)
+    /// differ.</summary>
     public ReleaseFixture Pipeline(string id, int k = 2, string? fallback = null, string inputs = """ "user_id": { "type": "int64?" } """)
     {
         var fallbackMember = fallback is null ? string.Empty : $"\"fallback_pipeline\": \"{fallback}\",";
@@ -61,7 +56,6 @@ internal sealed class ReleaseFixture : IDisposable
         return this;
     }
 
-    /// <summary>Builds the pipeline as it is now into the store, manifest included; its content id.</summary>
     public async Task<(ReleaseManifest Manifest, string Id)> BuildAsync(string pipelineId, long seq)
     {
         var diagnostics = new DiagnosticBag();
@@ -71,7 +65,6 @@ internal sealed class ReleaseFixture : IDisposable
         return (manifest!, await PutAsync(manifest!));
     }
 
-    /// <summary>Stores a manifest, as a release controller does; its content id.</summary>
     public async Task<string> PutAsync(ReleaseManifest manifest)
     {
         var id = await Store.PutAsync(ArtifactSerializer.ToNode(manifest));
@@ -82,7 +75,6 @@ internal sealed class ReleaseFixture : IDisposable
     /// <summary>Points the pipeline at a manifest, as <c>stratarec publish</c> does (without its checks).</summary>
     public Task PublishAsync(string pipelineId, string manifestId) => Pointers.WritePointerAsync(pipelineId, "local", manifestId);
 
-    /// <summary>A copy of <paramref name="manifest"/> with other release fields.</summary>
     public static ReleaseManifest With(ReleaseManifest manifest, long? seq = null, IEnumerable<string>? requires = null) => new()
     {
         PipelineId = manifest.PipelineId,
@@ -109,23 +101,18 @@ internal sealed class ReleaseFixture : IDisposable
     }
 }
 
-/// <summary>An artifact store that counts reads and can hold the read of one blob until it is cancelled.</summary>
 internal sealed class WatchedStore(IArtifactStore inner) : IArtifactStore
 {
     private int _reads;
 
     public int Reads => Volatile.Read(ref _reads);
 
-    /// <summary>A read of this id waits until its token is cancelled.</summary>
     public string? Hold { get; set; }
 
-    /// <summary>Completes when a held read has started.</summary>
     public TaskCompletionSource HeldReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    /// <summary>Completes when a held read was cancelled.</summary>
     public TaskCompletionSource HeldReadCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    /// <summary>A held read registers a callback on its token that throws, as a transport's cleanup may.</summary>
     public bool ThrowOnCancel { get; set; }
 
     public async ValueTask<byte[]?> TryGetAsync(string contentId, CancellationToken cancellationToken = default)
@@ -180,7 +167,6 @@ internal sealed class ManualTimers : TimeProvider
         }
     }
 
-    /// <summary>How many timers have been set so far.</summary>
     public int Scheduled
     {
         get
@@ -199,7 +185,6 @@ internal sealed class ManualTimers : TimeProvider
         return timer;
     }
 
-    /// <summary>Completes once <paramref name="count"/> timers have been set in all.</summary>
     public Task WhenScheduledAsync(int count)
     {
         lock (_gate)
@@ -310,14 +295,12 @@ internal sealed class ManualTimers : TimeProvider
     }
 }
 
-/// <summary>Keeps every log entry, with its category; thread-safe. While <see cref="Fails"/> is set, it throws after keeping one.</summary>
 internal sealed class ReleaseLog : ILoggerProvider
 {
     private volatile bool _fails;
 
     public ConcurrentQueue<(string Category, LogLevel Level, EventId EventId, string Message, Exception? Exception)> Entries { get; } = new();
 
-    /// <summary>Every entry throws, as a logger whose sink failed may.</summary>
     public bool Fails
     {
         get => _fails;

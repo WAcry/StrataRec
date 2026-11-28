@@ -3,10 +3,6 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The source line the CLI prints under a located diagnostic (<see cref="Output.Snippet"/>), with a caret under the
-/// column as a terminal draws the line: tabs copied, wide characters in two cells, a long line cut around the column.
-/// </summary>
 public sealed class SourceSnippetTests
 {
     [Fact]
@@ -19,15 +15,15 @@ public sealed class SourceSnippetTests
     }
 
     [Theory]
-    [InlineData("\t\t\"a\": x", 8, "    \"a\": x\n         ^")] // indentation of tabs, dropped
-    [InlineData("\"a\":\t\tx", 7, "    \"a\":\t\tx\n        \t\t^")] // tabs inside the line, copied
+    [InlineData("\t\t\"a\": x", 8, "    \"a\": x\n         ^")]
+    [InlineData("\"a\":\t\tx", 7, "    \"a\":\t\tx\n        \t\t^")]
     [InlineData("\"名称\": x", 7, "    \"名称\": x\n     \u3000\u3000   ^")] // CJK: two cells each
     [InlineData("\"😀\": x", 7, "    \"😀\": x\n     \u3000   ^")] // a surrogate pair: one character, two cells
     [InlineData("\"e\u0301\": x", 7, "    \"e\u0301\": x\n         ^")] // a combining accent: no cell
     [InlineData("\"𐍈\": x", 7, "    \"𐍈\": x\n         ^")] // A supplementary character that is narrow: one cell
     [InlineData("\"か\u3099\": x", 7, "    \"か\u3099\": x\n     \u3000   ^")] // A mark in a wide block: no cell
     [InlineData("a😀b", 3, "    a😀b\n     ^")] // the column of the pair's low surrogate: under the character
-    [InlineData("\"a\": ", 7, "    \"a\": \n         ^")] // the column past the text: after it
+    [InlineData("\"a\": ", 7, "    \"a\": \n         ^")]
     public void TheCaret_FollowsHowATerminalDrawsTheLine(string line, int column, string expected)
     {
         Assert.Equal(expected, Output.Snippet(line, column));
@@ -48,8 +44,8 @@ public sealed class SourceSnippetTests
     }
 
     [Theory]
-    [InlineData(5, false, true)] // near the start: the window starts with the line
-    [InlineData(300, true, false)] // near the end: a full window ending with the line
+    [InlineData(5, false, true)]
+    [InlineData(300, true, false)]
     public void ALongLine_NearAnEnd_ShowsAFullWindowFromThatEnd(int column, bool cutBefore, bool cutAfter)
     {
         var line = new string('x', 160) + "0123456789" + new string('y', 140);

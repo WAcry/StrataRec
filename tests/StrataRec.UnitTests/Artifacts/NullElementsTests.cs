@@ -7,19 +7,12 @@ using StrataRec.Artifacts.Model;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary>
-/// A null element where the model says a value is required is a binding error at the element's own pointer, for any
-/// config an extension binds; what the document did not write (a computed property) is not walked, nor what the
-/// serializer does not read.
-/// </summary>
 public sealed class NullElementsTests
 {
     [Fact]
     public void AComputedProperty_IsNotRead()
     {
-        // The document is walked, not the object: no code of the bound object runs, even with a null in the document.
         Assert.True(ArtifactSerializer.TryBind<WithComputed>(JsonNode.Parse("""{ "nickname": null }"""), "the config", out _, out var withNull), withNull?.Message);
-        // One returned the config itself: the walk recursed until the stack overflowed; one that throws threw.
         Assert.True(ArtifactSerializer.TryBind<WithComputed>(JsonNode.Parse("{}"), "the config", out var config, out var error), error?.Message);
         Assert.Equal("name", config.Name);
     }
@@ -36,7 +29,6 @@ public sealed class NullElementsTests
     [InlineData("""{ "pair": { "items": [null] } }""", "/pair/items/0", "Item 0 of 'items' must be a string, got null.")]
     [InlineData("""{ "by_date": { "2024-01-02T03:04:05": [null] } }""", "/by_date/2024-01-02T03:04:05/0", "Item 0 of '2024-01-02T03:04:05' must be a string, got null.")]
     [InlineData("""{ "other": null }""", "/other", "'other' must be a JSON value, got null.")] // extension data: at the object's level, not under the member's name
-    // The position is where the document writes the null, not where the bound collection holds it.
     [InlineData("""{ "by_kind": { "One": [null] } }""", "/by_kind/One/0", "Item 0 of 'One' must be a string, got null.")]
     [InlineData("""{ "by_number": { "01": [null] } }""", "/by_number/01/0", "Item 0 of '01' must be a string, got null.")]
     [InlineData("""{ "by_date": { "2024-01-02T03:04:05.0000000": [null] } }""", "/by_date/2024-01-02T03:04:05.0000000/0", "Item 0 of '2024-01-02T03:04:05.0000000' must be a string, got null.")]
@@ -48,8 +40,6 @@ public sealed class NullElementsTests
         AssertBinds<Collections>(json, pointer, message);
 
     [Theory]
-    // Only what the serializer reads is checked. An ignored member and a computed one are skipped (the
-    // document's value is not read); one populated, or filled through a constructor parameter, is read.
     [InlineData("""{ "ignored": [null] }""", null, null)]
     [InlineData("""{ "computed": [null] }""", null, null)]
     [InlineData("""{ "populated": [null] }""", "/populated/0", "Item 0 of 'populated' must be a string, got null.")]
@@ -64,7 +54,6 @@ public sealed class NullElementsTests
         AssertBinds<Contracts>(json, pointer, message);
 
     [Theory]
-    // A member filled through a constructor parameter follows the parameter's annotations: the document is read into it.
     [InlineData(typeof(FilteringConstructor), null)]
     [InlineData(typeof(PlainConstructor), "/items/0")]
     public void AConstructorParameter_IsTheContract(Type type, string? pointer) =>
@@ -85,7 +74,6 @@ public sealed class NullElementsTests
         AssertCheckedAsRead<PopulatedQueue>(read: true);
         AssertCheckedAsRead<PopulatedBag>(read: false);
 
-        // Filled, though the serializer cannot create one (no constructor without arguments).
         AssertCheckedAsRead<PopulatedListWithoutDefaultConstructor>(read: true);
         AssertCheckedAsRead<PopulatedCollectionWithoutDefaultConstructor>(read: true);
         AssertCheckedAsRead<PopulatedMapWithoutDefaultConstructor>(read: true, map: true);
@@ -111,7 +99,6 @@ public sealed class NullElementsTests
         Assert.True(ArtifactSerializer.TryBind<UnfilledExtension>(JsonNode.Parse(json), "the config", out _, out var error), error?.Message);
     }
 
-    /// <summary>The check reads a member as the serializer does: a null in what it reads is an error, in what it skips nothing.</summary>
     private static void AssertCheckedAsRead<T>(bool read, bool map = false)
         where T : class, IReadsItems
     {
@@ -132,7 +119,6 @@ public sealed class NullElementsTests
     [Fact]
     public void AValueHoldingAList_IsCheckedAsTheListItWrites()
     {
-        // The same JSON as { "set": ["a", null] }, built from a CLR array: one JsonValue, not a JsonArray.
         var node = new JsonObject { ["set"] = JsonValue.Create(new string?[] { "a", null }) };
 
         Assert.False(ArtifactSerializer.TryBind<Collections>(node, "the config", out _, out var error));

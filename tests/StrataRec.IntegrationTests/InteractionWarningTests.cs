@@ -1,12 +1,7 @@
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Interaction warnings between experiments of different layers: only nodes an arm adds interact, and a
-/// reviewed interaction recorded in an experiment stops warning, while a review no interaction needs warns.
-/// </summary>
 public sealed class InteractionWarningTests
 {
-    /// <summary>Removes the sample's review of calibration × MMR, so its INTERACTION_READ warning is reported.</summary>
     internal static void Unreviewed(string root) => ReplayTests.Edit(root, "experiments/exp_mmr_diversity.jsonc",
         "\"reviewed_interactions\": { \"exp_freshness_calibration\": [\"score.final\"] },", "");
 
@@ -21,7 +16,6 @@ public sealed class InteractionWarningTests
         Assert.Equal("experiment:exp_mmr_diversity", warning.Artifact);
         Assert.Equal("/arms/mmr/nodes/mmr_diversifier", warning.Pointer);
         Assert.Contains("'exp_freshness_calibration/calibrated' writes in the node it adds, 'freshness_calibration'", warning.Message);
-        // The hint is the entry that records the review.
         Assert.Contains("\"reviewed_interactions\": { \"exp_freshness_calibration\": [\"score.final\"] }", warning.Hint);
         Assert.Contains("'exp_mmr_diversity'", warning.Hint);
     }
@@ -40,12 +34,6 @@ public sealed class InteractionWarningTests
         Assert.Empty(compilation.Diagnostics);
     }
 
-    /// <summary>
-    /// Changing an existing node's settings is a parameter change, inline or not: two experiments tuning different
-    /// multipliers of fusion, which writes the flow column score.final, compose by the pipeline's structure. Counting the
-    /// nodes an arm touches warned for this pair (and for every pair of such experiments), but never when the same change
-    /// went through a parameter.
-    /// </summary>
     [Fact]
     public void ExperimentsTuningAnExistingNode_DoNotInteract()
     {
@@ -91,11 +79,6 @@ public sealed class InteractionWarningTests
         Assert.Equal("/reviewed_interactions/exp_freshness_calibration/0", warning.Pointer);
     }
 
-    /// <summary>
-    /// An arm that changes an existing node into a writer of a flow column changes the structure, as adding
-    /// one does. A filter becomes a writer of score.final, and another experiment's added node reads score.final: the
-    /// reader warns, naming the changed node. Settings of a node that keeps its columns still do not.
-    /// </summary>
     [Fact]
     public void AChangedNodeThatNowWritesAColumn_InteractsAsAnAddedOneDoes()
     {
@@ -113,11 +96,6 @@ public sealed class InteractionWarningTests
         Assert.Contains(compilation.Diagnostics, d => d.Code == "INTERACTION_READ" && d.Message.Contains("'exp_swap/t' writes in the node it adds, 'swap'", StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// Changing a read of a pinned version (col.score.final@fusion) to the current one is a new dependency: a
-    /// writer another experiment adds before the node now changes what it reads (the two arms together filtered every
-    /// item), so it warns. A pinned read does not see the writer, so it does not.
-    /// </summary>
     [Fact]
     public void AReadChangedFromPinnedToCurrent_Interacts_APinnedReadDoesNot()
     {
@@ -139,11 +117,6 @@ public sealed class InteractionWarningTests
         Assert.DoesNotContain(pinned.Diagnostics, d => d.Code == "INTERACTION_READ" && d.Message.Contains("'reader'", StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// A node's fallback reads when the node fails, so an arm that turns a fallback on, or points the node at
-    /// another one, adds what that fallback reads. Turned on here, the fallback read the zero another experiment writes
-    /// into score.final, and nothing warned. A fallback the baseline's node already had adds nothing.
-    /// </summary>
     [Theory]
     [InlineData("skip", "", """{ "nodes": { "late": { "on_failure": "fallback", "fallback": "late_backup" } } }""", true)]
     [InlineData("fallback", "old_backup", """{ "nodes": { "late": { "fallback": "late_backup" } } }""", true)]
@@ -181,10 +154,6 @@ public sealed class InteractionWarningTests
         }
     }
 
-    /// <summary>
-    /// While the configuration has errors, interactions are not known, so no review is called unused: a node's
-    /// config error made the sample's valid review "unused", with a hint to remove it.
-    /// </summary>
     [Fact]
     public void WithAnError_NoReviewIsCalledUnused()
     {
@@ -195,7 +164,6 @@ public sealed class InteractionWarningTests
         Assert.DoesNotContain(compilation.Diagnostics, d => d.Code == "INTERACTION_REVIEW_UNUSED");
     }
 
-    /// <summary>Adds an experiment of one arm (and a control) in a layer of its own.</summary>
     internal static void Experiment(string root, string id, string arm, string patch)
     {
         File.WriteAllText(Path.Combine(root, "experiments", id + ".jsonc"), $$"""

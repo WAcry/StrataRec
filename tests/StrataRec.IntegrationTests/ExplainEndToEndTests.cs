@@ -8,11 +8,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Candidate explanations end to end: <c>stratarec run --explain</c> on the home_feed sample says where a
-/// survivor ended and which node dropped an item with the values it read; a replay explains the replayed run; a request its
-/// fallback pipeline served explains that run; the engine rejects ids it cannot explain before anything runs.
-/// </summary>
 public sealed class ExplainEndToEndTests
 {
     [Fact]
@@ -42,7 +37,7 @@ public sealed class ExplainEndToEndTests
         var filter = Step(dropped, "safety_filter");
         Assert.Equal(("ran", "dropped", false, 17), (filter.GetProperty("step").GetString(), filter.GetProperty("change").GetString(),
             filter.GetProperty("alive").GetBoolean(), filter.GetProperty("rank_before").GetInt32()));
-        Assert.Equal(0.08f, (float)filter.GetProperty("values").GetProperty("item.report_rate").GetDouble()); // a float32 feature
+        Assert.Equal(0.08f, (float)filter.GetProperty("values").GetProperty("item.report_rate").GetDouble());
         Assert.True(filter.GetProperty("values").GetProperty("item.is_policy_safe").GetBoolean());
         Assert.False(filter.GetProperty("terms").GetProperty("predicate").GetBoolean());
         Assert.Equal("dropped: (col.item.is_policy_safe ?? true) && col.item.report_rate < 0.05 is false", filter.GetProperty("reason").GetString());
@@ -57,7 +52,7 @@ public sealed class ExplainEndToEndTests
         // The base utility is col.score.ctr: the float32 value, printed as the float, and the term, the double it widens to.
         Assert.Equal((float)ctr, (float)fusion.GetProperty("terms").GetProperty("base").GetDouble());
         Assert.Equal(fusion.GetProperty("values").GetProperty("score.final").GetDouble(), double.Parse(fusion.GetProperty("reason").GetString()!.Split(" = ")[^1],
-            System.Globalization.CultureInfo.InvariantCulture)); // the reason's result is what the float32 column holds
+            System.Globalization.CultureInfo.InvariantCulture));
         Assert.True(fusion.GetProperty("terms").TryGetProperty("multiplier.quality", out _));
         Assert.StartsWith("score.final = ", fusion.GetProperty("reason").GetString());
         var sort = Step(survivor, "rank_sort");
@@ -92,7 +87,7 @@ public sealed class ExplainEndToEndTests
         Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, sample, "local", [bundle], Array.Empty<string>(), "text", expectIdentical: true, text,
             CancellationToken.None, explain: new[] { "17" }));
         var lines = text.ToString();
-        Assert.DoesNotContain("  explain   pipeline home_feed", lines); // the result line says it served
+        Assert.DoesNotContain("  explain   pipeline home_feed", lines);
         Assert.Contains("  explain   17: dropped by safety_filter", lines);
         Assert.Contains("safety_filter: dropped (was rank 17); item.is_policy_safe true, item.report_rate 0.08; dropped: ", lines);
 
@@ -148,7 +143,7 @@ public sealed class ExplainEndToEndTests
         Assert.Equal("explain_ids has 101 ids, but a request explains at most 100 candidates; ask about fewer ids per request.", tooMany.Error);
         Assert.Equal(RecErrorKind.InvalidRequest, otherType.ErrorKind);
         Assert.Equal("explain id '17' is a string, but pipeline 'home_feed' has int64 entity ids; give its ids as int64s.", otherType.Error);
-        Assert.Empty(tooMany.Experiments.Assigned); // nothing was assigned
+        Assert.Empty(tooMany.Experiments.Assigned);
         Assert.Null(tooMany.Explanation);
         Assert.True(none.Succeeded, none.Error);
         Assert.Null(none.Explanation);

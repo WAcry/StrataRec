@@ -4,7 +4,6 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary><c>stratarec validate</c> and <c>stratarec schema bindings</c> on local feature source bindings.</summary>
 public sealed class LocalBindingCliTests
 {
     [Fact]
@@ -36,8 +35,7 @@ public sealed class LocalBindingCliTests
     [Fact]
     public async Task Validate_WithAMalformedBootstrapUri_WritesJsonWithThePointerAndAHint()
     {
-        // The real command line, in its own process: a malformed URI used to escape as an unhandled exception, leaving
-        // no JSON on stdout. The snapshot is deleted: validate still reads no snapshot file.
+        // The snapshot is deleted: validate still reads no snapshot file.
         var root = HomeFeedTestHost.LoadModified(root =>
         {
             Directory.Delete(Path.Combine(root, "fixtures", "author_snapshot"), recursive: true);

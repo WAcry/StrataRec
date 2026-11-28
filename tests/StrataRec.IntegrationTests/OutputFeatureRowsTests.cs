@@ -12,12 +12,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// The features an output column reads are filled for the returned rows only: the first <c>limit</c> rows of
-/// the final order. A row that is not returned is read by nobody, so nothing is fetched or computed for it, and a value of
-/// it that cannot be served does not fail the request (with candidates 1 and 2 and a limit of 1, item
-/// 2's derived value failed the request although only item 1 was returned).
-/// </summary>
 public class OutputFeatureRowsTests
 {
     [Fact]
@@ -74,11 +68,8 @@ public class OutputFeatureRowsTests
     }
 
     /// <summary>
-    /// The first recall appends item 1 and a scorer fills its <c>item.base</c>; a second recall appends item 2,
-    /// and the next node's fallback declares <c>item.base</c>, so a prefetch of key 2 starts, which fails. The node itself
-    /// succeeds and the fallback never runs. The output returns item 1 alone: its features were filled, and the prefetch
-    /// for item 2 is not waited for (waiting set <c>item.base</c> failed and failed the request). When item 2 is returned
-    /// too, the prefetch is waited for, its failure fails the request, and key 2 is not fetched again.
+    /// The first recall appends item 1 and a scorer fills its <c>item.base</c>; a second recall appends item 2, and the
+    /// next node's fallback declares <c>item.base</c>, so a prefetch of key 2 starts, which fails.
     /// </summary>
     [Theory]
     [InlineData(1)]
@@ -106,10 +97,8 @@ public class OutputFeatureRowsTests
     }
 
     /// <summary>
-    /// The first recall appends item 1; the second (no fetch barrier) appends item 2 after the prefetch of the
-    /// next node's fallback's <c>item.base</c> started, for key 1, which fails. The node succeeds, the fallback never runs,
-    /// and a filter keeps item 2 alone. The output fills item 2, which the prefetch never asked for: it is not waited for
-    /// (waiting failed the request with key 1's failure, the connector never asked for key 2), and key 2 is fetched.
+    /// The first recall appends item 1; the second (no fetch barrier) appends item 2 after the prefetch of the next
+    /// node's fallback's <c>item.base</c> started, for key 1, which fails.
     /// </summary>
     [Fact]
     public async Task APrefetchOfOtherKeys_ThatFails_DoesNotFailTheOutput_WhoseRowsItNeverAskedFor()
@@ -143,11 +132,6 @@ public class OutputFeatureRowsTests
         Assert.Equal(new long[][] { [1], [2] }, calls);
     }
 
-    /// <summary>
-    /// A feature the output reads that its source answered in part leaves defaults where values were: the result says it
-    /// is degraded, as it does when a node reads such a feature. It said nothing, and a cache of a call of the pipeline
-    /// kept those defaults for its ttl after the source had recovered.
-    /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -178,11 +162,6 @@ public class OutputFeatureRowsTests
         RequestId = "r", Inputs = new RequestInputs(), Deadline = TimeSpan.FromSeconds(5), TimeMs = 1_767_225_600_000,
     }, TestContext.Current.CancellationToken).AsTask();
 
-    /// <summary>
-    /// Candidates 1 and 2, in that order, and an output of <paramref name="limit"/> rows whose one column is
-    /// <c>item.narrow</c>: <c>item.base * 1500000000</c>, a non-nullable int32 with no default, so a value that does not fit
-    /// fails it. <c>item.base</c> is fetched; the keys of each call are returned.
-    /// </summary>
     private static (ExecutionPlan Plan, ConcurrentQueue<long[]> Calls) Compile(int limit, long baseOf2, long baseOf1 = 1) =>
         Compile(
             baseOf1,
@@ -196,11 +175,6 @@ public class OutputFeatureRowsTests
               "output": { "limit_param": "k", "columns": { "narrow": "col.item.narrow" } } }
             """);
 
-    /// <summary>
-    /// The pipeline: recall of item 1, a scorer reading <c>item.base</c>, recall of item 2, then a node whose
-    /// fallback reads <c>item.base</c>; the output of <paramref name="limit"/> rows reads <c>item.narrow</c>. The source
-    /// fails every call for key 2.
-    /// </summary>
     private static (ExecutionPlan Plan, ConcurrentQueue<long[]> Calls) CompileWithFallback(int limit) =>
         Compile(
             1,
@@ -258,10 +232,6 @@ public class OutputFeatureRowsTests
         return (compilation.Plan!, connectors.Calls);
     }
 
-    /// <summary>
-    /// <c>counting_memory@1</c>: <c>memory@1</c>, recording the keys of every call, failing a call that asks for
-    /// <paramref name="failing"/>, and answering every call as one answered in part when <paramref name="inPart"/>.
-    /// </summary>
     private sealed class CountingConnectors(long? failing = null, bool inPart = false) : IBindingFactory<IFeatureSourceConnector>
     {
         public const string TypeName = "counting_memory@1";

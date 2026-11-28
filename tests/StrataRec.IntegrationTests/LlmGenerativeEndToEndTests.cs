@@ -10,11 +10,7 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The sample with a <c>GenerativeRetriever@1</c> after the recall and an <c>LlmAnnotator@1</c> at the end, their models
-/// bound to <c>fixed_text@1</c> by the bindings alone: the generated rows are appended, get their features from the fetch
-/// planner before the safety filter and the scorers read them, and the leading rows get the annotation; a recording
-/// replays identically, the annotator per entity when its window changes, and the retriever's call only for the same
-/// prompt. Runs alone: it counts the model answer metrics.
+/// Runs alone: it counts the model answer metrics.
 /// </summary>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class LlmGenerativeEndToEndTests
@@ -39,7 +35,7 @@ public sealed class LlmGenerativeEndToEndTests
 
         Assert.True(recorded.Succeeded, recorded.Error);
         var items = recorded.Items.ToDictionary(i => i.Id.Int64Value);
-        Assert.Equal((1L, "food"), (items[58].Columns["gen_rank"].AsInt64(), items[58].Columns["category"].AsString())); // a catalog feature of the new row
+        Assert.Equal((1L, "food"), (items[58].Columns["gen_rank"].AsInt64(), items[58].Columns["category"].AsString()));
         Assert.Equal((3L, "tech"), (items[57].Columns["gen_rank"].AsInt64(), items[57].Columns["category"].AsString()));
         Assert.All(recorded.Items.Where(i => i.Id.Int64Value is not (58 or 57 or 60)), i => Assert.True(i.Columns["gen_rank"].IsMissing));
         Assert.Equal(new[] { Reason, Reason, Reason }, recorded.Items.Take(3).Select(i => i.Columns["reason"].AsString()));
@@ -53,12 +49,11 @@ public sealed class LlmGenerativeEndToEndTests
         var annotations = run.ServiceCalls.FindAll(c => c.Role == "model").Where(c => c.Service == "llm_annotator").ToList();
         Assert.Equal(3, annotations.Count);
         Assert.Equal(recorded.Items.Take(3).Select(i => i.Id.Int64Value).Order(),
-            annotations.Select(c => Assert.Single(c.Keys!.Value.EnumerateArray()).GetInt64()).Order()); // each keyed by its row's entity
+            annotations.Select(c => Assert.Single(c.Keys!.Value.EnumerateArray()).GetInt64()).Order());
         Assert.Equal(new[] { ("over_limit", 1.0), ("present", 1.0), ("repeated", 1.0), ("unknown", 1.0), ("used", 3.0) },
             Counts(metrics, StrataRecMetrics.Names.ModelAnswerIds, "llm_retriever"));
         Assert.Equal(new[] { ("used", 3.0) }, Counts(metrics, StrataRecMetrics.Names.ModelAnswers, "llm_annotator"));
 
-        // Through JSON, on a fresh engine whose stand-ins answer otherwise: the texts must come from the recording.
         metrics.Measurements.Clear();
         var bundle = ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording!));
         var outcome = await NewEngine(HomeFeedTestHost.LoadModified(root => AddLlm(root, "[]", "Something else."))).ReplayAsync(bundle, cancellationToken: TestContext.Current.CancellationToken);
@@ -68,14 +63,10 @@ public sealed class LlmGenerativeEndToEndTests
         Assert.Equal(Items(recorded.Items), Items(outcome.Result.Items));
         Assert.Empty(report.Gaps);
         Assert.All(report.Nodes, n => Assert.False(n.Changed, $"{n.Node}: {n.Recorded} -> {n.Replayed}"));
-        Assert.Empty(Counts(metrics, StrataRecMetrics.Names.ModelAnswerIds, "llm_retriever")); // a replay is not traffic
+        Assert.Empty(Counts(metrics, StrataRecMetrics.Names.ModelAnswerIds, "llm_retriever"));
         Assert.Empty(Counts(metrics, StrataRecMetrics.Names.ModelAnswers, "llm_annotator"));
     }
 
-    /// <summary>
-    /// Each annotation is recorded by its row's entity: with a window of 5 instead of 3, the three recorded rows replay
-    /// their text, and the two new ones were never annotated: missing, reported as not recorded, the node Degraded.
-    /// </summary>
     [Fact]
     public async Task AfterTheAnnotatorsWindowChanges_EachEntityReplaysItsOwnAnnotation()
     {
@@ -92,7 +83,7 @@ public sealed class LlmGenerativeEndToEndTests
 
         var report = outcome.Report;
         var replayed = outcome.Result.Items;
-        Assert.Equal(recorded.Items.Select(i => i.Id.Int64Value), replayed.Select(i => i.Id.Int64Value)); // the order is not the annotator's
+        Assert.Equal(recorded.Items.Select(i => i.Id.Int64Value), replayed.Select(i => i.Id.Int64Value));
         Assert.Equal(new[] { Reason, Reason, Reason }, replayed.Take(3).Select(i => i.Columns["reason"].AsString()));
         Assert.All(replayed.Skip(3), i => Assert.True(i.Columns["reason"].IsMissing));
         var gap = Assert.Single(report.Gaps);
@@ -103,7 +94,6 @@ public sealed class LlmGenerativeEndToEndTests
         Assert.StartsWith("model 'llm_annotator' annotated 3 of 5 rows; 2 call(s) failed", node.ReplayedDetail);
     }
 
-    /// <summary>The retriever's call is recorded whole: after its prompt changes, its inputs are reported as changed, and the node is skipped.</summary>
     [Fact]
     public async Task AfterTheRetrieversPromptChanges_ItsInputsAreReportedAsChanged_AndTheNodeIsSkipped()
     {
@@ -119,7 +109,7 @@ public sealed class LlmGenerativeEndToEndTests
         var outcome = await NewEngine(modified).ReplayAsync(recorded.Recording!, cancellationToken: TestContext.Current.CancellationToken);
 
         var report = outcome.Report;
-        Assert.True(outcome.Result.Succeeded, outcome.Result.Error); // on_failure: skip
+        Assert.True(outcome.Result.Succeeded, outcome.Result.Error);
         Assert.Contains(report.Gaps, g => g is { Kind: "model", Source: "llm_retriever", Reason: "inputs_changed" });
         var node = Assert.Single(report.Nodes, n => n.Node == "llm_retrieve");
         Assert.Equal(("succeeded", "failed"), (node.Recorded, node.Replayed));
@@ -162,10 +152,7 @@ public sealed class LlmGenerativeEndToEndTests
     }
 
     /// <summary>
-    /// A retriever of up to 3 ids right after the recall (skipped when it fails), whose model answers <paramref name="ids"/>,
-    /// writing each generated row's position to <c>llm.gen_rank</c>; and, after everything, an annotation of the top 3 rows
-    /// in <c>llm.reason</c>, whose model answers <paramref name="reason"/>. The recall's attribution columns are declared
-    /// nullable: the retriever's rows have none.
+    /// The recall's attribution columns are declared nullable: the retriever's rows have none.
     /// </summary>
     private static void AddLlm(string root, string ids, string reason)
     {

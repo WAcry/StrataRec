@@ -11,11 +11,6 @@ using StrataRec.Hosting.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Configurations named by a release manifest in an artifact store (<c>--manifest</c> with <c>--store</c>, or a ref of any
-/// kind): <c>run</c>, <c>explain-plan</c>, <c>replay</c> (also on the manifest each bundle recorded) and <c>compare</c>,
-/// and every error of a ref, with its hint.
-/// </summary>
 public sealed class ManifestRefCliTests
 {
     [Theory]
@@ -23,7 +18,7 @@ public sealed class ManifestRefCliTests
     [InlineData("json")]
     public async Task ExplainPlan_OfAManifest_ById_OrByFile_PrintsThePlanOfItsWorkspace(string format)
     {
-        var root = ManifestStores.Workspace(InteractionWarningTests.Unreviewed); // a warning to place
+        var root = ManifestStores.Workspace(InteractionWarningTests.Unreviewed);
         var store = ManifestStores.NewStore();
         var (id, file) = await ManifestStores.BuildAsync(root, store);
 
@@ -34,11 +29,10 @@ public sealed class ManifestRefCliTests
             var byFile = await Explain(null, file, store, arms);
 
             Assert.Equal(Normalized(workspace, "workspace:home_feed/local"), Normalized(byId, id));
-            Assert.Equal(Normalized(byId, id), Normalized(byFile, id)); // a file has the id build gave its manifest
+            Assert.Equal(Normalized(byId, id), Normalized(byFile, id));
             if (format == "text")
             {
-                Assert.DoesNotContain(workspace.Split('\n'), line => line.TrimEnd('\r').EndsWith(' ')); // columns padded, lines not
-                // The same warning; a workspace's at its file, line and column, a manifest's (no files) at its artifact.
+                Assert.DoesNotContain(workspace.Split('\n'), line => line.TrimEnd('\r').EndsWith(' '));
                 Assert.Matches(@"exp_mmr_diversity\.jsonc:\d+:\d+: warning INTERACTION_READ ", workspace);
                 Assert.Contains("warning INTERACTION_READ experiment:exp_mmr_diversity/arms/mmr/", byId);
             }
@@ -52,14 +46,13 @@ public sealed class ManifestRefCliTests
             return output.ToString();
         }
 
-        // Everything but the configuration's name and the compile time.
         string Normalized(string output, string manifestId)
         {
             if (format == "text")
             {
                 var lines = output.Split('\n');
                 Assert.StartsWith($"pipeline home_feed  ({manifestId}, compiled in ", lines[0]);
-                return string.Join('\n', lines.Skip(1).TakeWhile(l => !l.Contains(" INTERACTION_READ ", StringComparison.Ordinal))); // warnings: below
+                return string.Join('\n', lines.Skip(1).TakeWhile(l => !l.Contains(" INTERACTION_READ ", StringComparison.Ordinal)));
             }
 
             var document = JsonNode.Parse(output)!.AsObject();
@@ -70,11 +63,6 @@ public sealed class ManifestRefCliTests
         }
     }
 
-    /// <summary>
-    /// A plan without experiments has one combination, and explain-plan shows it without being asked: each node's
-    /// definition and the columns it reads and writes, as <c>--arms</c> shows them for a plan with experiments, whose
-    /// default stays the survey of its variants and sites. Of a manifest as of a workspace.
-    /// </summary>
     [Theory]
     [InlineData("text", false)]
     [InlineData("json", false)]
@@ -84,7 +72,6 @@ public sealed class ManifestRefCliTests
     {
         var plain = await Explain(ManifestStores.Workspace(root =>
         {
-            // The release places no experiment; their files stay, as those of experiments not in flight do.
             var release = Path.Combine(root, "releases", "home_feed.local.jsonc");
             File.WriteAllLines(release, File.ReadAllLines(release).Where(line => !line.Contains("\"layer\"", StringComparison.Ordinal)));
         }));
@@ -133,7 +120,6 @@ public sealed class ManifestRefCliTests
         var plan = JsonNode.Parse(output.ToString())!;
         Assert.Equal("""["exp_freshness_calibration/calibrated"]""", plan["combination"]!.ToJsonString());
 
-        // Each node's data flow in this combination: the columns it reads (not the entity id) and writes, by name.
         var nodes = plan["timeline"]!.AsArray().ToDictionary(n => n!["node"]!.GetValue<string>(), n => n!);
         Assert.Equal("""["item.is_policy_safe","item.report_rate"]""", nodes["safety_filter"]["reads"]!.ToJsonString());
         Assert.Equal("[]", nodes["safety_filter"]["writes"]!.ToJsonString());
@@ -141,7 +127,7 @@ public sealed class ManifestRefCliTests
         Assert.Equal("""["score.final"]""", nodes["freshness_calibration"]["writes"]!.ToJsonString());
         var served = plan["taps"]!["served"]!;
         Assert.Equal("""{"output":true}""", served["attach"]!.ToJsonString());
-        Assert.Equal("col.score.final@fusion", served["columns"]!["pre_calibration"]!.GetValue<string>()); // the arm's tap variant
+        Assert.Equal("col.score.final@fusion", served["columns"]!["pre_calibration"]!.GetValue<string>());
         Assert.Contains("item.age_hours", served["features"]!.AsArray().Select(f => f!.GetValue<string>()));
         Assert.Equal(1.0, plan["funnel_groups"]!["all"]!["rate"]!.GetValue<double>());
         Assert.Equal("final_top_k", plan["output"]!["limit_param"]!.GetValue<string>());
@@ -153,7 +139,6 @@ public sealed class ManifestRefCliTests
     [Fact]
     public async Task Replay_OfARequestThatFailedOver_RunsTheFallbackPipelineOnTheManifestItRecorded()
     {
-        // Two pipelines released separately: 'primary' (its source fails) falls back to 'backup'.
         var root = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         var bindings = Path.Combine(root, "bindings", "local.jsonc");
         File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"fixtures/recall_popular.json\"",
@@ -167,7 +152,6 @@ public sealed class ManifestRefCliTests
             manifests.Add((file, ContentHash.Compute(ArtifactSerializer.ToNode(ManifestStores.Read(file)))));
         }
 
-        // A node serving both releases records a request that failed over.
         var bundles = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
         ReplayBundle recording;
         await using (var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root)))
@@ -189,7 +173,6 @@ public sealed class ManifestRefCliTests
             ReplayBundleFile.Save(recording, Path.Combine(bundles, "failed-over.json"));
         }
 
-        // Only the store: each run on the manifest it recorded. The primary's manifest named: the fallback still on its own.
         foreach (var manifest in new[] { null, manifests[0].Id })
         {
             var output = new StringWriter();
@@ -201,12 +184,9 @@ public sealed class ManifestRefCliTests
             Assert.Equal("backup", bundle.GetProperty("served_by").GetString());
         }
 
-        // compare resolves each side the same way: the primary's manifest on both sides fails over as recorded.
         Assert.Equal(0, await CompareCommand.RunAsync(Tool.Environment, manifests[0].Id, null, "local", [bundles], Array.Empty<string>(), 5, "source", "json", TextWriter.Null,
             CancellationToken.None, candidateManifest: manifests[0].Id, store: store));
 
-        // A bundle cut down to its fallback run still replays its primary pipeline, on the named manifest, every one of its
-        // calls a gap, as on a workspace.
         var cut = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
         var withoutPrimary = ReplayBundleFile.Load(Path.Combine(bundles, "failed-over.json"));
         withoutPrimary.Runs.RemoveAt(0);
@@ -222,14 +202,12 @@ public sealed class ManifestRefCliTests
             Assert.Contains(bundle.GetProperty("gaps").EnumerateArray(), g => g.GetProperty("kind").GetString() == "recall" && g.GetProperty("source").GetString() == "broken");
         }
 
-        // A store without the fallback's manifest: not replayed, naming the pipeline, its manifest and why.
         File.Delete(new FileSystemArtifactStore(store).GetBlobPath(manifests[1].Id));
         var errors = new StringWriter();
         Assert.Equal(2, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [bundles], Array.Empty<string>(), "text", expectIdentical: false, TextWriter.Null, CancellationToken.None,
             store: store, errors: errors));
         Assert.Contains($"pipeline 'backup' ran on manifest {manifests[1].Id}, which does not load: MANIFEST_UNKNOWN", errors.ToString());
 
-        // An engine without the fallback pipeline says so instead of passing the primary's failure off as the replay.
         await using var primaryOnly = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root), bindingOptions: new Hosting.Bindings.BindingHostOptions { Load = false });
         var primary = await ManifestBuilder.LoadAsync(ManifestStores.Read(manifests[0].File), manifests[0].Id, new FileSystemArtifactStore(store), new DiagnosticBag(),
             TestContext.Current.CancellationToken);
@@ -247,7 +225,6 @@ public sealed class ManifestRefCliTests
         var (id, file) = await ManifestStores.BuildAsync(root, store);
         var manifestBundles = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
 
-        // Requests served by an engine that loaded the manifest, as a node does (its bindings loaded from the workspace's files).
         var request = await ManifestBuilder.LoadAsync(ManifestStores.Read(file), id,
             new FileSystemArtifactStore(store), new DiagnosticBag(), TestContext.Current.CancellationToken);
         await using (var engine = new RecEngine(CommonOptions.ForRoot(Tool.Environment, root)))
@@ -275,7 +252,6 @@ public sealed class ManifestRefCliTests
             });
         }
 
-        // A bundle recorded on the workspace names no manifest: it is not replayed, says how to replay it, and the others still replay.
         var mixed = Directory.CreateTempSubdirectory("stratarec-bundles-").FullName;
         foreach (var bundleFile in Directory.GetFiles(manifestBundles))
         {
@@ -301,7 +277,6 @@ public sealed class ManifestRefCliTests
             Assert.Contains(error, errors.ToString());
         }
 
-        // -c and --manifest replace the recorded configuration, as -c always did.
         Assert.Equal(0, await ReplayCommand.RunAsync(Tool.Environment, root, "local", [mixed], Array.Empty<string>(), "text", expectIdentical: true, TextWriter.Null, CancellationToken.None,
             store: store));
         output = new StringWriter();
@@ -330,10 +305,6 @@ public sealed class ManifestRefCliTests
         Assert.Same(first.Engine, second.Engine);
     }
 
-    /// <summary>
-    /// The engines a bundle replays on are found only for a bundle of this format, whoever read it: an object
-    /// deserialized without <see cref="ReplayBundleFile"/> is refused at /format before its runs are read.
-    /// </summary>
     [Fact]
     public async Task ReplayEngines_RefuseABundleObjectOfThePreviousFormat_BeforeReadingItsRuns()
     {
@@ -369,11 +340,6 @@ public sealed class ManifestRefCliTests
         Assert.Equal(1, root2.GetProperty("comparison").GetProperty("identical").GetInt32());
     }
 
-    /// <summary>
-    /// <c>run --manifest</c> loads the release as a node does, bindings included (the snapshot of a local table, here named
-    /// absolutely: a manifest's relative paths resolve against the current directory), and serves what the workspace it
-    /// was built from serves; the bundle it records replays on the manifest from the store, as the printed command says.
-    /// </summary>
     [Fact]
     public async Task Run_OnAManifest_ServesWhatItsWorkspaceServes_AndSaysHowToReplayIt()
     {
@@ -397,7 +363,6 @@ public sealed class ManifestRefCliTests
         Assert.True(0 == await ReplayCommand.RunAsync(Tool.Environment, null, "local", [bundle], Array.Empty<string>(), "json", true, TextWriter.Null,
             CancellationToken.None, store: store, errors: replayErrors), replayErrors.ToString());
 
-        // A manifest named by its file need not be in the store: the command names the file.
         var copy = Path.Combine(ManifestStores.NewStore(), "release.json");
         File.Copy(manifestFile, copy);
         var fileBundle = Path.Combine(store, "recorded-file.json");
@@ -409,10 +374,6 @@ public sealed class ManifestRefCliTests
             CancellationToken.None, manifest: copy, store: store, errors: replayErrors), replayErrors.ToString());
     }
 
-    /// <summary>
-    /// A manifest that does not release the request's pipeline says which it releases; one whose bindings do not load
-    /// says where relative paths resolve; one whose plan falls back to another pipeline warns that the run does not load it.
-    /// </summary>
     [Fact]
     public async Task Run_OnAManifest_SaysWhatItCannotDo()
     {
@@ -423,11 +384,10 @@ public sealed class ManifestRefCliTests
         File.WriteAllText(other, File.ReadAllText(Path.Combine(root, "requests", "user_1001.json")).Replace("\"home_feed\"", "\"other_feed\"", StringComparison.Ordinal));
 
         var (code, _, errors) = await Run(other, manifest: id, store: store);
-        Assert.Equal(2, code); // the request's mistake, as help says
+        Assert.Equal(2, code);
         Assert.Contains("REQUEST_INVALID", errors);
         Assert.Contains("The request runs pipeline 'other_feed', and the manifest releases pipeline 'home_feed'.", errors);
 
-        // Without a workspace, a '$schema' that is no string is still pointed at the request schema.
         var schema = Path.Combine(store, "schema.json");
         File.WriteAllText(schema, File.ReadAllText(Path.Combine(root, "requests", "user_1001.json")).Replace("\"../schemas/request.schema.json\"", "1", StringComparison.Ordinal));
         (code, _, errors) = await Run(schema, manifest: id, store: store);
@@ -442,7 +402,6 @@ public sealed class ManifestRefCliTests
         Assert.Contains("author_snapshot", errors);
         Assert.Contains($"relative paths in a manifest's bindings resolve against the current directory, {Environment.CurrentDirectory}", errors);
 
-        // 'primary' falls back to 'backup', which a run on primary's manifest does not load.
         var fallback = ExperimentRegressionTests.FallbackWorkspace(brokenLatencyMs: 0);
         var bindings = Path.Combine(fallback, "bindings", "local.jsonc");
         File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"fixtures/recall_popular.json\"",
@@ -452,12 +411,11 @@ public sealed class ManifestRefCliTests
         var failing = Path.Combine(store, "primary-request.json");
         File.WriteAllText(failing, """{ "pipeline_id": "primary", "request_id": "r", "deadline_ms": 30000 }""");
         (code, _, errors) = await Run(failing, manifest: primary, store: store);
-        Assert.Equal(1, code); // its source fails, and nothing to fall back to here
+        Assert.Equal(1, code);
         Assert.Contains("warning RUN_FALLBACK_NOT_LOADED", errors);
         Assert.Contains("Pipeline 'primary' falls back to 'backup', which a run on one manifest does not load", errors);
     }
 
-    /// <summary>The sample's local table snapshots, named absolutely (see <see cref="ManifestStores.Workspace"/>).</summary>
     private static void AbsoluteSnapshot(string root)
     {
         var path = Path.Combine(root, "bindings", "local.jsonc");
@@ -491,7 +449,6 @@ public sealed class ManifestRefCliTests
         await Expect(2, "MANIFEST_IS_DIRECTORY", "--manifest", "pass a workspace directory with -c", manifest: root, store: store);
         await Expect(2, "MANIFEST_ID_INVALID", "--manifest", "copy the id 'stratarec build' printed", manifest: id.ToUpperInvariant().Replace("SHA256:", "sha256:"), store: store);
 
-        // compare's baseline is a ref of any kind: one that names nothing is a usage error too.
         var errors = new StringWriter();
         Assert.Equal(2, await CompareCommand.RunAsync(Tool.Environment, missing, root, "local", [store], Array.Empty<string>(), 10, "score", "json", TextWriter.Null, CancellationToken.None,
             errors: errors));
@@ -511,19 +468,15 @@ public sealed class ManifestRefCliTests
         var (id, file) = await ManifestStores.BuildAsync(root, store);
         var blobs = new FileSystemArtifactStore(store);
 
-        // An id the store does not have.
         var unknown = "sha256:" + new string('0', 64);
         await Expect(1, "MANIFEST_UNKNOWN", "manifest:" + unknown, "check the id", manifest: unknown, store: store);
 
-        // A manifest pinned to another pipeline than --pipeline asks for.
         await Expect(1, "MANIFEST_OTHER_PIPELINE", "manifest:" + id, "omit --pipeline", manifest: id, store: store, pipeline: "other_feed", pointer: "/pipeline_id");
 
-        // A manifest file that is not a manifest: its artifacts lack the pipeline, catalog and bindings.
         var notAManifest = Path.Combine(store, "not-a-manifest.json");
         File.WriteAllText(notAManifest, """{ "pipeline_id": "home_feed", "environment": "local", "artifacts": {} }""");
         await Expect(1, "MANIFEST_SCHEMA", notAManifest, "release manifest", manifest: notAManifest, store: store, pointer: "/artifacts");
 
-        // A manifest file whose seq canonical JSON cannot hold exactly has no content id (an unhandled exception).
         var beyond = Path.Combine(store, "beyond-2-53.json");
         File.WriteAllText(beyond, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(file), "\"seq\": \\d+", "\"seq\": 9007199254740993"));
         await Expect(1, "MANIFEST_NOT_CANONICAL", beyond, "write integers of at most 9007199254740991", manifest: beyond, store: store, pointer: "/seq");
@@ -532,14 +485,12 @@ public sealed class ManifestRefCliTests
         Assert.Contains($"error MANIFEST_NOT_CANONICAL {beyond}/seq", publishErrors.ToString());
         Assert.DoesNotContain("Unhandled", publishErrors.ToString());
 
-        // A damaged, then a missing artifact blob: reported by the manifest loader at the manifest's pointer.
         var manifest = ManifestStores.Read(file);
         File.WriteAllText(blobs.GetBlobPath(manifest.Artifacts.Pipeline), "{}");
         await Expect(1, "ARTIFACT_UNAVAILABLE", "manifest:" + id, "the stored blob is damaged", manifest: id, store: store, pointer: "/artifacts/pipeline");
         File.Delete(blobs.GetBlobPath(manifest.Artifacts.Pipeline));
         await Expect(1, "ARTIFACT_MISSING", "manifest:" + id, "stratarec build", manifest: id, store: store, pointer: "/artifacts/pipeline");
 
-        // A damaged manifest blob.
         File.WriteAllText(blobs.GetBlobPath(id), "{}");
         await Expect(1, "MANIFEST_UNREADABLE", "manifest:" + id, "the blob is damaged", manifest: id, store: store);
     }
@@ -547,7 +498,6 @@ public sealed class ManifestRefCliTests
     [Fact]
     public async Task AManifestThatNeedsWhatTheBinaryLacks_IsIncompatible_AsOnANode()
     {
-        // Built by a binary with an operator this one does not register: its requires names it.
         var root = ManifestStores.Workspace();
         var store = ManifestStores.NewStore();
         var (_, file) = await ManifestStores.BuildAsync(root, store);
@@ -569,7 +519,6 @@ public sealed class ManifestRefCliTests
             id, store, errors));
         Assert.Contains("The manifest requires a capability this binary does not provide: CategoryBoost@1.", errors.ToString());
 
-        // replay loads it as a node does, with the same report: the configuration does not load (1).
         errors = new StringWriter();
         Assert.Equal(1, await ReplayCommand.RunAsync(Tool.Environment, null, "local", [store], Array.Empty<string>(), "json", false, TextWriter.Null, CancellationToken.None,
             manifest: id, store: store, errors: errors));
@@ -586,11 +535,6 @@ public sealed class ManifestRefCliTests
         Assert.Equal((code, artifact, pointer), (error.Code, error.Artifact, error.Pointer));
         Assert.Contains(hint, error.Hint);
     }
-    /// <summary>
-    /// A plan binds only the feature sources it reads, so the manifest requires only their connector types. A
-    /// catalog shared with another pipeline may name a source whose connector this binary lacks; it validated, built and
-    /// ran from the workspace, but the manifest required the connector, and the same binary refused to load it.
-    /// </summary>
     [Fact]
     public async Task TheManifest_RequiresOnlyTheConnectorsOfTheSourcesThePlanReads()
     {
@@ -608,7 +552,6 @@ public sealed class ManifestRefCliTests
         var requires = ManifestStores.Read(file).Requires;
         Assert.DoesNotContain("not_installed@1", requires);
         Assert.Contains("memory@1", requires); // item_store's: the plan reads its features
-        // The same binary loads it, as a node does (it refused: MANIFEST_INCOMPATIBLE, not_installed@1).
         var manifest = ManifestStores.Read(file);
         var diagnostics = new DiagnosticBag();
         var request = await ManifestBuilder.LoadAsync(manifest, ContentHash.Compute(ArtifactSerializer.ToNode(manifest)), new FileSystemArtifactStore(store), diagnostics,

@@ -204,9 +204,6 @@ public static class ReplayComparison
         long requested = 0, missing = 0;
         foreach (var pair in pairs)
         {
-            // The bundles both sides replayed, as the comparison counts them: a bundle only one side could replay is in
-            // the request list with its error, and in neither side's rates, which would otherwise be of different
-            // samples (50% errors of two requests beside 0% of one).
             if (pair.Baseline is null || pair.Candidate is null || side(pair) is not { } outcome || NotReplayed(pair))
             {
                 continue;
@@ -289,10 +286,6 @@ public static class ReplayComparison
         };
     }
 
-    /// <summary>
-    /// The service of a successful request was degraded: it was served by a fallback pipeline, or a node degraded, fell
-    /// back, failed and was skipped, or was skipped for lack of time or input. Only meaningful for a request that succeeded.
-    /// </summary>
     private static bool IsDegraded(ReplayOutcome outcome)
     {
         if (outcome.Result.ServedBy != outcome.Bundle.Request.PipelineId)
@@ -331,7 +324,6 @@ public static class ReplayComparison
         }
     }
 
-    /// <summary>The item's numeric score; null when the column is absent, missing or not a number.</summary>
     private static double? Score(Pipeline.Execution.RankedItem item, string scoreColumn) =>
         item.Columns.TryGetValue(scoreColumn, out var score) && score.Kind is StorageKind.Float64 or StorageKind.Int64 ? score.AsFloat64() : null;
 

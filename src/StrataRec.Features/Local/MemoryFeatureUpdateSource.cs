@@ -17,7 +17,6 @@ public sealed record MemoryFeatureUpdate(IReadOnlyList<EntityKey> Key, long Vers
 /// <see cref="Upsert(EntityKey[], long, IReadOnlyDictionary{string, ScalarValue})"/> and <see cref="Delete(EntityKey[], long)"/> (or their one-part forms); <see cref="RunAsync"/> applies them in order as one partition (offset =
 /// index of the next update), checkpoints after each batch, and waits for more until <see cref="Complete"/> or cancellation.
 /// </summary>
-/// <remarks>Not built for speed: values arrive as <see cref="ScalarValue"/>s and go through <see cref="RecordBuilder.Set"/>.</remarks>
 public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
 {
     public const string Type = "memory_updates@1";
@@ -93,10 +92,10 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
                 completed = _completed;
             }
 
-            // Cancellation is checked before every update and once more before the checkpoint and the return, so a
-            // cancellation that arrives while an update is applied (the last one included) still ends the run with
-            // OperationCanceledException. Updates applied before it stay; the position is not advanced past them, so a
-            // rerun from the table's position applies them again, which versions make harmless.
+            // Cancellation is checked before the checkpoint and the return, so a cancellation that arrives while an
+            // update is applied (the last one included) still ends the run with OperationCanceledException. Updates
+            // applied before it stay; the position is not advanced past them, so a rerun from the table's position
+            // applies them again, which versions make harmless.
             foreach (var update in batch)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -133,7 +132,7 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
         {
             if (!writer.Schema.TryGetFieldIndex(name, out var field))
             {
-                continue; // a field of the stream that no feature of this table reads
+                continue;
             }
 
             try
@@ -150,8 +149,6 @@ public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
         builder.Commit();
     }
 
-    /// <summary>The update's key, checked against the table's key layout: another number of parts or a part of another type
-    /// is a <see cref="FeatureUpdateException"/> at <c>/key</c> (or <c>/key/&lt;i&gt;</c>) saying what the table is keyed by.</summary>
     private static EntityKey[] KeyOf(MemoryFeatureUpdate update, int offset, LocalTableSchema schema)
     {
         var key = new EntityKey[update.Key.Count];

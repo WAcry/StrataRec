@@ -10,11 +10,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Managed allocation on the request path must not grow with the number of candidates: recall
-/// merge, key lookups, feature fetches and operator scratch all use the request's pooled buffers. Metrics are recorded
-/// with tags cached per plan, so an attached <see cref="MeterListener"/> adds nothing either.
-/// </summary>
 /// <remarks>In the listener collection: another test's listener would run its callbacks on the measuring thread.</remarks>
 [Collection(ProcessWideListenersCollection.Name)]
 public sealed class RequestAllocationTests
@@ -25,18 +20,12 @@ public sealed class RequestAllocationTests
         var small = Measure(Plan(250));
         var large = Measure(Plan(4_000));
 
-        // Before the rented key index, 3,750 more candidates cost ~2.1 MB per request (dictionaries, key lists, a string
-        // per key); now both sizes allocate the same.
         Assert.True(large - small < 4 * 1024, $"250 candidates: {small} B per request, 4,000 candidates: {large} B per request");
     }
 
     [Fact]
     public void HomeFeedRequest_CostsWhatItReads_NotWhatTheCatalogDeclares()
     {
-        // A catalog is shared by many pipelines, and a plan holds only the features it reads. 2,000 features
-        // this pipeline does not read (physical and derived, candidate and context, of a fetched and a local source) used to
-        // cost about 25 B each per request (slots, fill state, the fetcher's per-feature state, output bindings, context
-        // values) and 40% more time; now the plan, and so the request, is the same.
         var lean = Plan(250);
         var wide = HomeFeedTestHost.LoadModified(root =>
         {
@@ -55,8 +44,7 @@ public sealed class RequestAllocationTests
     [Fact]
     public void AnExplainedRequest_CostsWhatItsTargetsAndNodesCost_NotWhatItsCandidatesCost()
     {
-        // Targets are found by key once and followed, so explaining three ids allocates the same at 250 and at
-        // 4,000 candidates (steps, values and reasons: targets × nodes). The ids are early in both recall lists.
+        // The ids are early in both recall lists.
         var smallPlan = Plan(250);
         var largePlan = Plan(4_000);
         var plain = Measure(smallPlan);
@@ -130,12 +118,6 @@ public sealed class RequestAllocationTests
         Assert.True(observed <= quiet, $"without a listener: {quiet} B per request, with one: {observed} B");
     }
 
-    /// <summary>
-    /// A request's temporaries (the ranking copy of each attempt, backfill and derived row lists, the recall
-    /// merge, filter masks, TopK and quota selections) go back to the pool when their computation is done, not with the
-    /// request: held to the end, every array a 4,000-candidate request rented was out at once, and with many requests in
-    /// flight the shared pool dropped what it could not keep and later rents allocated.
-    /// </summary>
     [Fact]
     public async Task ARequestsTemporaries_AreBackInThePoolBeforeItEnds()
     {
@@ -145,12 +127,11 @@ public sealed class RequestAllocationTests
         var result = await executor.ExecuteAsync(Plan(4_000), HomeFeedTestHost.NewRequest(), TestContext.Current.CancellationToken);
 
         Assert.Equal(10, result.Items.Count);
-        Assert.Equal(0, pool.Outstanding); // everything is back once the request has ended
-        Assert.True(pool.PeakBytes * 100 < pool.TotalBytes * 80, // 70% now, 100% when everything waited for the end
+        Assert.Equal(0, pool.Outstanding);
+        Assert.True(pool.PeakBytes * 100 < pool.TotalBytes * 80,
             $"at most {pool.PeakBytes} B were out at once of the {pool.TotalBytes} B rented in all");
     }
 
-    /// <summary>Rents fresh arrays and tracks the bytes out of the pool and their peak.</summary>
     private sealed class PeakPool : Core.Memory.IBufferPool
     {
         private readonly object _gate = new();
@@ -210,8 +191,7 @@ public sealed class RequestAllocationTests
     }
 
     /// <summary>
-    /// Allocated bytes of one request on this thread, best of three after a warm-up. The sample's in-memory sources
-    /// have no latency, so the whole request runs synchronously here.
+    /// The sample's in-memory sources have no latency, so the whole request runs synchronously here.
     /// </summary>
     private static long MeasureBest<T>(Func<ValueTask<T>> run, Func<T, int> items)
     {
@@ -237,9 +217,9 @@ public sealed class RequestAllocationTests
     }
 
     /// <summary>
-    /// Rewrites the sample for <paramref name="candidates"/> recalled items. Everything that legitimately scales with
-    /// the rows a stage keeps is held constant: one fetch chunk (max_batch), and coarse_k stays 30, so the model, the
-    /// logged rows and the decoded category strings are the same at both sizes.
+    /// Everything that legitimately scales with the rows a stage keeps is held constant: one fetch chunk (max_batch),
+    /// and coarse_k stays 30, so the model, the logged rows and the decoded category strings are the same at both
+    /// sizes.
     /// </summary>
     private static void Scale(string root, int candidates)
     {
@@ -257,7 +237,6 @@ public sealed class RequestAllocationTests
 
         File.WriteAllText(Path.Combine(root, "fixtures", "items.json"), items.Append("\n}").ToString());
 
-        // author_store is a local table loaded from a snapshot directory (one JSONL part).
         var authors = new StringBuilder();
         for (var id = 100; id < 400; id++)
         {
@@ -266,7 +245,6 @@ public sealed class RequestAllocationTests
 
         File.WriteAllText(Path.Combine(root, "fixtures", "author_snapshot", "part-0000.jsonl"), authors.ToString());
 
-        // Two thirds from the personalized source, the rest from the popular list; the lists overlap.
         var twoTower = candidates * 2 / 3;
         var popular = candidates - twoTower;
         File.WriteAllText(Path.Combine(root, "fixtures", "recall_vectors.json"), RecallVectors(1, twoTower));
@@ -280,11 +258,6 @@ public sealed class RequestAllocationTests
         File.WriteAllText(bindings, File.ReadAllText(bindings).Replace("\"max_batch\": 25", "\"max_batch\": 10000", StringComparison.Ordinal));
     }
 
-    /// <summary>
-    /// Adds <paramref name="count"/> features no node, tap or output of the sample reads to its catalog: a quarter each
-    /// physical item features (a fetched source), physical user features (context), derived item features and derived user
-    /// features, and a few of author_store (a local table, laid out from the catalog either way).
-    /// </summary>
     internal static void AddUnusedFeatures(string root, int count)
     {
         var quarter = (count - Math.Min(20, count)) / 4;

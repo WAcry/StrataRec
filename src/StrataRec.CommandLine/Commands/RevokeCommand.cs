@@ -6,26 +6,11 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec revoke</c>: the emergency stop for the release controller that <c>stratarec publish</c> is.
-/// It publishes, at once, what the pointer publishes without the named experiments, as the next release (<c>seq</c> one
-/// more), which lists them as revoked. Nodes take it as they take any newer release. Nothing is compiled or validated
-/// (<see cref="ManifestBuilder.RevokeAsync"/>), so the stop takes the nodes' polling interval and a compile, and needs
-/// neither the repository nor CI.
-/// </summary>
-/// <remarks>
-/// <para>It reads the pointer and moves it under the pointer's lock, as publish does, so no publish comes between what it
-/// read and what it writes. Run again, it changes nothing: an experiment the published manifest lists as revoked already is
-/// reported as such, and the command succeeds, so a stop can be retried without thought.</para>
-/// <para>The stop lasts without controller state of its own: while the published manifest lists an experiment as revoked,
-/// <c>stratarec build</c> refuses to release it unchanged (see <see cref="BuildCommand"/>), and the owner's change to the
-/// experiment, or <c>--restore</c>, releases it again.</para>
-/// </remarks>
 internal static class RevokeCommand
 {
     public static Command Create(PlanEnvironment provided)
     {
-        _ = provided; // nothing is compiled: the experiments are removed from what is published as it is
+        _ = provided;
         var experiments = new Argument<string[]>("experiments")
         {
             Description = "The experiments to remove from the published release.",
@@ -50,7 +35,6 @@ internal static class RevokeCommand
         return command;
     }
 
-    /// <param name="errors">Where diagnostics and advice go; standard error by default.</param>
     internal static async Task<int> RunAsync(
         string[] experiments, string storeRoot, string pipelineId, string environment, string format, TextWriter output, CancellationToken cancellationToken,
         TextWriter? errors = null)
@@ -154,8 +138,7 @@ internal static class RevokeCommand
     }
 
     /// <summary>
-    /// Reads what the pointer publishes and moves the pointer to its revocation, under the pointer's lock. Null, with the
-    /// exit code, after reporting errors.
+    /// Reads what the pointer publishes and moves the pointer to its revocation, under the pointer's lock.
     /// </summary>
     private static async Task<(Outcome? Outcome, int Code)> RevokeAsync(
         string[] experiments, FileSystemManifestSource pointers, string path, IArtifactStore store, string pipelineId, string environment,
@@ -247,7 +230,6 @@ internal static class RevokeCommand
         return "it releases " + string.Join(", ", names);
     }
 
-    /// <summary>What a revoke did: the manifest published now (the revocation, or what was published already), and the one before.</summary>
     private sealed record Outcome(
         string Id, long Seq, (string Id, long Seq) Previous, List<string> Revoked, List<(string Name, RevokedExperiment Revocation)> RevokedAlready);
 }

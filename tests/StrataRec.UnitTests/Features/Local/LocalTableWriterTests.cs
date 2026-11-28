@@ -7,17 +7,13 @@ using static StrataRec.UnitTests.Features.Local.LocalTableTestSupport;
 
 namespace StrataRec.UnitTests.Features.Local;
 
-/// <summary>
-/// The writer's pending buffer (list items and strings are staged in one growable byte array until commit) and the
-/// <c>max_bytes</c> charge for new dictionary strings.
-/// </summary>
 public class LocalTableWriterTests
 {
     // The pending buffer starts at 256 bytes: 64 int32 items or 32 int64 items fill it exactly.
     [Theory]
     [InlineData(64)]
     [InlineData(65)]
-    [InlineData(10_000)] // many growths in a row
+    [InlineData(10_000)]
     public void Int32ListItems_SurviveGrowthOfAFreshBuffer(int count)
     {
         var table = Table();
@@ -75,8 +71,7 @@ public class LocalTableWriterTests
 
     /// <summary>
     /// A text of n chars leaves the buffer at 2n bytes, not a power of two; the next record's list then crosses that
-    /// size mid-list. The item that crosses it must land in the grown buffer, not in the old one (where it would be lost
-    /// and, at 451 chars, write past the old array's end), and the stale text bytes must not show through.
+    /// size mid-list.
     /// </summary>
     [Theory]
     [InlineData(450)]
@@ -135,7 +130,6 @@ public class LocalTableWriterTests
         Assert.Equal(before, table.Pin().Bytes);
         Assert.Equal(0, table.Pin().RecordCount);
 
-        // What it costs, measured without a limit, is exactly the limit it needs.
         var needed = BytesAfter(long.MaxValue, w => WriteStrings(w, 1, strings));
         Assert.True(needed > 9000);
         Assert.Equal(needed, BytesAfter(needed, w => WriteStrings(w, 1, strings)));
@@ -163,7 +157,6 @@ public class LocalTableWriterTests
     [Fact]
     public void MaxBytes_ChargesARepeatedNewStringOnce()
     {
-        // A record repeating its new strings (in a string field and in list items) is charged for each distinct one once.
         void Write(IFeatureTableWriter writer)
         {
             var builder = writer.Begin(1L, 1);
@@ -213,8 +206,7 @@ public class LocalTableWriterTests
     [Fact]
     public void MaxBytes_RechargesASingleStringAfterACompactionDropsIt()
     {
-        // As above with one string value (the writer's fast path). Keys 2-8 fill the index to its limit, so the last write
-        // also grows the index.
+        // Keys 2-8 fill the index to its limit, so the last write also grows the index.
         var first = new string('f', 600);
         void Setup(IFeatureTableWriter writer)
         {
@@ -244,10 +236,9 @@ public class LocalTableWriterTests
 
     /// <summary>
     /// A string costs its record only a 4-byte code, so a field rewritten with long new values supersedes small records
-    /// and leaves its old values in the dictionary. The automatic compaction counts those strings (once no current record
-    /// references them) with the superseded records: here the records alone (20 superseded of 120) would never compact,
-    /// while most of the table's bytes are strings nothing reads. A string current records still hold ("shared", the tags)
-    /// is never counted, and a compaction rebuilds the counts.
+    /// and leaves its old values in the dictionary. The automatic compaction counts those strings (once no current
+    /// record references them) with the superseded records: here the records alone (20 superseded of 120) would never
+    /// compact, while most of the table's bytes are strings nothing reads.
     /// </summary>
     [Fact]
     public void StringsOnlySupersededRecordsHeld_DriveTheAutomaticCompaction_AndAStringACurrentRecordHoldsIsNotCounted()
@@ -268,7 +259,6 @@ public class LocalTableWriterTests
             Assert.True(builder.Commit());
         }
 
-        // 100 keys with short descriptions, then keys 1-5 rewritten four times with 2,000-char ones.
         static void Fill(LocalTableWriter writer)
         {
             for (var key = 1; key <= 100; key++)
@@ -338,8 +328,6 @@ public class LocalTableWriterTests
     [MemberData(nameof(EmptyListsAfterText))]
     public void EmptyList_AfterTextOfAnyLength_IsKept_AndIsNotMissing(string list, int textChars)
     {
-        // After a string that grew the staging buffer to a size that is not a multiple of 8, an
-        // empty list's aligned start was past the buffer's end and Commit threw.
         var schema = Schema(fields: new[]
         {
             new LocalTableField("t", ColumnType.String),
@@ -372,8 +360,6 @@ public class LocalTableWriterTests
     [Fact]
     public void FailedWrite_LeavesTheTableAsItWas_ThoughACompactionWasTried()
     {
-        // The write needs a compaction to have a chance, the compacted copy cannot make room for
-        // it, and the write fails. The copy must not be published: same version, bytes and generation.
         var schema = Schema(fields: new[] { new LocalTableField("l", ColumnType.List(StorageKind.Int32)) });
         var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions { PageSize = 4096, MaxBytes = 42368, CompactionMinBytes = long.MaxValue });
         for (var key = 1; key <= 18; key++)
@@ -396,18 +382,12 @@ public class LocalTableWriterTests
         Assert.False(after.Find(999L).Found);
         Assert.Equal(378, after.Read(0, after.Find(2L)).ListLength);
 
-        // An explicit compaction fits (the records are packed in their old order) and is published.
         table.Writer.Compact();
         Assert.NotSame(before, table.Pin());
         Assert.True(table.Pin().Bytes < before.Bytes);
         Assert.Equal(18, table.Pin().RecordCount);
     }
 
-    /// <summary>
-    /// The writer keeps nothing of a version it wrote once that version is replaced:
-    /// the probe of its last write held the version, with its pages, index and dictionary, until the next write, which a
-    /// source with nothing more to write never makes.
-    /// </summary>
     [Theory]
     [InlineData("empty reload")]
     [InlineData("compaction")]
@@ -422,7 +402,7 @@ public class LocalTableWriterTests
         Assert.False(old.IsAlive, $"the writer keeps the version replaced by the {replacement} alive");
     }
 
-    /// <summary>Writes records, replaces the version; a weak reference to the old one. Not inlined, so no local here keeps it alive.</summary>
+    /// <summary>Not inlined, so no local here keeps it alive.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference WriteThenReplace(LocalFeatureTable table, string replacement)
     {
@@ -431,7 +411,7 @@ public class LocalTableWriterTests
             Write(table.Writer, EntityKey.FromInt64(id), 1, Values(id));
         }
 
-        Write(table.Writer, EntityKey.FromInt64(1), 2, Values(1)); // superseded bytes, for the compaction to drop
+        Write(table.Writer, EntityKey.FromInt64(1), 2, Values(1));
         var old = new WeakReference(table.Pin());
         if (replacement == "compaction")
         {
@@ -450,9 +430,6 @@ public class LocalTableWriterTests
     [Fact]
     public void RejectedWrite_DoesNotKeepTheDiscardedCompactedCopyAlive()
     {
-        // The write's one string is looked up in the compacted copy built to make room for it;
-        // the copy does not make room, the write fails, and the lookup cache kept the whole copy alive (40 KB here, a
-        // second table at real size) until the next Begin, which a source stopped by the failure may never call.
         var schema = Schema(fields: new[] { new LocalTableField("l", ColumnType.List(StorageKind.Int32)), new LocalTableField("s", ColumnType.String) });
         var options = new LocalFeatureTableOptions { PageSize = 4096, MaxBytes = 46512, CompactionMinBytes = long.MaxValue };
         var table = new LocalFeatureTable(schema, options);
@@ -508,10 +485,8 @@ public class LocalTableWriterTests
     [Fact]
     public void ExplicitCompaction_ThatWouldNotFit_IsRejected_AndTheTableIsUnchanged()
     {
-        // A compacted copy can be larger than the table, so the guard that rejects it is reachable.
-        // The table: key 1's empty list in a small first page, key 2's 80 KB list in a page of its own. The copy opens its
-        // first page for all the bytes still to copy (a whole 64 KiB page), puts key 1 in it, and key 2 does not fit: it
-        // takes a second page, and the first stays almost empty.
+        // The copy opens its first page for all the bytes still to copy (a whole 64 KiB page), puts key 1 in it, and
+        // key 2 does not fit: it takes a second page, and the first stays almost empty.
         var schema = Schema(fields: new[] { new LocalTableField("l", ColumnType.List(StorageKind.Int32)) });
         var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions { PageSize = 65536, MaxBytes = 84696, CompactionMinBytes = long.MaxValue });
         WritePayload(table.Writer, 1, 1, 0);
@@ -533,13 +508,9 @@ public class LocalTableWriterTests
     [InlineData(3)]
     public void MaxBytes_HoldsAfterEveryOperation_AndAFailedOneChangesNothing(int seed)
     {
-        // Random updates of 40 keys near the limit (which the budget path's compactions keep the table under), automatic
-        // compactions (small CompactionMinBytes), explicit ones, and now and then a record too large for the limit, which
-        // tries a compaction and must fail without a trace. A failure from the table being full is fine too; whatever
-        // happens, the table never exceeds the limit and a failed operation changes nothing.
         var schema = Schema(fields: new[]
         {
-            new LocalTableField("t", ColumnType.String), // long values: what the dictionary holds counts toward the limit
+            new LocalTableField("t", ColumnType.String),
             new LocalTableField("s", ColumnType.String),
             new LocalTableField("li32", ColumnType.List(StorageKind.Int32)),
         });
@@ -597,7 +568,6 @@ public class LocalTableWriterTests
         }
     }
 
-    /// <summary>A record whose field 0, a list&lt;int32&gt;, holds <paramref name="bytes"/> bytes (rounded up to 4) inline.</summary>
     private static void WritePayload(IFeatureTableWriter writer, long key, long version, int bytes)
     {
         var builder = writer.Begin(key, version);
@@ -606,10 +576,8 @@ public class LocalTableWriterTests
     }
 
     /// <summary>
-    /// <paramref name="last"/> reuses a string only a superseded record of <paramref name="setup"/> holds. Below what it
-    /// needs both without a compaction and after one, the write compacts, finds that the copy (which dropped the string,
-    /// so the write adds it again) does not make room, and fails with the table unchanged. A writer that kept the string's
-    /// charge from before the compaction would take the copy and end above the limit.
+    /// <paramref name="last"/> reuses a string only a superseded record of <paramref name="setup"/> holds. A writer
+    /// that kept the string's charge from before the compaction would take the copy and end above the limit.
     /// </summary>
     private static void AssertRechargedAfterCompaction(Action<IFeatureTableWriter> setup, Action<IFeatureTableWriter> last, long lastKey)
     {
@@ -625,7 +593,6 @@ public class LocalTableWriterTests
         last(compacted.Writer);
         var afterCompaction = compacted.Pin().Bytes;
 
-        // With room for the write as it is, it takes exactly that.
         Assert.Equal(withoutCompaction, BytesAfter(withoutCompaction, w => { setup(w); last(w); }));
 
         var limit = Math.Min(withoutCompaction, afterCompaction) - 1;
@@ -641,7 +608,6 @@ public class LocalTableWriterTests
         Assert.Equal("b", before.Read(table.Schema.FieldIndex("s"), before.Find(1L)).AsString());
     }
 
-    /// <summary>20 records of a 2,000-byte list sharing one category, then key 1 again: one superseded record.</summary>
     private static void FillPayloadAndCategory(IFeatureTableWriter writer)
     {
         for (var key = 1; key <= 20; key++)
@@ -660,8 +626,7 @@ public class LocalTableWriterTests
         builder.Commit();
     }
 
-    /// <summary>A write of two million bytes that fails after a compaction was tried; a weak reference to the copy it built.
-    /// Not inlined, so no local of this frame keeps the copy alive in the caller.</summary>
+    /// <summary>Not inlined, so no local of this frame keeps the copy alive in the caller.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference FailWriteThatNeedsACompaction(LocalTableWriter writer)
     {

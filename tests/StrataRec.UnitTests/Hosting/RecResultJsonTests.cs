@@ -10,10 +10,6 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>
-/// <see cref="RecResultJson"/>: the one document of a result, for every host and the CLI. Missing is null, never 0; what
-/// JSON cannot represent is null too; ids and integers are exact; floats are not rounded.
-/// </summary>
 public sealed class RecResultJsonTests
 {
     [Fact]
@@ -59,8 +55,8 @@ public sealed class RecResultJsonTests
     {
         var json = Write(Result(new RankedItem(EntityKey.FromInt64(7), 1, new Dictionary<string, ScalarValue>
         {
-            ["p_click"] = ScalarValue.FromFloat32(0.1f), // a float32 column's value
-            ["widened"] = ScalarValue.FromFloat64(0.1f), // the same number in a float64 column
+            ["p_click"] = ScalarValue.FromFloat32(0.1f),
+            ["widened"] = ScalarValue.FromFloat64(0.1f),
             ["nan"] = ScalarValue.FromFloat32(float.NaN),
         })));
 
@@ -78,7 +74,7 @@ public sealed class RecResultJsonTests
             new RankedItem(EntityKey.FromInt64(7), 1, new Dictionary<string, ScalarValue>
             {
                 ["p"] = ScalarValue.FromFloat64(0.1f), // a float32 value held as its double, e.g. a float32 request input
-                ["d"] = ScalarValue.FromFloat32(0.1f), // the same number in a float64 column is the double
+                ["d"] = ScalarValue.FromFloat32(0.1f),
                 ["v"] = ScalarValue.FromFloat64List([0.1f, 2f]),
             })));
 
@@ -101,7 +97,7 @@ public sealed class RecResultJsonTests
             ["inf"] = ScalarValue.FromFloat64(double.NegativeInfinity),
             ["string"] = ScalarValue.FromString("a \"quoted\" é"),
             ["text"] = ScalarValue.FromString("line\nbreak"),
-            ["vector"] = ScalarValue.FromFloat32List(new[] { 0.5f, float.NaN, float.PositiveInfinity }), // an embedding, list<float32,3>
+            ["vector"] = ScalarValue.FromFloat32List(new[] { 0.5f, float.NaN, float.PositiveInfinity }),
             ["ints"] = ScalarValue.FromInt64List(new[] { long.MinValue, 2L }),
             ["strings"] = ScalarValue.FromStringList(new[] { "x", string.Empty }),
             ["empty"] = ScalarValue.FromInt64List(Array.Empty<long>()),
@@ -114,24 +110,24 @@ public sealed class RecResultJsonTests
 
         using var document = JsonDocument.Parse(json);
         var item = document.RootElement.GetProperty("items")[0];
-        Assert.Equal("item-\"1\"", item.GetProperty("id").GetString()); // a string id is a string
+        Assert.Equal("item-\"1\"", item.GetProperty("id").GetString());
         var written = item.GetProperty("columns");
-        Assert.Equal(JsonValueKind.Null, written.GetProperty("missing").ValueKind); // never 0
+        Assert.Equal(JsonValueKind.Null, written.GetProperty("missing").ValueKind);
         Assert.Equal(JsonValueKind.Null, written.GetProperty("nan").ValueKind);
         Assert.Equal(JsonValueKind.Null, written.GetProperty("inf").ValueKind);
         Assert.Equal(JsonValueKind.False, written.GetProperty("bool").ValueKind);
         Assert.Contains("\"int\":9007199254740993,", json, StringComparison.Ordinal); // exact above 2^53
-        Assert.Contains("\"float\":0.1,", json, StringComparison.Ordinal); // the shortest form that reads back as the double
-        Assert.Equal(1e-300, written.GetProperty("tiny").GetDouble()); // not rounded
+        Assert.Contains("\"float\":0.1,", json, StringComparison.Ordinal);
+        Assert.Equal(1e-300, written.GetProperty("tiny").GetDouble());
         Assert.Equal("a \"quoted\" é", written.GetProperty("string").GetString());
         Assert.Equal("line\nbreak", written.GetProperty("text").GetString());
         Assert.Contains("\"vector\":[0.5,null,null]", json, StringComparison.Ordinal);
         Assert.Contains("\"ints\":[-9223372036854775808,2]", json, StringComparison.Ordinal);
         Assert.Contains("\"strings\":[\"x\",\"\"]", json, StringComparison.Ordinal);
         Assert.Contains("\"empty\":[]", json, StringComparison.Ordinal);
-        Assert.Contains("\"flags\":[true,false]", json, StringComparison.Ordinal); // JSON booleans, as a bool column is
-        Assert.Contains("\"weights\":[0.1,null,1E-300]", json, StringComparison.Ordinal); // a non-finite element is null, as a non-finite float is
-        Assert.Contains("\"weights32\":[0.1,null]", json, StringComparison.Ordinal); // float32 elements as the floats they are
+        Assert.Contains("\"flags\":[true,false]", json, StringComparison.Ordinal);
+        Assert.Contains("\"weights\":[0.1,null,1E-300]", json, StringComparison.Ordinal);
+        Assert.Contains("\"weights32\":[0.1,null]", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -160,7 +156,6 @@ public sealed class RecResultJsonTests
         Assert.Contains("\"column_producers\":{\"score\":\"rank\"}", Write(withProducers, options: new RecResultJsonOptions { IncludeColumnProducers = true }), StringComparison.Ordinal);
     }
 
-    /// <summary>A result of the items, each column typed as its first value is a value of (<see cref="TypeOf"/>).</summary>
     private static RecResult Result(params RankedItem[] items) =>
         Result(items.Length == 0 ? [] : items[0].Columns.Select(c => (c.Key, TypeOf(c.Value))).ToArray(), items);
 
@@ -175,8 +170,6 @@ public sealed class RecResultJsonTests
         ElapsedMs = 1.23456,
     };
 
-    /// <summary>The type of a test value: its promoted kind, float32 for one read from float32 storage, a nullable
-    /// float64 for a missing one.</summary>
     private static ColumnType TypeOf(ScalarValue value) => value switch
     {
         { IsMissing: true } => ColumnType.Float64.AsNullable(),

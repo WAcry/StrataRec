@@ -30,7 +30,6 @@ public sealed class ExpressionFilterFactory : IOperatorFactory
 
     private sealed class ExpressionFilter(CompiledExpression predicate) : Operator, IExplainableOperator
     {
-        /// <summary>The predicate and its value for each row it tested.</summary>
         public void Explain(ExplainContext context)
         {
             var values = context.Evaluate(predicate);
@@ -207,10 +206,6 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
         (string Name, CompiledExpression Expr)[] addends,
         OutputColumn output) : Operator, IExplainableOperator
     {
-        /// <summary>
-        /// The base utility, each multiplier and each addend for a scored row, and the score they make
-        /// in the operator's order: the base, times each multiplier, plus each addend, in float64.
-        /// </summary>
         /// <remarks>
         /// The terms are the exact doubles; the reason is written at the precision of the column it explains, so for a float32
         /// column its numbers are floats and its result is the value the column holds (the operator narrows the same double).
@@ -258,7 +253,7 @@ public sealed class CompositeMultiplierScorerFactory : IOperatorFactory
         private static double Term(ExplainContext context, int target, string name, in ScalarValue value, StringBuilder text, bool single)
         {
             context.Term(target, name, value);
-            var number = value.IsMissing ? double.NaN : value.AsFloat64(); // score terms are non-nullable float64
+            var number = value.IsMissing ? double.NaN : value.AsFloat64();
 
             // A term is a float64, and may lie outside float32's range where the result does not: at float32's precision
             // only where float32 holds it, never as an Infinity or a 0 it was not.

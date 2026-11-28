@@ -5,7 +5,6 @@ namespace StrataRec.Core.Columns;
 
 /// <summary>
 /// Helpers for bitmaps stored as <c>ulong</c> words (bit <c>i</c> lives in word <c>i &gt;&gt; 6</c>, LSB first).
-/// Used for validity, fill state and liveness. A 5,000-row bitmap is 79 words.
 /// </summary>
 public static class Bits
 {
@@ -54,8 +53,7 @@ public static class Bits
     }
 
     /// <summary>
-    /// Sets the bit of every index in <paramref name="indices"/> (any order, repeats allowed). Consecutive indices in one
-    /// word are gathered in a register and stored once, so a run of ascending rows does not wait on its own stores.
+    /// Sets the bit of every index in <paramref name="indices"/> (any order, repeats allowed).
     /// </summary>
     public static void SetEach(Span<ulong> words, ReadOnlySpan<int> indices)
     {

@@ -8,7 +8,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Experiments;
 
-/// <summary>What a release needs of a binary, the baseline's and each experiment's.</summary>
 public sealed class ReleaseRequirementsTests
 {
     /// <summary>
@@ -58,11 +57,6 @@ public sealed class ReleaseRequirementsTests
         Assert.Equal(["future@1"], requirements.Experiments["exp_add"]);
     }
 
-    /// <summary>
-    /// A needs future@1 alone, and b and c (other layers) need it together. It goes to all three: revoking a
-    /// leaves b and c requiring what they need. Before, only a listed it, and the release without a required nothing a
-    /// binary without future@1 lacks, though its compile fails there.
-    /// </summary>
     [Fact]
     public void ACapabilityOneExperimentNeedsAlone_AndAPairOfOthersNeedsToo_GoesToAllThree()
     {
@@ -79,7 +73,6 @@ public sealed class ReleaseRequirementsTests
         Assert.Equal(["future@1"], requirements.Experiments["c"]);
     }
 
-    /// <summary>Two experiments that each need it alone list it, and the baseline does not: revoking both frees it.</summary>
     [Fact]
     public void ACapabilityTwoExperimentsEachNeedAlone_GoesToBoth_NotToTheBaseline()
     {
@@ -96,10 +89,6 @@ public sealed class ReleaseRequirementsTests
         Assert.Empty(requirements.Experiments["d"]);
     }
 
-    /// <summary>
-    /// Every set of experiments a revocation can leave requires what its compile needs: the property the attribution
-    /// promises, checked over all subsets of a release with a capability one experiment needs alone and a pair needs too.
-    /// </summary>
     [Fact]
     public void EverySetOfExperimentsLeft_RequiresWhatItNeeds()
     {
@@ -139,10 +128,6 @@ public sealed class ReleaseRequirementsTests
         return requirements!;
     }
 
-    /// <summary>
-    /// Two recalls reading quota maps q1 and q2; qf holds a source of client type future@1, q3 does not until an arm adds it.
-    /// Each experiment is in a layer of its own.
-    /// </summary>
     private static (PlanCompileRequest Request, PlanEnvironment Environment) Workspace(Dictionary<string, string> patches)
     {
         var root = Directory.CreateTempSubdirectory("stratarec-requirements-").FullName;
@@ -193,7 +178,6 @@ public sealed class ReleaseRequirementsTests
         File.WriteAllText(full, content);
     }
 
-    /// <summary>A client type this binary would not have: the memory list under another name.</summary>
     private sealed class AliasFactory : IBindingFactory<IServiceClient>
     {
         public string Type => "future@1";

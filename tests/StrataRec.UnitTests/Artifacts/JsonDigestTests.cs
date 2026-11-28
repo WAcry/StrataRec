@@ -3,10 +3,6 @@ using StrataRec.Artifacts.Json;
 
 namespace StrataRec.UnitTests.Artifacts;
 
-/// <summary>
-/// The digest configurations are told apart by where a content id cannot be: every value has one, the order its members
-/// were written in does not matter, and two values that differ anywhere differ in it.
-/// </summary>
 public class JsonDigestTests
 {
     [Fact]
@@ -17,7 +13,7 @@ public class JsonDigestTests
             JsonValue.Create(9_007_199_254_740_993L), // 2^53 + 1: RFC 8785 cannot hold it exactly
             JsonValue.Create(double.NaN),
             JsonValue.Create(float.PositiveInfinity),
-            JsonValue.Create("\ud800"), // an unpaired surrogate
+            JsonValue.Create("\ud800"),
             JsonNode.Parse("1e400"),
         ];
 
@@ -51,6 +47,6 @@ public class JsonDigestTests
         var digests = different.Select(text => JsonDigest.Of(JsonNode.Parse(text))).ToList();
 
         Assert.Equal(different.Length, digests.Distinct().Count());
-        Assert.Equal(JsonDigest.Of(JsonValue.Create(7L)), JsonDigest.Of(JsonNode.Parse("7"))); // a typed host's value and the file's
+        Assert.Equal(JsonDigest.Of(JsonValue.Create(7L)), JsonDigest.Of(JsonNode.Parse("7")));
     }
 }

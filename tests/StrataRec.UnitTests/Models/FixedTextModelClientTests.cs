@@ -6,10 +6,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Models;
 
-/// <summary>
-/// <c>fixed_text@1</c>, the stand-in for a generative model: it declares the text signature its settings give, and every
-/// call answers the same fixed texts.
-/// </summary>
 public sealed class FixedTextModelClientTests
 {
     private const string Settings = """{ "inputs": ["system", "user"], "outputs": { "answer": "[3, 1, 2]", "note": "" } }""";
@@ -27,7 +23,6 @@ public sealed class FixedTextModelClientTests
         Assert.Equal(new[] { "answer text []", "note text []" }, signature.Outputs.Select(Describe));
         Assert.Equal(signature, await client.DescribeAsync("llm", null, CancellationToken.None));
 
-        // What LlmReranker@1 checks at load: the stand-in passes as the real model would.
         Assert.Empty(TextSignature.Check("Model 'llm' version 'v7'", "LlmReranker@1", [("system", "/prompts/system"), ("user", "/prompts/user")], [("answer", "/output")], signature));
         await Assert.ThrowsAsync<ArgumentException>(async () => await client.DescribeAsync("other", null, CancellationToken.None));
     }
@@ -85,7 +80,7 @@ public sealed class FixedTextModelClientTests
     [InlineData("""{ "inputs": ["user"], "outputs": { } }""", "/outputs", "'outputs' is empty")]
     [InlineData("""{ "inputs": ["user"], "outputs": { "answer": [3, 1] } }""", "/outputs/answer", "Entry 'answer' of 'outputs' must be a string")]
     [InlineData("""{ "inputs": ["user"], "outputs": { "": "x" } }""", "/outputs/", "'outputs' maps an empty name.")]
-    [InlineData("""{ "inputs": ["user"], "outputs": { "a/b": "x", "a/b": "y" } }""", "/outputs/a~1b", "Duplicate key 'a/b'")] // settings built in code
+    [InlineData("""{ "inputs": ["user"], "outputs": { "a/b": "x", "a/b": "y" } }""", "/outputs/a~1b", "Duplicate key 'a/b'")]
     public void BadSettings_AreBindingErrors_AtTheirPointer_WithAHint(string settings, string pointer, string message)
     {
         var error = Assert.Throws<BindingException>(() => Create(settings));
@@ -100,7 +95,6 @@ public sealed class FixedTextModelClientTests
     private static BindingContext Context(string settings) =>
         new("llm", ParseSettings(settings), AppContext.BaseDirectory, null);
 
-    /// <summary>The settings' members in order, repeats included (a dictionary would keep only one).</summary>
     private static IReadOnlyDictionary<string, JsonElement> ParseSettings(string settings)
     {
         var members = new Dictionary<string, JsonElement>();

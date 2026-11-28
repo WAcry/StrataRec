@@ -5,10 +5,9 @@ using StrataRec.Expressions.Binding;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>
-/// <c>docs/guide/expressions.md</c> says only what the compiler does: every <c>colexpr</c> block of the page is run.
-/// A line ending in <c>// =&gt; value</c> evaluates to that value (<c>missing</c> for no value), a line ending in
-/// <c>// error</c> does not compile, and everything else (up to a blank line or the end of the block) compiles. The
-/// names the page's examples use are declared in <see cref="Fixture"/>.
+/// <c>docs/guide/expressions.md</c> says only what the compiler does: every <c>colexpr</c> block of the page is run. A
+/// line ending in <c>// =&gt; value</c> evaluates to that value (<c>missing</c> for no value), a line ending in <c>//
+/// error</c> does not compile, and everything else (up to a blank line or the end of the block) compiles.
 /// </summary>
 public sealed class ExpressionGuideTests
 {

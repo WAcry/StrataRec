@@ -34,10 +34,6 @@ public sealed record EffectiveTap(CompiledTap Tap, CompiledFunnelGroup Group);
 /// definitions, its parameter snapshot, the log taps that capture and the funnel groups they sample with, and the output.
 /// </summary>
 /// <remarks>
-/// <para>It is read from the compiled unified plan, selecting each node's and tap's variant exactly as a request does
-/// (<see cref="TimelineSlot.Select"/>), rather than by merging the patches again: it shows what runs, and a compiler
-/// fault would show in it instead of being repeated by a second implementation. <c>explain-plan --arms</c> prints it and
-/// <c>diff</c> compares two of them through <see cref="ToDocument"/>, so the two never disagree.</para>
 /// <para>What exists only because of an arm appears only in combinations that include the arm: a node it adds, a
 /// parameter leaf it declares (whose baseline is missing), a tap it attaches. Funnel groups are those the selected taps
 /// use, so a group an arm adds does not appear in the baseline.</para>
@@ -244,22 +240,12 @@ public sealed class EffectivePlan
         };
         if (Output.Values.Length > 0)
         {
-            document["values"] = Expressions(Output.Values); // only where there are: a plan without stays the document it was
+            document["values"] = Expressions(Output.Values);
         }
 
         return Sorted(document, "output");
     }
 
-    /// <summary>
-    /// The RFC 8785 form of a document: members in ordinal order at every level, numbers in their canonical spelling. A
-    /// workspace and a manifest built from it hold the same definitions in different member orders (the store keeps
-    /// canonical bytes), so only this form prints the same for both.
-    /// </summary>
-    /// <param name="section">The document's member in <see cref="ToDocument"/>, which prefixes the pointer of a value the
-    /// form cannot hold.</param>
-    /// <exception cref="JsonCanonicalizationException">A value has no exact canonical form, at its pointer into <see cref="ToDocument"/>.
-    /// What compiled has passed the same check (an artifact when it is hashed, an integer parameter when it is bound), so
-    /// this is not expected; the commands report it as a diagnostic all the same.</exception>
     private static JsonObject Sorted(JsonObject document, string section)
     {
         try

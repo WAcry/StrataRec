@@ -6,7 +6,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>The bindings of a compile that does not serve: one instance per identity and factory object.</summary>
 public sealed class UnloadedBindingsTests
 {
     private static readonly string Root = Path.Combine(Path.GetTempPath(), "stratarec-config");

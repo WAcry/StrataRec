@@ -14,16 +14,14 @@ using StrataRec.UnitTests.Features;
 namespace StrataRec.UnitTests.Pipeline;
 
 /// <summary>
-/// One service, <c>m</c>, with a cache: its in-process table, written back by hand
-/// (<see cref="Apply"/>, what the table's writer does in the background), an optional distributed tier, a clock the test
-/// moves, and the service itself (<see cref="CountingService"/>). Calls go through <see cref="OperatorContext.CallAsync"/>
-/// as an operator's do.
+/// One service, <c>m</c>, with a cache: its in-process table, written back by hand (<see cref="Apply"/>, what the
+/// table's writer does in the background), an optional distributed tier, a clock the test moves, and the service itself
+/// (<see cref="CountingService"/>).
 /// </summary>
 internal sealed class ServiceCacheRig
 {
     private RequestMemory _memory = new();
 
-    /// <param name="cached">False binds the service without its cache: the same calls, for comparison.</param>
     /// <param name="identity">What the binding answers with (<see cref="ServiceCache.AnswerIdentity"/>): rigs sharing a store share records only with the same one.</param>
     public ServiceCacheRig(
         long ttlMs = 60_000, long staleIfErrorMs = 0, ICacheStore? store = null, int? timeoutMs = null, int distributedTimeoutMs = 10_000, bool cached = true,
@@ -53,25 +51,21 @@ internal sealed class ServiceCacheRig
 
     public BoundService Bound { get; }
 
-    /// <summary>The same service without its cache, for comparison.</summary>
     public BoundService Unbound { get; }
 
-    /// <summary><paramref name="client"/> as <c>m</c>, with this rig's cache.</summary>
     public BoundService With(IServiceClient client) => new("m", client, IoRoles.Model, _timeoutMs, Cache);
 
     /// <summary>
-    /// Each call is a request of its own: its memory is given back when the next call starts, as the engine gives it back
-    /// at the request's end (a response is read before the next call). Otherwise every call's buffers stay rented.
+    /// Each call is a request of its own: its memory is given back when the next call starts, as the engine gives it
+    /// back at the request's end (a response is read before the next call).
     /// </summary>
     public bool ReleaseEachCall { get; init; }
 
-    /// <summary>The context of the last call (its degraded reason).</summary>
     public OperatorContext? Last { get; private set; }
 
     /// <summary>Applies what calls handed the local tier; returns the batches.</summary>
     public int Apply() => Table.Cache!.WriteQueued(Table.Writer);
 
-    /// <summary>A call about items <paramref name="ids"/> with input <c>x</c> (one float each), reading <paramref name="outputs"/>.</summary>
     public static ServiceCall Items(long[] ids, float[] x, params string[] outputs) => new()
     {
         Service = "m",
@@ -81,7 +75,6 @@ internal sealed class ServiceCacheRig
         Outputs = outputs.Length == 0 ? new[] { "p" } : outputs,
     };
 
-    /// <summary>A call about no items with input <c>q</c>, asking for <paramref name="limit"/> items and reading <paramref name="outputs"/>.</summary>
     public static ServiceCall Query(float q, int limit, params string[] outputs) => new()
     {
         Service = "m",
@@ -127,12 +120,6 @@ internal sealed class ServiceCacheRig
     public static long[] Ids(ServiceResponse response) => response.Keys.ToArray().Select(k => k.Int64Value).ToArray();
 }
 
-/// <summary>
-/// <c>m</c>: about items, output <c>p</c> is <c>x × 10 + Offset</c> (<see cref="Width"/> values an item, the w-th plus
-/// w), <c>q</c> is <c>[id, 2 id]</c> (int64) and, when <see cref="WriteText"/>, text <c>note</c>; about no items, it
-/// adds its first <see cref="Have"/> items up to the limit and writes text <c>answer</c> and <c>p</c> (<c>[Offset,
-/// Offset + 1]</c>) when read. Every call is kept.
-/// </summary>
 internal sealed class CountingService : IServiceClient
 {
     private readonly List<Sent> _calls = new();

@@ -11,13 +11,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// Nothing is read that no successful attempt wrote (<c>CandidateTable</c>): a row has no value in a column
-/// until something writes it, even when the column's slot is created after the row was appended (an earlier row source
-/// without the <c>recall.*</c> columns, then <c>MultiSourceRecall@1</c>); and a failed attempt leaves no slot behind, so a
-/// pinned <c>col.x@node</c> of a node that failed reads as missing, live and on replay alike. Configurations that could
-/// only fail at runtime this way are rejected when the plan is compiled.
-/// </summary>
 /// <remarks>Requests run on a pool whose arrays are full of bytes that look like data, as after an earlier request.</remarks>
 public sealed class UnwrittenAndUncommittedDataTests
 {
@@ -55,8 +48,6 @@ public sealed class UnwrittenAndUncommittedDataTests
     [Fact]
     public async Task WithNullableRecallColumns_TheEarlierRowSourcesRowsHaveNoRecallValues_AndAReplayAgrees()
     {
-        // The seed appends 1 and 2 without recall.*; recall then creates those slots for its own rows 7 and 8. The seed's
-        // rows used to read the slot's pooled bytes (or '' and 0) as valid values.
         var plan = Compile(NullableRecallColumns, """
             "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [1, 2] } },
             "recall": { "order": 100, "op": "MultiSourceRecall@1", "config": { "quotas_param": "quotas_r" } }
@@ -111,8 +102,7 @@ public sealed class UnwrittenAndUncommittedDataTests
     [Fact]
     public async Task ARowSourceThatLeavesItsOwnRowsUnwritten_FailsAtCommit_AndTheDefaultDoesNotFillThem()
     {
-        // score.x is non-nullable with a default; the row source declares it but writes only its first row. The default
-        // replaces values that cannot be stored, never a value nobody wrote.
+        // The default replaces values that cannot be stored, never a value nobody wrote.
         var plan = Compile(""" "score.x": { "type": "float64", "default": 0.0 } """, """
             "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [1, 2, 3], "output_col": "score.x", "write_first": 1 } }
             """, """ "x": "col.score.x" """);
@@ -125,9 +115,8 @@ public sealed class UnwrittenAndUncommittedDataTests
 
     /// <summary>
     /// A row source after a non-nullable column has to write it only when something after it relies on the column for
-    /// every row: a node, the output, or a later row source writing it (which checks every live row at commit), unless an
-    /// unskippable node rewrites the column for every row first. The rule used to require every such column, read or not
-    /// (a retriever after a recall had to write the recall's attribution columns, or they had to be declared nullable).
+    /// every row: a node, the output, or a later row source writing it (which checks every live row at commit), unless
+    /// an unskippable node rewrites the column for every row first.
     /// </summary>
     [Theory]
     [InlineData("", "", null)]
@@ -162,7 +151,7 @@ public sealed class UnwrittenAndUncommittedDataTests
         Assert.Equal(new long[] { 1, 2, 3 }, result.Items.Select(i => i.Id.Int64Value).Order());
         if (output.Length > 0)
         {
-            Assert.All(result.Items, i => Assert.Equal(3.0, i.Columns["y"].AsFloat64())); // the rewrite covers row 3 too
+            Assert.All(result.Items, i => Assert.Equal(3.0, i.Columns["y"].AsFloat64()));
         }
     }
 
@@ -178,7 +167,6 @@ public sealed class UnwrittenAndUncommittedDataTests
             "more": { "order": 80, "op": "Rows@1", "config": { "ids": [3], "output_col": "score.x" } }
             """, """ "x": "col.score.x ?? -1.0", "y": "col.score.y" """);
 
-        // score.x, which 'rescore' rewrote, is fine: the row's value joins that version. score.y is not written for row 3.
         Assert.False(compilation.Succeeded);
         var error = Assert.Single(compilation.Diagnostics, d => d.IsError);
         Assert.Equal(("ROW_SOURCE_AFTER_COLUMN", "/nodes/more"), (error.Code, error.Pointer));
@@ -187,12 +175,6 @@ public sealed class UnwrittenAndUncommittedDataTests
             error.Hint, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// Injection after scoring (ads, operational slots): a row source after a node wrote its own version of a column writes
-    /// the rows it appends into that version, which stays current, so the output, later nodes and a pinned read of that
-    /// version see them. A row source used to be refused there (ROW_SOURCE_SHADOWS_VERSION): its values went to the row
-    /// sources' shared version, which readers would switch to and which has none of the node's values.
-    /// </summary>
     [Fact]
     public async Task ARowSourceAfterANodesVersion_WritesItsRowsIntoIt_ForEveryReader_AsInAReplay()
     {
@@ -213,10 +195,6 @@ public sealed class UnwrittenAndUncommittedDataTests
         await AssertReplayAgrees(plan, recorded);
     }
 
-    /// <summary>
-    /// A row source that fails after writing its rows into another node's version leaves nothing there: its rows are
-    /// released, in every slot, and the fallback that appends instead reuses them, with its own values.
-    /// </summary>
     [Fact]
     public async Task ARowSourceThatFailsAfterWritingIntoAVersion_LeavesNothing_AndItsFallbacksRowsHaveTheirOwnValues()
     {
@@ -247,10 +225,6 @@ public sealed class UnwrittenAndUncommittedDataTests
     [InlineData("row source fallback of a row source", "ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed|ROW_SOURCE_BEFORE_COLUMN /nodes/seed", "later row source 'recall'")]
     public void AFallbackIsChecked_AgainstWhatCameBeforeItsNode_AndWhatFollowsSeesWhatEitherMayLeave(string scenario, string expected, string mention)
     {
-        // A fallback runs where its node failed and was rolled back, so it must pass the checks the node's own position
-        // would apply to it, whatever the node's effects. It used to be checked only for its outputs and
-        // inputs: a row source standing in for a column writer appended rows whose non-nullable columns read pooled data.
-        // Each effect is checked once: a row source fallback of a row source reports nothing twice.
         var (columns, nodes) = scenario switch
         {
             "row source fallback after a column" => ("""
@@ -306,10 +280,8 @@ public sealed class UnwrittenAndUncommittedDataTests
     [InlineData("independent fallback", null)]
     public void NodesSharingAnOrder_AreIndependentInEveryBranch_FallbacksIncluded(string scenario, string? expected)
     {
-        // Nodes of one order run in an unspecified relative order, so neither may have row effects or read
-        // what the other writes. A position runs its node or its fallback: a fallback that appends rows, or reads the other
-        // node's column, used to pass because only the node was checked, and the result then depended on node names
-        //.
+        // Nodes of one order run in an unspecified relative order, so neither may have row effects or read what the
+        // other writes.
         var primary = scenario switch
         {
             "row source shares an order" => """
@@ -345,8 +317,6 @@ public sealed class UnwrittenAndUncommittedDataTests
     [Fact]
     public async Task ARowSourceFallbackOfAColumnWriter_ThatPassesTheChecks_ServesItsRows_AsInAReplay()
     {
-        // The rules hold (no non-nullable column before it, nobody's version under it), so effects may differ: the node
-        // writes 99 into its own version of score.y and fails; the fallback appends 8 and writes the shared version.
         var plan = Compile(""" "score.y": { "type": "float64?" } """, """
             "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7] } },
             "primary": { "order": 70, "op": "Late@1", "on_failure": "fallback", "fallback": "backup", "config": { "output_col": "score.y", "how": "fails" } },
@@ -368,9 +338,6 @@ public sealed class UnwrittenAndUncommittedDataTests
     [InlineData("fails to commit")]
     public async Task APinnedReadOfANodeThatFailed_IsMissing_HoweverItFailed_LiveAndOnReplay(string how)
     {
-        // base commits score.x = 1. late writes 99 into its own version and fails; on_failure skips it. The output and a
-        // later node read its version pinned. They used to read 99 live, while a replay, which skips a recorded timeout
-        // instead of running it, read it as missing.
         var timeout = how == "returns late" ? ", \"timeout_ms\": 50" : string.Empty;
         var plan = Compile(""" "score.x": { "type": "float64", "flow": true, "default": 0.0 }, "score.seen": { "type": "float64", "default": 0.0 } """, $$"""
             "seed": { "order": 50, "op": "Rows@1", "config": { "ids": [7, 8] } },
@@ -469,10 +436,6 @@ public sealed class UnwrittenAndUncommittedDataTests
         public bool Fails { get; init; }
     }
 
-    /// <summary>
-    /// <c>Rows@1</c>: appends its ids; with <c>output_col</c>, writes id / 10 into it for its first <c>write_first</c> rows
-    /// (all by default); with <c>fails</c>, then reports a failure.
-    /// </summary>
     private sealed class RowsFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("Rows", 1, Effects.RowSource, typeof(RowsConfig), "Appends fixed ids.");
@@ -527,10 +490,6 @@ public sealed class UnwrittenAndUncommittedDataTests
         public required string How { get; init; }
     }
 
-    /// <summary>
-    /// <c>Late@1</c>: writes 99 into its output on every live row, then fails: it reports a failure, throws, returns only
-    /// after its budget ran out, or (to fail its commit) leaves the last row unwritten.
-    /// </summary>
     private sealed class LateFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("Late", 1, Effects.ColumnWriter, typeof(LateConfig), "Writes 99, then fails.");
@@ -561,7 +520,7 @@ public sealed class UnwrittenAndUncommittedDataTests
                     case "throws":
                         throw new InvalidOperationException("broke after writing");
                     case "returns late":
-                        Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience)); // then returns, as a success
+                        Assert.True(context.CancellationToken.WaitHandle.WaitOne(Patience));
                         break;
                 }
 
@@ -570,7 +529,6 @@ public sealed class UnwrittenAndUncommittedDataTests
         }
     }
 
-    /// <summary><c>FailingRecall@1</c>: <c>MultiSourceRecall@1</c> that reports a failure once it has appended and written its rows.</summary>
     private sealed class FailingRecallFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } =

@@ -6,17 +6,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Benchmarks;
 
-/// <summary>
-/// One home_feed request (no experiments) with its candidate features fetched from <c>memory@1</c> or read from local
-/// tables holding the same records: the cost of the two request paths, not of a remote store. Each fetched
-/// source answers in one call, so the fetch side pays its per-call work (staging, backfill, the wave's task) once per
-/// source rather than once per chunk.
-/// </summary>
-/// <remarks>
-/// <para><c>item_store</c> is read for every candidate (8 features, one a vector, one a string); <c>author_store</c> for
-/// every candidate through <c>item.author_id</c> (300 authors).</para>
-/// <para>Run: <c>dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*FeatureSupplyBenchmarks*'</c>.</para>
-/// </remarks>
 [MemoryDiagnoser]
 public class FeatureSupplyBenchmarks
 {

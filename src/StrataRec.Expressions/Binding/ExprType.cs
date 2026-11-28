@@ -2,7 +2,6 @@ using StrataRec.Core.Types;
 
 namespace StrataRec.Expressions.Binding;
 
-/// <summary>Expression-level type kinds (after promotion).</summary>
 internal enum TypeKind : byte
 {
     /// <summary>Poison type of an ill-typed subexpression; suppresses cascading diagnostics.</summary>
@@ -19,8 +18,7 @@ internal enum TypeKind : byte
     ListString,
 }
 
-/// <summary>A promoted type with nullability. <see cref="Length"/> is a list's fixed length (0 = any length, and for
-/// every other kind): what <c>dot</c> and <c>cosine</c> compare at compile time, and what a fixed-length site checks.</summary>
+/// <summary><see cref="Length"/> is a list's fixed length (0 = any length, and for every other kind).</summary>
 internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Length = 0)
 {
     public static ExprType Error => default;
@@ -41,10 +39,8 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Lengt
 
     public static bool IsListKind(TypeKind kind) => kind is TypeKind.ListBool or TypeKind.ListInt or TypeKind.ListFloat or TypeKind.ListString;
 
-    /// <summary>The type of a list's elements (never nullable): bool, int64, float64 or string.</summary>
     public ExprType Element => new(ElementKind(Kind), false);
 
-    /// <summary>The kind of a list kind's elements; <see cref="TypeKind.Error"/> for other kinds.</summary>
     public static TypeKind ElementKind(TypeKind list) => list switch
     {
         TypeKind.ListBool => TypeKind.Bool,
@@ -54,7 +50,6 @@ internal readonly record struct ExprType(TypeKind Kind, bool Nullable, int Lengt
         _ => TypeKind.Error,
     };
 
-    /// <summary>The list kind whose elements are <paramref name="element"/>; <see cref="TypeKind.Error"/> when there is none.</summary>
     public static TypeKind ListOf(TypeKind element) => element switch
     {
         TypeKind.Bool => TypeKind.ListBool,

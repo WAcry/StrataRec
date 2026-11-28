@@ -8,12 +8,9 @@ using StrataRec.Features.Local;
 namespace StrataRec.Features.Cache;
 
 /// <summary>
-/// The tiers of one service's cache (docs/decisions/external-calls.md): an in-process <c>cache</c> table, which the
-/// table host runs like a source's, and optionally the distributed tier the deployment shares. Every service's table has
-/// one layout (<see cref="Schema"/>): a list field per element type, and a list of integers saying what the record holds.
-/// What that is (which outputs of which call, which items) is the call's business: the call primitive writes and reads
-/// records with <see cref="ServiceRecordBuilder"/> and <see cref="IServiceRecord"/>. A record's key is a 128-bit hash of the
-/// call (or of the item), as two int64 parts.
+/// Every service's table has one layout (<see cref="Schema"/>): a list field per element type, and a list of integers
+/// saying what the record holds. What that is (which outputs of which call, which items) is the call's business: the
+/// call primitive writes and reads records with <see cref="ServiceRecordBuilder"/> and <see cref="IServiceRecord"/>.
 /// </summary>
 internal sealed class ServiceCache
 {
@@ -42,12 +39,8 @@ internal sealed class ServiceCache
     /// <summary>Every record's key: the high and the low 64 bits of its hash.</summary>
     private static readonly EntityKeyLayout KeyLayout = EntityKeyLayout.OfTypes(EntityKeyType.Int64, EntityKeyType.Int64);
 
-    /// <param name="answerIdentity">
-    /// What the binding answers with, the same on every instance that has the same configuration: part of every key, so a
-    /// binding whose client or settings changed (a hot reload, another deployment sharing the store) does not read the
-    /// answers the earlier one left. The binding's <c>cache.version</c> when it names one.
-    /// </param>
-    /// <param name="policy">The binding's times as the plan compiled them.</param>
+    /// <param name="answerIdentity">What the binding answers with, the same on every instance that has the same
+    /// configuration: part of every key. The binding's <c>cache.version</c> when it names one.</param>
     public ServiceCache(
         string service, LocalFeatureTable table, CachePolicy policy, DistributedCacheTier? distributed, int distributedTimeoutMs, string answerIdentity)
     {
@@ -68,32 +61,22 @@ internal sealed class ServiceCache
         Io = new IoTarget(IoRoles.Cache, service);
     }
 
-    /// <summary>The service's binding name.</summary>
     public string Service { get; }
 
-    /// <summary>What the binding answers with (see the constructor): its <c>cache.version</c>, or a digest of its client and settings.</summary>
     public string AnswerIdentity { get; }
 
     public LocalFeatureTable Table { get; }
 
-    /// <summary>How fresh this plan's calls find a record, in either tier.</summary>
     public CachePolicy Policy { get; }
 
-    /// <summary>The table's side of the cache: the write-back queue, the records' layout, the clock, the counts.</summary>
     public LocalTableCache TableCache { get; }
 
     public DistributedCacheTier? Distributed { get; }
 
-    /// <summary>
-    /// Whether a tier keeps the cache's records (<see cref="CacheTableOptions.Kept"/>). One that keeps nothing has the
-    /// calls of one request share an answer: of use to a call the request's other calls can share, and to no other.
-    /// </summary>
     public bool Kept => TableCache.Kept;
 
-    /// <summary>The longest one read of the distributed tier may take (its <c>timeout_ms</c>, or half the service's).</summary>
     public int DistributedTimeoutMs { get; }
 
-    /// <summary>The telemetry target of the distributed tier's reads: role <c>cache</c>, the service's name.</summary>
     public IoTarget Io { get; }
 
     /// <summary>The one layout of every table of whole answers, for the service (or the pipeline) <paramref name="owner"/>.</summary>
@@ -107,20 +90,14 @@ internal sealed class ServiceCache
         return version.Find(parts);
     }
 
-    /// <summary>How a record of <paramref name="key"/> written at <paramref name="writtenMs"/> stands at <paramref name="nowMs"/>.</summary>
     public CacheFreshness Classify(long writtenMs, UInt128 key, long nowMs) => Policy.Classify(writtenMs, (ulong)key, nowMs);
 
-    /// <summary>The text of <paramref name="key"/> in the distributed tier (<see cref="CacheKeyspace.KeyText"/>), e.g. <c>-81234:9921</c>.</summary>
     public static string KeyText(UInt128 key)
     {
         Span<EntityKey> parts = [High(key), Low(key)];
         return CacheKeyspace.KeyText(parts);
     }
 
-    /// <summary>
-    /// A record a distributed read returned, decoded, or null when it is of another layout or format (<c>mismatch</c>) or
-    /// cut short (<c>error</c>): <paramref name="outcome"/> says which, for its count.
-    /// </summary>
     public DecodedServiceRecord? Decode(ReadOnlyMemory<byte> bytes, out CacheKeyOutcome outcome)
     {
         var record = bytes.Span;
@@ -144,7 +121,6 @@ internal sealed class ServiceCache
 
     private static EntityKey Low(UInt128 key) => EntityKey.FromInt64((long)(ulong)key);
 
-    /// <summary>Copies a wire record's lists out of the record's bytes, which belong to the store's answer.</summary>
     private struct DecodeVisitor(DecodedServiceRecord record) : ICacheRecordVisitor
     {
         private List<string>? _strings;
@@ -202,9 +178,7 @@ internal sealed class ServiceCache
 }
 
 /// <summary>
-/// A service cache record's fields, wherever it was read from: a pinned local table version (<see cref="LocalServiceRecord"/>,
-/// read in place) or a distributed read (<see cref="DecodedServiceRecord"/>, copied out). A list the record has no value
-/// for is empty.
+/// A list the record has no value for is empty.
 /// </summary>
 internal interface IServiceRecord
 {
@@ -254,7 +228,6 @@ internal sealed class DecodedServiceRecord(long writtenMs, ReadOnlyMemory<byte> 
 {
     public long WrittenMs { get; } = writtenMs;
 
-    /// <summary>The record as the store returned it: what the memory tier is written from.</summary>
     public ReadOnlyMemory<byte> Bytes { get; } = bytes;
 
     internal int[] LayoutValues { get; set; } = [];
@@ -289,9 +262,9 @@ internal sealed class DecodedServiceRecord(long writtenMs, ReadOnlyMemory<byte> 
 }
 
 /// <summary>
-/// Builds the records a call writes back, one after another, and hands them to the tiers: each record's lists are gathered
-/// (<see cref="Layout"/> and the typed lists, in any order), then <see cref="End"/> encodes it. One per write-back; a few
-/// arrays a batch, not one per record.
+/// Builds the records a call writes back, one after another, and hands them to the tiers: each record's lists are
+/// gathered (<see cref="Layout"/> and the typed lists, in any order), then <see cref="End"/> encodes it. One per
+/// write-back.
 /// </summary>
 internal sealed class ServiceRecordBuilder
 {
@@ -327,7 +300,6 @@ internal sealed class ServiceRecordBuilder
     /// <summary>The bytes of the record ended <paramref name="index"/>th: the writer's array is not written again once its records are ended.</summary>
     public ReadOnlyMemory<byte> Record(int index) => _writer.Bytes.AsMemory(_records[index].Offset, _records[index].Length);
 
-    /// <summary>Encodes the record gathered so far under <paramref name="key"/> and clears the lists for the next.</summary>
     public void End(UInt128 key)
     {
         _writer.Begin(_writtenMs, _cache.TableCache.Fingerprint, absent: false);
@@ -347,7 +319,6 @@ internal sealed class ServiceRecordBuilder
         Clear();
     }
 
-    /// <summary>Drops what was gathered for a record that will not be written.</summary>
     public void Clear()
     {
         Layout.Clear();
@@ -359,17 +330,13 @@ internal sealed class ServiceRecordBuilder
         Strings.Clear();
     }
 
-    /// <summary>
-    /// Hands the records to the tiers without waiting (<see cref="LocalTableCache.TryWriteBack"/>, and the distributed
-    /// tier's queue with each record's time to live); a full queue drops them, counted.
-    /// </summary>
     /// <param name="policy">The times the records are kept for; null for the cache's own (a service's binding's).</param>
     public void WriteBack(CachePolicy? policy = null)
     {
         var count = _records.Count;
         if (count == 0 || !_cache.Kept)
         {
-            return; // nothing to hand over, or no tier to hand it to: the record was the request's alone
+            return;
         }
 
         // The host's clock is read, for the store's time to live, before anything is handed over: one that throws
@@ -378,7 +345,7 @@ internal sealed class ServiceRecordBuilder
         var ttl = distributed is null ? default : (policy ?? _cache.Policy).StoreTimeToLive(_writtenMs, _cache.TableCache.NowMs());
         var bytes = _writer.Bytes;
         var memory = _cache.TableCache.Memory;
-        var keys = memory ? new EntityKey[2 * count] : []; // the in-process tier's, when the cache has one
+        var keys = memory ? new EntityKey[2 * count] : [];
         var records = new ReadOnlyMemory<byte>[count];
         for (var i = 0; i < count; i++)
         {

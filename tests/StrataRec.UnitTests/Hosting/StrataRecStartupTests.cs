@@ -12,11 +12,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Hosting;
 
-/// <summary>
-/// <see cref="ServiceCollectionExtensions.AddStrataRec"/> in a generic host: the workspace loads when the host starts, a
-/// configuration with errors stops it, warnings go to the host's log (event 1003), and paths resolve where the host's
-/// files are.
-/// </summary>
 public sealed class StrataRecStartupTests : IDisposable
 {
     private readonly string _contentRoot = Directory.CreateTempSubdirectory("stratarec-startup-").FullName;
@@ -28,10 +23,10 @@ public sealed class StrataRecStartupTests : IDisposable
     {
         Workspace(Path.Combine(_contentRoot, "config"));
         var log = new CapturedLog();
-        using var host = Build(log, options => options.ConfigRoot = "config"); // the default, relative to the content root
+        using var host = Build(log, options => options.ConfigRoot = "config");
 
         var engine = host.Services.GetRequiredService<IRecEngine>();
-        Assert.Empty(engine.PipelineIds()); // nothing loads before the host starts
+        Assert.Empty(engine.PipelineIds());
         await host.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(new[] { "p" }, engine.PipelineIds());
@@ -63,10 +58,6 @@ public sealed class StrataRecStartupTests : IDisposable
         Assert.Equal(("NODE_BAD_CONFIG", "/nodes/top/config/k"), (error.Code, error.Pointer));
     }
 
-    /// <summary>
-    /// A workspace directory without a pipeline stops the host, with the error validate reports: the host started, served
-    /// nothing, and its health check answered 503.
-    /// </summary>
     [Fact]
     public async Task AWorkspaceWithoutAPipeline_StopsTheHost()
     {
@@ -93,7 +84,7 @@ public sealed class StrataRecStartupTests : IDisposable
         using var host = Build(log, options =>
         {
             options.ConfigRoot = root;
-            options.PlanEnvironment = environment; // its BaseDirectory is null: the config root is used
+            options.PlanEnvironment = environment;
         });
 
         await host.StartAsync(TestContext.Current.CancellationToken);
@@ -108,9 +99,6 @@ public sealed class StrataRecStartupTests : IDisposable
     [Fact]
     public async Task WithServicesStartingConcurrently_AServiceRegisteredLater_StartsWithThePlansLoaded()
     {
-        // The load ran in StartAsync, which a host starting its services concurrently does not wait for, so a web
-        // server registered after AddStrataRec could listen with no plan loaded. The load is now in StartingAsync, which
-        // every service completes before any starts. The source's load takes a while, as a remote one would.
         Workspace(Path.Combine(_contentRoot, "config"), client: "slow_list@1");
         var later = new LaterService();
         using var host = Build(new CapturedLog(), options =>
@@ -125,10 +113,6 @@ public sealed class StrataRecStartupTests : IDisposable
         await host.StopAsync(TestContext.Current.CancellationToken);
     }
 
-    /// <summary>
-    /// The container's log pipeline is the engine's (<c>RecEngine</c> takes it, the executor it ran with being internal):
-    /// a served request's tap batch reaches the sink, and disposing the host drains it.
-    /// </summary>
     [Fact]
     public async Task ALogSink_ReceivesTheTapsOfServedRequests()
     {
@@ -172,7 +156,6 @@ public sealed class StrataRecStartupTests : IDisposable
         return builder.Build();
     }
 
-    /// <summary>A service registered after AddStrataRec, as a web server is: records what the engine serves when it starts.</summary>
     private sealed class LaterService : IHostedService
     {
         private IRecEngine? _engine;
@@ -194,7 +177,6 @@ public sealed class StrataRecStartupTests : IDisposable
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    /// <summary><c>memory_list@1</c> whose load takes 300 ms.</summary>
     private sealed class SlowListFactory : IBindingFactory<IServiceClient>
     {
         public string Type => "slow_list@1";
@@ -212,10 +194,6 @@ public sealed class StrataRecStartupTests : IDisposable
         }
     }
 
-    /// <summary>
-    /// One pipeline <c>p</c>: a source reading a data file, then a TopK (or another operator with its config); with
-    /// <paramref name="tap"/>, a <c>served</c> tap logging its output's <c>source</c> column for every request.
-    /// </summary>
     private static void Workspace(
         string root, string data = """{ "items": [8, 9] }""", string topK = "\"k\": 2", string op = "TopK@1", string client = "memory_list@1", bool tap = false)
     {
@@ -248,7 +226,6 @@ public sealed class StrataRecStartupTests : IDisposable
             """);
     }
 
-    /// <summary><c>TopK@1</c> under another name, which warns when it compiles.</summary>
     private sealed class WarnedTopK : IOperatorFactory
     {
         private readonly TopKFactory _inner = new();

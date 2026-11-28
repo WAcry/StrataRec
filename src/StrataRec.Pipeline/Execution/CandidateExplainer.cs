@@ -9,24 +9,9 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Pipeline.Execution;
 
-/// <summary>
-/// Records, for the candidates a request asks to explain, their state after every node: whether they are
-/// in the table and live, their rank, and the values of the columns the node read and wrote, plus what an
-/// <see cref="IExplainableOperator"/> adds. Exists only for such requests; the executor holds none otherwise.
-/// </summary>
 /// <remarks>
-/// <para>Generic: everything comes from what the executor already knows of every node (its declared reads and writes,
-/// the row selection before and after), so custom operators are explained without code of their own.</para>
-/// <para>Work is per target, not per row: a target's row is found by key (<see cref="CandidateTable.FindRow"/>) after a
-/// row source that may append it, while the target is not live, and followed through compactions (<see cref="Compacted"/>)
-/// without looking it up again; a dropped target a row source brings back is followed at its new row. Two costs follow the table instead, both only for an explained request: the rank, since the ranking
-/// has no inverse, is one pass over the live rows after a node that changes the row set or the order, stopping at the last
-/// live target, with a bitmap of the table's capacity; and an operator's <see cref="ExplainContext.Evaluate"/> writes its
-/// target rows into one pooled column of the table's capacity per result type (the compiled expression writes at physical
-/// rows), as one more column a node writes would. Both are rented from the request's memory and returned with it.</para>
-/// <para>An attempt is observed before it commits (<see cref="Observe"/>, where the operator explains itself, seeing the
-/// columns it read) and recorded after (<see cref="Ran"/>, reading the values it wrote); a failed attempt's observation is
-/// dropped, and its step says it was rolled back, with the state from before it, which is what the table is again.</para>
+/// <para>An attempt is observed before it commits (<see cref="Observe"/>, where the operator explains itself, seeing
+/// the columns it read) and recorded after (<see cref="Ran"/>, reading the values it wrote).</para>
 /// </remarks>
 internal sealed class CandidateExplainer
 {
@@ -35,14 +20,12 @@ internal sealed class CandidateExplainer
     private readonly EntityKey[] _keys;
     private readonly List<ExplainStep>[] _steps;
 
-    // The state after the last recorded step: physical row (-1 when not in the table), 1-based rank (0 when not live),
-    // whether the target ever entered the table, and the node that last dropped it.
+    // The state after the last recorded step: physical row (-1 when not in the table), 1-based rank (0 when not live).
     private readonly int[] _rows;
     private readonly int[] _ranks;
     private readonly bool[] _present;
     private readonly string?[] _droppedBy;
 
-    // The observed attempt's state, until it is recorded or dropped.
     private readonly int[] _pendingRows;
     private readonly int[] _pendingRanks;
     private readonly string?[] _reasons;
@@ -93,10 +76,8 @@ internal sealed class CandidateExplainer
 
     public int PendingRank(int target) => _pendingRanks[target];
 
-    /// <summary>A node that did not run: every target is as it was.</summary>
     public void Skipped(string nodeId, string? detail) => Unchanged(nodeId, ExplainStepKind.Skipped, detail);
 
-    /// <summary>A failed attempt: the table is back where it was before it, and so is every target.</summary>
     public void RolledBack(string nodeId, string? detail)
     {
         _observed = false;
@@ -104,10 +85,6 @@ internal sealed class CandidateExplainer
         Unchanged(nodeId, ExplainStepKind.RolledBack, detail);
     }
 
-    /// <summary>
-    /// Takes the state an attempt left before it is committed: finds the targets a row source appended, their liveness and
-    /// ranks, and lets the operator explain itself.
-    /// </summary>
     public void Observe(RequestState state, CompiledNode node)
     {
         var table = state.Table;
@@ -118,9 +95,8 @@ internal sealed class CandidateExplainer
             var row = _rows[t];
             if (appends && (row < 0 || !rows.IsAlive(row)))
             {
-                // Appended, or brought back after it was dropped: the last row appended with the key
-                // (a dropped target that an injector brought back was explained at its dropped row).
-                // A key of the other key type is never found.
+                // Appended, or brought back after it was dropped: the last row appended with the key. A key of the
+                // other key type is never found.
                 row = table.FindRow(_keys[t]);
             }
 
@@ -156,7 +132,6 @@ internal sealed class CandidateExplainer
         }
     }
 
-    /// <summary>Records a committed attempt observed by <see cref="Observe"/>, with the values of the columns the node read and wrote.</summary>
     public void Ran(RequestState state, CompiledNode node)
     {
         if (!_observed)
@@ -212,7 +187,6 @@ internal sealed class CandidateExplainer
         }
     }
 
-    /// <summary>The explanations of the run: <paramref name="returned"/> items were returned when it <paramref name="succeeded"/>.</summary>
     public RunExplanation Build(string pipelineId, bool succeeded, int returned)
     {
         var candidates = new CandidateExplanation[_keys.Length];
@@ -276,10 +250,6 @@ internal sealed class CandidateExplainer
         }
     }
 
-    /// <summary>
-    /// Sets the pending rank of every live target: one pass over the ranking, testing a bit per row and stopping at the
-    /// last live target, so the work is the targets' depth in the ranking, at most the live rows.
-    /// </summary>
     private void Rank(CandidateTable table)
     {
         var pending = 0;
@@ -344,9 +314,7 @@ internal sealed class CandidateExplainer
     };
 
     /// <summary>
-    /// The row's values, after the node, of the columns it read (but the entity id), by name, and then those it wrote that
-    /// it did not read. A column resolves as a later reader would see it: a feature by its slot, an output by its committed
-    /// version. Reads are sorted by name: column ids say nothing (a feature's is the order the plan first read it in).
+    /// Reads are sorted by name: column ids say nothing (a feature's is the order the plan first read it in).
     /// </summary>
     private static ExplainValue[] Values(RequestState state, CompiledNode node, int row)
     {

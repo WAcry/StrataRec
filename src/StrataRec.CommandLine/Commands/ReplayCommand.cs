@@ -12,14 +12,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// <c>stratarec replay</c>: re-executes recorded requests with their recorded external responses and timing
-/// decisions, and prints each result with its diff against the recorded one, the node decisions and parameters that
-/// changed, and every piece of data the bundle lacked. It replays on a workspace (<c>-c</c>), on a release manifest
-/// (<c>--manifest</c>), or, given only <c>--store</c>, each bundle on the manifest it recorded (<see cref="ReplayEngines"/>).
-/// A bundle of an aborted request is not replayed (<see cref="ReplayOutcome.NotReplayed"/>): its recorded abort and node
-/// decisions are printed instead, and it counts neither as replayed nor as an error.
-/// </summary>
 internal static class ReplayCommand
 {
     public static Command Create(PlanEnvironment provided)
@@ -59,11 +51,6 @@ internal static class ReplayCommand
         return command;
     }
 
-    /// <param name="config">The workspace (<c>-c</c>). With <paramref name="manifest"/> null too: each bundle's recorded manifest when
-    /// <paramref name="store"/> is given, else the workspace <c>config</c>.</param>
-    /// <param name="manifest">A manifest id or file (<c>--manifest</c>), read with <paramref name="store"/>.</param>
-    /// <param name="errors">Where diagnostics and per-bundle errors go; standard error by default.</param>
-    /// <param name="provided">What the binary provides to plans (<see cref="StrataRecCommandLine"/>).</param>
     internal static async Task<int> RunAsync(
         PlanEnvironment provided, string? config, string environment, IReadOnlyList<string> bundlePaths, string[] armArgs, string format, bool expectIdentical, TextWriter output, CancellationToken cancellationToken,
         string? manifest = null, string? store = null, TextWriter? errors = null, string[]? explain = null)
@@ -97,7 +84,6 @@ internal static class ReplayCommand
             errors.WriteLine($"{string.Join(", ", bundlePaths)}: no replay bundles found.");
         }
 
-        // One bundle file given: its report alone, without the summary of a set.
         var singleFile = files.Count == 1 && bundlePaths.Count == 1 && !Directory.Exists(bundlePaths[0]);
         if (format == "json")
         {
@@ -144,17 +130,12 @@ internal static class ReplayCommand
             different |= result.Outcome is null || (result.Outcome.NotReplayed is null && !result.Outcome.Report.Diff.Identical);
         }
 
-        // A bundle not replayed for an error (unreadable, or its configuration unavailable), or nothing replayed at all, is an
-        // input error even when the rest replayed identically. A bundle of an aborted request is neither: it is reported.
         return Status(results) != "ok" ? 2 : expectIdentical && different ? 1 : 0;
     }
 
-    /// <summary>One bundle's replay, or why it was not replayed.</summary>
     /// <param name="Unresolved">Not replayed because the configuration it recorded is not available (not because the bundle is unreadable).</param>
     internal sealed record BundleReplay(string File, ReplayOutcome? Outcome, string? Error, bool Unresolved);
 
-    /// <returns>Bundles replayed, bundles of aborted requests (not replayed), unreadable bundles, bundles without a
-    /// configuration to replay on, and replays that reproduced their recorded result.</returns>
     private static (int Replayed, int Aborted, int Unreadable, int Unresolved, int Identical) Counts(List<BundleReplay> results)
     {
         int replayed = 0, aborted = 0, unreadable = 0, unresolved = 0, identical = 0;
@@ -170,19 +151,12 @@ internal static class ReplayCommand
         return (replayed, aborted, unreadable, unresolved, identical);
     }
 
-    /// <summary>
-    /// <c>ok</c> (every bundle replayed, or of an aborted request), <c>partial</c> (some not replayed for an error) or
-    /// <c>failed</c> (none replayed, or no bundles).
-    /// </summary>
     private static string Status(List<BundleReplay> results)
     {
         var (replayed, aborted, _, _, _) = Counts(results);
         return replayed == 0 ? "failed" : replayed + aborted < results.Count ? "partial" : "ok";
     }
 
-    /// <summary>Replays one bundle file on the engine <paramref name="engines"/> chooses for it.</summary>
-    /// <param name="explain">The <c>--explain</c> ids, read as the key type of the pipeline the bundle replays on; an id that is
-    /// not one is the bundle's error.</param>
     internal static async Task<BundleReplay> ReplayFileAsync(
         ReplayEngines engines, string file, ReplayOptions options, TextWriter errors, CancellationToken cancellationToken, string[]? explain = null)
     {
@@ -291,7 +265,7 @@ internal static class ReplayCommand
 
         json.WriteString("served_by", result.ServedBy);
         json.WriteNumber("elapsed_ms", Math.Round(report.ElapsedMs, 3));
-        json.WritePropertyName("items"); // as the service answers them (run prints the same)
+        json.WritePropertyName("items");
         RecResultJson.WriteItems(json, result.Columns);
         WriteDiff(json, "diff", report.Diff);
         json.WriteStartArray("nodes");
@@ -330,16 +304,12 @@ internal static class ReplayCommand
         if (result.Explanation is { } explanation)
         {
             json.WritePropertyName("explanation");
-            RecResultJson.WriteExplanation(json, explanation); // as 'run' writes it
+            RecResultJson.WriteExplanation(json, explanation);
         }
 
         json.WriteEndObject();
     }
 
-    /// <summary>
-    /// A bundle of an aborted request: what it recorded, and no replay (no result, diff, gaps or parameters, which only a
-    /// replay has).
-    /// </summary>
     private static void WriteNotReplayed(Utf8JsonWriter json, ReplayReport report, RecordedAbort abort)
     {
         json.WriteStartObject("manifest");
@@ -409,7 +379,6 @@ internal static class ReplayCommand
                 foreach (var column in change.Columns)
                 {
                     json.WriteStartObject(column.Column);
-                    // As the items: NaN and ±∞ stay distinguishable from a missing value.
                     json.WritePropertyName("recorded");
                     Output.WriteValue(json, column.Recorded);
                     json.WritePropertyName("replayed");
@@ -437,7 +406,6 @@ internal static class ReplayCommand
         json.WriteEndArray();
         json.WriteEndObject();
 
-        // A side without the value is absent; one with it gives its type and value (NaN and ±∞ distinguishable from missing).
         static void WriteSide(Utf8JsonWriter json, string side, ResultValue? value)
         {
             if (value is not { } present)
@@ -600,7 +568,6 @@ internal static class ReplayCommand
 
         static string Join(IReadOnlyList<string> values) => values.Count == 0 ? "(none)" : string.Join(", ", values);
 
-        // One side of a value change: absent, or its value, with its type when the other side has another.
         static string Side(ResultValue? side, ResultValue? other) => side switch
         {
             null => "absent",

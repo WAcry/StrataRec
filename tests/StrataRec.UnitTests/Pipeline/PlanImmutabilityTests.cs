@@ -8,12 +8,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.UnitTests.Pipeline;
 
-/// <summary>
-/// A compiled plan is shared by every concurrent request and handed to hosts for inspection, so its public surface is
-/// read-only: a host that sorts <c>plan.Nodes</c> for display or edits a node's definition must not be able to change
-/// what requests run. This walks every plan type reachable from <see cref="ExecutionPlan"/> (the planning and feature
-/// runtime types) and fails on a public setter or a mutable collection or JSON tree, so a member added later stays so.
-/// </summary>
 public sealed class PlanImmutabilityTests
 {
     private static readonly string[] Namespaces = [typeof(ExecutionPlan).Namespace!, typeof(FeaturePlan).Namespace!];
@@ -53,7 +47,7 @@ public sealed class PlanImmutabilityTests
         }
 
         Assert.Empty(problems);
-        Assert.Contains(typeof(CompiledNode), visited); // the walk reaches the types it guards
+        Assert.Contains(typeof(CompiledNode), visited);
         Assert.Contains(typeof(CompiledTap), visited);
         Assert.Contains(typeof(ParamLeaf), visited);
         Assert.Contains(typeof(FetchGroup), visited);
@@ -63,7 +57,6 @@ public sealed class PlanImmutabilityTests
     private static bool IsInit(MethodInfo setter) =>
         setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(IsExternalInit));
 
-    /// <summary>Why a property type lets a reader change the plan, if it does: an array, a mutable collection or a JSON tree.</summary>
     private static IEnumerable<string> Mutable(Type type)
     {
         if (type.IsArray)
@@ -98,7 +91,6 @@ public sealed class PlanImmutabilityTests
         }
     }
 
-    /// <summary>The plan types a property type holds, through read-only collections, tuples and nullables.</summary>
     private static IEnumerable<Type> PlanTypes(Type type)
     {
         if (type.IsGenericType)

@@ -105,7 +105,7 @@ public static class ExternalArms
             var current = byLayer[arm.LayerIndex];
             if (current == arm.Index)
             {
-                continue; // the same id again
+                continue;
             }
 
             if (current == NoArm)
@@ -116,7 +116,7 @@ public static class ExternalArms
 
             if (current != Conflict)
             {
-                Add(ref skipped, arms[current].Id, IgnoredArmReason.LayerConflict); // the arm taken so far goes too
+                Add(ref skipped, arms[current].Id, IgnoredArmReason.LayerConflict);
                 byLayer[arm.LayerIndex] = Conflict;
                 conflicts = true;
             }
@@ -141,7 +141,7 @@ public static class ExternalArms
         }
         else
         {
-            skipped.Sort(static (a, b) => string.CompareOrdinal(a.Id, b.Id)); // ids are distinct: the order is the ids'
+            skipped.Sort(static (a, b) => string.CompareOrdinal(a.Id, b.Id));
             ignored = skipped.ToArray();
         }
 
@@ -152,7 +152,7 @@ public static class ExternalArms
     /// <paramref name="arms"/> as they run (<see cref="ExecutionPlan.Yields"/>): an arm whose experiment yields to the
     /// experiment of another of them is added to <paramref name="ignored"/> as <see cref="IgnoredArmReason.Yielded"/>,
     /// sorted by id with the rest, and its layer runs the baseline. Every source of a request's arms goes through it,
-    /// forced arms too: they show what a request in those arms runs, and a pair that yields is never compiled together.
+    /// forced arms too: they show what a request in those arms runs.
     /// </summary>
     /// <param name="ignored">The ids already ignored, sorted by id; returned as it is (no allocation) when no arm yields.</param>
     public static RequestArms Yield(ExecutionPlan plan, in RequestArms arms, IgnoredArm[] ignored, out IgnoredArm[] withYielded)
@@ -198,7 +198,6 @@ public static class ExternalArms
         return null;
     }
 
-    /// <summary>Adds an ignored id once: a repeated id is one id, with one reason.</summary>
     private static void Add(ref List<IgnoredArm>? skipped, string id, IgnoredArmReason reason)
     {
         skipped ??= new List<IgnoredArm>(2);

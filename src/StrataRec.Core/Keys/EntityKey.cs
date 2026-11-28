@@ -47,8 +47,7 @@ public readonly record struct EntityKeyPart(string Reference, EntityKeyType Type
 /// </remarks>
 public sealed class EntityKeyLayout : IEquatable<EntityKeyLayout>
 {
-    /// <summary>The most parts a key has: enough for real composite keys (segment × age bucket × country …), small enough
-    /// that a tuple fits on the stack and a batch keeps its shared flags in one byte.</summary>
+    /// <summary>The most parts a key has.</summary>
     public const int MaxParts = 8;
 
     private readonly EntityKeyPart[] _parts;

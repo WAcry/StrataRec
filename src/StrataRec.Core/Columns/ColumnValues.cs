@@ -48,8 +48,8 @@ public static class ColumnValues
 
     /// <summary>
     /// A list value of elements stored as <typeparamref name="T"/> (<c>bool</c>, <c>int</c>, <c>long</c>, <c>float</c>,
-    /// <c>double</c> or <c>string</c>): copied and promoted, as a column row is read (int32 widened, float32 kept printable
-    /// as floats). The one conversion from list storage to a value, for every reader of stored lists.
+    /// <c>double</c> or <c>string</c>): copied and promoted, as a column row is read (int32 widened, float32 kept
+    /// printable as floats).
     /// </summary>
     public static ScalarValue ListValue<T>(ReadOnlySpan<T> elements)
     {
@@ -197,9 +197,8 @@ public static class ColumnValues
         }
     }
 
-    /// <summary>True when a list of <paramref name="length"/> elements is a value of <paramref name="type"/>: any length for
-    /// a list of any length (and for every other type), exactly N for a <c>list&lt;E,N&gt;</c>. The one length check of
-    /// every writer.</summary>
+    /// <summary>True when a list of <paramref name="length"/> elements is a value of <paramref name="type"/>: any
+    /// length for a list of any length (and for every other type), exactly N for a <c>list&lt;E,N&gt;</c>.</summary>
     public static bool FitsLength(int length, ColumnType type) => type.FixedLength == 0 || length == type.FixedLength;
 
     /// <summary>
@@ -344,8 +343,6 @@ public static class ColumnValues
     /// one non-finite element is replaced as a whole, as a list with an element out of int32 range is: a list with an
     /// element taken out is wrong data.
     /// </summary>
-    /// <remarks>A row's validity is read only when its value is not finite, which is rare: the common path is one scan of
-    /// the values.</remarks>
     public static int SanitizeNonFinite(ColumnBuffer column, ReadOnlySpan<int> rows, in ScalarValue defaultValue)
     {
         var changed = 0;

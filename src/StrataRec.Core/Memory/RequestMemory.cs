@@ -6,8 +6,7 @@ using StrataRec.Core.Diagnostics;
 namespace StrataRec.Core.Memory;
 
 /// <summary>
-/// Source of large reusable buffers. The engine uses <see cref="SharedArrayBufferPool"/>; another pool is
-/// for tests (counting or poisoning what goes back), since hosts run requests through the engine, which takes none.
+/// Source of large reusable buffers. The engine uses <see cref="SharedArrayBufferPool"/>.
 /// </summary>
 public interface IBufferPool
 {
@@ -47,21 +46,18 @@ public interface IRequestEndObserver
 /// and <see cref="Release"/> when it completes or acknowledges cancellation; the request calls <see cref="Release"/>
 /// after it has produced its result. The last release returns all buffers and then tells the
 /// <see cref="IRequestEndObserver"/>, if any: the one moment from which nothing of the request can still run.</para>
-/// <para>The ledger is itself a pooled array of struct entries, so renting allocates nothing per buffer.</para>
-/// <para>A buffer the pool will not take back (an <see cref="IBufferPool"/> throws; a test's may) is left to the GC, the others are
+/// <para>A buffer the pool will not take back (an <see cref="IBufferPool"/> throws) is left to the GC, the others are
 /// still returned, and the failure goes to the event log as <see cref="RequestEvent.BufferReturnFailed"/>.
-/// <see cref="Release"/> never throws for the pool: the last release often runs on a client's thread, as the continuation
-/// of a call the request abandoned, where an exception would reach no one.</para>
+/// <see cref="Release"/> never throws for the pool.</para>
 /// </remarks>
 public sealed class RequestMemory
 {
     /// <summary>
-    /// Whether <see cref="Release"/> fills returned buffers of unmanaged elements with <see cref="PoisonByte"/>, so code
-    /// that keeps using a buffer after its request reads garbage at once instead of another request's data.
-    /// Set by the <c>StrataRec.PoisonReturnedBuffers</c> runtime switch: every test project turns it on, in Release as in
-    /// Debug, since CI tests the Release build; production leaves it off (it writes every returned byte once more).
+    /// Whether <see cref="Release"/> fills returned buffers of unmanaged elements with <see cref="PoisonByte"/>, so
+    /// code that keeps using a buffer after its request reads garbage at once instead of another request's data. Set by
+    /// the <c>StrataRec.PoisonReturnedBuffers</c> runtime switch: production leaves it off (it writes every returned
+    /// byte once more).
     /// </summary>
-    /// <remarks>Read once into a static readonly field, which the JIT treats as a constant.</remarks>
     public static readonly bool PoisonReturnedBuffers =
         AppContext.TryGetSwitch("StrataRec.PoisonReturnedBuffers", out var poison) && poison;
 
@@ -115,7 +111,6 @@ public sealed class RequestMemory
         {
             if (_returned)
             {
-                // Lost a race with the final Release: give the lease back instead of leaking it.
                 _pool.Return(array, RuntimeHelpers.IsReferenceOrContainsReferences<T>());
                 throw new ObjectDisposedException(nameof(RequestMemory));
             }
@@ -148,12 +143,9 @@ public sealed class RequestMemory
     /// back with <see cref="ReturnScratch{T}"/> as soon as it is done. It is not on the ledger and not in
     /// <see cref="RentedBytes"/>. Contents are unspecified.
     /// </summary>
-    /// <remarks>Held to the request's end, a request's temporaries are all out of the pool at once, and the shared pool
-    /// keeps only so many arrays of a size per core: with many requests in flight, buffers given back past that are dropped
-    /// and later rents allocate. Given back at once, the request's next rent of that size takes the same array. Only for a
-    /// buffer nothing else can still reference once it is given back: nothing an operator writes into the table, hands
-    /// to a client or keeps across an external call. One never given back (an exception between the two) is only lost to the
-    /// pool.</remarks>
+    /// <remarks>Only for a buffer nothing else can still reference once it is given back: nothing an operator writes
+    /// into the table, hands to a client or keeps across an external call. One never given back (an exception between
+    /// the two) is only lost to the pool.</remarks>
     public T[] RentScratch<T>(int minimumLength) => _pool.Rent<T>(minimumLength);
 
     /// <summary>Gives back a buffer of <see cref="RentScratch{T}"/>: poisoned when <see cref="PoisonReturnedBuffers"/> is on,
@@ -230,7 +222,6 @@ public sealed class RequestMemory
         return 0;
     }
 
-    /// <summary>Doubles the ledger. The ledger comes from the shared pool, not from <see cref="IBufferPool"/>: it is bookkeeping.</summary>
     private void GrowLedger()
     {
         var next = ArrayPool<Lease>.Shared.Rent(Math.Max(InitialLedgerLength, _leases.Length * 2));
@@ -254,7 +245,7 @@ public sealed class RequestMemory
         }
     }
 
-    /// <summary>One ledger entry. A struct plus a per-type singleton returner, so renting allocates no wrapper object.</summary>
+    /// <summary>A struct plus a per-type singleton returner, so renting allocates no wrapper object.</summary>
     private readonly record struct Lease(Array Array, ArrayReturner Returner);
 
     private abstract class ArrayReturner

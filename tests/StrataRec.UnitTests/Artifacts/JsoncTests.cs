@@ -201,8 +201,8 @@ public class JsoncTests
         Assert.Throws<ArgumentNullException>(() => Jsonc.Parse((string)null!));
     }
 
-    // The byte overload must reject ill-formed UTF-8 even in unescaped string values, which
-    // Utf8JsonReader skips over without validating, just as the string overload rejects ill-formed UTF-16.
+    // The byte overload must reject ill-formed UTF-8 even in unescaped string values, which Utf8JsonReader skips over
+    // without validating.
     [Fact]
     public void Parse_Bytes_InvalidUtf8InUnescapedString_IsRejectedWithLocation()
     {

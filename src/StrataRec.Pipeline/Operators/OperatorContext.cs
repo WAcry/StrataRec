@@ -34,9 +34,7 @@ namespace StrataRec.Pipeline.Operators;
 /// <see cref="CancellationToken"/> when the client honours it, or by waiting no longer than <see cref="BudgetRemaining"/>
 /// and keeping every buffer the client may still write alive (through <see cref="RequestMemory.Hold"/>) until it completes.
 /// Such I/O is also not recorded or replayed.</para>
-/// <para>Nothing may write into <see cref="Table"/> once the attempt has returned: a failed attempt's appended rows are
-/// rolled back and reused by the fallback (<see cref="CandidateTable.Rollback"/>), so a late write would land on the
-/// fallback's rows. Clients called through this context write into rented buffers, never into the table.</para>
+/// <para>Nothing may write into <see cref="Table"/> once the attempt has returned.</para>
 /// </remarks>
 public sealed class OperatorContext : IServiceCallScope
 {
@@ -49,9 +47,9 @@ public sealed class OperatorContext : IServiceCallScope
     private ScalarValue[]? _staged;
 
     /// <summary>
-    /// The node's output slots that held a version when the attempt started (<see cref="Rewrites"/>), each with the buffer
-    /// this attempt writes instead, made when it is first asked for. Null for a node that runs for the first time in the
-    /// request, which is nearly every attempt.
+    /// The node's output slots that held a version when the attempt started (<see cref="Rewrites"/>), each with the
+    /// buffer this attempt writes instead, made when it is first asked for. Null for a node that runs for the first
+    /// time in the request.
     /// </summary>
     private Dictionary<int, ColumnBuffer?>? _rewrites;
 
@@ -114,7 +112,6 @@ public sealed class OperatorContext : IServiceCallScope
 
     /// <summary>
     /// True while the request replays a recording: it is not traffic, so traffic metrics are not counted.
-    /// Public for operators outside this assembly that count metrics of their own (<c>stratarec.model.answer_ids</c>).
     /// </summary>
     public bool Replays => _state.Replay is not null;
 
@@ -124,8 +121,7 @@ public sealed class OperatorContext : IServiceCallScope
 
     /// <summary>
     /// How many of the calls of pipelines this attempt made were answered, by a run that had every call of its own
-    /// answered. Fewer than it made when the attempt ends: one failed, was refused, threw, or is still under way
-    /// (<see cref="PipelineResult.CallsUnanswered"/>).
+    /// answered.
     /// </summary>
     internal int CallsAnswered => Volatile.Read(ref _callsAnswered);
 
@@ -154,13 +150,8 @@ public sealed class OperatorContext : IServiceCallScope
         return _state.Table.GetOrCreateSlot(slot);
     }
 
-    /// <summary>
-    /// Says that the node's own slot <paramref name="slot"/> holds a version an earlier run of the node committed: the
-    /// attempt writes another buffer (<see cref="Output"/>), published by <see cref="PublishRewrites"/> when it commits.
-    /// </summary>
     internal void Rewrites(int slot) => (_rewrites ??= new Dictionary<int, ColumnBuffer?>()).Add(slot, null);
 
-    /// <summary>Makes the buffers the attempt wrote instead of its earlier versions the slots' own: the attempt commits.</summary>
     internal void PublishRewrites()
     {
         if (_rewrites is null)
@@ -221,7 +212,6 @@ public sealed class OperatorContext : IServiceCallScope
         (_staged ??= new ScalarValue[_requestOutputs.Length])[output.Index] = value;
     }
 
-    /// <summary>Replaces a staged value with what the commit stores (<see cref="PipelineExecutor"/>); missing needs no storage.</summary>
     internal void RestageRequestValue(int position, in ScalarValue value)
     {
         if (_staged is not null)
@@ -230,10 +220,8 @@ public sealed class OperatorContext : IServiceCallScope
         }
     }
 
-    /// <summary>The value staged for the node's <paramref name="position"/>-th request output; missing when none was.</summary>
     internal ScalarValue StagedRequestValue(int position) => _staged is { } staged ? staged[position] : ScalarValue.Missing;
 
-    /// <summary>Whether a present value is of <paramref name="promoted"/>'s kind; an integer is a float's (it converts exactly as stored).</summary>
     private static bool OfKind(in ScalarValue value, ColumnType promoted)
     {
         var (want, have) = promoted.IsList
@@ -247,43 +235,22 @@ public sealed class OperatorContext : IServiceCallScope
 
     /// <summary>
     /// Waits until the context features of each of <paramref name="reads"/> are settled, and calls
-    /// <paramref name="settled"/> for each as soon as it is, with its index and the worst state of its features: once every
-    /// one is stored, or at once with <see cref="FeatureState.Failed"/> when one failed, since the operator gives up on what
-    /// reads it whatever the others do. Then the awaited expressions they come from
-    /// (<see cref="OperatorCompileContext.CompileAwaitedExpression"/>) can be evaluated (<see cref="EvalContext"/>); a failed
-    /// feature is the operator's to handle, as it handles a failed call: its value is missing.
+    /// <paramref name="settled"/> for each as soon as it is, with its index and the worst state of its features: once
+    /// every one is stored, or at once with <see cref="FeatureState.Failed"/> when one failed.
     /// </summary>
     /// <remarks>
-    /// <para>For an operator sending several calls (a recall source's query), each as soon as its own features
-    /// are stored; a call with no awaited reads is settled at once. The features were prefetched when the request started, so
-    /// only what is still in flight is waited for.</para>
-    /// <para>Each round observes the prefetch once, then settles, in the order of <paramref name="reads"/>, every read that
-    /// this one observation settles, so reads whose features are stored together are settled in that order whenever the
-    /// store happens; then it waits for any feature it observed in flight, so one stored meanwhile starts the next round at
-    /// once (each read observed the tasks on its own, so a store between two reads put them in different rounds,
-    /// and one between the check and the wait was missed until another feature was stored).</para>
+    /// <para>Each round observes the prefetch once, then settles, in the order of <paramref name="reads"/>, every read
+    /// that this one observation settles, so reads whose features are stored together are settled in that order
+    /// whenever the store happens.</para>
     /// <para><paramref name="settled"/> runs on the operator's flow, one call at a time; what it throws ends the wait.</para>
-    /// <para>The wait is bounded on its own by the attempt's deadline and the caller, as a call is
-    /// (<see cref="CallAsync"/>), not by <see cref="CancellationToken"/>, which a client's callback could hold up; and a
-    /// prefetch that faulted is rethrown as it is, not taken for the deadline. The bound is also checked before each round
-    /// and before each read is judged (an empty one's callback included), so what is stored after it passed is never
-    /// settled, and a fault is not reported for a deadline that came first, however long a callback ran. Each read of
-    /// <paramref name="reads"/> is asked for once, in order, with the bound checked before: none of the operator's code (its
-    /// list, its callback) is called once a check saw the bound pass. An operator that stopped waiting reads nothing more of
-    /// the request's.</para>
     /// </remarks>
-    /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up first: the reads not
-    /// settled by then never are, and the operator stops, as when a call it sent is cut off.</exception>
+    /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up first: the reads
+    /// not settled by then never are.</exception>
     public async ValueTask WhenEachReadyAsync(IReadOnlyList<AwaitedReads> reads, Action<int, FeatureFillResult> settled)
     {
         ArgumentNullException.ThrowIfNull(reads);
         ArgumentNullException.ThrowIfNull(settled);
 
-        // One pass over the operator's list, which reads each read once and never again: one with nothing to wait for is
-        // settled as it is read, the others are kept with their features (no copy of the list: none for an operator that
-        // waits for nothing). The bound is checked before each call into the operator's code, its list's Count and indexer
-        // as its callback (Count too): indexed in each round, a slow list let a callback run after the bound passed and a faulted
-        // prefetch stand for it; read up front without a check, the rest of the list was read after it.
         List<(int Index, ImmutableArray<int> Features)>? waiting = null;
         ThrowIfBoundPassed();
         var count = reads.Count;
@@ -308,8 +275,8 @@ public sealed class OperatorContext : IServiceCallScope
         }
 
         var features = _state.Features;
-        var tasks = new List<Task>(); // this round's observation: each task the waiting reads wait for, once,
-        var stored = new List<bool>(); // and whether it had completed
+        var tasks = new List<Task>();
+        var stored = new List<bool>();
         var pending = new List<Task>();
         while (true)
         {
@@ -369,10 +336,9 @@ public sealed class OperatorContext : IServiceCallScope
     }
 
     /// <summary>
-    /// The bound of <see cref="WhenEachReadyAsync"/> outside its wait: a settled callback that ran past the deadline (or
-    /// until the caller gave up) must not let the next round, or the next read of this one, settle what was stored late.
-    /// The wait itself would not say so: a task already completed makes <c>Task.WhenAny</c> complete at once, and a timed
-    /// wait on a completed task never times out.
+    /// The bound of <see cref="WhenEachReadyAsync"/> outside its wait: a settled callback that ran past the deadline
+    /// (or until the caller gave up) must not let the next round, or the next read of this one, settle what was stored
+    /// late. The wait itself would not say so: a timed wait on a completed task never times out.
     /// </summary>
     private void ThrowIfBoundPassed()
     {
@@ -386,7 +352,6 @@ public sealed class OperatorContext : IServiceCallScope
     private OperationCanceledException BudgetRanOut() =>
         new("The node's budget ran out while it waited for context features.", Budget.Token);
 
-    /// <summary>Whether one round's observation settles <paramref name="features"/>, and with which state (see <see cref="WhenEachReadyAsync"/>).</summary>
     private static bool Settled(FeatureFetcher fetcher, ImmutableArray<int> features, List<Task> tasks, List<bool> stored, out FeatureFillResult result)
     {
         var worst = new FeatureFillResult(FeatureState.Ok);
@@ -466,31 +431,23 @@ public sealed class OperatorContext : IServiceCallScope
 
     /// <summary>
     /// Calls another pipeline for this request, with the handle the node declared
-    /// (<see cref="OperatorCompileContext.TryCallPipeline"/>), and returns its result: the rows its output returns with
-    /// their columns, and its output values. What the operator does with them is its own: append them as candidates
-    /// (<see cref="AppendRows(ReadOnlySpan{long})"/>), order rows by them, write columns.
+    /// (<see cref="OperatorCompileContext.TryCallPipeline"/>), and returns its result.
     /// </summary>
     /// <param name="inputs">
-    /// The inputs the operator passes, each declared with <see cref="OperatorCompileContext.TryCallInput"/>. Every other
-    /// input the pipeline declares gets this request's input of the same name, when it has one.
+    /// The inputs the operator passes, each declared with <see cref="OperatorCompileContext.TryCallInput"/>. Every
+    /// other input the pipeline declares gets this request's input of the same name, when it has one.
     /// </param>
-    /// <param name="timeout">
-    /// The called run's deadline, when less than what is left of the node's budget: for a call the node can do without
-    /// (a page's sponsored rows), so that a slow one ends while the node still has time to go on. It is the run's
-    /// deadline as a request's is, not a time after which its answer is thrown away: a pipeline that serves what it has
-    /// when a node of its own times out (<c>on_failure: skip</c>) answers so here too.
-    /// </param>
+    /// <param name="timeout">The called run's deadline, when less than what is left of the node's budget: the run
+    /// serves within it as a request does within its deadline.</param>
     /// <returns>
-    /// The result. A call that cannot be answered is a failed result, never an exception: the pipeline is not served, does
-    /// not fit the call (an input, a column or the key type the node declared), rejects the inputs, fails, or no time is
-    /// left. The operator decides what that means for its node (<see cref="Fail"/>, <see cref="ReportDegraded"/>, nothing).
+    /// A call that cannot be answered is a failed result, never an exception: the pipeline is not served, does not fit
+    /// the call, rejects the inputs, fails, or no time is left.
     /// </returns>
     /// <remarks>
-    /// <para>The called run is the same request: its id, its time, and its experiment assignment, of which the pipeline
-    /// runs the arms it has; its seed is derived from this run's, the node and the call's place among the calls the node
-    /// made in the run, so calls made in the same order get the same seeds. It has what is left of the node's budget, and does not fail
-    /// over to its <c>fallback_pipeline</c>: the node's <c>on_failure</c> decides.</para>
-    /// <para>An operator may make several calls at once, as it may call several services.</para>
+    /// <para>The called run is the same request: its id, its time and its experiment assignment; its seed is derived
+    /// from this run's and the call's place among the node's calls, so calls made in the same order get the same seeds.
+    /// It has what is left of the node's budget, and does not fail over to its <c>fallback_pipeline</c>: the node's
+    /// <c>on_failure</c> decides.</para>
     /// </remarks>
     /// <exception cref="ArgumentException">The handle is another node's, or an input was not declared.</exception>
     /// <exception cref="OperationCanceledException">The caller cancelled the request.</exception>
@@ -517,13 +474,13 @@ public sealed class OperatorContext : IServiceCallScope
 
         if (_state.CallerCancellation.IsCancellationRequested)
         {
-            return ValueTask.FromCanceled<PipelineCallResult>(_state.CallerCancellation); // the caller's cancellation is never a failed call
+            return ValueTask.FromCanceled<PipelineCallResult>(_state.CallerCancellation);
         }
 
         var sequence = _state.NextPipelineCall(NodeId);
         if (_state.Replay is { } replay)
         {
-            return new(Heard(replay.PipelineCall(NodeId, sequence, call.PipelineId, inputs))); // answered from the recording: a replay runs no other pipeline, and reads no cache
+            return new(Heard(replay.PipelineCall(NodeId, sequence, call.PipelineId, inputs)));
         }
 
         if (_state.Recorder is { } recorder)
@@ -538,11 +495,9 @@ public sealed class OperatorContext : IServiceCallScope
         Heard(await SendAsync(call, inputs, sequence, timeout).ConfigureAwait(false));
 
     /// <summary>
-    /// A result as the node gets it: one its cache served past its <c>ttl_ms</c> because the pipeline failed, or one of a
-    /// run that was itself degraded, degrades the node, as a service's stale or partial answer does, whatever the
+    /// A result as the node gets it: one its cache served past its <c>ttl_ms</c> because the pipeline failed, or one of
+    /// a run that was itself degraded, degrades the node, as a service's stale or partial answer does, whatever the
     /// operator does with it. The request's result is then degraded too, and is not kept by a cache of a call of it.
-    /// Every call's result comes to its node through here, and one that answers the call whole is counted
-    /// (<see cref="CallsAnswered"/>).
     /// </summary>
     private PipelineCallResult Heard(PipelineCallResult result)
     {
@@ -595,41 +550,24 @@ public sealed class OperatorContext : IServiceCallScope
         return calls.CallAsync(new PipelineCallRequest(call, inputs, _state.Inputs, sequence, _state.Seed, RequestTimeMs, budget, _state.Memory), _state.CallerCancellation);
     }
 
-    /// <summary>
-    /// Calls a service for this node the way the framework calls every external dependency (through
-    /// <see cref="BoundedCall"/>): holds the request memory until the client completes, waits for it no
-    /// longer than the binding's <c>timeout_ms</c> and the node's budget allow, records duration, errors, health and a span
-    /// through the service's <see cref="BoundService.Target"/>, counts the tokens a generative client
-    /// reports, closes <paramref name="response"/>, and records the call or answers it from a recording when the request
-    /// records or replays. Custom operators that call services through it are bounded, measured, recorded
-    /// and replayed like the built-in ones.
-    /// </summary>
-    /// <param name="call">
-    /// The call. One about rows gives the rows' <see cref="ServiceCall.Items"/> (<see cref="KeysOf"/>): the recording keys
-    /// each item's outputs by its entity and inputs, so a replay answers an item however the items were batched. Its
-    /// <see cref="ServiceCall.Outputs"/> name what the operator reads: only those are recorded and replayed.
-    /// </param>
+    /// <param name="call">One about rows gives the rows' <see cref="ServiceCall.Items"/> (<see cref="KeysOf"/>). Its
+    /// <see cref="ServiceCall.Outputs"/> name what the operator reads: only those are recorded and replayed.</param>
     /// <param name="response">Created for this call, with the call's <see cref="ServiceCall.Limit"/>; read it only after the call succeeded.</param>
     /// <returns>
-    /// The client's status. The service's own timeout and an exception the client throws become a failed status, with the
-    /// exception's message; only the node's budget running out or the caller cancelling throws
-    /// (<see cref="OperationCanceledException"/>).
+    /// The service's own timeout and an exception the client throws become a failed status; only the node's budget
+    /// running out or the caller cancelling throws (<see cref="OperationCanceledException"/>).
     /// </returns>
     /// <remarks>
     /// <para>The wait ends at the earlier of the service's timeout and the node's deadline, or when the caller cancels,
     /// even if the client ignores its token. A client still running then is abandoned: it keeps the request memory held
-    /// until it completes, and <paramref name="response"/> reads as empty from then on, so neither the operator nor the
-    /// recording reads a buffer the client may still be writing. The recording has the call as the request saw it (a
-    /// timeout or a cancellation, without outputs).</para>
-    /// <para>A replay returns what the call returned in the recording, and throws <see cref="OperationCanceledException"/>
-    /// where the recorded call was cut off by the budget or the caller. A client exception is a failed status, not a throw,
-    /// so a replay never has to recreate an exception type the recording saw.</para>
+    /// until it completes, and <paramref name="response"/> reads as empty from then on.</para>
+    /// <para>A replay returns what the call returned in the recording, and throws
+    /// <see cref="OperationCanceledException"/> where the recorded call was cut off by the budget or the caller.</para>
     /// </remarks>
     public Task<ServiceStatus> CallAsync(BoundService service, ServiceCall call, ServiceResponse response)
     {
-        // Not an async method: the shared path's task is the call's (awaiting it here cost a second
-        // task per call). A wrong call is still a faulted task, and a cancellation (an operator's output names may be a
-        // memory of its own) a cancelled one, as an async method's would be.
+        // Not async, so the shared path's task is the call's: a wrong call is still a faulted task, and a cancellation
+        // a cancelled one.
         try
         {
             Check(service, call, response);
@@ -690,10 +628,8 @@ public sealed class OperatorContext : IServiceCallScope
 
     /// <summary>
     /// Each input is named once: a service reads an input by its name (<see cref="ServiceCall.TryGetInput"/> finds the
-    /// first), and a replay's digests and a cache's keys take every input in name order, so a second of a name is one the
-    /// service never reads that the key does, and two orders of the two were one key. By the names'
-    /// hashes, sorted with the inputs' indices: only names of one hash are compared (one collision
-    /// compared every pair of names), and nothing is allocated for up to 256 inputs.
+    /// first), and a replay's digests and a cache's keys take every input in name order, so a second of a name is one
+    /// the service never reads that the key does.
     /// </summary>
     internal static void CheckInputs(ServiceCall call)
     {
@@ -703,7 +639,6 @@ public sealed class OperatorContext : IServiceCallScope
             return;
         }
 
-        // The hash in the high half, the index in the low: sorted, the inputs of one hash are adjacent.
         Span<long> keyed = inputs.Length <= 256 ? stackalloc long[inputs.Length] : new long[inputs.Length];
         for (var i = 0; i < inputs.Length; i++)
         {
@@ -735,12 +670,6 @@ public sealed class OperatorContext : IServiceCallScope
         }
     }
 
-    /// <summary>
-    /// The shape of a call about items (<see cref="ServiceCall.Items"/>): one item per row, no items added, and each input
-    /// either per item (its leading dimension the batch size) or shared (leading dimension 1, a scalar or a text). A shared
-    /// input of another leading dimension would be split by row where the batch size happened to match it: a replay's
-    /// digests and a cache's call of the items it misses split inputs on this rule.
-    /// </summary>
     private static void CheckItems(ServiceCall call)
     {
         if (call.Limit != 0)
@@ -786,7 +715,6 @@ public sealed class OperatorContext : IServiceCallScope
         return keys.AsMemory(0, rows.Length);
     }
 
-    /// <summary>The request's recorder, when it records.</summary>
     internal RunRecorder? Recorder => _state.Recorder;
 
     ServiceCaller IServiceCallScope.Caller => ServiceCaller.OfNode(NodeId);

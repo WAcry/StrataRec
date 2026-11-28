@@ -5,12 +5,6 @@ using StrataRec.Expressions;
 
 namespace StrataRec.UnitTests.Expressions;
 
-/// <summary>
-/// <c>list&lt;int32&gt;</c> columns in ColumnExpr: read in place with int64 element semantics, and the
-/// out-of-range rule for every write into int32 storage (<c>int32</c> and <c>list&lt;int32&gt;</c>).
-/// </summary>
-/// <remarks><see cref="ExprAssert.Rows"/> checks each expected value three ways: full-range (zero-copy column reads),
-/// gather (one row at a time) and the reference interpreter.</remarks>
 [Collection(AllocationMeasurement.Name)]
 public class ListInt32Tests
 {
@@ -18,17 +12,6 @@ public class ListInt32Tests
     private const long Wrap3 = 4294967299;   // 2^32 + 3: an unchecked narrowing gives 3
     private const long Below = -2147483649;  // int.MinValue - 1: an unchecked narrowing gives int.MaxValue
 
-    /// <summary>
-    /// <code>
-    /// row | t32 (list&lt;int32&gt;?)  | u32 (list&lt;int32&gt;) | t64 (list&lt;int64&gt;?) | big (list&lt;int64&gt;?)    | k        | n (int64?)
-    /// 0   | [1, 2, 3]          | [3, 3, 9]       | [3, 4]           | [1, 2]              | 3        | 5
-    /// 1   | []                 | [3]             | [5]              | [Above]             | Wrap3    | missing (5e9 underneath)
-    /// 2   | [Min, 7, 7]        | [7]             | [7, Min]         | [3, Wrap3]          | Above    | Below
-    /// 3   | missing            | [1]             | [1, 3]           | missing             | 7        | missing (5e9 underneath)
-    /// 4   | [Max, -5]          | [-5, -5]        | missing          | [Min, Max]          | Max      | Min
-    /// 5-7 | [0]                | [0]             | [0]              | [0]                 | 0        | 0
-    /// </code>
-    /// </summary>
     private static ExprFixture Lists()
     {
         var f = new ExprFixture(capacity: 16)
@@ -84,15 +67,13 @@ public class ListInt32Tests
         return f;
     }
 
-    // ---- Reading: every list function, both row domains, the reference interpreter -------------------------------------
-
     [Fact]
     public void Size_CountsElements()
     {
         var f = Lists();
         ExprAssert.Rows(f, "size(col.t32)", 3, 0, 3, null, 2);
         ExprAssert.Rows(f, "size(col.u32)", 3, 1, 1, 1, 2);
-        ExprAssert.Rows(f, "size(col.t32 ?? col.t64)", 3, 0, 3, 2, 2); // lazy select of mixed widths
+        ExprAssert.Rows(f, "size(col.t32 ?? col.t64)", 3, 0, 3, 2, 2);
         ExprAssert.Rows(f, "has(col.t32)", true, true, true, false, true);
     }
 
@@ -116,7 +97,7 @@ public class ListInt32Tests
         ExprAssert.Rows(f, "col.k in col.t32", true, false, false, null, true);
         ExprAssert.Rows(f, "2147483648 in col.t32", false, false, false, null, false);
         ExprAssert.Rows(f, "4294967299 in col.u32", false, false, false, false, false);
-        ExprAssert.Scalar(f, "4294967305 in ctx.l32", false); // 2^32 + 9
+        ExprAssert.Scalar(f, "4294967305 in ctx.l32", false);
         ExprAssert.Scalar(f, "9 in ctx.l32", true);
     }
 
@@ -155,14 +136,11 @@ public class ListInt32Tests
         Assert.Equal(ColumnType.List(StorageKind.Int64).AsNullable(), f.Compile("col.t32").ResultType);
         Assert.Equal(ColumnType.List(StorageKind.Int64), f.Compile("col.u32").ResultType);
 
-        // Both widths are accepted where an int list is expected, in either direction.
         f.Compile("col.u32", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Int64) });
         f.Compile("col.t64 ?? [1]", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Int32) });
         var error = Assert.Single(f.Errors("['a']", new CompileOptions { ExpectedType = ColumnType.List(StorageKind.Int32) }));
         Assert.Equal(ExpressionErrorCodes.TypeMismatch, error.Code);
     }
-
-    // ---- Writing into list<int32>: narrowing and the out-of-range rule ---------------------------------------------------
 
     [Theory]
     [InlineData(false)]
@@ -181,9 +159,9 @@ public class ListInt32Tests
             Assert.IsType<ListColumn<int>>(destination);
             var what = gather ? "gather" : "full range";
             ExprAssert.Same(new long[] { 1, 2 }, ExprFixture.Read(destination, 0), what);
-            ExprAssert.Same(replaced, ExprFixture.Read(destination, 1), what);  // [2^31]: not [Min]
-            ExprAssert.Same(replaced, ExprFixture.Read(destination, 2), what);  // [3, 2^32 + 3]: not [3, 3], not [3]
-            ExprAssert.Same(null, ExprFixture.Read(destination, 3), what);      // a missing source is not out of range
+            ExprAssert.Same(replaced, ExprFixture.Read(destination, 1), what);
+            ExprAssert.Same(replaced, ExprFixture.Read(destination, 2), what);
+            ExprAssert.Same(null, ExprFixture.Read(destination, 3), what);
             ExprAssert.Same(new long[] { int.MinValue, int.MaxValue }, ExprFixture.Read(destination, 4), what);
             Assert.Equal(2, f.Counters.OutOfRange - before);
         }
@@ -220,7 +198,6 @@ public class ListInt32Tests
         var f = Lists();
         var rows = new[] { 0, 1, 2 };
 
-        // Request-level: one value broadcast to every listed row.
         var fits = ColumnBuffer.Create(ColumnType.List(StorageKind.Int32), f.Capacity, f.Memory);
         f.Compile("[1, -2147483648]").Evaluate(f.Context, rows, fits);
         Assert.All(rows, r => ExprAssert.Same(new long[] { 1, int.MinValue }, ExprFixture.Read(fits, r), $"row {r}"));
@@ -229,14 +206,13 @@ public class ListInt32Tests
         var wide = ColumnBuffer.Create(ColumnType.List(StorageKind.Int32), f.Capacity, f.Memory);
         f.Compile("[1, 5000000000]").Evaluate(f.Context, rows, wide, ScalarValue.FromInt64List(new long[] { 0 }));
         Assert.All(rows, r => ExprAssert.Same(new long[] { 0 }, ExprFixture.Read(wide, r), $"row {r}"));
-        Assert.Equal(3, f.Counters.OutOfRange); // once per row
+        Assert.Equal(3, f.Counters.OutOfRange);
 
         var missing = ColumnBuffer.Create(ColumnType.List(StorageKind.Int32).AsNullable(), f.Capacity, f.Memory);
         f.Compile("ctx.small > 0 ? [5000000000] : [1]").Evaluate(f.Context, rows, missing);
         Assert.All(rows, r => Assert.False(missing.IsValid(r)));
         Assert.Equal(6, f.Counters.OutOfRange);
 
-        // Row-level: a literal in one branch.
         foreach (var gather in new[] { false, true })
         {
             var before = f.Counters.OutOfRange;
@@ -265,8 +241,6 @@ public class ListInt32Tests
         f.Compile("2147483647", new CompileOptions { ExpectedType = ColumnType.Int32 });
     }
 
-    // ---- Writing into int32: the narrowing bug (it used to wrap) --------------------------------------------------------
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -283,8 +257,8 @@ public class ListInt32Tests
 
             var what = gather ? "gather" : "full range";
             ExprAssert.Same(3, ExprFixture.Read(destination, 0), what);
-            ExprAssert.Same(replaced, ExprFixture.Read(destination, 1), what); // 2^32 + 3 used to be written as 3
-            ExprAssert.Same(replaced, ExprFixture.Read(destination, 2), what); // 2^31 used to be written as int.MinValue
+            ExprAssert.Same(replaced, ExprFixture.Read(destination, 1), what);
+            ExprAssert.Same(replaced, ExprFixture.Read(destination, 2), what);
             ExprAssert.Same(7, ExprFixture.Read(destination, 3), what);
             ExprAssert.Same(int.MaxValue, ExprFixture.Read(destination, 4), what);
             Assert.Equal(2, f.Counters.OutOfRange - before);
@@ -301,9 +275,9 @@ public class ListInt32Tests
             var destination = Evaluate(f, f.Compile("col.n"), "int32?", gather);
 
             ExprAssert.Same(5, ExprFixture.Read(destination, 0), "n");
-            ExprAssert.Same(null, ExprFixture.Read(destination, 1), "n"); // missing (5e9 underneath)
-            ExprAssert.Same(null, ExprFixture.Read(destination, 2), "n"); // -2^31 - 1: out of range
-            ExprAssert.Same(null, ExprFixture.Read(destination, 3), "n"); // missing (5e9 underneath)
+            ExprAssert.Same(null, ExprFixture.Read(destination, 1), "n");
+            ExprAssert.Same(null, ExprFixture.Read(destination, 2), "n");
+            ExprAssert.Same(null, ExprFixture.Read(destination, 3), "n");
             ExprAssert.Same(int.MinValue, ExprFixture.Read(destination, 4), "n");
             Assert.Equal(1, f.Counters.OutOfRange - before);
         }
@@ -319,7 +293,7 @@ public class ListInt32Tests
             var destination = Evaluate(f, f.Compile("col.k - 1"), "int32", gather, ScalarValue.FromInt64(0));
             ExprAssert.Same(2, ExprFixture.Read(destination, 0), "k - 1");
             ExprAssert.Same(0, ExprFixture.Read(destination, 1), "k - 1");
-            ExprAssert.Same(int.MaxValue, ExprFixture.Read(destination, 2), "k - 1"); // 2^31 - 1 fits
+            ExprAssert.Same(int.MaxValue, ExprFixture.Read(destination, 2), "k - 1");
             ExprAssert.Same(int.MaxValue - 1, ExprFixture.Read(destination, 4), "k - 1");
             Assert.Equal(1, f.Counters.OutOfRange - before);
         }
@@ -357,13 +331,10 @@ public class ListInt32Tests
         Assert.Throws<ArgumentException>(() => f.Compile("col.k").Evaluate(f.Context, rows, int32, ScalarValue.FromFloat64(1)));
         Assert.Throws<ArgumentException>(() => f.Compile("col.u32").Evaluate(f.Context, rows, list32, ScalarValue.FromInt64List(new[] { Below })));
 
-        // Destinations without int32 storage never need it.
         var int64 = ColumnBuffer.Create(ColumnType.Int64, f.Capacity, f.Memory);
         f.Compile("col.k").Evaluate(f.Context, rows, int64, ScalarValue.FromInt64(Above));
         ExprAssert.Same(Wrap3, ExprFixture.Read(int64, 1), "int64");
     }
-
-    // ---- Allocation -------------------------------------------------------------------------------------------------------
 
     [Fact]
     public void ReadingListInt32_DoesNotAllocate_InSteadyState()
@@ -379,7 +350,7 @@ public class ListInt32Tests
             ("overlap_count(col.u32, ctx.l)", "int64"),
             ("overlap_count(col.t32, col.t64 ?? col.u32)", "int64?"),
             ("overlap_count(col.u32, col.u32)", "int64"),
-            ("col.k", "int32"), // narrowing write, in and out of range
+            ("col.k", "int32"),
         };
 
         foreach (var (source, type) in expressions)
@@ -412,7 +383,6 @@ public class ListInt32Tests
         }
     }
 
-    /// <summary>Evaluates rows 0–4 (full range: 5 of 8 physical rows) or each row alone (gather) into a fresh column.</summary>
     private static ColumnBuffer Evaluate(ExprFixture f, CompiledExpression compiled, string type, bool gather, ScalarValue outOfRange = default)
     {
         var destination = ColumnBuffer.Create(ColumnType.Parse(type), f.Capacity, f.Memory);

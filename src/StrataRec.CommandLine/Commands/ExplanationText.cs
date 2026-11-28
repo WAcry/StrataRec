@@ -3,15 +3,8 @@ using StrataRec.Pipeline.Execution;
 
 namespace StrataRec.CommandLine.Commands;
 
-/// <summary>
-/// Explained candidates as lines for people: where each ended, then one line per node that did something to
-/// it (or was skipped, or rolled back) with the values it read and wrote and the operator's reason; the nodes that ran while
-/// it was not live are counted in one line. The text formats print this; JSON has
-/// <see cref="Hosting.RecResultJson.WriteExplanation"/>.
-/// </summary>
 internal static class ExplanationText
 {
-    /// <param name="prefix">Starts each candidate's line (e.g. the report's label column); its steps are indented past it.</param>
     /// <remarks>The pipeline explained is the one that served the result, which the text formats name already ("served by").</remarks>
     public static void Write(TextWriter output, RunExplanation explanation, string prefix)
     {
@@ -20,8 +13,7 @@ internal static class ExplanationText
         {
             output.WriteLine($"{prefix}{candidate.Id}: {Verdict(candidate)}");
 
-            // A node that ran while the candidate was not live did nothing to it: one line says how many, not one each
-            // (the JSON has every step). A skipped or rolled-back node is still listed: it may be why the candidate is absent.
+            // A skipped or rolled-back node is still listed: it may be why the candidate is absent.
             var quiet = 0;
             foreach (var step in candidate.Steps)
             {

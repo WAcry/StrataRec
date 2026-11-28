@@ -8,10 +8,6 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// <c>ModelScorer@1</c> rejects at load time every model version it could not call, at the node's config
-/// key, rather than loading cleanly and failing or falling back on every request.
-/// </summary>
 public sealed class ModelSignatureTests
 {
     private static readonly int[] Rows = { -1 };
@@ -26,7 +22,7 @@ public sealed class ModelSignatureTests
     [InlineData("int64 input", "/nodes/ctr_ranker/config/inputs/smoothed_ctr", "MODEL_TENSOR_MISMATCH")]
     [InlineData("matrix input", "/nodes/ctr_ranker/config/inputs/smoothed_ctr", "MODEL_TENSOR_MISMATCH")]
     [InlineData("extra input", "/nodes/ctr_ranker/config/model", "MODEL_INPUT_MISSING")]
-    [InlineData("matrix output", "/nodes/ctr_ranker/config/outputs/p_click", "MODEL_TENSOR_MISMATCH")] // its float32 column takes float32 [-1]
+    [InlineData("matrix output", "/nodes/ctr_ranker/config/outputs/p_click", "MODEL_TENSOR_MISMATCH")]
     public void AVersionTheScorerCannotCall_IsALoadError_AtItsConfigKey(string mismatch, string pointer, string code)
     {
         var signature = mismatch switch
@@ -49,7 +45,6 @@ public sealed class ModelSignatureTests
     [Fact]
     public void EveryVersionTheNodeMayUse_IsChecked()
     {
-        // ctr_ranker picks its version from a parameter; v2 takes an int64 input. v1 alone would load.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             const string pipeline = "pipelines/home_feed.jsonc";
@@ -72,7 +67,6 @@ public sealed class ModelSignatureTests
     [Fact]
     public void AnIntColumnMappedToTheFloat32Model_IsAMismatch_WhoseFixIsAFloat32DerivedFeature()
     {
-        // linear@1 declares float32 [-1]; an int64 column is sent as int64 [-1], whatever the model declares.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"log_followers\": \"col.author.log_followers\"", "\"log_followers\": \"col.entity_id\""));
 
@@ -91,7 +85,6 @@ public sealed class ModelSignatureTests
     private static PlanCompilation Compile(HomeFeedTestHost host, Func<string?, ServiceSignature> signature) =>
         PlanCompiler.Compile(host.Request, new PlanEnvironment { BaseDirectory = host.Root, Bindings = PlanEnvironment.DefaultBindings().Add(new SignatureModels(signature)) });
 
-    /// <summary>The sample model's signature (what <c>linear@1</c> declares for it), with one tensor replaced or added.</summary>
     private static ServiceSignature Linear(TensorSpec? smoothedCtr = null, TensorSpec? logFollowers = null, TensorSpec? extra = null, TensorSpec? pClick = null)
     {
         var inputs = new List<TensorSpec>
@@ -107,7 +100,6 @@ public sealed class ModelSignatureTests
         return new ServiceSignature(inputs, new[] { pClick ?? new TensorSpec("p_click", TensorElementType.Float32, Rows) });
     }
 
-    /// <summary>Stands in for <c>linear@1</c> with a signature per version; never called.</summary>
     private sealed class SignatureModels(Func<string?, ServiceSignature> signature) : IBindingFactory<IServiceClient>
     {
         public string Type => LinearModelClientFactory.TypeName;

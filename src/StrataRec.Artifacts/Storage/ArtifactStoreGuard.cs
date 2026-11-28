@@ -2,7 +2,6 @@ using StrataRec.Artifacts.Json;
 
 namespace StrataRec.Artifacts.Storage;
 
-/// <summary>Argument and integrity checks shared by the <see cref="IArtifactStore"/> implementations.</summary>
 internal static class ArtifactStoreGuard
 {
     /// <summary>Validates a content id and returns its hex digest; rejecting malformed ids also prevents path traversal.</summary>
@@ -19,7 +18,6 @@ internal static class ArtifactStoreGuard
         }
     }
 
-    /// <summary>Throws <see cref="ArtifactIntegrityException"/> unless <paramref name="bytes"/> hash to <paramref name="contentId"/>.</summary>
     public static void VerifyIntegrity(string contentId, ReadOnlySpan<byte> bytes, string? location)
     {
         var actual = ContentHash.FromCanonicalBytes(bytes);

@@ -13,9 +13,8 @@ internal static class RowGroups
 {
     /// <summary>
     /// The group of each row of <paramref name="rows"/> into <paramref name="groupOf"/> (-1 for a row whose key is
-    /// missing, or every row when <paramref name="keys"/> is null), and the number of groups. Strings are numbered in the
-    /// order they first appear, through a scratch key index (equal strings group together whether or not they are the same
-    /// instance); integers are numbered after a sort.
+    /// missing, or every row when <paramref name="keys"/> is null), and the number of groups. Strings are numbered in
+    /// the order they first appear, (equal strings group together whether or not they are the same instance).
     /// </summary>
     public static int Assign(ColumnBuffer? keys, ReadOnlySpan<int> rows, Span<int> groupOf, RequestMemory memory)
     {

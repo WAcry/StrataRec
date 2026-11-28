@@ -77,7 +77,6 @@ public sealed record ManifestLoadResult(
     /// </summary>
     public DateTimeOffset? AttemptedAt { get; init; }
 
-    /// <summary>The reason of a rejection: its first error, and how many more there are.</summary>
     internal static string RejectedReason(IReadOnlyList<ConfigDiagnostic> diagnostics)
     {
         ConfigDiagnostic? first = null;
@@ -110,8 +109,8 @@ public sealed partial class RecEngine
     /// Each outcome is logged and counted (<c>stratarec.plan.loads</c>; events 1001, 1002 and 1004–1008). Failures are
     /// results, not exceptions; a store that throws something other than I/O and integrity errors (a transport's own
     /// exception) does propagate, as does cancellation. The store's reads are part of the load: they get the load's own
-    /// token, cancelled with <paramref name="cancellationToken"/> and by the engine's disposal, whose callbacks run on the
-    /// thread pool (<see cref="ObservedCancellationSource"/>), not on the thread that cancels.
+    /// token, cancelled with <paramref name="cancellationToken"/> and by the engine's disposal, whose callbacks run on
+    /// the thread pool, not on the thread that cancels.
     /// </remarks>
     /// <param name="manifestId">The manifest's content id (<see cref="ManifestBuilder.ContentId"/>): plans, results and
     /// replay bundles carry it.</param>
@@ -155,8 +154,6 @@ public sealed partial class RecEngine
                 "this binary lacks " + string.Join(", ", missing), missing);
         }
 
-        // A load from here on, as LoadAsync's (see there): registered before the download, so a disposal cancels the
-        // download too, and the store gets the load's token, whose callbacks run on the pool, never the caller's.
         PlanLoadResult loaded;
         var load = BeginLoad(cancellationToken);
         try
@@ -169,7 +166,6 @@ public sealed partial class RecEngine
                 return Result(manifest, manifestId, ManifestLoadStatus.Rejected, diagnostics, TimeSpan.Zero, ManifestLoadResult.RejectedReason(diagnostics.Items));
             }
 
-            // Compile and load, as any plan; it logs and counts its own outcome.
             loaded = await LoadWithBindingsAsync(request, sequence, load, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (DisposedDuring(load, cancellationToken))

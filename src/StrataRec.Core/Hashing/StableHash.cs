@@ -86,8 +86,7 @@ public static class StableHash
     }
 
     /// <summary>
-    /// Builder over the canonical encoding for mixed-type keys. Bytes accumulate in a pooled buffer and are hashed
-    /// once by <see cref="Finish"/>, so building a key does not allocate in steady state. Dispose returns the buffer.
+    /// Builder over the canonical encoding for mixed-type keys. Dispose returns the buffer.
     /// </summary>
     public ref struct Builder
     {
@@ -204,9 +203,7 @@ public static class StableHash
             XxHash3.HashToUInt64(_buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length));
 
         /// <summary>
-        /// The XXH3-128 of the bytes added so far: for keys a collision must not confuse among very many (a cache of a
-        /// hundred million answers has a real chance of two 64-bit keys alike, and the collision serves one's answer to the
-        /// other).
+        /// The XXH3-128 of the bytes added so far: for keys a collision must not confuse among very many.
         /// </summary>
         public readonly UInt128 Finish128() =>
             XxHash128.HashToUInt128(_buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length));
@@ -220,7 +217,7 @@ public static class StableHash
         /// <summary>Adds bytes this encoding produced already (<see cref="Encoded"/>), as if their values were added again.</summary>
         public void AddEncoded(scoped ReadOnlySpan<byte> encoded)
         {
-            if (!encoded.IsEmpty) // nothing to add: no buffer rented for it
+            if (!encoded.IsEmpty)
             {
                 encoded.CopyTo(Reserve(encoded.Length));
             }

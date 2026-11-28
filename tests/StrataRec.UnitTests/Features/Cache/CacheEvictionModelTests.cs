@@ -6,9 +6,7 @@ using StrataRec.Features.Local;
 namespace StrataRec.UnitTests.Features.Cache;
 
 /// <summary>
-/// The table's eviction against SIEVE written the plain way, as a linked list in insertion order with a hand: after
-/// every write, under random reads, refreshes and compactions, both hold the same keys with the same values. The
-/// table keeps no list: its order is the position of the records in its pages, which every rebuild has to preserve.
+/// The table keeps no list: its order is the position of the records in its pages, which every rebuild has to preserve.
 /// </summary>
 public class CacheEvictionModelTests
 {
@@ -36,7 +34,7 @@ public class CacheEvictionModelTests
         var record = new CacheRecordWriter(cache.Layout, 512);
         float[][] widths = [new float[1], new float[4], new float[16], new float[64]];
 
-        var order = new LinkedList<long>(); // insertion order, oldest first
+        var order = new LinkedList<long>();
         var nodes = new Dictionary<long, LinkedListNode<long>>();
         var values = new Dictionary<long, int>();
         var visited = new HashSet<long>();
@@ -49,7 +47,6 @@ public class CacheEvictionModelTests
             var version = table.Pin();
             for (var r = 0; r < 16; r++)
             {
-                // Mostly a small hot set, otherwise a recent key: some are read again before the hand comes, some not.
                 var key = random.NextDouble() < 0.8 ? random.Next(150) : random.NextInt64(Math.Max(1, nextKey - 1000), Math.Max(2, nextKey + 1));
                 var found = version.Find(key);
                 Assert.Equal(values.ContainsKey(key), found.Found);
@@ -61,8 +58,6 @@ public class CacheEvictionModelTests
                 }
             }
 
-            // Mostly a new key. Some writes are of a key written before, live or evicted since, and some of the newest
-            // key again (two requests that missed it at once): a hole anywhere in the pages, and the record the hand is at.
             var written = step % 7 == 0 ? random.NextInt64(Math.Max(1, nextKey))
                 : step % 5 == 0 && order.Last is { } newest ? newest.Value
                 : nextKey++;
@@ -102,7 +97,6 @@ public class CacheEvictionModelTests
             Assert.Equal(values.Count, version.RecordCount);
             if (evicted)
             {
-                // The same number of keys, and every key of the model is there: the same keys.
                 foreach (var (key, value) in values)
                 {
                     Assert.Equal(value, Value(version, version.Find(key)));

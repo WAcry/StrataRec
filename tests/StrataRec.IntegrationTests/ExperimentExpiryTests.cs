@@ -3,11 +3,6 @@ using StrataRec.CommandLine.Commands;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// An experiment's <c>expires_at</c> is checked where a release is decided, <c>validate</c> and <c>build</c>,
-/// with a warning in the last 14 days. Loading, running, explaining and replaying configurations never fail on a
-/// calendar date: a service restarting after the date must start, and last week's request must still replay.
-/// </summary>
 public sealed class ExperimentExpiryTests
 {
     [Fact]
@@ -40,7 +35,7 @@ public sealed class ExperimentExpiryTests
         Assert.Equal(0, ValidateCommand.Run(Tool.Environment, root, "local", null, "text", false, output));
         Assert.Contains("EXPERIMENT_EXPIRING", output.ToString());
         Assert.Contains(when, output.ToString());
-        Assert.Equal(1, ValidateCommand.Run(Tool.Environment, root, "local", null, "text", true, TextWriter.Null)); // a strict CI can refuse it
+        Assert.Equal(1, ValidateCommand.Run(Tool.Environment, root, "local", null, "text", true, TextWriter.Null));
     }
 
     [Fact]

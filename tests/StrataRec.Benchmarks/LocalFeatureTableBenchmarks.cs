@@ -10,22 +10,6 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Benchmarks;
 
-/// <summary>
-/// The request read path of a local feature table (500 rows × 30 features in about 20 μs): one
-/// lookup per key, then the features written into candidate-table columns.
-/// </summary>
-/// <remarks>
-/// <para>The table holds 1,000,000 items with 30 features each, the shape's <c>item_store</c>: 25
-/// <c>float32</c>, 2 <c>int64</c>, 1 <c>bool</c>, 1 low-cardinality <c>string</c> and a 64-dimensional embedding
-/// (about 400 B per record, 400 MB in all). Each invocation reads the next of 64 random key sets, so a request's records
-/// are not already in the core's caches from the previous one (a large L3 may still hold much of the table). A tenth of the
-/// keys are not in the table.</para>
-/// <para><c>LookupAndFill</c> fills all features in one call (rows in blocks, every feature per block);
-/// <c>LookupAndFillPerField</c> makes one call per feature, so each feature walks all records again; <c>LookupOnly</c> is
-/// the index part alone; <c>LookupAndFillWarm</c> repeats one key set, which leaves the CPU cost without cache and TLB
-/// misses.</para>
-/// <para>Run: <c>dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*LocalFeatureTableBenchmarks*'</c>.</para>
-/// </remarks>
 [MemoryDiagnoser]
 public class LocalFeatureTableBenchmarks
 {
@@ -87,7 +71,6 @@ public class LocalFeatureTableBenchmarks
             _reads[f] = new LocalFieldRead(f, _columns[f], _absent[f]);
         }
 
-        // Fail fast on a broken setup instead of measuring an error path.
         if (LookupAndFill() != Keys - (Keys / 10) || LookupAndFillPerField() != Keys - (Keys / 10))
         {
             throw new InvalidOperationException("Unexpected lookup result.");

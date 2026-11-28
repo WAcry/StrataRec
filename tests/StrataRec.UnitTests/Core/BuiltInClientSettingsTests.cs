@@ -7,25 +7,17 @@ using StrataRec.Core.Services;
 
 namespace StrataRec.UnitTests.Core;
 
-/// <summary>
-/// The built-in clients <c>init</c> and the sample bind (<c>linear@1</c>, <c>memory@1</c>, <c>memory_list@1</c>) check their
-/// settings strictly: a misspelled setting is an error at its pointer with the name it resembles, where it used to be
-/// ignored and its default used (an <c>"activaton": "sigmoid"</c> scored with the identity); a member of the wrong type
-/// is an error at it, where it used to be an exception without a place. The settings are bound to each factory's settings
-/// type (<see cref="StrataRec.Artifacts.Model.BindingSettings"/>), so the words are those of every other config.
-/// </summary>
 public sealed class BuiltInClientSettingsTests
 {
     private const string SchemaHint = "'stratarec schema bindings' prints the JSON Schema of bindings";
 
     public static TheoryData<string, string, string, string, string?> Mistakes() => new()
     {
-        // client, settings, pointer, message, hint
         { "linear@1", """{ "outputs": { "p": { "bias": 1 } }, "lantency_ms": 5 }""", "/lantency_ms", "Unknown key 'lantency_ms' in the settings of linear@1.", "did you mean 'latency_ms'?" },
         { "linear@1", """{ "outputs": { "p": { "bias": 1, "activaton": "sigmoid" } } }""", "/outputs/p/activaton", "Unknown key 'activaton' in entry 'p' of 'outputs'.", "did you mean 'activation'?" },
         { "linear@1", """{ "outputs": { "p": { "bias": "high" } } }""", "/outputs/p/bias", "'bias' must be a number, got the string \"high\".", SchemaHint },
         { "linear@1", """{ "outputs": { "p": { "bias": 1e400 } } }""", "/outputs/p/bias", "The number 1e400 is outside the double-precision range.", "use a smaller magnitude" },
-        { "memory_list@1", """{ "items": [{ "id": 1, "score": -1e999 }] }""", "/items/0/score", "The number -1e999 is outside", null }, // one check for every settings type
+        { "memory_list@1", """{ "items": [{ "id": 1, "score": -1e999 }] }""", "/items/0/score", "The number -1e999 is outside", null },
         { "linear@1", """{ "outputs": { "p": { "weights": { "ctr": [1] } } } }""", "/outputs/p/weights/ctr", "Entry 'ctr' of 'weights' must be a number, got an array", null },
         { "linear@1", """{ "outputs": { "p": { "activation": "relu" } } }""", "/outputs/p/activation", "Unknown activation 'relu'.", "use 'sigmoid' or 'identity'" },
         { "linear@1", """{ "versions": ["v1"] }""", "", "'outputs' is required in the settings of linear@1.", "'outputs': " },
@@ -34,7 +26,7 @@ public sealed class BuiltInClientSettingsTests
         { "linear@1", """{ "outputs": {}, "latency_ms": -1 }""", "/latency_ms", "'latency_ms' must be 0 or more, got -1.", null },
         { "linear@1", """{ "outputs": {}, "versions": ["v1", ""] }""", "/versions/1", "must be a non-empty", null },
         { "memory@1", """{ "data": {}, "faill": true }""", "/faill", "Unknown key 'faill' in the settings of memory@1.", "did you mean 'fail'?" },
-        { "memory@1", """{ "data_file": "s3://bucket/items.json" }""", "/data_file", "is not a local path", "local directory" }, // a URI was read as a path
+        { "memory@1", """{ "data_file": "s3://bucket/items.json" }""", "/data_file", "is not a local path", "local directory" },
         { "memory@1", """{ "data": {}, "data_file": "items.json" }""", "/data_file", "memory@1 takes 'data' or 'data_file', not both.", null },
         { "memory@1", """{ "data_file": "missing.json" }""", "/data_file", "missing.json' cannot be read", "a relative path resolves against" },
         { "memory@1", """{ "data": [1, 2] }""", "/data", "The records must be a JSON object, by entity key.", null },
@@ -49,10 +41,8 @@ public sealed class BuiltInClientSettingsTests
         { "memory_list@1", """{ "data_file": "list.json" }""", "/data_file", "list.json' at /itemz: Unknown key 'itemz' in the file.", "did you mean 'items'?" },
         { "memory_list@1", """{ "data_file": "bad-item.json" }""", "/data_file", "bad-item.json' at /items/1: An id must be a string or an int64; got true.", null },
         { "memory_list@1", """{ "data_file": "missing.json" }""", "/data_file", "missing.json' cannot be read", "a relative path resolves against" },
-        // A fixture is read as strictly as a workspace file: a key written twice was its last value.
         { "memory@1", """{ "data_file": "twice.json" }""", "/data_file", "Duplicate key '1'", "remove or merge one of the definitions" },
         { "memory_list@1", """{ "data_file": "twice.json" }""", "/data_file", "Duplicate key '1'", "remove or merge one of the definitions" },
-        // Read as text first, an invalid byte became U+FFFD, and the id it was in another id.
         { "memory_list@1", """{ "data_file": "invalid.json" }""", "/data_file", "is not valid UTF-8", "save the file as UTF-8" },
         { "memory@1", """{ "data_file": "invalid.json" }""", "/data_file", "is not valid UTF-8", "save the file as UTF-8" },
         { "random@1", """{ "inputs": ["x"], "outputs": ["p"], "sed": 1 }""", "/sed", "Unknown key 'sed' in the settings of random@1.", "did you mean 'seed'?" },

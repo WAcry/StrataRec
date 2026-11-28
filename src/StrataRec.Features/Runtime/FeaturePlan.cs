@@ -35,8 +35,7 @@ public sealed class FeatureRuntimeInfo
     public CompiledExpression? Expression { get; init; }
 
     /// <summary>
-    /// Features that must be available first: derived inputs (given when the feature is registered), or the foreign key of
-    /// the entity (set by <see cref="FeaturePlan.Create"/> when it groups the physical features).
+    /// Features that must be available first: derived inputs, or the foreign key of the entity.
     /// </summary>
     public ImmutableArray<int> Dependencies
     {
@@ -59,50 +58,32 @@ public sealed class FeatureRuntimeInfo
     /// inputs, or -1 when it needs no candidate fetch at all (only <c>entity_id</c>, request inputs or context
     /// features), in which case it is computed before wave 0.
     /// </summary>
-    /// <remarks>
-    /// This places a derived foreign key after its own inputs and strictly before the groups keyed by it; treating
-    /// every derived key as "wave 1" would fetch those groups before the key exists.
-    /// </remarks>
     public int Wave { get; internal set; }
 
     public bool IsContext => Definition.IsContext;
 
     public bool IsDerived => Definition.IsDerived;
 
-    /// <summary>
-    /// Tags of <see cref="StrataRecMetrics.ColumnNonFinite"/> for this feature (<c>stratarec.column</c>), built once per
-    /// plan on first use: non-finite values are rare, and features are not produced by a node.
-    /// </summary>
     internal KeyValuePair<string, object?>[] NonFiniteTags =>
         _nonFiniteTags ?? Interlocked.CompareExchange(ref _nonFiniteTags, [new(StrataRecTags.Column, Definition.Name)], null) ?? _nonFiniteTags!;
 
-    /// <summary>
-    /// Tags of <see cref="StrataRecMetrics.SourceValues"/> for this physical feature: its source, its name, and the
-    /// outcome. Built once per plan on first use, when a listener is enabled: a feature belongs to one fetch group, so
-    /// these are the tags of that group's field.
-    /// </summary>
     internal SourceValueTags ValueTags =>
         _valueTags ?? Interlocked.CompareExchange(ref _valueTags, new SourceValueTags(Definition.Source!, Definition.Name), null) ?? _valueTags!;
 
     private KeyValuePair<string, object?>[]? _nonFiniteTags;
     private SourceValueTags? _valueTags;
 
-    /// <summary>Set once <see cref="FeaturePlan.Create"/> has taken the info for a plan.</summary>
     internal bool Planned { get; set; }
 
-    /// <summary>A physical feature of an entity whose key reads features depends on those key features alone.</summary>
     internal void DependOnKey(ImmutableArray<int> keyFeatures) => _dependencies = keyFeatures;
 
     /// <summary>
     /// A derived context feature that a key reads, or an operator awaits while it runs (a recall source's query),
-    /// directly or through other derived features (set by <see cref="FeaturePlan.Create"/>): the context prefetch
-    /// computes it as soon as its inputs are stored, so the groups keyed by it start then and the operator's call is sent
-    /// then; other derived context features are computed once the whole prefetch is.
+    /// directly or through other derived features.
     /// </summary>
     internal bool ComputedEarly { get; set; }
 }
 
-/// <summary>The two tag sets of <see cref="StrataRecMetrics.SourceValues"/> for one feature of a source.</summary>
 internal sealed class SourceValueTags(string source, string feature)
 {
     public KeyValuePair<string, object?>[] Present { get; } = Tags(source, feature, "present");
@@ -117,7 +98,6 @@ internal sealed class SourceValueTags(string source, string feature)
     ];
 }
 
-/// <summary>One argument of a service group (<see cref="FetchGroup.Args"/>): the service's input, its type and where the request holds its value.</summary>
 /// <param name="ContextId">The request's context value: a request input's, or a context feature's.</param>
 /// <param name="Feature">The context feature read, or -1 for a request input.</param>
 internal readonly record struct ServiceArgSource(string Name, ColumnType Type, int ContextId, int Feature);
@@ -170,9 +150,8 @@ public sealed class FetchGroup
     internal int[] ContextKeyFeatures { get; init; } = [];
 
     /// <summary>
-    /// The feature read as the key's only varying part (-1 for the candidate's entity id), or <see cref="int.MinValue"/>
-    /// when several parts vary. One varying part (every one-part key, and one column beside request inputs) is resolved,
-    /// deduplicated and looked up as one value per row, without a tuple: the per-row cost one-part keys always had.
+    /// The feature read as the key's only varying part (-1 for the candidate's entity id), or
+    /// <see cref="int.MinValue"/> when several parts vary.
     /// </summary>
     internal int OneVaryingFeature => VaryingParts.Length == 1 ? KeyParts[VaryingParts[0]].Feature : int.MinValue;
 
@@ -193,15 +172,12 @@ public sealed class FetchGroup
 
     /// <summary>
     /// The names of <see cref="Fields"/>, each once, in field order (two features may read one field): what a source in
-    /// mode <c>service</c> asks its service for when it fetches the whole group. Built once per plan on first use, for each
-    /// group: a source of several entities asks for each one's (one kept for the last group
-    /// was built again at each entity's call).
+    /// mode <c>service</c> asks its service for when it fetches the whole group.
     /// </summary>
     internal string[] FieldNames => _fieldNames ?? Interlocked.CompareExchange(ref _fieldNames, DistinctNames(FieldArray), null) ?? _fieldNames!;
 
     private string[]? _fieldNames;
 
-    /// <summary>The names of <paramref name="fields"/>, each once, in order.</summary>
     internal static string[] DistinctNames(ReadOnlySpan<CompiledFieldBinding> fields)
     {
         var names = new List<string>(fields.Length);
@@ -218,7 +194,7 @@ public sealed class FetchGroup
 
     public int Wave { get; internal set; }
 
-    /// <summary>Metric tags and span name of this source, built once per plan on first use.</summary>
+    /// <summary>Metric tags and span name of this source.</summary>
     public IoTarget Io => _io ?? Interlocked.CompareExchange(ref _io, new IoTarget(IoRoles.Fetch, SourceName), null) ?? _io!;
 
     private IoTarget? _io;
@@ -269,35 +245,13 @@ public sealed class FeaturePlan
     /// <summary>Highest fetch wave of any group (0 when nothing is keyed by a feature).</summary>
     public int MaxWave { get; }
 
-    /// <summary>Whether a group holds a table, which a request may read: it then readies the buffers of its reads up front.</summary>
+    /// <summary>Whether a group holds a table.</summary>
     public bool HasTables { get; }
 
     /// <summary>The most varying parts of a key of a group that holds a table (0 when none has two or more): a request
     /// readies a tuple index for its reads up front.</summary>
     internal int TableTupleParts { get; }
 
-    /// <summary>
-    /// Builds the plan: groups physical features by (source, entity), resolves each group's supply from the bindings
-    /// (<see cref="FeatureSourceResolver"/>: a connector, or a local table from <paramref name="localTables"/>) and
-    /// computes fetch waves. Problems (unbound sources, wrong settings, unsupported key layouts) are reported to the
-    /// resolver's <see cref="BindingResolver.Diagnostics"/>, with its binding errors: one list.
-    /// </summary>
-    /// <param name="resolver">Creates connectors, update sources and distributed cache stores (sharing them by identity as
-    /// it does) and reports their bindings' errors.</param>
-    /// <param name="localTables">Where local tables come from; null gives tables that are never loaded (compiling without serving).</param>
-    /// <param name="clock">The clock of the cache tables the plan creates; null is the system clock.</param>
-    /// <param name="catalog">The catalog the features come from: a <c>local</c> table holds every physical feature it
-    /// binds to the table's source and entity, not only those of <paramref name="features"/> (see
-    /// <see cref="NeedsWholeTable"/>); null holds the plan's features alone.</param>
-    /// <param name="services">The plan's services, for sources in mode <c>service</c> (<see cref="FeatureSourceResolver"/>).</param>
-    /// <param name="awaited">The context features operators await while they run rather than before they start (a recall
-    /// source's query), by index in <paramref name="features"/>: a derived one is computed as soon as its inputs
-    /// are stored (<see cref="FeatureRuntimeInfo.ComputedEarly"/>), so such an operator does not wait for the whole
-    /// prefetch; null has none.</param>
-    /// <exception cref="ArgumentException">An info of <paramref name="features"/> belongs to a plan already.</exception>
-    /// <remarks>The plan takes <paramref name="features"/> as they are and fills in their groups, fields, key dependencies
-    /// and waves. So an info belongs to one plan: one that a plan has taken (another plan's <see cref="Features"/>, which
-    /// requests are using) is refused before anything changes.</remarks>
     internal static FeaturePlan Create(
         IReadOnlyList<FeatureRuntimeInfo> features,
         SourceBindingArtifact bindings,
@@ -416,12 +370,8 @@ public sealed class FeaturePlan
     }
 
     /// <summary>
-    /// Where a request reads each part of <paramref name="entity"/>'s key: a request input from the request's
-    /// context values, <c>col.entity_id</c>, a candidate key feature's column, or a context key feature's context value; the
-    /// group's members then depend on the key features. An entity with args reads each argument as a shared part: a
-    /// request input, or a context feature stored first. False (diagnosed) when a key feature is not in the plan.
+    /// False (diagnosed) when a key feature is not in the plan.
     /// </summary>
-    /// <remarks>The one place a part's (or an argument's) kind becomes a source.</remarks>
     private static bool TryKeyParts(
         EntityDefinition entity, Dictionary<string, FeatureRuntimeInfo> byName, Func<string, int> contextIdOfRequestInput, DiagnosticBag diagnostics,
         string catalogArtifact, out KeyPartSource[] parts, out int[] varying, out ImmutableArray<int> keyFeatures, out int[] contextKeys,
@@ -509,11 +459,6 @@ public sealed class FeaturePlan
         return true;
     }
 
-    /// <summary>
-    /// Marks the derived context features keys read, whether the key is a context group's or a shared part of a candidate
-    /// group's, and those <paramref name="awaited"/> lists, directly or through other derived features
-    /// (<see cref="FeatureRuntimeInfo.ComputedEarly"/>): the prefetch computes them as soon as their inputs are stored.
-    /// </summary>
     private static void MarkComputedEarly(FeatureRuntimeInfo[] features, IReadOnlyList<FetchGroup> groups, IReadOnlyCollection<int>? awaited)
     {
         foreach (var group in groups)
@@ -537,7 +482,7 @@ public sealed class FeaturePlan
             var info = features[f];
             if (!info.IsDerived || !info.IsContext || info.ComputedEarly)
             {
-                return; // a physical one is stored by its group; one marked already (a cycle is rejected anyway)
+                return;
             }
 
             info.ComputedEarly = true;
@@ -549,15 +494,11 @@ public sealed class FeaturePlan
     }
 
     /// <summary>
-    /// Whether a plan that reads one feature of <paramref name="entity"/> from <paramref name="source"/> must hold every
-    /// physical feature of that table, as the plan builder registers them. A <c>cache</c> table is filled by the misses
-    /// of the plans that read it, and a record written back, or shared with the request's other reads, must be complete,
-    /// or a later read of another field would take the field for missing: a miss fetches every member of the group, so
-    /// every field of the table must be a member. That is every entity the binding's cache applies to
-    /// (<see cref="FeatureSourceResolver.Caches"/>). A <c>local</c>
-    /// table is loaded whole by its source, whatever the plan reads (<see cref="Create"/> lays it out from the catalog),
-    /// and a <c>fetch</c> carries only the features a request needs: those plans hold only what they read. False for a
-    /// source with no binding or an unknown mode, which the feature plan reports.
+    /// Whether a plan that reads one feature of <paramref name="entity"/> from <paramref name="source"/> must hold
+    /// every physical feature of that table, as the plan builder registers them. That is every entity the binding's
+    /// cache applies to (<see cref="FeatureSourceResolver.Caches"/>). A <c>local</c> table is loaded whole by its
+    /// source, whatever the plan reads, and a <c>fetch</c> carries only the features a request needs: those plans hold
+    /// only what they read. False for a source with no binding or an unknown mode, which the feature plan reports.
     /// </summary>
     public static bool NeedsWholeTable(SourceBindingArtifact bindings, string source, EntityDefinition entity)
     {
@@ -594,10 +535,8 @@ public sealed class FeaturePlan
     }
 
     /// <summary>
-    /// <see cref="Closure(IEnumerable{int})"/> into caller-provided buffers (the request's rented arrays), so a request
-    /// computes its fetch closures without allocating: <paramref name="order"/> receives the closure, of the returned
-    /// length; <paramref name="seen"/> must be all false and is left marking the closure. The roots are a span, so a
-    /// node's read features (an immutable array) and a request's lists are read without boxing an enumerator.
+    /// <see cref="Closure(IEnumerable{int})"/> into caller-provided buffers: <paramref name="order"/> receives the
+    /// closure, of the returned length; <paramref name="seen"/> must be all false and is left marking the closure.
     /// </summary>
     internal int Closure(ReadOnlySpan<int> roots, int[] order, bool[] seen)
     {
@@ -626,12 +565,6 @@ public sealed class FeaturePlan
         order[count++] = feature;
     }
 
-    /// <summary>
-    /// Assigns <see cref="FeatureRuntimeInfo.Wave"/> to every feature and <see cref="FetchGroup.Wave"/> to every group
-    /// from the full dependency graph: ready(physical) = wave of its group = 0 for <c>entity_id</c>/context keys,
-    /// otherwise ready(key) + 1; ready(derived) = max ready(input), or -1 without candidate fetch inputs; context
-    /// features are -1 (they are fetched with the request, before any candidate wave).
-    /// </summary>
     internal static void AssignWaves(FeatureRuntimeInfo[] features, IReadOnlyList<FetchGroup> groups)
     {
         const int Unknown = int.MinValue;
@@ -648,7 +581,6 @@ public sealed class FeaturePlan
             group.Wave = GroupWave(group);
         }
 
-        // A group is fetched in the wave after the latest of its key features (0 without any).
         int GroupWave(FetchGroup group)
         {
             var wave = 0;

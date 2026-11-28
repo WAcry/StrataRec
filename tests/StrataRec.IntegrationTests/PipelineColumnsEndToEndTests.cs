@@ -17,7 +17,6 @@ namespace StrataRec.IntegrationTests;
 /// </summary>
 public sealed class PipelineColumnsEndToEndTests
 {
-    /// <summary>A second pipeline to call, with output columns of its own.</summary>
     private const string Tagged = """
         {
           "pipeline_id": "tagged",
@@ -53,12 +52,10 @@ public sealed class PipelineColumnsEndToEndTests
         }
         """;
 
-    /// <summary>Every row calls <c>promoted</c> with its own key.</summary>
     private const string OnePipeline = """
         "pipeline": "promoted", "inputs": { "slots": "col.entity_id" }, "ids": "games", "columns": { "bids": "bid" }, "values": { "count": "count" }, "max_calls": 10
         """;
 
-    /// <summary>Row 8 calls <c>tagged</c>, which fills <c>bids</c> from another column and has a list of its own; the others call <c>promoted</c>.</summary>
     private const string TwoPipelines = """
         "pipeline": "promoted", "inputs": { "slots": "col.entity_id" }, "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
         "pipelines": { "8": { "pipeline": "tagged", "columns": { "bids": "weight", "tags": "tag" } } }
@@ -112,10 +109,6 @@ public sealed class PipelineColumnsEndToEndTests
 
     private static double[] Bids(RankedItem row) => row.Columns["bids"].AsFloat64List().ToArray();
 
-    /// <summary>
-    /// Each row's lists are what its own call returned, in the call's order: the row's key is passed as an input, so each
-    /// call's bids differ, and the same items are in every row's list, which one table of candidates could not hold.
-    /// </summary>
     [Fact]
     public async Task EachRowsCall_FillsItsLists_AndAnItemMayBeInSeveralRows()
     {
@@ -135,15 +128,11 @@ public sealed class PipelineColumnsEndToEndTests
             Assert.Equal(alone.Values["count"].AsInt64(), row.Columns["count"].AsInt64());
         }
 
-        Assert.Equal(Games(page.Items[0]), Games(page.Items[1])); // the same items, in two rows
+        Assert.Equal(Games(page.Items[0]), Games(page.Items[1]));
         Assert.NotEqual(Bids(page.Items[0]), Bids(page.Items[1]));
         Assert.Equal(new[] { "page/content#0", "page/content#1", "page/content#2" }, page.Calls!.Select(c => c.CalledBy));
     }
 
-    /// <summary>
-    /// Rows of different kinds call different pipelines: an entry fills a shared list from another column of its pipeline
-    /// and has a list only its pipeline gives, which the other rows have no value in.
-    /// </summary>
     [Fact]
     public async Task RowsOfDifferentKinds_CallDifferentPipelines_EachWithColumnsOfItsOwn()
     {
@@ -167,11 +156,6 @@ public sealed class PipelineColumnsEndToEndTests
         Assert.Equal(new[] { "promoted", "tagged", "promoted" }, page.Calls!.Select(c => c.PipelineId));
     }
 
-    /// <summary>
-    /// Most rows call one pipeline and the rows of a kind another, the kind being a column (<c>by</c>): the item's category
-    /// here, of which row 8 is the only <c>food</c>. The entry's pipeline is called its own way (its inputs), and gives a
-    /// value the other rows have none of.
-    /// </summary>
     [Fact]
     public async Task AColumnSaysARowsKind_AndAnEntryHasInputsAndValuesOfItsOwn()
     {
@@ -200,10 +184,6 @@ public sealed class PipelineColumnsEndToEndTests
         Assert.Equal(promoted.Values["count"].AsInt64(), page.Items[1].Columns["count"].AsInt64());
     }
 
-    /// <summary>
-    /// A row whose call fails has no values (an empty list where the column is not nullable) and the node is degraded;
-    /// when every call fails, the node fails, and its <c>on_failure</c> decides.
-    /// </summary>
     [Theory]
     [InlineData("fail_request")]
     [InlineData("skip")]
@@ -215,7 +195,7 @@ public sealed class PipelineColumnsEndToEndTests
             nullable ? "\"games\": { \"type\": \"list<int64>?\" }" : "\"games\": { \"type\": \"list<int64>\"  }"));
         var ct = TestContext.Current.CancellationToken;
 
-        var some = await Engine(host, "promoted", "page").ExecuteAsync(Request("page"), ct); // tagged is not served
+        var some = await Engine(host, "promoted", "page").ExecuteAsync(Request("page"), ct);
         Assert.True(some.Succeeded, some.Error);
         var row = some.Items.Single(i => i.Id.Int64Value == 8);
         Assert.Equal(nullable, row.Columns["games"].IsMissing);
@@ -230,11 +210,10 @@ public sealed class PipelineColumnsEndToEndTests
         Assert.Contains("1 of 3 calls failed", node.Detail);
         Assert.Contains("tagged", node.Detail);
 
-        var none = await Engine(host, "page").ExecuteAsync(Request("page"), ct); // neither is served
+        var none = await Engine(host, "page").ExecuteAsync(Request("page"), ct);
         Assert.Equal(onFailure == "skip", none.Succeeded);
         if (onFailure == "skip")
         {
-            // The node wrote nothing: its columns are as no node had written them.
             Assert.All(none.Items, i => Assert.True(i.Columns["games"].IsMissing));
         }
         else
@@ -243,15 +222,9 @@ public sealed class PipelineColumnsEndToEndTests
         }
     }
 
-    /// <summary>
-    /// Every row's inputs are read before any call is made: one that cannot be read fails the node with nothing started
-    /// (the calls of the rows before it were under way and left behind, and whether the
-    /// recording had them depended on how fast they ended).
-    /// </summary>
     [Fact]
     public async Task AnInputThatCannotBeRead_FailsTheNode_BeforeAnyCallIsMade()
     {
-        // Row 5 calls with its key. Row 8's entry passes a parameter's key that has no value, which reading it refuses.
         const string OneUnreadable = """
             "pipeline": "promoted", "inputs": { "slots": "col.entity_id" }, "ids": "games", "max_calls": 10,
             "pipelines": { "8": { "pipeline": "promoted", "inputs": { "slots": "param.slots_by.food" } } }
@@ -291,7 +264,6 @@ public sealed class PipelineColumnsEndToEndTests
         }
     }
 
-    /// <summary>The first <c>max_calls</c> rows are called; the others get no values, and the node says so.</summary>
     [Fact]
     public async Task TheRowsAfterTheMostCalls_AreNotCalled()
     {
@@ -306,7 +278,6 @@ public sealed class PipelineColumnsEndToEndTests
         Assert.Contains("1 of 3 rows were not called", page.Trace!.Single(n => n.NodeId == "content").Detail);
     }
 
-    /// <summary>A row of a kind the node has no pipeline for calls nothing, and that is no failure.</summary>
     [Fact]
     public async Task ARowOfNoKindTheNodeHasAPipelineFor_CallsNothing()
     {
@@ -323,7 +294,6 @@ public sealed class PipelineColumnsEndToEndTests
         Assert.Equal(NodeOutcomeKind.Succeeded, page.Trace!.Single(n => n.NodeId == "content").Kind);
     }
 
-    /// <summary>The calls are recorded each at its row's place, and a replay answers them from the bundle, with the same lists.</summary>
     [Fact]
     public async Task ARecordedPage_ReplaysFromItsBundle()
     {
@@ -334,7 +304,6 @@ public sealed class PipelineColumnsEndToEndTests
         Assert.Equal(new[] { ("content", 0, "promoted"), ("content", 1, "tagged"), ("content", 2, "promoted") },
             recorded.Recording!.Runs[0].PipelineCalls.Select(c => (c.Node, c.Seq, c.Pipeline)));
 
-        // Replayed by an engine that serves neither called pipeline: the bundle has what they returned.
         var outcome = await Engine(host, "page").ReplayAsync(ReplayBundleFile.Parse(ReplayBundleFile.Serialize(recorded.Recording)), cancellationToken: ct);
 
         Assert.Empty(outcome.Report.Gaps);
@@ -342,7 +311,6 @@ public sealed class PipelineColumnsEndToEndTests
         Assert.Equal(recorded.Items.Select(Games), outcome.Result.Items.Select(Games));
     }
 
-    /// <summary>A tap logs a row's list as the row's value: what a page showed is in its own log.</summary>
     [Fact]
     public async Task ATapLogsARowsList()
     {
@@ -357,18 +325,16 @@ public sealed class PipelineColumnsEndToEndTests
     }
 
     [Theory]
-    // What the lists are declared as.
     [InlineData("\"ids\": \"games\"", "\"ids\": \"wrong\"", "COLUMN_TYPE_MISMATCH", "/nodes/content/config/ids")]
     [InlineData("\"ids\": \"games\"", "\"ids\": \"tags\"", "PIPELINE_CALL_KEY_TYPE", "/nodes/content/config/ids")]
     [InlineData("\"bids\": \"bid\"", "\"wrong\": \"bid\"", "COLUMN_TYPE_MISMATCH", "/nodes/content/config/columns/wrong")]
     [InlineData("\"bids\": \"bid\"", "\"tags\": \"bid\"", "PIPELINE_CALL_OUTPUT", "/nodes/content/config/columns/tags")]
     [InlineData("\"bids\": \"bid\"", "\"bids\": \"bud\"", "PIPELINE_CALL_OUTPUT", "/nodes/content/config/columns/bids")]
     [InlineData("\"count\": \"count\"", "\"wrong\": \"count\"", "COLUMN_TYPE_MISMATCH", "/nodes/content/config/values/wrong")]
-    // A list of a fixed length has no empty value for a row without a result (such a row got a list of none).
+    // A list of a fixed length has no empty value for a row without a result.
     [InlineData("\"count\": \"count\"", "\"pair\": \"count\"", "COLUMN_TYPE_MISMATCH", "/nodes/content/config/values/pair")]
     [InlineData("\"bids\": \"bid\"", "\"games\": \"bid\"", "COLUMN_WRITTEN_TWICE", "/nodes/content/config/columns/games")]
     [InlineData("\"count\": \"count\"", "\"bids\": \"count\"", "COLUMN_WRITTEN_TWICE", "/nodes/content/config/values/bids")]
-    // What the node is told.
     [InlineData("\"max_calls\": 10", "\"max_calls\": 0", "PIPELINE_COLUMNS_CONFIG", "/nodes/content/config/max_calls")]
     [InlineData("\"max_calls\": 10", "\"max_calls\": 10, \"timeout_ms\": 0", "PIPELINE_COLUMNS_CONFIG", "/nodes/content/config/timeout_ms")]
     [InlineData("\"max_calls\": 10", "\"max_calls\": 10, \"by\": \"col.entity_id\"", "PIPELINE_COLUMNS_CONFIG", "/nodes/content/config/by")]
@@ -382,7 +348,6 @@ public sealed class PipelineColumnsEndToEndTests
     }
 
     [Theory]
-    // An entry is checked against its own pipeline, where the entry or the node writes what does not fit.
     [InlineData("\"tags\": \"tag\"", "\"tags\": \"country\"", "PIPELINE_CALL_OUTPUT", "/nodes/content/config/pipelines/8/columns/tags")]
     [InlineData("\"bids\": \"weight\", ", "", "PIPELINE_CALL_OUTPUT", "/nodes/content/config/columns/bids")]
     [InlineData("\"pipeline\": \"tagged\"", "\"pipeline\": \"tagged\", \"inputs\": { \"slots\": \"1\" }", "PIPELINE_CALL_INPUT", "/nodes/content/config/pipelines/8/inputs/slots")]

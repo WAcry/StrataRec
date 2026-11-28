@@ -12,10 +12,7 @@ namespace StrataRec.Logging;
 /// request's candidate table can go back to the pool while the batch waits in a queue.
 /// </summary>
 /// <remarks>
-/// <para>Columns used to be one <see cref="ScalarValue"/> per row (24 bytes) and a copied array per list row: a candidate tap
-/// of 1,000 rows and 10 numeric columns held 240 KB of values; typed it holds 80 KB in 10 arrays (40 KB when they are
-/// float32 or int32), and a list column is one array of elements instead of one per row. A sink reads the arrays
-/// directly; <see cref="Get"/> gives a row as a value, for cold readers.</para>
+/// <para>A sink reads the arrays directly; <see cref="Get"/> gives a row as a value, for cold readers.</para>
 /// <para>The arrays have the column's <see cref="Type"/>, so a sink whose own types are narrow (an int32 feature log, a
 /// float32 training table) writes them as they are: an <c>int32</c> column is an <c>int[]</c>, a
 /// <c>list&lt;float32,64&gt;</c> embedding a <c>float[]</c> of 64 elements per row.</para>
@@ -105,10 +102,9 @@ public sealed class LogColumn
     }
 
     /// <summary>
-    /// The <paramref name="rows"/> of <paramref name="buffer"/> as a column of <paramref name="type"/>, in that order, copied
-    /// in the buffer's storage without widening: a candidate column's own storage for a column logged as a reference to
-    /// it, an expression's result otherwise. A NaN or ±∞ number and a list with such an element are missing: logs carry
-    /// no non-finite values.
+    /// The <paramref name="rows"/> of <paramref name="buffer"/> as a column of <paramref name="type"/>, in that order,
+    /// copied in the buffer's storage without widening. A NaN or ±∞ number and a list with such an element are missing:
+    /// logs carry no non-finite values.
     /// </summary>
     /// <remarks>A row is missing when the buffer's validity says so, whatever the type's nullability: a table slot is
     /// missing until something writes it, and a log records what is there rather than whatever an unwritten row
@@ -166,7 +162,7 @@ public sealed class LogColumn
 
             if (value.IsMissing || ColumnValues.IsNonFinite(value) || (offsets is not null && !ColumnValues.FitsLength(value.ListLength, type)))
             {
-                MarkMissing(ref validity, count, i); // a list of another length than a list<E,N> is missing, as in Capture
+                MarkMissing(ref validity, count, i);
                 continue;
             }
 
@@ -179,7 +175,7 @@ public sealed class LogColumn
                     f[i] = value.AsFloat32();
                     if (!float.IsFinite(f[i]))
                     {
-                        f[i] = 0; // beyond the float32 range: an infinity in float32 storage, so missing
+                        f[i] = 0;
                         MarkMissing(ref validity, count, i);
                     }
 
@@ -253,7 +249,6 @@ public sealed class LogColumn
         return array;
     }
 
-    /// <summary>The first <paramref name="length"/> elements, so <see cref="Values"/> holds no spare capacity.</summary>
     private static Array Trim(Array elements, int length) => elements.Length == length ? elements : elements switch
     {
         bool[] b => b[..length],
@@ -327,8 +322,6 @@ public sealed class LogColumn
         return values;
     }
 
-    /// <summary>The rows' elements in one array, <paramref name="offsets"/> delimiting each row's; a row with a non-finite
-    /// element is missing and adds none.</summary>
     private static T[] Elements<T>(ListColumn<T> list, ColumnType type, ReadOnlySpan<int> rows, int[] offsets, ref ulong[]? validity)
     {
         // A row of another length than the logged list<E,N> is missing, as an expression reading it finds it: a custom
@@ -378,10 +371,9 @@ public sealed record LogSchema(string Id, string TapId, ImmutableArray<LogField>
     public static LogSchema Experiments { get; } = new("$experiments", "$experiments", [], []);
 
     /// <summary>
-    /// The schema with its id: the sha256 of the record's JSON as a sink writes it, less the id. Everything the record says
-    /// is in the id and nothing else is: a context field whose type changed gets a new id (it hashed the tap's definition
-    /// and its columns' types, so a reader holding the record by id read the field with the old type), and a
-    /// change of rate or filter that leaves the record as it was keeps it.
+    /// The schema with its id: the sha256 of the record's JSON as a sink writes it, less the id. Everything the record
+    /// says is in the id and nothing else is: a context field whose type changed gets a new id, and a change of rate or
+    /// filter that leaves the record as it was keeps it.
     /// </summary>
     public static LogSchema Create(string tapId, ImmutableArray<LogField> columns, ImmutableArray<LogField> context)
     {

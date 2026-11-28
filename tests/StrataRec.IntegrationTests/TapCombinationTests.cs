@@ -10,13 +10,6 @@ using static StrataRec.IntegrationTests.CombinationLimitTests;
 
 namespace StrataRec.IntegrationTests;
 
-/// <summary>
-/// A tap's attach point and the context features it logs are judged per arm combination, against that combination's
-/// nodes, as a compile of the combination alone judges them. Both used to be
-/// judged against every variant at once: a baseline tap could depend on a node or a feature reader that only an arm adds,
-/// and the baseline then broke when that experiment ended (a tap after a missing node never fires; a feature nobody reads
-/// is fetched for the tap alone).
-/// </summary>
 public sealed class TapCombinationTests
 {
     private const string Reader = """{ "order": 950, "op": "ExpressionScorer@1", "config": { "output_col": "score.t", "expr": "ctx.user.tenure_days * 1.0" } }""";
@@ -48,7 +41,6 @@ public sealed class TapCombinationTests
     [Fact]
     public async Task AnArmThatAddsTheReaderAndTheTapsField_IsAccepted_AndLogsItOnlyWhereItRuns()
     {
-        // The control: the field and its reader come and go together.
         var host = HomeFeedTestHost.Load();
         host.Request.Pipeline.Columns["score.t"] = new ColumnSpec { Type = "float64?" };
         var request = With(host.Request, new[]
@@ -62,14 +54,6 @@ public sealed class TapCombinationTests
         Assert.DoesNotContain(Single(await Serve(plan), "served").Context, c => c.Name == "tenure");
     }
 
-    /// <summary>
-    /// A tap may log the key of a chain a node reads. Here the two-tower recall's query alone reads
-    /// <c>ctx.region.boost</c> (the fusion's regional weight is a constant), and the output tap logs its key,
-    /// <c>ctx.country.region</c>. What a combination fetches followed a feature's derived inputs, not its entity's key
-    /// features, which the feature plan adds after these checks: the tap was rejected (TAP_FEATURE_NOT_FETCHED in the
-    /// baseline and in the arm that patches the tap) although the prefetch fetches the region for every request. The
-    /// unified compile checks every combination; the region is logged.
-    /// </summary>
     [Fact]
     public async Task ATapLoggingTheKeyOfAChainOnlyAQueryReads_IsAccepted_AndLogsIt()
     {
@@ -217,7 +201,6 @@ public sealed class TapCombinationTests
         return (With(host.Request, placements, maxCombinationsChecked), environment);
     }
 
-    /// <summary>Compiles <paramref name="request"/> through the host's bindings and waits for them, as the engine does before serving.</summary>
     private static ExecutionPlan Plan(HomeFeedTestHost host, PlanCompileRequest request)
     {
         var lease = host.Bindings.OpenLease();
@@ -247,7 +230,6 @@ public sealed class TapCombinationTests
         public bool Third { get; init; }
     }
 
-    /// <summary><c>ContextReader@1</c>: reads a context feature unless all three options are on; writes nothing.</summary>
     private sealed class ContextReaderFactory : IOperatorFactory
     {
         public OperatorDescriptor Descriptor { get; } = new("ContextReader", 1, Effects.ColumnWriter, typeof(ContextReaderConfig), "Reads a context feature.");

@@ -5,30 +5,17 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
 
-/// <summary>Whether the names the nodes of an arm combination bind are declared there, and as the unified schema declares them.</summary>
 internal sealed partial class UnifiedCompilation
 {
     private HashSet<string>? _extraLeaves;
     private (int Start, int End) _flowErrors; // the current combination's other checks, for ReportedAt
 
     /// <summary>
-    /// The unified plan compiles every node once, on one schema holding whatever any arm declares; a compile of one arm
-    /// combination alone knows a name only once it is declared there. So for a combination with an arm (the bare baseline
-    /// is compiled alone, <see cref="ValidateBaselineAlone"/>), every name a node, fallback, tap or the output binds
-    /// (<see cref="CompiledNode.Requires"/>) must be declared before it compiles: by the baseline, by an addition of an arm
-    /// assigned here, or, for a column, by a node compiled earlier whose write declares it (<see cref="CompiledNode.Declares"/>).
-    /// The compile order is the one <see cref="CompileVariants"/> uses: the timeline by order, then id; the fallbacks after
-    /// it by id; the taps and the output last. A reader the combination's other checks reported an error at (since
-    /// <paramref name="start"/>; a tap reading a column no node produces before it) is not reported again.
+    /// The compile order is the one <see cref="CompileVariants"/> uses.
     /// </summary>
     /// <remarks>
-    /// Each part of this was a gap where the unified plan accepted what a combination's own compile refuses: a column only
-    /// an arm's node declared, read by the baseline; a writer one arm deletes or moves and a reader
-    /// another adds (generated differential test); a node reading its own output before writing it; a column
-    /// declared by an arm not assigned with its reader, a name in a branch the optimizer drops, a write that needs a
-    /// declaration. An arm whose additions are all it changes is never part of a combination checked here (it
-    /// changes no node): that it is not assigned is the case to check, since a reader cannot rely on an arm of another
-    /// layer, which a request may not get.
+    /// An arm whose additions are all it changes is never part of a combination checked here: that it is not assigned
+    /// is the case to check, since a reader cannot rely on an arm of another layer, which a request may not get.
     /// </remarks>
     private void ValidateNames(
         List<CompiledNode> nodes, Dictionary<string, CompiledNode> fallbacks, List<CompiledTap> taps, OutputPlan output, List<ArmPatch> assigned,
@@ -93,14 +80,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>
-    /// A column an arm declares exists only where that arm is assigned; elsewhere the writes that declare a column with a
-    /// type of their own declare it, as a compile of that combination does. The unified plan has one schema, holding the
-    /// arm's declaration: each such write in a combination without the arm (the bare baseline too) must declare the same
-    /// column (its type, no default, not a flow column), or the combination would be served with another column than its
-    /// own compile has: a reader compiled on a nullable declaration refusing what the write's type allows, a default it
-    /// does not have.
-    /// </summary>
     private void ValidateImplicitDeclarations(List<CompiledNode> nodes, Dictionary<string, CompiledNode> fallbacks, List<ArmPatch> assigned)
     {
         foreach (var node in nodes)
@@ -136,7 +115,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>Reports <paramref name="name"/> unless it is declared before the reader: by the first <paramref name="nodes"/> timeline nodes or <paramref name="fallbacks"/> fallbacks.</summary>
     private void Declared(
         NameRef name, string kind, string reader, string pointer, List<CompiledNode> ordered, int nodes, List<CompiledNode> later, int fallbacks,
         List<ArmPatch> assigned)
@@ -223,7 +201,6 @@ internal sealed partial class UnifiedCompilation
         }
     }
 
-    /// <summary>Whether the combination's other checks reported an error at <paramref name="pointer"/> or under it.</summary>
     private bool ReportedAt(string pointer)
     {
         var items = _diagnostics.Items;
@@ -263,7 +240,6 @@ internal sealed partial class UnifiedCompilation
         return false;
     }
 
-    /// <summary>Whether a write of <paramref name="node"/> declares the column.</summary>
     private static bool Writes(CompiledNode node, int logical)
     {
         foreach (var declaration in node.Declares)
@@ -295,7 +271,6 @@ internal sealed partial class UnifiedCompilation
         };
     }
 
-    /// <summary>The catalog section an added feature is in, or null when no arm adds it.</summary>
     private string? FeatureSection(string feature) =>
         IsAddition("features", feature) ? "features" : IsAddition("derived_features", feature) ? "derived_features" : null;
 
@@ -314,7 +289,6 @@ internal sealed partial class UnifiedCompilation
         return false;
     }
 
-    /// <summary>Which arms declare an entry (an addition, or a parameter leaf), as a message says it; empty when none does.</summary>
     private string AddingArms(string section, string entry, string? leaf)
     {
         var arms = DeclaringArms(section, entry, leaf, out var count);
@@ -326,7 +300,6 @@ internal sealed partial class UnifiedCompilation
         };
     }
 
-    /// <summary>The valid arms declaring an entry (an addition, or a parameter leaf), quoted and comma-separated.</summary>
     private string DeclaringArms(string section, string entry, string? leaf, out int count)
     {
         var arms = new List<string>();
@@ -342,7 +315,6 @@ internal sealed partial class UnifiedCompilation
         return string.Join(", ", arms);
     }
 
-    /// <summary>A parameter leaf only arms declare: a parameter an arm adds, or a key an arm adds to a map parameter.</summary>
     private bool IsExtraLeaf(ParamLeaf leaf)
     {
         if (_extraLeaves is null)
