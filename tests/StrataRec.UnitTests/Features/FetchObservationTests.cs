@@ -13,7 +13,12 @@ namespace StrataRec.UnitTests.Features;
 /// </summary>
 public class FetchObservationTests
 {
-    private const int TimeoutMs = 20;
+    /// <summary>
+    /// The source's timeout. Its time starts before the call is sent, and a call whose time ran out before that is not
+    /// sent at all, which is not what these tests are about: long enough that a stalled runner still sends the call
+    /// (at 20 ms one did not), and the tests that wait for it take that long.
+    /// </summary>
+    private const int TimeoutMs = 250;
 
     [Fact]
     public async Task ASynchronousConnectorThatReturnsAfterTheDeadline_TimesOut_AndItsValuesAreNotBackfilled()

@@ -138,7 +138,7 @@ public static class StrataRecMetrics
     /// its operator did not wait for. Each counts once, so an operation counts beside the client call it waits for.
     /// Tags: <c>stratarec.pipeline</c>.
     /// </summary>
-    public static readonly Counter<long> AbandonedIo = Meter.CreateCounter<long>(Names.AbandonedIo, "{operation}", "External I/O still running after its request returned.");
+    public static readonly Counter<long> AbandonedIo = Meter.CreateCounter<long>(Names.AbandonedIo, "{operation}", "Calls and external I/O still under way after their request returned.");
 
     // Calls of external dependencies, of every role (IoTarget): feature connectors per max_batch chunk, distributed caches
     // per read, services per call. Tags: stratarec.io.role, stratarec.io.target.

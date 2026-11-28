@@ -52,8 +52,9 @@ public enum RequestEvent : byte
     BufferReturnFailed,
 
     /// <summary>
-    /// A request's buffers were still rented <see cref="RequestEventLog.HeldAfter"/> after it returned; subject: the pipeline. External calls it abandoned at a timeout have not finished: a client or connector
-    /// that ignores its cancellation token keeps them, and the plan instances the request used, for as long as it runs.
+    /// A request's buffers were still rented <see cref="RequestEventLog.HeldAfter"/> after it returned; subject: the pipeline. Calls of it have not finished: one it abandoned at a timeout, whose client or
+    /// connector ignores its cancellation token, or one an operator did not wait for. They keep the buffers, and the
+    /// plan instances the request used, for as long as they run.
     /// </summary>
     BuffersHeld,
 }
@@ -229,7 +230,7 @@ public sealed partial class RequestEventLog : IDisposable
                 if (age >= HeldAfter)
                 {
                     Report(RequestEvent.BuffersHeld, held.Subject, held.RequestId, string.Create(CultureInfo.InvariantCulture,
-                        $"buffers still rented {age.TotalSeconds:0} s after the request returned: calls it abandoned at a timeout have not finished"));
+                        $"buffers still rented {age.TotalSeconds:0} s after the request returned: calls of it (abandoned at a timeout, or not waited for) have not finished"));
                     continue;
                 }
 

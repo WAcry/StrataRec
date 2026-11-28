@@ -1310,26 +1310,21 @@ public sealed class PipelineCallCacheEndToEndTests
     public Task AResultOfARunWithACallThatWasNotAnswered_IsNotKept_WhateverItsNodeDidWithoutIt(string how) => ARunWithACallThatWasNotAnswered(how);
 
     /// <summary>
-    /// A call its operator did not wait for goes on after its request has returned, and its run still reads what the
-    /// node gave it: a list among the inputs is the node's own array, rented from the request's memory, which the call
-    /// holds until it ends. (The memory went back with the request and the array was cleared: the run counted none of
-    /// the markers it was given, and that was its result, for a cache to keep and for the calls waiting for it.)
+    /// A call its operator did not wait for goes on after its request has returned, and holds the request's memory
+    /// until it ends: it reads it after waits of its own (for its cache's distributed tier, after its assignment).
+    /// The memory went back with the request, and such a call then threw on it.
     /// </summary>
     [Fact]
-    public async Task ACallItsOperatorDidNotWaitFor_StillReadsWhatItWasGiven_AfterItsRequestHasReturned()
+    public async Task ACallItsOperatorDidNotWaitFor_HoldsItsRequestsMemory_UntilItEnds()
     {
-        var lists = new ListCall();
+        var left = new LeftCall();
         var host = Host(more: root =>
         {
             WriteOther(root);
-            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"request_schema\": {", "\"request_schema\": { \"markers\": { \"type\": \"list<string>?\" },");
-            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"request_columns\": {", "\"request_columns\": { \"seen\": { \"type\": \"int64\" },");
-            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"nodes\": {", "\"nodes\": {\n \"seen\": { \"order\": 500, \"op\": \"CountMarkers@1\" },");
-            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"count\": \"req.promoted.count\"", "\"count\": \"req.promoted.count\", \"seen\": \"req.seen\"");
-            ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"nodes\": {", "\"nodes\": {\n \"lists\": { \"order\": 150, \"op\": \"ListCall@1\" },");
+            ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"nodes\": {", "\"nodes\": {\n \"left\": { \"order\": 150, \"op\": \"LeftCall@1\" },");
         });
         var letGo = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var rig = new Rig(host, operators: [lists, new CountMarkers()], pipelines: NestedPipelines);
+        await using var rig = new Rig(host, operators: [left], pipelines: NestedPipelines);
         try
         {
             rig.Probe.HoldNamed = letGo.Task; // the run of other stays under way
@@ -1337,18 +1332,18 @@ public sealed class PipelineCallCacheEndToEndTests
             var returned = await rig.Run("req-1");
 
             Assert.True(returned.Succeeded, returned.Error);
-            Assert.False(lists.Call!.IsCompleted);
+            Assert.False(left.Call!.IsCompleted);
+            Assert.False(left.Memory!.IsReturned);
         }
         finally
         {
             letGo.TrySetResult();
         }
 
-        var late = await lists.Call!.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var late = await left.Call!.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         Assert.True(late.Succeeded, late.Error);
-        Assert.True(lists.Given > 0);
-        Assert.Equal(lists.Given, late.Values["seen"].AsInt64());
+        await CacheEngineTests.Eventually(() => left.Memory!.IsReturned, () => "the memory of req-1, given back once its call has ended");
     }
 
     /// <param name="how">
@@ -1832,64 +1827,28 @@ public sealed class PipelineCallCacheEndToEndTests
         }
     }
 
-    /// <summary>
-    /// <c>ListCall@1</c>: calls <c>other</c> with a list it rents from the request's memory, and ends its node without
-    /// waiting for the call.
-    /// </summary>
-    internal sealed class ListCall : IOperatorFactory
+    /// <summary><c>LeftCall@1</c>: calls <c>other</c> and ends its node without waiting for the call.</summary>
+    internal sealed class LeftCall : IOperatorFactory
     {
         private volatile Task<PipelineCallResult>? _call;
-        private volatile int _given;
+        private volatile Core.Memory.RequestMemory? _memory;
 
         /// <summary>The call the node made last.</summary>
         public Task<PipelineCallResult>? Call => _call;
 
-        /// <summary>How many markers it gave that call.</summary>
-        public int Given => _given;
+        /// <summary>The memory of the request that made it.</summary>
+        public Core.Memory.RequestMemory? Memory => _memory;
 
-        public OperatorDescriptor Descriptor { get; } = new("ListCall", 1, Effects.None, typeof(ProbeConfig), "Calls a pipeline with a list it rented, and does not wait for it.");
+        public OperatorDescriptor Descriptor { get; } = new("LeftCall", 1, Effects.None, typeof(ProbeConfig), "Calls a pipeline, and does not wait for it.");
 
-        public Operator? Compile(OperatorCompileContext context) =>
-            context.TryCallPipeline("other", "/pipeline", out var call)
-            && context.TryCallInput(call, "markers", "/markers", Core.Types.ColumnType.List(Core.Types.StorageKind.String))
-            && context.TryCallValue(call, "seen", "/seen", Core.Types.ColumnType.Int64)
-                ? new Node(this, call)
-                : null;
+        public Operator? Compile(OperatorCompileContext context) => context.TryCallPipeline("other", "/pipeline", out var call) ? new Node(this, call) : null;
 
-        private sealed class Node(ListCall owner, PipelineCall call) : Operator
+        private sealed class Node(LeftCall owner, PipelineCall call) : Operator
         {
             public override ValueTask ExecuteAsync(OperatorContext context)
             {
-                var markers = context.Memory.Rent<string>(8);
-                Array.Fill(markers, "valid");
-                owner._given = markers.Length;
-                owner._call = context.CallPipelineAsync(call, new RequestInputs().Set("markers", markers)).AsTask();
-                return ValueTask.CompletedTask;
-            }
-        }
-    }
-
-    /// <summary><c>CountMarkers@1</c>: writes how many of the markers its pipeline was given are valid to the request column <c>seen</c>.</summary>
-    internal sealed class CountMarkers : IOperatorFactory
-    {
-        public OperatorDescriptor Descriptor { get; } = new("CountMarkers", 1, Effects.RequestWriter, typeof(ProbeConfig), "Counts the valid markers its pipeline was given.");
-
-        public Operator? Compile(OperatorCompileContext context) => context.TryWriteRequestColumn("seen", "/seen", out var seen) ? new Node(seen) : null;
-
-        private sealed class Node(RequestOutput seen) : Operator
-        {
-            public override ValueTask ExecuteAsync(OperatorContext context)
-            {
-                var valid = 0;
-                foreach (var marker in context.Inputs["markers"].AsStringList())
-                {
-                    if (marker == "valid")
-                    {
-                        valid++;
-                    }
-                }
-
-                context.SetRequestValue(seen, ScalarValue.FromInt64(valid));
+                owner._memory = context.Memory;
+                owner._call = context.CallPipelineAsync(call).AsTask();
                 return ValueTask.CompletedTask;
             }
         }

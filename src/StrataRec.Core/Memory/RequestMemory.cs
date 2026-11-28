@@ -98,7 +98,11 @@ public sealed class RequestMemory
     /// <summary>Total bytes currently rented (approximate, for metrics).</summary>
     public long RentedBytes { get; private set; }
 
-    /// <summary>Rents an array of at least <paramref name="minimumLength"/> elements. Contents are unspecified.</summary>
+    /// <summary>
+    /// Rents an array of at least <paramref name="minimumLength"/> elements. Contents are unspecified. It goes back to
+    /// the pool when the request and its calls have ended: a buffer to work in, never the array of a value
+    /// (<see cref="Values.ScalarValue"/>'s lists keep their arrays, and values outlive the request).
+    /// </summary>
     public T[] Rent<T>(int minimumLength)
     {
         lock (_gate)

@@ -64,7 +64,9 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     /// <summary>A list value over <paramref name="value"/>, which it keeps without copying: do not change the array afterwards.</summary>
     /// <remarks>A value is immutable, and one value may be shared by every request (a plan's default or parameter, an
     /// expression's constant), so the list accessors are read-only spans: no reader can change what another reads. Copy
-    /// one (<c>ToArray()</c>) to sort or edit it. A value has no fixed length of its own: whether its length is the one a
+    /// one (<c>ToArray()</c>) to sort or edit it. The array is the value's from then on, and a value outlives the request
+    /// that made it (in its result, in a cache, in the result of a call that another request takes): never an array
+    /// rented from a pool or from the request's memory (<c>RequestMemory.Rent</c>), which goes back and is used again. A value has no fixed length of its own: whether its length is the one a
     /// <c>list&lt;E,N&gt;</c> holds is checked where it is converted or stored (<see cref="TryConvert"/>).</remarks>
     public static ScalarValue FromBoolList(bool[]? value) => List(StorageKind.Bool, value);
 

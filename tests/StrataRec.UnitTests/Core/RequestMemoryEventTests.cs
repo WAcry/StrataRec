@@ -46,7 +46,7 @@ public sealed class RequestMemoryEventTests
         var entry = Assert.Single(logger.Entries);
         Assert.Equal((RequestEvent.BuffersHeld, "home_feed", 1L, "req-hung"),
             ((RequestEvent)entry.State["Event"]!, (string)entry.State["Subject"]!, (long)entry.State["Count"]!, (string)entry.State["SampleRequestId"]!));
-        Assert.EndsWith("s after the request returned: calls it abandoned at a timeout have not finished", (string)entry.State["SampleError"]!);
+        Assert.EndsWith("s after the request returned: calls of it (abandoned at a timeout, or not waited for) have not finished", (string)entry.State["SampleError"]!);
 
         logger.Entries.Clear();
         events.Flush();

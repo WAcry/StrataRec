@@ -620,16 +620,18 @@ public class CacheReadTests
         var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, Store);
         rig.Build();
         var recorder = new RecordingHook();
+        await rig.NewRequest([7]).EnsureAsync(clicks); // the path has run once: what follows is not timed against its first use
 
         // The first chunk answers at once; where its answer is counted, the read's time runs out before the next is sent.
         var waited = false;
         using var counted = new MeasurementHook(
             StrataRecMetrics.Names.IoKeys, () => waited |= bound.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)), (StrataRecTags.IoTarget, Store));
-        var fill = await rig.NewRequest([1, 2, 3], hook: recorder, deadlineMs: 50).EnsureAsync(clicks);
+        // Long enough that the first chunk is sent before the time is up, on a stalled runner too.
+        var fill = await rig.NewRequest([1, 2, 3], hook: recorder, deadlineMs: 250).EnsureAsync(clicks);
 
         var call = Assert.Single(recorder.Calls);
         Assert.True(waited);
-        Assert.Single(connector.Calls);
+        Assert.Equal(2, connector.Calls.Count); // the one before, and the first chunk's
         Assert.Equal(FeatureState.Degraded, fill.State);
         Assert.Equal((IoOutcome.Partial, true, 2), (call.Outcome, call.Sent, call.Status.FailedKeys));
     }
