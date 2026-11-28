@@ -103,7 +103,8 @@ public sealed class ManifestRefCliTests
         else
         {
             Assert.Contains("timeline for baseline:", plain);
-            Assert.Matches(@"<- reads\s+item\.is_policy_safe, item\.report_rate", plain);
+            Assert.Matches(@"<- reads\s+item\.is_policy_safe, item\.report_rate\r?\n\s+-> writes\s+\(no columns\)", plain);
+            Assert.Matches(@"<- reads\s+item\.smoothed_ctr\r?\n\s+-> writes\s+score\.coarse", plain);
             Assert.DoesNotContain("timeline for", surveyed);
             Assert.DoesNotContain("<- reads", surveyed);
         }

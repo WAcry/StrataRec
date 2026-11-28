@@ -549,8 +549,8 @@ public sealed class OperatorCompileContext
 
     /// <summary>
     /// The node's cache of a call: its times and version checked at their keys, over the tiers the environment binds for
-    /// the pipeline. With no setting at all, a cache that keeps nothing and asks the environment for nothing: the node's
-    /// calls for one result within a request run the pipeline once.
+    /// the pipeline. With no setting at all, a cache that keeps nothing and asks the environment for nothing: its calls
+    /// share a run only for as long as the request that made it is under way.
     /// </summary>
     private void DeclareCallCache(PipelineCall call, PipelineCallCacheConfig cache, string cacheKey)
     {

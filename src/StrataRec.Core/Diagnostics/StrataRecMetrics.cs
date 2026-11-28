@@ -133,9 +133,10 @@ public static class StrataRecMetrics
         "Bytes rented from the buffer pool per run of a pipeline.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = ByteBuckets });
 
     /// <summary>
-    /// External operations (connector and service calls, the context prefetch) still running when their
-    /// run returned; they keep its buffers rented until they finish. Tags:
-    /// <c>stratarec.pipeline</c>.
+    /// External operations still under way when their run returned, which keep its buffers rented until they finish:
+    /// connector and service calls, the context prefetch, and a call through a service's cache or of a pipeline that
+    /// its operator did not wait for. Each counts once, so an operation counts beside the client call it waits for.
+    /// Tags: <c>stratarec.pipeline</c>.
     /// </summary>
     public static readonly Counter<long> AbandonedIo = Meter.CreateCounter<long>(Names.AbandonedIo, "{operation}", "External I/O still running after its request returned.");
 

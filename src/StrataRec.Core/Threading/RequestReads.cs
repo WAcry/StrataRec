@@ -103,10 +103,13 @@ internal sealed class RequestReads
     {
         lock (_group.Gate)
         {
+            // Either way the request no longer holds its reads, nor their records: a call it did not wait for may
+            // keep this object long after.
             _ended = true;
             if (_made is null)
             {
-                return; // a request on its own: its reads go with it
+                _group.Reads.Clear(); // a request on its own: the group is its own, and nothing joins it any more
+                return;
             }
 
             foreach (var read in _made)
@@ -114,8 +117,6 @@ internal sealed class RequestReads
                 _group.Leave(read);
             }
 
-            // The request no longer holds them, nor their records: a call it did not wait for may keep this object
-            // long after.
             _made.Clear();
         }
     }

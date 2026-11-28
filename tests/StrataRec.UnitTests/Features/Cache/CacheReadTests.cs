@@ -602,6 +602,39 @@ public class CacheReadTests
     }
 
     /// <summary>
+    /// A read whose time ran out between its chunks sent a call, and its recording says so: the chunks it could not
+    /// send are its failed keys, not what "sent" is about. (It said what its first chunk to fail said: not sent.)
+    /// </summary>
+    [Fact]
+    public async Task ACacheReadWhoseTimeRanOutBetweenItsChunks_IsRecordedAsHavingSentACall()
+    {
+        const string Store = "store_whose_time_runs_out"; // its own name: the hook below hears every test's calls
+        var bound = default(CancellationToken);
+        var connector = new ScriptedConnector((keys, fields, writer, cancellation) =>
+        {
+            bound = cancellation; // cancelled when the read's time is up
+            ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
+            return ValueTask.FromResult(FetchStatus.Ok);
+        });
+        var rig = new FeatureTestRig().CacheSource(Store, connector, ttlMs: 1_000, maxBatch: 1);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, Store);
+        rig.Build();
+        var recorder = new RecordingHook();
+
+        // The first chunk answers at once; where its answer is counted, the read's time runs out before the next is sent.
+        var waited = false;
+        using var counted = new MeasurementHook(
+            StrataRecMetrics.Names.IoKeys, () => waited |= bound.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)), (StrataRecTags.IoTarget, Store));
+        var fill = await rig.NewRequest([1, 2, 3], hook: recorder, deadlineMs: 50).EnsureAsync(clicks);
+
+        var call = Assert.Single(recorder.Calls);
+        Assert.True(waited);
+        Assert.Single(connector.Calls);
+        Assert.Equal(FeatureState.Degraded, fill.State);
+        Assert.Equal((IoOutcome.Partial, true, 2), (call.Outcome, call.Sent, call.Status.FailedKeys));
+    }
+
+    /// <summary>
     /// A read that had no time to ask its origin and served what the cache had past its time says it sent no call,
     /// though it gave values: the recording's "sent" is about the call, not about what the read could still give.
     /// </summary>

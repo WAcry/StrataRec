@@ -179,14 +179,16 @@ public class RequestReadsTests
     }
 
     /// <summary>
-    /// A request that ended holds none of what it read: a call it did not wait for may keep the request's reads long
-    /// after, and would keep every record with them.
+    /// A request that ended holds none of what it read, of a host's group or on its own: a call it did not wait for
+    /// may keep the request's reads long after, and would keep every record with them.
     /// </summary>
-    [Fact]
-    public void ARequestThatEnded_HoldsNoneOfWhatItRead()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ARequestThatEnded_HoldsNoneOfWhatItRead(bool ofAGroup)
     {
         var group = new RequestReads.Group();
-        var reads = new RequestReads(group);
+        var reads = ofAGroup ? new RequestReads(group) : new RequestReads();
         var record = ReadARecord(reads);
 
         reads.End();

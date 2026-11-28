@@ -315,6 +315,23 @@ public sealed partial class RecEngine
     {
         public async ValueTask<PipelineCallResult> CallAsync(PipelineCallRequest call, CancellationToken callerCancellation)
         {
+            // The run reads what the caller gave it (a list among the inputs is the caller's array), and the call the
+            // request's memory (its cache's distributed tier), until it ends, which may be after the request has
+            // returned: a call its operator did not wait for. So the call holds the memory from before its first wait
+            // to its end, as a cached service call and a feature fetch do.
+            call.Memory.Hold();
+            try
+            {
+                return await HeldAsync(call, callerCancellation).ConfigureAwait(false);
+            }
+            finally
+            {
+                call.Memory.Release();
+            }
+        }
+
+        private async ValueTask<PipelineCallResult> HeldAsync(PipelineCallRequest call, CancellationToken callerCancellation)
+        {
             var started = Stopwatch.GetTimestamp();
             var id = call.Call.PipelineId;
             PipelineResult? ran = null;

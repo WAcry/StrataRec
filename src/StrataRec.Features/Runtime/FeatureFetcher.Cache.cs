@@ -560,6 +560,7 @@ public sealed partial class FeatureFetcher
         {
             var answered = await calls[c].ConfigureAwait(false);
             var status = StatusOf(group, read.BudgetMs, answered);
+            read.Asked |= answered.Sent;
             if (status.Outcome == FetchOutcome.Failed)
             {
                 read.Fail(status.Error, answered.Outcome, answered.Sent); // its keys stay unanswered; its staging is never read
@@ -1130,13 +1131,18 @@ public sealed partial class FeatureFetcher
         /// <summary>How the read's first call to fail ended, for the read's recording when no key got a value.</summary>
         public IoOutcome Failure { get; private set; } = IoOutcome.Error;
 
+        /// <summary>A call of the read reached its connector.</summary>
+        public bool Asked { get; set; }
+
         /// <summary>
-        /// Whether that call was sent: false when the read had no time left, or its caller had cancelled, before it,
-        /// whatever the read could still give (a stale value). True for a read with no failure.
+        /// Whether the read's call was sent, for its recording: false when the read had something to ask its origin
+        /// for and sent none of it (no time left, or its caller had cancelled), whatever it could still give (a stale
+        /// value). True when any of its chunks was sent, and for a read with no failure.
         /// </summary>
-        public bool Sent { get; private set; } = true;
+        public bool Sent => !_refused || Asked;
 
         private bool _failed;
+        private bool _refused; // a call of the read was not sent
 
         /// <summary>The keys the connector said it could not answer, in the chunks it answered in part.</summary>
         public int PartialKeys { get; set; }
@@ -1190,12 +1196,12 @@ public sealed partial class FeatureFetcher
         /// <summary>The read's first failure is the one it reports, whether or not it came with words.</summary>
         public void Fail(string? error, IoOutcome outcome, bool sent = true)
         {
+            _refused |= !sent;
             if (!_failed)
             {
                 _failed = true;
                 Error ??= error;
                 Failure = outcome;
-                Sent = sent;
             }
         }
 

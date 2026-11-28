@@ -15,7 +15,8 @@ namespace StrataRec.Pipeline.Operators;
 /// A node's cache of its calls of a pipeline (<c>cache</c> in the config of an operator that calls one): a call whose
 /// result is cached does not run the pipeline. Where the results are kept is the environment's
 /// (<c>pipelines.&lt;id&gt;.cache</c> in the bindings). With no settings (<c>"cache": {}</c>) nothing is kept and the
-/// environment binds nothing: the calls for one result within a request run the pipeline once.
+/// environment binds nothing: a call takes the result of a run for a request still under way (its own request, or one
+/// its host sends with it as one group), and runs the pipeline otherwise.
 /// </summary>
 /// <remarks>
 /// A result is found again by what the called pipeline would run and what it is given: its configuration (or
@@ -28,9 +29,8 @@ public sealed class PipelineCallCacheConfig
     /// <summary>
     /// How long a result is served, in milliseconds, e.g. <c>3600000</c>. Each result's lifetime varies by ±10% with its
     /// key, so results computed together do not all expire together. Leave out every setting (<c>"cache": {}</c>) to keep
-    /// nothing: the calls for one result made while the request that computes it is under way (its own, and those of
-    /// the requests its host sends with it as one group) share that one run, and a call made after that request has
-    /// ended runs the pipeline again.
+    /// nothing: a call then takes the result of a run, done or under way, for a request that has not ended (its own
+    /// request, or one its host sends with it as one group), and runs the pipeline otherwise.
     /// </summary>
     public long? TtlMs { get; init; }
 

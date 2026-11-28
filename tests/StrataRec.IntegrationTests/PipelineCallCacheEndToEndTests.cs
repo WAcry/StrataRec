@@ -1309,6 +1309,48 @@ public sealed class PipelineCallCacheEndToEndTests
     [InlineData("not waited for")]
     public Task AResultOfARunWithACallThatWasNotAnswered_IsNotKept_WhateverItsNodeDidWithoutIt(string how) => ARunWithACallThatWasNotAnswered(how);
 
+    /// <summary>
+    /// A call its operator did not wait for goes on after its request has returned, and its run still reads what the
+    /// node gave it: a list among the inputs is the node's own array, rented from the request's memory, which the call
+    /// holds until it ends. (The memory went back with the request and the array was cleared: the run counted none of
+    /// the markers it was given, and that was its result, for a cache to keep and for the calls waiting for it.)
+    /// </summary>
+    [Fact]
+    public async Task ACallItsOperatorDidNotWaitFor_StillReadsWhatItWasGiven_AfterItsRequestHasReturned()
+    {
+        var lists = new ListCall();
+        var host = Host(more: root =>
+        {
+            WriteOther(root);
+            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"request_schema\": {", "\"request_schema\": { \"markers\": { \"type\": \"list<string>?\" },");
+            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"request_columns\": {", "\"request_columns\": { \"seen\": { \"type\": \"int64\" },");
+            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"nodes\": {", "\"nodes\": {\n \"seen\": { \"order\": 500, \"op\": \"CountMarkers@1\" },");
+            ReplayTests.Edit(root, "pipelines/other.jsonc", "\"count\": \"req.promoted.count\"", "\"count\": \"req.promoted.count\", \"seen\": \"req.seen\"");
+            ReplayTests.Edit(root, "pipelines/feed.jsonc", "\"nodes\": {", "\"nodes\": {\n \"lists\": { \"order\": 150, \"op\": \"ListCall@1\" },");
+        });
+        var letGo = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var rig = new Rig(host, operators: [lists, new CountMarkers()], pipelines: NestedPipelines);
+        try
+        {
+            rig.Probe.HoldNamed = letGo.Task; // the run of other stays under way
+
+            var returned = await rig.Run("req-1");
+
+            Assert.True(returned.Succeeded, returned.Error);
+            Assert.False(lists.Call!.IsCompleted);
+        }
+        finally
+        {
+            letGo.TrySetResult();
+        }
+
+        var late = await lists.Call!.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.True(late.Succeeded, late.Error);
+        Assert.True(lists.Given > 0);
+        Assert.Equal(lists.Given, late.Values["seen"].AsInt64());
+    }
+
     /// <param name="how">
     /// <c>not served</c>: the engine does not serve the pipeline. <c>no time</c>: the operator gives the call no time.
     /// <c>throws</c>: the call throws (the caller arranges that) and the operator catches it. <c>in a called run</c>:
@@ -1786,6 +1828,69 @@ public sealed class PipelineCallCacheEndToEndTests
                 }
 
                 Interlocked.Increment(ref owner._unanswered);
+            }
+        }
+    }
+
+    /// <summary>
+    /// <c>ListCall@1</c>: calls <c>other</c> with a list it rents from the request's memory, and ends its node without
+    /// waiting for the call.
+    /// </summary>
+    internal sealed class ListCall : IOperatorFactory
+    {
+        private volatile Task<PipelineCallResult>? _call;
+        private volatile int _given;
+
+        /// <summary>The call the node made last.</summary>
+        public Task<PipelineCallResult>? Call => _call;
+
+        /// <summary>How many markers it gave that call.</summary>
+        public int Given => _given;
+
+        public OperatorDescriptor Descriptor { get; } = new("ListCall", 1, Effects.None, typeof(ProbeConfig), "Calls a pipeline with a list it rented, and does not wait for it.");
+
+        public Operator? Compile(OperatorCompileContext context) =>
+            context.TryCallPipeline("other", "/pipeline", out var call)
+            && context.TryCallInput(call, "markers", "/markers", Core.Types.ColumnType.List(Core.Types.StorageKind.String))
+            && context.TryCallValue(call, "seen", "/seen", Core.Types.ColumnType.Int64)
+                ? new Node(this, call)
+                : null;
+
+        private sealed class Node(ListCall owner, PipelineCall call) : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context)
+            {
+                var markers = context.Memory.Rent<string>(8);
+                Array.Fill(markers, "valid");
+                owner._given = markers.Length;
+                owner._call = context.CallPipelineAsync(call, new RequestInputs().Set("markers", markers)).AsTask();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    /// <summary><c>CountMarkers@1</c>: writes how many of the markers its pipeline was given are valid to the request column <c>seen</c>.</summary>
+    internal sealed class CountMarkers : IOperatorFactory
+    {
+        public OperatorDescriptor Descriptor { get; } = new("CountMarkers", 1, Effects.RequestWriter, typeof(ProbeConfig), "Counts the valid markers its pipeline was given.");
+
+        public Operator? Compile(OperatorCompileContext context) => context.TryWriteRequestColumn("seen", "/seen", out var seen) ? new Node(seen) : null;
+
+        private sealed class Node(RequestOutput seen) : Operator
+        {
+            public override ValueTask ExecuteAsync(OperatorContext context)
+            {
+                var valid = 0;
+                foreach (var marker in context.Inputs["markers"].AsStringList())
+                {
+                    if (marker == "valid")
+                    {
+                        valid++;
+                    }
+                }
+
+                context.SetRequestValue(seen, ScalarValue.FromInt64(valid));
+                return ValueTask.CompletedTask;
             }
         }
     }

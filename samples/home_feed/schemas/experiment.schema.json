@@ -1315,7 +1315,7 @@
                                   ],
                                   "properties": {
                                     "ttl_ms": {
-                                      "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: the calls for one result made while the request that computes it is under way (its own, and those of the requests its host sends with it as one group) share that one run, and a call made after that request has ended runs the pipeline again.",
+                                      "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, for a request that has not ended (its own request, or one its host sends with it as one group), and runs the pipeline otherwise.",
                                       "type": [
                                         "integer",
                                         "null"
@@ -1415,7 +1415,7 @@
                             ],
                             "properties": {
                               "ttl_ms": {
-                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: the calls for one result made while the request that computes it is under way (its own, and those of the requests its host sends with it as one group) share that one run, and a call made after that request has ended runs the pipeline again.",
+                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, for a request that has not ended (its own request, or one its host sends with it as one group), and runs the pipeline otherwise.",
                                 "type": [
                                   "integer",
                                   "null"
@@ -1557,7 +1557,7 @@
                             ],
                             "properties": {
                               "ttl_ms": {
-                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: the calls for one result made while the request that computes it is under way (its own, and those of the requests its host sends with it as one group) share that one run, and a call made after that request has ended runs the pipeline again.",
+                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, for a request that has not ended (its own request, or one its host sends with it as one group), and runs the pipeline otherwise.",
                                 "type": [
                                   "integer",
                                   "null"
