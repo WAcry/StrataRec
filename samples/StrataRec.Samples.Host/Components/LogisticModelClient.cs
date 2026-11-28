@@ -16,8 +16,8 @@ namespace StrataRec.Samples.Host.Components;
 /// <see cref="ILoadable"/> and answers after its load.</item>
 /// <item>Model inputs are non-nullable: what a missing feature means is decided in the catalog, the same for training
 /// and serving.</item>
-/// <item>A call writes into the caller's buffers and allocates nothing. A wrong input is a failed status with a reason,
-/// not an exception: the node then applies its <c>on_failure</c>.</item>
+/// <item>A call writes into the caller's buffers and, up to 64 inputs, allocates nothing. A wrong input is a failed
+/// status with a reason, not an exception: the node then applies its <c>on_failure</c>.</item>
 /// <item>A remote client passes the token to its I/O; the engine stops waiting at the timeout either way.</item>
 /// </list>
 /// </remarks>

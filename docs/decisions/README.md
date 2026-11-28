@@ -4,7 +4,7 @@
 
 ## 怎么用
 
-- 改一个领域之前，先看它的文件有哪些决定：`grep -no '^- \*\*[^*]*\*\*' docs/decisions/<文件>.md` 列出每一条的标题和行号，再读相关的那几条。按类型名、配置键或错误码找：`grep -rn 'TopK@1' docs/decisions/`。
+- 改一个领域之前，先看它的文件有哪些决定：`grep -no '^ *- \*\*[^*]*\*\*' docs/decisions/<文件>.md` 列出每一条（包括缩进的子条）的标题和行号，再读相关的那几条。按类型名、配置键或错误码找：`grep -rn 'TopK@1' docs/decisions/`。
 - 有人提出一个能力或者改法时，先看 [`scope.md`](scope.md)：不做的、暂时不做的和理由在那里。
 - 做出新的决定时怎么记、记在哪，见 `.agents/skills/record-decision/SKILL.md`。
 

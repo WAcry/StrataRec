@@ -48,9 +48,9 @@ public sealed class LocalFeatureTableOptions
 }
 
 /// <summary>
-/// The in-process feature table behind the <c>cache</c> and <c>local</c> modes: one per (source, entity), one
-/// fixed-size record of native values per entity (<see cref="RecordLayout"/>), written by one background writer and
-/// read by requests without locks.
+/// The in-process feature table behind a <c>local</c> source and the in-process tier of a <c>cache</c>: one per
+/// (source, entity), one fixed-size record of native values per entity (<see cref="RecordLayout"/>), written by one
+/// background writer and read by requests without locks.
 /// </summary>
 /// <remarks>
 /// <para>The publication rules readers rely on:</para>
@@ -203,7 +203,8 @@ public sealed class LocalFeatureTable
 
     /// <summary>
     /// The current version. A request pins it once per table and does all its lookups against it, so the arrays it
-    /// reads stay alive and consistent for the request even if the writer compacts or reloads meanwhile.
+    /// reads stay alive for the request even if the writer compacts or reloads meanwhile. It is not a snapshot: lookups
+    /// of one request may see updates made between them, as two remote fetches would.
     /// </summary>
     public TableVersion Pin() => Volatile.Read(ref _current);
 

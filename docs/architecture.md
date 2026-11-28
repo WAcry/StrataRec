@@ -60,8 +60,8 @@
 | 5 | 编译期接受的，运行时就能执行；统一计划接受的每个臂组合，单独编译它也接受、得到同样的计划（统一计划可以多拒绝：跨组合的冲突，检查超出上限） | `PlanCompiler` | `GeneratedExperimentTests` |
 | 6 | 计划所有请求共用，公开面只读：没有 setter，没有声明成可变集合或 JSON 树的成员（把只读接口强转回去改，和用反射改一样，不在保证之内）。节点的表达式、列和参数在请求期不解析、不按名字查找（请求输入按名字绑定一次；带配置覆盖的调试请求在请求内编译） | `ExecutionPlan` | `PlanImmutabilityTests` |
 | 7 | 确定性：计划、请求（输入、id、种子）、时间上的判定（时钟读数，哪一次等待先到了上界）、外部回答和臂相同，结果就相同；回放复用录制下来的这些判定。随机只来自请求种子的 `StableHash` | `PipelineExecutor` | `ReplayTests` |
-| 8 | 请求路径上框架发起的每一次外部等待（服务、连接器、缓存的存储、臂的分配）都有上界，只有一份实现，不依赖对方响应取消。不在其内：自定义算子里同步执行的代码；启动、发布状态上报和日志 sink，它们收到取消信号，不保证限时返回 | `BoundedCall` | `BoundedCallTests`、`TimerFaultTests` |
-| 9 | 向外交付的值（给服务的张量、日志、结果）是声明的类型和宽度，不做隐式转换。进来的请求输入和流水线调用的输入只按一张固定的表放宽（`int32`→`int64`、整数→浮点） | `ColumnType`、各边界的写入器、`RequestSchema` | `DeclaredWidthEndToEndTests`、`RequestSchemaTests` |
+| 8 | 请求路径上框架发起的每一次外部等待（服务、连接器、缓存的存储、臂的分配）都有上界，只有一份实现，不依赖对方响应取消。不在其内：自定义算子里同步执行的代码；这些扩展点在返回任务之前同步执行的代码；启动、发布状态上报和日志 sink，它们收到取消信号，不保证限时返回 | `BoundedCall` | `BoundedCallTests`、`TimerFaultTests` |
+| 9 | 向外交付的值（给服务的张量、日志、结果）是声明的类型和宽度，不做隐式转换。进来的请求输入和流水线调用的输入只按一张固定的表转换（`ScalarValue.TryConvert`）：在声明类型范围内的整数（进 `int32` 也是），整数进浮点，恰好是整数的浮点进整数，进 `float32` 的按 float32 舍入；别的种类之间不转换 | `ColumnType`、各边界的写入器、`RequestSchema` | `DeclaredWidthEndToEndTests`、`RequestSchemaTests` |
 | 10 | 表达式的向量化后端和参考解释器结果相同 | `ReferenceInterpreter` | `DifferentialTests` |
 | 11 | 请求的分配不随候选数增长（列缓冲随请求租借和归还；交给调用方的结果随返回的行数增长）；`src/` 里不用 `BannedSymbols.txt` 列出的 API（LINQ） | `RequestMemory`、`BannedSymbols.txt` | `RequestAllocationTests`、`BufferPoisoningTests` |
 | 12 | 回放、解释、计划对比读的是请求实际执行的编译结果，不另写一份逻辑 | `RunReplay` | `ReplayTests`、`ExplainEndToEndTests` |

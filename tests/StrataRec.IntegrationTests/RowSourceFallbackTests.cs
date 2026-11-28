@@ -25,8 +25,8 @@ public sealed class RowSourceFallbackTests
     public async Task APrimaryThatAppendedThenFailed_LeavesNoRows_SoTheFallbackServesTheIdsItShares_AndAReplayAgrees(string how)
     {
         // seed appends 5 and 6, and drop filters 6 out. The primary appends 7, which the fallback also returns, and fails.
-        // The fallback answers [6, 7, 11, 22]: 6 stays filtered, 7 is the fallback's. The primary's dead row 7 used to
-        // be found by the fallback's dedup, so 7 was lost; a replay, skipping the timed-out primary, served it.
+        // The fallback answers [6, 7, 11, 22]: 6 stays filtered, 7 is the fallback's: the primary's dead row 7 does not
+        // count as seen by the fallback's dedup.
         var plan = Compile(how, seed: true, primary: "[7]", backup: "[6, 7, 11, 22]", backupQuota: 4);
 
         var recorded = await Execute(plan, record: true);

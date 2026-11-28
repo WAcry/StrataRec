@@ -313,7 +313,8 @@ internal static class ServiceInputDigest
         batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && shape[0] == batch;
 
     /// <summary>
-    /// A row's digest has what the row saw of it, without that dimension (see the remarks).
+    /// Whether a row's digest has what the row saw of an input with a leading dimension of rows, without that dimension
+    /// (see the remarks).
     /// </summary>
     private static bool RowView(in NamedInput input, int batch) =>
         batch > 0 && input.ElementType != TensorElementType.Text && input.Shape is { Length: > 0 } shape && (shape[0] == batch || shape[0] == 1);

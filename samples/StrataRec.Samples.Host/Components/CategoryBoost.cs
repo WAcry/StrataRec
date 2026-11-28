@@ -37,7 +37,8 @@ public sealed class CategoryBoostConfig
 /// <item>It only writes a column, so it declares <see cref="Effects.ColumnWriter"/> and nothing else; the engine
 /// enforces the declaration.</item>
 /// <item>Compile does every check, once per node variant: the config, the columns it reads (so the features it needs
-/// are fetched before it runs) and the column it writes. The request path checks nothing again.</item>
+/// are fetched before it runs) and the column it writes. The request path checks only what a request decides: whether
+/// the score column was produced.</item>
 /// <item>The compiled operator is immutable and shared by every request. Buffers come from the request's
 /// <see cref="Core.Memory.RequestMemory"/>; per row it allocates nothing.</item>
 /// <item>A row whose category is missing keeps its score: this operator's stated rule, not a default standing in for

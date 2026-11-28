@@ -6,7 +6,9 @@ using StrataRec.UnitTests.Core;
 namespace StrataRec.UnitTests.Expressions;
 
 /// <summary>
-/// The other expression tests write into buffers made directly, which count every row valid and so cannot tell.
+/// An expression writing into a real table slot: the rows it wrote a value into are present, the rows it wrote as
+/// missing and the rows it did not write are missing. The other expression tests write into buffers made directly,
+/// which count every row valid and so cannot tell these apart.
 /// </summary>
 public class TableWriteContractTests
 {

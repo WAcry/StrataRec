@@ -260,12 +260,14 @@ public interface IFeatureBatchWriter
 
     /// <summary>
     /// A string with the characters of <paramref name="value"/>, for <see cref="SetString"/> or a
-    /// <see cref="SetStringList"/> element: within this call, equal values return the same instance.
+    /// <see cref="SetStringList"/> element: within this call, equal values return the same instance while the table has
+    /// room.
     /// </summary>
     /// <remarks>
     /// <para>The scope is the call: the table goes away with the writer, and nothing is kept process-wide. At most
-    /// 4,096 distinct values are kept; past that each call returns a new string. A connector that wants reuse across
-    /// requests holds its own pool, sized for its data, and passes its strings to <see cref="SetString"/>.</para>
+    /// 4,096 distinct values are kept; past that a value not kept yet returns a new string each time. A connector that
+    /// wants reuse across requests holds its own pool, sized for its data, and passes its strings to
+    /// <see cref="SetString"/>.</para>
     /// </remarks>
     string Intern(ReadOnlySpan<char> value);
 
@@ -278,15 +280,19 @@ public interface IFeatureBatchWriter
     /// <remarks>A setter for another element type than the field's is a connector bug and throws. A fixed-length field
     /// (<c>list&lt;float32,64&gt;</c>, an embedding) takes the same setter; a value of another length is data, not a
     /// bug: the engine replaces it with the feature's default (or missing) where it stores it, and counts it
-    /// (<c>column_out_of_range_total</c>), while recordings and the cache keep what the connector wrote.</remarks>
+    /// (<c>stratarec.column.out_of_range</c>), while recordings and the cache keep what the connector wrote.</remarks>
     void SetBoolList(int fieldIndex, int keyIndex, ReadOnlySpan<bool> value);
 
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetInt32List(int fieldIndex, int keyIndex, ReadOnlySpan<int> value);
 
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value);
 
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetFloat32List(int fieldIndex, int keyIndex, ReadOnlySpan<float> value);
 
+    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetFloat64List(int fieldIndex, int keyIndex, ReadOnlySpan<double> value);
 
     /// <summary>Writes a <c>list&lt;string&gt;</c> field value; no element may be null.</summary>
@@ -330,10 +336,11 @@ public interface IFeatureSourceConnector
     /// </summary>
     /// <remarks>
     /// <paramref name="fields"/> holds only the fields the request needs at this point, so the same source may be
-    /// called again later for other fields of the same keys. The engine stops waiting at the source timeout or the
-    /// request deadline, whichever comes first, and discards whatever the call writes afterwards; the writer's buffers
-    /// stay rented until the call actually completes. The same holds for the keys of <paramref name="keys"/>: neither
-    /// may be kept past completion.
+    /// called again later for other fields of the same keys. It is called on the request's thread, and the work before
+    /// it returns its task is not bounded: do the I/O asynchronously. The engine stops waiting for the task at the
+    /// source timeout or the request deadline, whichever comes first, and discards whatever the call writes afterwards;
+    /// the writer's buffers stay rented until the call actually completes. The same holds for the keys of
+    /// <paramref name="keys"/>: neither may be kept past completion.
     /// </remarks>
     ValueTask<FetchStatus> FetchAsync(
         EntityKeyBatch keys,

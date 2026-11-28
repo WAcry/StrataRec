@@ -1,7 +1,7 @@
 namespace StrataRec.Core.Diagnostics;
 
 /// <summary>
-/// "Did you mean.?" for misspelled names (<c>diversty_cap</c> for <c>diversity_cap</c>).
+/// "Did you mean ...?" for misspelled names (<c>diversty_cap</c> for <c>diversity_cap</c>).
 /// </summary>
 public static class Spelling
 {

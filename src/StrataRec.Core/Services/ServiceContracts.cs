@@ -456,8 +456,10 @@ public interface IServiceClient
             $"Service '{service}' does not describe its inputs and outputs ({GetType().Name} implements no DescribeAsync), so a model operator cannot check its calls.");
 
     /// <summary>
-    /// Answers one call into <paramref name="response"/>. A failure is a failed status (or an exception, which the engine
-    /// turns into one); the engine stops waiting at the call's timeout and the node's budget, and cancels the token.
+    /// Answers one call into <paramref name="response"/>. A failure is a failed status (or an exception, which the
+    /// engine turns into one). It is called on the request's thread, and the work before it returns its task is not
+    /// bounded: do the I/O asynchronously. The engine stops waiting for the task at the call's timeout and the node's
+    /// budget, and cancels the token.
     /// </summary>
     ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken);
 }

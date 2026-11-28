@@ -336,8 +336,8 @@ public static class ColumnValues
 
     /// <summary>
     /// Replaces non-finite values on the given rows with <paramref name="defaultValue"/> (or marks them missing when
-    /// the default is missing). Returns the number of rows changed (metric <c>column_nonfinite_total</c>). A list row
-    /// with one non-finite element is replaced as a whole.
+    /// the default is missing). Returns the number of rows changed (metric <c>stratarec.column.nonfinite</c>). A list
+    /// row with one non-finite element is replaced as a whole.
     /// </summary>
     public static int SanitizeNonFinite(ColumnBuffer column, ReadOnlySpan<int> rows, in ScalarValue defaultValue)
     {

@@ -1081,7 +1081,7 @@ public sealed class BoundedCallAllocationTests
     [Fact]
     public void ASynchronousAnswer_WithAShorterOwnTimeout_CostsOneTokenSourceAndTimer()
     {
-        // About 224 B on.NET 10: the source, its registration on the node token and the timer.
+        // About 224 B on .NET 10: the source, its registration on the node token and the timer.
         var bytes = BytesPerCall(timeoutMs: 300_000, calls: 2_000);
 
         Assert.InRange(bytes, 1, 256);

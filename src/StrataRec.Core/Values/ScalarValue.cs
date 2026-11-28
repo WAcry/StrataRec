@@ -26,7 +26,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     /// <summary>The reference of a float64 value that came from float32 storage; no other value has it.</summary>
     private static readonly object SinglePrecision = new();
 
-    /// <summary>In a list's bits, above its element kind: the elements came from float32 storage (see the type's remarks).</summary>
+    /// <summary>In a list's bits, above its element kind: the elements came from float32 storage (see the type's summary).</summary>
     private const long SinglePrecisionList = 0x100;
 
     private readonly long _bits;

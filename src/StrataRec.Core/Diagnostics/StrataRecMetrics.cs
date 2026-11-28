@@ -181,7 +181,7 @@ public static class StrataRecMetrics
     public static readonly Counter<long> NodeOutcomes = Meter.CreateCounter<long>(Names.NodeOutcomes, "{node}", "Node outcomes by category.");
 
     /// <summary>
-    /// NaN/±∞ values replaced by the default or marked missing (<c>column_nonfinite_total</c>). Tags for
+    /// NaN/±∞ values replaced by the default or marked missing (<c>stratarec.column.nonfinite</c>). Tags for
     /// node outputs: <c>stratarec.pipeline</c>, <c>stratarec.node</c>, <c>stratarec.column</c>; for features, which no
     /// node produces: <c>stratarec.column</c>.
     /// </summary>
@@ -190,7 +190,7 @@ public static class StrataRecMetrics
     /// <summary>
     /// Values outside the int32 storage of an <c>int32</c> or <c>list&lt;int32&gt;</c> column or feature, and lists of
     /// another length than a <c>list&lt;E,N&gt;</c>'s, replaced by the default or marked missing instead of wrapping or
-    /// being stored (<c>column_out_of_range_total</c>). Recorded once per run. Tags: <c>stratarec.pipeline</c>.
+    /// being stored (<c>stratarec.column.out_of_range</c>). Recorded once per run. Tags: <c>stratarec.pipeline</c>.
     /// </summary>
     public static readonly Counter<long> ColumnOutOfRange = Meter.CreateCounter<long>(Names.ColumnOutOfRange, "{value}", "Values outside the int32 storage range or a list's fixed length, replaced or masked.");
 

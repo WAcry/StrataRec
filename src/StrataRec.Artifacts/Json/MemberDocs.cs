@@ -12,7 +12,7 @@ namespace StrataRec.Artifacts.Json;
 /// the summary of its XML documentation when the assembly's documentation file is deployed next to it.
 /// </summary>
 /// <remarks>
-/// A summary that refers to a type or method (<c>&lt;see cref="T:…"/&gt;</c>) is not used, since it would show a.NET
+/// A summary that refers to a type or method (<c>&lt;see cref="T:…"/&gt;</c>) is not used, since it would show a .NET
 /// name to someone writing JSON; a property reference becomes the member's JSON name.
 /// </remarks>
 internal static class MemberDocs

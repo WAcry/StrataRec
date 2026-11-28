@@ -460,7 +460,7 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// Rewrites every slot so that live rows occupy physical rows 0.n-1 in rank order and dropped rows are released.
+    /// Rewrites every slot so that live rows occupy physical rows 0..n-1 in rank order and dropped rows are released.
     /// Fill state moves with the values. Old arrays are returned when the request ends. The released keys are kept:
     /// <see cref="ContainsKey"/> still finds them.
     /// </summary>

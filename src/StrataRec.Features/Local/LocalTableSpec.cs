@@ -69,6 +69,16 @@ public sealed class LocalTableSpec
         return new LocalTableSpec(schema, options, ArtifactSerializer.ToNode(binding), source, bootstrapFactory, artifact, pointer, directory);
     }
 
+    /// <summary>
+    /// The spec of a cache's table, fed through its writer (<see cref="Cache.CacheWriterSource"/>). Its identity is what
+    /// decides which records the table may hold: the layout, whether it has an in-process tier, whether it keeps records,
+    /// <paramref name="kind"/> and <paramref name="origin"/>. A release that only changes the cache's times and limits
+    /// keeps the table and its records (<see cref="LocalFeatureTable.Retune"/>).
+    /// </summary>
+    /// <param name="origin">What the records come from: the binding's <c>cache.version</c>, or without one a digest of the
+    /// connector or client and its settings.</param>
+    /// <param name="kind">What the cache is in front of: <c>source</c>, <c>service</c> or <c>pipeline</c>.</param>
+    /// <param name="owner">The registry the plan's bindings were resolved with (<see cref="Owner"/>).</param>
     public static LocalTableSpec CreateCache(
         LocalTableSchema schema,
         LocalFeatureTableOptions options,

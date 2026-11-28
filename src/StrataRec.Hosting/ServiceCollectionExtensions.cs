@@ -102,7 +102,8 @@ public static class ServiceCollectionExtensions
     /// <para>The load runs in the hosted services' starting phase
     /// (<see cref="IHostedLifecycleService.StartingAsync"/>), which the generic host completes for every service before
     /// it starts any, also when services start concurrently (<c>HostOptions.ServicesStartConcurrently</c>): a service
-    /// takes no request until every plan has loaded. A host that is not a generic host (a bare service provider) loads
+    /// takes no request until every plan has loaded. A workspace with errors stops the host there, with a
+    /// <see cref="ConfigException"/> listing every error. A host that is not a generic host (a bare service provider) loads
     /// the workspace itself with <see cref="LoadWorkspaceAsync"/>.</para>
     /// <para>The engine serves the workspace as it was at startup. With <see cref="StrataRecOptions.Releases"/> it
     /// serves release manifests instead: it loads the manifest each pipeline's pointer names in the same starting

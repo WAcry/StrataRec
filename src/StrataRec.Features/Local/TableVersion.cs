@@ -63,8 +63,8 @@ internal readonly struct LocalFieldRead
     public ScalarValue Absent { get; }
 }
 
-/// <param name="NonFinite">NaN/±∞ values (and float lists holding one): <c>column_nonfinite_total</c>.</param>
-/// <param name="OutOfRange">Lists of another length than a <c>list&lt;E,N&gt;</c> target's: <c>column_out_of_range_total</c>.</param>
+/// <param name="NonFinite">NaN/±∞ values (and float lists holding one): <c>stratarec.column.nonfinite</c>.</param>
+/// <param name="OutOfRange">Lists of another length than a <c>list&lt;E,N&gt;</c> target's: <c>stratarec.column.out_of_range</c>.</param>
 internal readonly record struct LocalFillCounts(int NonFinite, int OutOfRange);
 
 /// <summary>
@@ -1554,8 +1554,8 @@ public sealed class TableVersion
 }
 
 /// <summary>
-/// The open-addressing index of a <see cref="TableVersion"/>: slot <c>s</c> is <c>Entries[2s]</c> (the int64 key, or
-/// the 64-bit hash of a string key) and <c>Entries[2s + 1]</c> (the record's position, 0 = empty). Entries are never
+/// The open-addressing index of a <see cref="TableVersion"/>: slot <c>s</c> is <c>Entries[2s]</c> (a one-part int64 key,
+/// or the 64-bit hash of any other key) and <c>Entries[2s + 1]</c> (the record's position, 0 = empty). Entries are never
 /// removed (deletes are tombstone records), and the table is kept at most half full, so every probe sequence ends at an
 /// empty slot.
 /// </summary>

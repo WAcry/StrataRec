@@ -10,8 +10,9 @@ namespace StrataRec.Features.Cache;
 /// records of different sources and entities never collide.
 /// </summary>
 /// <remarks>
-/// <para>The name is <c>{source}:{entity}:</c>. Entity names are identifiers; a source name is escaped (<c>%</c> as
-/// <c>%25</c>, <c>:</c> as <c>%3A</c>) so that no source and entity pair can spell another's prefix.</para>
+/// <para>The name is <c>{source}:{entity}:</c>, then <c>{origin}:</c> when it has one. Entity names are identifiers; a
+/// source name is escaped (<c>%</c> as <c>%25</c>, <c>:</c> as <c>%3A</c>) so that no source and entity pair can spell
+/// another's prefix.</para>
 /// <para>A store sees each key as its text (<see cref="KeyText"/>), the same in every process and every run, so
 /// instances share records: one part is the value (an int64 in invariant decimal, a string as is), several parts are
 /// their texts joined by <c>:</c>. A key's layout is not in its text: records carry a fingerprint of the layout and the
@@ -55,8 +56,9 @@ public sealed class CacheKeyspace
     /// as is (not copied); for several, each part's text in order joined by <c>:</c>, a string part escaped (<c>%</c> as
     /// <c>%25</c>, <c>:</c> as <c>%3A</c>), e.g. <c>10042:US</c>.
     /// </summary>
-    /// <remarks>Unambiguous among keys of one layout: no part's text holds a <c>:</c>, so a text splits back into its
-    /// parts, and each position has one type. A one-part string is not escaped.</remarks>
+    /// <remarks>Unambiguous among keys of one layout: a one-part key is its value, not escaped; in a key of several
+    /// parts no part's text holds a <c>:</c>, so the text splits back into its parts, and each position has one
+    /// type.</remarks>
     public static string KeyText(ReadOnlySpan<EntityKey> parts)
     {
         if (parts.Length == 1)
@@ -126,10 +128,10 @@ public sealed class CacheKeyspace
 public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> Record, TimeSpan TimeToLive);
 
 /// <summary>
-/// A distributed cache shared by a deployment's instances, of a feature source in mode <c>cache</c> or of a service
-/// with a <c>cache</c>: the engine reads it for the keys its in-process table misses, before the connector or the
-/// service's client, and writes back what they returned. Records are opaque bytes the engine encodes; the store only
-/// moves them.
+/// A distributed cache shared by a deployment's instances, the <c>distributed</c> tier of the <c>cache</c> of a feature
+/// source, a service or a pipeline call: the engine reads it for the keys its in-process tier misses, before it
+/// fetches, calls or runs, and writes back what that returned. Records are opaque bytes the engine encodes; the store
+/// only moves them.
 /// </summary>
 /// <remarks>
 /// <para>A store is a binding instance: the whole lifetime contract (create, share, load, dispose) is on

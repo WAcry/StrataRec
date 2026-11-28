@@ -25,9 +25,11 @@ namespace StrataRec.Features.Local;
 /// <code>
 /// { "format": "jsonl", "position": { "0": 1200, "1": 980 }, "files": ["part-0000.jsonl", "part-0001.jsonl"] }
 /// </code>
-/// <para>Data files are JSON Lines. <c>key</c> is a number or a string for a one-part key, an array in the entity's
-/// declared order otherwise; <c>fields</c> uses physical field names, <c>null</c> is missing, an absent field keeps the
-/// earlier value, and floats also accept <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>.</para>
+/// <para>Data files are JSON Lines. <c>key</c> has each part as its type says (an int64 part a JSON integer, a string
+/// part a JSON string): the value for a one-part key, an array of exactly that many in the entity's declared order
+/// otherwise. <c>version</c> is a JSON integer (int64). <c>fields</c> uses physical field names, <c>null</c> is
+/// missing, an absent field keeps the earlier value, and floats also accept <c>"NaN"</c>, <c>"Infinity"</c> and
+/// <c>"-Infinity"</c>.</para>
 /// <code>
 /// {"key": 10042, "version": 17, "fields": {"i_clk_7d": 12.0, "i_emb_v3": [0.1, 0.2], "i_age_h": null}}
 /// {"key": [10042, "US"], "version": 3, "deleted": true}

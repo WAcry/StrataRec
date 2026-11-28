@@ -141,8 +141,8 @@ public sealed class SlotBlendFactory : IOperatorFactory
                 return;
             }
 
-            // A row source appends only keys the request has not seen: one already there (an earlier node's) is passed
-            // over, and takes no place.
+            // This row source appends only keys the request has not seen: one already there (an earlier node's) is
+            // passed over, and takes no place.
             var keys = new List<long>(most);
             var scores = new List<ScalarValue>(most);
             var flags = new List<bool>(most);

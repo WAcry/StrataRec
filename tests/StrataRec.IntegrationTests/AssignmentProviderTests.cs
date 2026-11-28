@@ -201,8 +201,8 @@ public sealed class AssignmentProviderTests
         var request = engine.ExecuteAsync(Request("req-caller-abandons"), caller.Token).AsTask();
         Assert.False(request.IsCompleted);
 
-        // From a thread without a synchronization context, as in a server: xUnit's would keep the request's continuation
-        // out of Cancel, hiding the order above.
+        // From a thread without a synchronization context, as in a server, so Cancel may end the request inline before
+        // it cancels the provider's token; xUnit's context would keep the request's continuation out of Cancel.
         await Task.Run(caller.Cancel, TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);

@@ -70,7 +70,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     private readonly IFeatureCallHook? _hook;
     private int _nonFiniteReplaced;
 
-    /// <summary>What the cached reads of the request's runs share (<see cref="RequestReads"/>); null for a request of one run.</summary>
+    /// <summary>What the cached reads of the request's runs share (<see cref="RequestReads"/>); null for a replay.</summary>
     internal RequestReads? Reads { get; init; }
 
     /// <param name="counters">The request's expression counters, shared with the operators' evaluations so a request
@@ -115,14 +115,14 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <summary>
     /// Number of feature values (physical or derived, candidate or context) that were NaN/±∞ and were replaced by the
-    /// feature's default or marked missing (metric <c>column_nonfinite_total</c>).
+    /// feature's default or marked missing (metric <c>stratarec.column.nonfinite</c>).
     /// </summary>
     public int NonFiniteReplaced => Volatile.Read(ref _nonFiniteReplaced);
 
     /// <summary>
     /// Counters of derived-feature evaluations. <see cref="ExpressionCounters.OutOfRange"/> includes derived values
     /// (candidate or context) that did not fit an <c>int32</c> or <c>list&lt;int32&gt;</c> feature and were replaced by its
-    /// default or marked missing (metric <c>column_out_of_range_total</c>).
+    /// default or marked missing (metric <c>stratarec.column.out_of_range</c>).
     /// </summary>
     public ExpressionCounters Counters => _counters;
 

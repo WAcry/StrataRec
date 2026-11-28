@@ -2,7 +2,7 @@
 
 面向 .NET 10+ 的进程内推荐执行引擎：列式候选表、编译一次的算子流水线、CEL 风格的表达式语言 `ColumnExpr`、声明式漏斗日志，以及用 RFC 7396 合并补丁表达的多层实验。
 
-流水线的全部行为都是标准格式的配置（JSONC、JSON Merge Patch、JSON Pointer、JSON Schema、CEL 风格表达式），并且在发布之前就能在本地完整校验：类型、数据流、实验冲突，以及所有可能同时分配的臂组合。
+流水线的全部行为都是标准格式的配置（JSONC、JSON Merge Patch、JSON Pointer、JSON Schema、CEL 风格表达式），并且在发布之前就能在本地校验：类型、数据流、实验冲突，以及所有可能同时分配的臂组合。
 
 > 状态：阶段性框架。整个链路在自带的 `home_feed` 示例上端到端可用，公开 API 尚未稳定。
 
@@ -11,8 +11,8 @@
 需要 .NET 10 SDK 或更新版本。
 
 ```sh
-dotnet build StrataRec.sln          # 警告视为错误
-dotnet test StrataRec.sln           # 单元测试 + 集成测试
+dotnet build StrataRec.sln -c Release   # 警告视为错误
+dotnet test StrataRec.sln -c Release    # 单元测试 + 集成测试；分配测试量的是 Release 的代码
 
 dotnet run --project src/StrataRec.Cli -- validate     -c samples/home_feed
 dotnet run --project src/StrataRec.Cli -- explain-plan -c samples/home_feed   # --arms exp/arm：这个组合实际执行的节点、定义和每个节点读写的列
@@ -20,7 +20,7 @@ dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r s
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --record bundles/1001.json
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --format text --explain 17,1   # 可读的结果；每个 id 落在哪
 dotnet run --project src/StrataRec.Cli -- replay       -c samples/home_feed bundles   # 用录制的 I/O 重现并对比
-dotnet run --project src/StrataRec.Cli -- diff         --from <旧工作区或 manifest> --to samples/home_feed   # 按臂组合对比两份配置
+dotnet run --project src/StrataRec.Cli -- diff         --from <旧工作区> --to samples/home_feed   # 按臂组合对比两份配置；manifest 加 -s store
 dotnet run --project src/StrataRec.Cli -- build        -c samples/home_feed -s store   # 产物按哈希写进 store
 dotnet run --project src/StrataRec.Cli -- publish      -s store <manifest id 或文件>   # 让 store 里的指针指向它
 dotnet run --project src/StrataRec.Cli -- revoke       -s store -p home_feed exp_mmr_diversity   # 紧急停止：立即发布去掉这个实验的 manifest
@@ -42,7 +42,7 @@ dotnet run --project src/StrataRec.Cli -- run      -c my-feed -r my-feed/request
 
 `init` 写出目录、本地绑定、一条从召回到 top-k 的流水线、一个实验、发布文件、夹具和示例请求，每个文件开头的注释说明先改哪里，最后打印接下来可以照抄的命令。`home_feed` 是演示全部功能的完整示例。
 
-工作区的 `schemas/` 里是各类文件的 JSON Schema，每个文件用顶层的 `"$schema"` 引用它，所以在 VS Code 等编辑器里打开就有补全、字段说明和即时报错：节点的 `config` 按它的 `op` 检查，实验臂按补丁的形式检查。Schema 由二进制生成，包含它注册的算子；升级之后 `validate` 会报 `SCHEMAS_STALE`，用 `stratarec schema --out <工作区>/schemas` 重新生成并提交。
+工作区的 `schemas/` 里是各类文件的 JSON Schema，配置文件用顶层的 `"$schema"` 引用它，所以在 VS Code 等编辑器里打开就有补全、字段说明和即时报错：节点的 `config` 按它的 `op` 检查，实验臂按补丁的形式检查。Schema 由二进制生成，包含它注册的算子；升级之后 `schemas/` 过期时 `validate` 报 `SCHEMAS_STALE`，用 `stratarec schema --out <工作区>/schemas` 重新生成并提交。
 
 ## 在服务里嵌入引擎
 
@@ -65,7 +65,7 @@ curl -s -X POST localhost:5000/recommend/trending_feed -H 'content-type: applica
 dotnet run --project samples/StrataRec.Samples.Host -- stratarec validate -c config   # 宿主自己的二进制带着自定义组件跑全部 stratarec 命令（-c 相对项目目录）
 ```
 
-生产环境的节点服务 manifest 而不是工作区：CI 用 `stratarec build --store` 写产物和 manifest、`stratarec publish` 改指针，出了问题用 `stratarec revoke` 立即停掉一个实验，`stratarec status -s <store>` 看 store 现在发布的是什么；宿主在 `AddStrataRec` 里设置 `Releases`、列出 `Pipelines`，并注册 `IManifestSource` 和 `IArtifactStore`（本地目录各有现成的实现，其他存储实现这两个接口）。
+生产环境的节点服务 manifest 而不是工作区：CI 用 `stratarec build --store` 写产物和 manifest、`stratarec publish` 改指针，出了问题用 `stratarec revoke` 立即发布去掉一个实验的 manifest（节点在下一次轮询时换上），`stratarec status -s <store>` 看 store 现在发布的是什么；宿主在 `AddStrataRec` 里设置 `Releases`、列出 `Pipelines`，并注册 `IManifestSource` 和 `IArtifactStore`（本地目录各有现成的实现，其他存储实现这两个接口）。
 
 ## 示例工作区
 

@@ -4,25 +4,23 @@ namespace StrataRec.Core.Bindings;
 
 /// <summary>
 /// What a factory gets to create the instance one binding names: a service client, a feature connector, a distributed
-/// cache store or an update source.
+/// cache store or an update source. The update source of a <c>local</c> table is not a shared instance: its context has
+/// no secret store, and it is never loaded or disposed. For every other instance the remarks are its lifetime contract.
 /// </summary>
-/// <remarks>
-/// <para><b>Update sources.</b> The update source of a <c>local</c> table is not a shared instance. Its context has no
-/// secret store, and it is never loaded or disposed.</para>
-/// </remarks>
 /// <remarks>
 /// <para><b>Create.</b> Two plans loading at once may both create one; the extra one is disposed without being loaded
 /// or called. So <c>Create</c> only reads and checks the settings: no I/O, no connections, threads or anything else
 /// that needs releasing.</para>
 /// <para><b>Sharing.</b> One instance serves every plan of the engine whose binding has the same identity: section,
 /// logical name, type, all of the binding's own <see cref="Settings"/> and the <see cref="BaseDirectory"/>, from the
-/// same factory object. All requests of all those plans call the one instance concurrently: it must be
-/// thread-safe.</para>
-/// <para><b>Calls.</b> The engine may stop waiting for a call at its timeout and cancel its token; the instance stays
-/// alive until the call has returned.</para>
+/// same factory object. All requests of all those plans call it concurrently: it must be thread-safe.</para>
+/// <para><b>Calls.</b> None comes before <see cref="ILoadable.LoadAsync"/> completed. The engine may stop waiting for a
+/// call at its timeout and cancel its token; the instance stays alive until the call has returned. A request call must
+/// not leave a callback that uses the instance after it returned.</para>
 /// <para><b>Dispose.</b> An instance that holds resources implements <see cref="IAsyncDisposable"/> (preferred) or
-/// <see cref="IDisposable"/>. No call starts after the disposal begins. It may come without a load or after a failed
-/// load, so it must release whatever was acquired so far.</para>
+/// <see cref="IDisposable"/>. The engine disposes it once, on the thread pool, after its load, every call and every
+/// signature lookup returned; one whose call never returns is never disposed. It may come without a load or after a
+/// failed load, so it must release whatever was acquired so far.</para>
 /// </remarks>
 public sealed class BindingContext
 {

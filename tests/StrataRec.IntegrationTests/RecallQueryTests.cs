@@ -212,8 +212,8 @@ public sealed class RecallQueryTests
     [Fact]
     public async Task AQueryReadingADerivedFeature_IsSentOnceItIsComputed_NotAfterTheWholePrefetch()
     {
-        // user.query_embedding is derived from the user's embedding; geo_store (the request's country) is still in flight.
-        // The derived feature was computed only once every group was stored, so two_tower waited for geo_store.
+        // user.query_embedding is derived from the user's embedding; geo_store (the request's country) is still in flight
+        // while two_tower is sent.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "catalog/home_feed.jsonc", "\"derived_features\": {",
@@ -270,7 +270,7 @@ public sealed class RecallQueryTests
     public async Task SourcesWhoseFeaturesAreStoredTogether_AreSentInSourceOrder()
     {
         // popular reads the user's tenure, two_tower the user's embedding: both stored by user_store at once. two_tower comes
-        // first in source_order, so it is sent first, every time (each source waited on its own and raced).
+        // first in source_order, so it is sent first, every time.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"queries\": { \"two_tower\": {", "\"queries\": { \"popular\": { \"tenure\": \"ctx.user.tenure_days\" }, \"two_tower\": {"));
         for (var i = 0; i < 16; i++)
@@ -293,8 +293,7 @@ public sealed class RecallQueryTests
     {
         // popular's client blocks in a callback on its token, registered after the node started waiting for two_tower's
         // embedding; the node's token is cancelled at the deadline on a thread that runs the newest callback first. The
-        // wait was cancelled through that token, so it waited for the client's callback to return; it ends at
-        // the deadline on its own now, as a call does.
+        // wait ends at the deadline on its own, as a call does, not when the client's callback returns.
         var host = HomeFeedTestHost.LoadModified(root => ReplayTests.Edit(root, "pipelines/home_feed.jsonc",
             "\"order\": 100, \"op\": \"MultiSourceRecall@1\",", "\"order\": 100, \"op\": \"MultiSourceRecall@1\", \"timeout_ms\": 1000,"));
         using var users = new GatedConnectors("user_store");
@@ -407,8 +406,7 @@ public sealed class RecallQueryTests
     public async Task AQueryReadingADerivedFeature_IsRefusedAsSoonAsOneOfItsInputsFails(bool derived)
     {
         // user_store fails; geo_store, which region.boost waits for, is held past the node's budget. A query reading tenure
-        // and boost itself is refused at once; one reading a feature derived from both waited for boost, up to the node's
-        // budget.
+        // and boost itself is refused at once, and so is one reading a feature derived from both.
         var host = HomeFeedTestHost.LoadModified(root =>
         {
             ReplayTests.Edit(root, "bindings/local.jsonc", "\"user_store\":   { \"connector\": \"memory@1\",", "\"user_store\":   { \"connector\": \"memory@1\", \"fail\": true,");

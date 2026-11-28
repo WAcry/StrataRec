@@ -1021,9 +1021,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     }
 
     /// <summary>
-    /// The plan a pipeline serves, its binding lease entered (see the lifecycle remarks): the caller ends the entry
-    /// (<see cref="BindingLease.RequestEnded"/>) when it is done with the plan; the plan's runs join the lease
-    /// meanwhile.
+    /// The plan a pipeline serves, its binding lease entered (a retired lease reads the current plan again): the caller
+    /// ends the entry (<see cref="BindingLease.RequestEnded"/>) when it is done with the plan; the plan's runs join the
+    /// lease meanwhile.
     /// </summary>
     private LoadedPipeline? Enter(string pipelineId, out bool disposed)
     {

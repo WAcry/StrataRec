@@ -107,7 +107,7 @@ public sealed class DiagnosticLocationCliTests : IDisposable
     [InlineData(Pipeline, "\"user_id\":    { \"type\": \"int64?\" }", "\"user_id\":    { \"type\": \"int46?\" }",
         "REQUEST_BAD_TYPE", "/request_schema/user_id/type", "\"type\": \"int46?\"")]
     [InlineData(Pipeline, "\"surface\":    { \"type\": \"string\" }", "\"surface\":    { \"type\": \"string\" }, \"seed\": { \"type\": \"int64\" }",
-        "REQUEST_RESERVED_NAME", "/request_schema/seed", "\"seed\"")] // was an unhandled exception; ctx.request.seed is built in
+        "REQUEST_RESERVED_NAME", "/request_schema/seed", "\"seed\"")] // ctx.request.seed is built in
     [InlineData("catalog/home_feed.jsonc", "\"item.clicks_7d\":      { \"type\": \"float32\"", "\"item.clicks_7d\":      { \"type\": \"flot32\"",
         "FEATURE_BAD_TYPE", "/features/item.clicks_7d/type", "\"type\": \"flot32\"")]
     [InlineData("catalog/home_feed.jsonc", "\"item.author_id\":      { \"type\": \"int64\"", "\"item.author_id\":      { \"type\": \"int46\"",

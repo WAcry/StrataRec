@@ -911,10 +911,9 @@ internal sealed class RunReplay : IFeatureCallHook
     }
 
     /// <summary>
-    /// Writes a recorded value into a staging field; false (nothing written) when it does not fit. The value was
-    /// decoded with its recorded type; a field whose type changed takes it only when it converts without loss of
-    /// meaning: numeric widening, rounding to float32 as the source itself would. Exact and synthesized calls both
-    /// write through here, so they apply one rule.
+    /// Writes a recorded value into a staging field; false (nothing written) when it does not fit. A field whose type
+    /// changed takes the value only as its source could have written it: an integer that fits an int32 field, an integer
+    /// or a float into a float field, rounded as the source would. Exact and synthesized calls both write through here.
     /// </summary>
     private static bool TryWrite(IFeatureBatchWriter writer, int field, int key, ColumnType type, in ScalarValue value)
     {

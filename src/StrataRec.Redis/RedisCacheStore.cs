@@ -10,10 +10,10 @@ namespace StrataRec.Redis;
 
 /// <remarks>
 /// <para>The connection is made at load, but a server that is down then does not fail the load: the plan serves from
-/// the connector (or the service) while the client reconnects in the background, and commands sent while it is
-/// disconnected fail at once rather than queue. Credentials the server refuses (a wrong password or user, or none where
-/// the server requires one) and a missing secret do fail the load (<see cref="LoadAsync"/> says how they are told
-/// apart).</para>
+/// what the cache is in front of (the connector, the service or the pipeline) while the client reconnects in the
+/// background, and commands sent while it is disconnected fail at once rather than queue. Credentials the server
+/// refuses (a wrong password or user, or none where the server requires one) and a missing secret do fail the load
+/// (<see cref="LoadAsync"/> says how they are told apart).</para>
 /// </remarks>
 public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
 {

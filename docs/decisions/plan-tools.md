@@ -15,7 +15,7 @@
   - `$schema` 不计入内容 ID：读文件时先去掉它，再绑定、哈希、存储，所以 `build` 上传的字节、manifest 和 `diff` 都不受它影响。内容 ID 标识部署的东西，`$schema` 只给编辑器用；它的值是相对路径，换个目录布局就会变；给仓库里所有文件批量加上 `$schema` 也不该产生新发布，或者让大表重新下载。只认顶层的字符串：其他类型的值是 `ARTIFACT_SCHEMA /$schema`，hint 给出这个文件该写的路径；嵌套在别处的 `$schema` 仍按未知键报错。`run` 的请求文件也一样。
   - 流水线按节点的 `op` 校验 `config`，每个算子一组 `if {op: const} then {config: …}`。没有用 `oneOf`：它只报“最接近的那一支”的错误，未知的 op 会显示成误导人的类型错误。`op` 是枚举，带 VS Code 的 `enumDescriptions`。只有算子的配置有必填成员时才要求写 `config`，否则允许 `null`，和引擎把缺失或 `null` 的配置读成 `{}` 一致。
   - 实验臂的 Schema 是流水线可修改视图的合并补丁形式：去掉所有 `required`，每个值都可以是 `null`（删除）；封闭对象里未知的键只能是 `null`：切换节点的 `op` 时要删除旧算子独有的配置成员，新算子的 Schema 里没有它们，删除不存在的成员也不改变什么，带值的未知键照样报错（原来保留 `additionalProperties: false`，合法的切换会被标红）；臂的顶层（分区清单）仍然封闭，分区既不能删除也不能拼错；数组整体替换所以 `items` 不变，`if` 不变（补丁里写了 `op`，`config` 仍按那个算子检查），分区本身不能为 `null`（引擎拒绝删除整个分区）。一个条目是新增（必须完整）还是修改，取决于基线，按类型生成的 Schema 看不到基线，所以它从不拒绝合法的补丁，这一部分留给 `validate`。可修改的分区只有一份清单（`PatchableView.Sections` 由 `ExperimentArtifact` 的分区拼出），Schema 和补丁校验用的是同一份。
-  - 描述先取 `[Description]`，没有就取 XML 文档注释的摘要（`MemberDocs`），所以悬停能看到字段说明。代价是 Schema 的字节取决于二进制旁边有没有 XML 文档：生成和检查要用同一个二进制，单文件发布、不带 XML 文档的二进制写出的 Schema 没有描述。
+  - 描述先取 `[Description]`，没有就取 XML 文档注释的摘要（`MemberDocs`），所以悬停能看到字段说明。代价是 Schema 的字节取决于二进制旁边有没有 XML 文档：生成和检查要用同一个二进制，单文件发布、不带 XML 文档的二进制写出的 Schema 只有 `[Description]` 给的描述。
   - 过期检查是 `validate` 的警告 `SCHEMAS_STALE`，不另做 `--check` 命令：CI 本来就跑 `validate`，加 `--warnings-as-errors` 就会失败，开发者本地也看得到。是警告不是错误，因为它不影响部署。只在 `schemas/` 存在时检查，忽略 CRLF 差异，不管目录里的其他文件。`--out` 只改写内容变了的文件。
   - fixtures 不加 `$schema`：它们是连接器的数据，`$schema` 会被当成一个 ID。宿主示例里给 curl 用的请求体也不加：服务的端点是严格的，未知成员是 400。
   - Schema 用了 VS Code 的非标准关键字 `allowComments`、`allowTrailingCommas`、`enumDescriptions`。2020-12 把未知关键字当注解；ajv 的 strict 模式会报错，要关掉。

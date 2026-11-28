@@ -118,7 +118,7 @@ dotnet run -- stratarec schema --out config/schemas       # 每类文件一个 <
 
 ## 生产服务还要加什么
 
-`Program.cs` 的注释列出了，这里不实现：接实验平台的 `IAssignmentProvider`、解析 `secret://` 的 `ISecretResolver`、订阅 `StrataRec` meter 和 activity source 的指标与追踪、写漏斗日志的 `ILogSink`，以及不重启加载新发布（`RecEngine.LoadAsync`）。
+这个示例不实现：接实验平台的 `IAssignmentProvider`、解析 `secret://` 的 `ISecretResolver`、订阅 `StrataRec` meter 和 activity source 的指标与追踪、写漏斗日志的 `ILogSink`，以及不重启加载新发布（`RecEngine.LoadAsync`）。
 
 ## 测试
 

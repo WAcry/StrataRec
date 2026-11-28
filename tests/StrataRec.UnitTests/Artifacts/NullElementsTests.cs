@@ -375,7 +375,7 @@ public sealed class NullElementsTests
         public Dictionary<string, object> Other { get; private set; } = [];
     }
 
-    /// <summary>Its constructor takes nulls and drops them.</summary>    /// <summary>Its constructor takes nulls and drops them.</summary>
+    /// <summary>Its constructor takes nulls and drops them.</summary>
     public sealed class FilteringConstructor(List<string?> items)
     {
         public List<string> Items { get; } = Without(items);

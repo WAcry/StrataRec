@@ -45,6 +45,8 @@ public class FetchChunkTests
 
             return FetchStatus.Ok;
         });
+        // A budget a loaded machine cannot use up while the chunks are sent one after another: a chunk whose time is up
+        // before it is sent is not sent, and its connector never sees the cancellation the wait below is for.
         var rig = new FeatureTestRig().Source("item_store", connector, timeoutMs: 1000, maxBatch: 1);
         var score = rig.Physical("item.score", FeatureTestRig.Item, ColumnType.Float64, "item_store");
         rig.Build();
@@ -368,7 +370,7 @@ public class FetchChunkTests
     [Fact]
     public async Task ConcurrentChunks_WriteNumbersStringsAndLists_WhileAnAbandonedChunkKeepsWriting_AndItsResultIsNeverRead()
     {
-        const int Chunks = 16;
+        const int Chunks = 16; // several chunks per 64-bit word of "written" bits, were the bits dense
         const int MaxBatch = 4;
         using var start = new ManualResetEventSlim();
         using var late = new ManualResetEventSlim();

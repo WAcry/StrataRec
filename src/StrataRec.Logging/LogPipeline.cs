@@ -625,8 +625,8 @@ public sealed partial class LogPipeline : IAsyncDisposable
     }
 
     /// <summary>
-    /// A batch is counted in before it is queued and counted out before the pending count drops: the series never goes
-    /// below zero, and a flush returns after the last decrement.
+    /// A batch is counted in before it is queued and counted out before the pending count drops: for a listener that
+    /// receives every measurement the series never goes below zero, and a flush returns after the last decrement.
     /// </summary>
     private static void QueueDepth(long delta, bool durable) =>
         Measure(static () => StrataRecMetrics.LogQueueDepth, delta, durable ? DurableTags : BestEffortTags);

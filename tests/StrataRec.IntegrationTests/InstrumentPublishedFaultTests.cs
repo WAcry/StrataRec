@@ -7,8 +7,8 @@ using StrataRec.Logging;
 namespace StrataRec.IntegrationTests;
 
 /// <summary>
-/// The first read happens once per process, so the test runs in a child process (<see cref="TimerFaultChild.Start"/>'s
-/// way).
+/// The engine's instruments are created when first read, once per process, so the test runs in a child process
+/// (<see cref="TimerFaultChild.Start"/>'s way).
 /// </summary>
 public sealed class InstrumentPublishedFaultTests
 {

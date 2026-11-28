@@ -55,7 +55,7 @@ internal sealed class ServiceSupplyCall
 
     public long? Seed { get; init; }
 
-    /// <summary>What the cached reads of the request's runs share; null for a request of one run.</summary>
+    /// <summary>What the cached reads of the request's runs share; null for a replay, which reads nothing.</summary>
     public RequestReads? Reads { get; init; }
 
     /// <summary>The fetch, which tracks the call's external operations still running (<see cref="FeatureFetcher.WhenIoCompleteAsync"/>).</summary>

@@ -13,7 +13,7 @@
 | 想知道 | 问 |
 | --- | --- |
 | 有哪些算子，各有什么效果 | `stratarec operators` |
-| 一个节点实际读写哪些列 | `stratarec explain-plan -c <工作区> --arms <实验>/<臂> --format json`：这个臂组合下每个节点的 `reads`、`writes` |
+| 一个节点实际读写哪些列 | `stratarec explain-plan -c <工作区> --arms <实验>/<臂> --format json`：这个臂组合下每个节点的 `reads`、`writes`；没有实验的流水线不用 `--arms` |
 | 一个算子的配置怎么写 | `stratarec schema operator TopK@1`，或者在编辑器里看补全（工作区的 `schemas/`） |
 | 一种文件有哪些字段 | `stratarec schema pipeline`（`catalog`、`bindings`、`experiment`、`release`、`request` 同理） |
 | 配置对不对 | `stratarec validate -c <工作区>`：类型、数据流、实验冲突、所有可能同时生效的臂组合；每个错误带位置和修法 |

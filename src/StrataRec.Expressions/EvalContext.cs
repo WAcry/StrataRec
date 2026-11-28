@@ -43,11 +43,11 @@ public sealed class ExpressionCounters
 
     /// <summary>
     /// Number of values that did not fit the storage they were written to and were replaced by the column's default or
-    /// marked missing (metric <c>column_out_of_range_total</c>): an int64 outside the int32 range written to
+    /// marked missing (metric <c>stratarec.column.out_of_range</c>): an int64 outside the int32 range written to
     /// an <c>int32</c> column, a list with such an element written to a <c>list&lt;int32&gt;</c> column (counted once
     /// per list), or a list of another length written to a <c>list&lt;E,N&gt;</c> column, feature or context value.
     /// </summary>
-    /// <remarks>Kept apart from the non-finite count (<c>column_nonfinite_total</c>).</remarks>
+    /// <remarks>Kept apart from the non-finite count (<c>stratarec.column.nonfinite</c>).</remarks>
     public long OutOfRange => Interlocked.Read(ref _outOfRange);
 
     public void AddOutOfRange(long count) => Interlocked.Add(ref _outOfRange, count);

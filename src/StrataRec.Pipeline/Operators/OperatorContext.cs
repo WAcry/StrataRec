@@ -242,7 +242,9 @@ public sealed class OperatorContext : IServiceCallScope
     /// <para>Each round observes the prefetch once, then settles, in the order of <paramref name="reads"/>, every read
     /// that this one observation settles, so reads whose features are stored together are settled in that order
     /// whenever the store happens.</para>
-    /// <para><paramref name="settled"/> runs on the operator's flow, one call at a time; what it throws ends the wait.</para>
+    /// <para><paramref name="settled"/> runs on the operator's flow, one call at a time; what it throws ends the wait.
+    /// Each element of <paramref name="reads"/> is asked for once, in order, with the bound checked before: none of the
+    /// operator's code (its list, its callback) is called once the bound has passed.</para>
     /// </remarks>
     /// <exception cref="OperationCanceledException">The attempt's budget ran out or the caller gave up first: the reads
     /// not settled by then never are.</exception>
@@ -447,7 +449,7 @@ public sealed class OperatorContext : IServiceCallScope
     /// <para>The called run is the same request: its id, its time and its experiment assignment; its seed is derived
     /// from this run's and the call's place among the node's calls, so calls made in the same order get the same seeds.
     /// It has what is left of the node's budget, and does not fail over to its <c>fallback_pipeline</c>: the node's
-    /// <c>on_failure</c> decides.</para>
+    /// <c>on_failure</c> decides. An operator may make several calls at once, as it may call several services.</para>
     /// </remarks>
     /// <exception cref="ArgumentException">The handle is another node's, or an input was not declared.</exception>
     /// <exception cref="OperationCanceledException">The caller cancelled the request.</exception>

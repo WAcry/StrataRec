@@ -77,7 +77,8 @@ public sealed class KeyValueFeatureConnector : IFeatureSourceConnector, ILoadabl
         return new ValueTask<FetchStatus>(Serve(keys, fields.Span, writer));
     }
 
-    /// <summary>What a remote store's call looks like: the token goes to the I/O, and nothing is written once it is cancelled.</summary>
+    /// <summary>What a remote store's call looks like: the token goes to the I/O, and a call cancelled during it throws
+    /// without writing.</summary>
     private async ValueTask<FetchStatus> FetchRemoteAsync(
         EntityKeyBatch keys, ReadOnlyMemory<CompiledFieldBinding> fields, IFeatureBatchWriter writer, CancellationToken cancellationToken)
     {
