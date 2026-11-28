@@ -77,7 +77,6 @@ public static class StableHash
 
     public static double Hash01(long a, long b, long c) => ToUnit(Hash(a, b, c));
 
-    /// <summary>Derives a 64-bit seed from a salt string, e.g. a request id or a funnel group key.</summary>
     public static long SeedFromSalt(string salt)
     {
         using var builder = new Builder();
@@ -143,8 +142,8 @@ public static class StableHash
         }
 
         /// <summary>
-        /// Adds any value, a missing one and a list too, each after what it is: a missing value, an empty list and an empty
-        /// string are three things. A float32 is added as the double it is: what declares the value says its width.
+        /// Adds any value, a missing one and a list too, each after what it is: a missing value, an empty list and an
+        /// empty string are three things. A float32 is added as the double it is.
         /// </summary>
         public void AddAny(in ScalarValue value)
         {
@@ -203,7 +202,7 @@ public static class StableHash
             XxHash3.HashToUInt64(_buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length));
 
         /// <summary>
-        /// The XXH3-128 of the bytes added so far: for keys a collision must not confuse among very many.
+        /// The XXH3-128 of the bytes added so far.
         /// </summary>
         public readonly UInt128 Finish128() =>
             XxHash128.HashToUInt128(_buffer is null ? ReadOnlySpan<byte>.Empty : _buffer.AsSpan(0, _length));

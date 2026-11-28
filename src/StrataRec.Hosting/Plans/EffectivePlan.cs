@@ -21,7 +21,6 @@ public sealed record EffectiveNode(CompiledNode Node, TimelineSlot Slot)
 }
 
 /// <summary>A parameter leaf's value for the combination.</summary>
-/// <param name="Leaf">The leaf.</param>
 /// <param name="Value">The snapshot value: the baseline with the combination's overrides applied.</param>
 /// <param name="Overridden">True when an arm of the combination sets the value (or adds the leaf).</param>
 public sealed record EffectiveParam(ParamLeaf Leaf, ScalarValue Value, bool Overridden);

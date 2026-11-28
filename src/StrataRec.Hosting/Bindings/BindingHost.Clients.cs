@@ -7,7 +7,6 @@ using StrataRec.Features.Bindings;
 
 namespace StrataRec.Hosting.Bindings;
 
-/// <summary>The instances bindings name (service clients, connectors): sharing, loading and disposal.</summary>
 public sealed partial class BindingHost
 {
     /// <summary>

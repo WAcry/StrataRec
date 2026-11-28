@@ -10,7 +10,7 @@ namespace StrataRec.Core.Tables;
 /// <para>An operator changes the table only through its context, which checks each change against the effects the node
 /// declared: the ranking (<c>Retain</c>, <c>Truncate</c>, <c>SetOrder</c>), new rows (<c>AppendRows</c>) and the node's
 /// own output columns (<c>Output</c>). Compaction, checkpoints and rollback belong to the executor.</para>
-/// <para>A struct over the table: taking it costs nothing, and every member reads the table as it is now.</para>
+/// <para>A struct over the table: every member reads the table as it is now.</para>
 /// </remarks>
 public readonly struct CandidateTableView
 {
@@ -43,7 +43,6 @@ public readonly struct CandidateTableView
     /// <summary>Live physical rows in rank order (best first).</summary>
     public ReadOnlySpan<int> LiveRows => _table.Rows.Order;
 
-    /// <summary>Number of live rows.</summary>
     public int LiveCount => _table.Rows.Count;
 
     /// <summary>True when the physical row is live (in the ranking); a dropped row stays in the table until compaction.</summary>
@@ -53,8 +52,7 @@ public readonly struct CandidateTableView
     public EntityKey GetKey(int physicalRow) => _table.GetKey(physicalRow);
 
     /// <summary>
-    /// The int64 entity id of each physical row, indexed by row (for tie-breaks and lookups over many rows without a key
-    /// per row); empty when the table's keys are strings.
+    /// The int64 entity id of each physical row, indexed by row; empty when the table's keys are strings.
     /// </summary>
     public ReadOnlySpan<long> Int64Ids => _table.KeyType == EntityKeyType.Int64 ? _table.Int64Ids.Span : default;
 

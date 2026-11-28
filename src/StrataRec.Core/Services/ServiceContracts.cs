@@ -23,7 +23,7 @@ public enum TensorElementType : byte
     Text,
 }
 
-/// <summary>Name, element type and shape of a service input or output. A dimension of -1 is dynamic (batch).</summary>
+/// <summary>A dimension of -1 is dynamic (batch).</summary>
 public sealed record TensorSpec(string Name, TensorElementType ElementType, IReadOnlyList<int> Shape);
 
 /// <summary>Inputs and outputs a version of a service's operation accepts and produces; checked at load time.</summary>
@@ -72,7 +72,6 @@ public readonly struct TensorValues
     /// <summary>0 for default values, which hold none.</summary>
     public TensorElementType ElementType { get; }
 
-    /// <summary>The number of elements.</summary>
     public int Length { get; }
 
     public ReadOnlyMemory<bool> Bool => As<bool>();
@@ -210,32 +209,25 @@ public readonly struct NamedInput
     public ReadOnlySpan<int> Shape => _shape;
 
     /// <summary>
-    /// The tensor's elements, exactly the product of the <see cref="Shape"/>'s dimensions; default (none) for text and for a
-    /// missing value. Built from a longer buffer (one rented from a pool), it is that buffer's first elements: the slack is
-    /// no part of the value, for a client or a digest.
+    /// The tensor's elements, exactly the product of the <see cref="Shape"/>'s dimensions; default (none) for text and
+    /// for a missing value. Built from a longer buffer, it is that buffer's first elements: the slack is no part of the
+    /// value.
     /// </summary>
     public TensorValues Values { get; }
 
-    /// <summary>The text value.</summary>
     /// <exception cref="InvalidOperationException">The input is a tensor.</exception>
     public string Text => _text ?? throw new InvalidOperationException($"Input '{Name}' is a {TensorValues.Name(ElementType)} tensor, not text.");
 
-    /// <inheritdoc cref="TensorValues.Bool"/>
     public ReadOnlyMemory<bool> Bool => Values.Bool;
 
-    /// <inheritdoc cref="TensorValues.Int32"/>
     public ReadOnlyMemory<int> Int32 => Values.Int32;
 
-    /// <inheritdoc cref="TensorValues.Int64"/>
     public ReadOnlyMemory<long> Int64 => Values.Int64;
 
-    /// <inheritdoc cref="TensorValues.Float32"/>
     public ReadOnlyMemory<float> Float32 => Values.Float32;
 
-    /// <inheritdoc cref="TensorValues.Float64"/>
     public ReadOnlyMemory<double> Float64 => Values.Float64;
 
-    /// <inheritdoc cref="TensorValues.String"/>
     public ReadOnlyMemory<string> String => Values.String;
 
     /// <summary>A tensor of <typeparamref name="T"/>'s element type (see <see cref="TensorValues.TypeOf{T}"/>).</summary>
@@ -299,7 +291,6 @@ public readonly struct NamedInput
     }
 }
 
-/// <summary>Per-call options.</summary>
 /// <param name="Seed">The request's seed (<c>ctx.request.seed</c>), for a service that samples.</param>
 /// <param name="MaxOutputTokens">
 /// The most tokens a generative service may produce for this call; a client that stops there says so
@@ -308,10 +299,9 @@ public readonly struct NamedInput
 public readonly record struct ServiceCallOptions(long? Seed = null, int? MaxOutputTokens = null);
 
 /// <summary>
-/// One call of a service: named inputs in; named outputs, text and items out. What a call carries depends on
-/// its use. A model scoring rows sends a tensor per input whose leading dimension is the rows, the rows'
-/// <see cref="Items"/>, and reads an output per row; a recall sends its query's values and reads the items the service
-/// adds, up to <see cref="Limit"/>; a generative call sends text and reads text; a filter sends the candidates as
+/// A model scoring rows sends a tensor per input whose leading dimension is the rows, the rows' <see cref="Items"/>,
+/// and reads an output per row; a recall sends its query's values and reads the items the service adds, up to
+/// <see cref="Limit"/>; a generative call sends text and reads text; a filter sends the candidates as
 /// <see cref="Items"/> and reads a flag per item.
 /// </summary>
 /// <remarks>
@@ -340,19 +330,19 @@ public sealed class ServiceCall
     public int BatchSize { get; init; }
 
     /// <summary>
-    /// The entity of each row of the batch, in the order of the rows of row-wise tensors, for a call about rows (a model
-    /// scoring them, a service filtering them); empty for a call about no rows.
+    /// The entity of each row of the batch, in the order of the rows of row-wise tensors, for a call about rows; empty
+    /// for a call about no rows.
     /// </summary>
     /// <remarks>
     /// One per row (<see cref="BatchSize"/> of them). In such a call an input whose leading dimension is the batch size
     /// is per item, row <c>i</c> its slice <c>i</c>; every other input is shared by the items, and its leading
-    /// dimension is 1 (<c>[1, d]</c>, as the model operators send a broadcast value), or it is a scalar or a text.
+    /// dimension is 1 (<c>[1, d]</c>), or it is a scalar or a text.
     /// </remarks>
     public ReadOnlyMemory<Keys.EntityKey> Items { get; init; }
 
     /// <summary>
-    /// The named outputs the caller reads; empty when it reads none (a recall reads only the items it adds). A service may
-    /// compute only these. Only these are recorded and replayed.
+    /// The named outputs the caller reads; empty when it reads none. A service may compute only these. Only these are
+    /// recorded and replayed.
     /// </summary>
     public ReadOnlyMemory<string> Outputs { get; init; }
 
@@ -361,10 +351,9 @@ public sealed class ServiceCall
     /// as every call with <see cref="Items"/> does.
     /// </summary>
     /// <remarks>
-    /// A service's items for a smaller limit are the start of its items for a larger one, as a ranked list's are. A
-    /// call that reads named outputs is answered only by an answer to its own limit: an output or a text may say how
-    /// many items it was asked for. The items a service adds past a limit (<c>ServiceResponse.Dropped</c>) count only
-    /// for that limit.
+    /// A service's items for a smaller limit are the start of its items for a larger one. A call that reads named
+    /// outputs is answered only by an answer to its own limit. The items a service adds past a limit
+    /// (<c>ServiceResponse.Dropped</c>) count only for that limit.
     /// </remarks>
     public int Limit { get; init; }
 
@@ -391,8 +380,8 @@ public sealed class ServiceCall
 }
 
 /// <summary>
-/// Receives a call's answer. Its buffers are the caller's: the client writes into them during the call and keeps none of
-/// them afterwards; an answer written after the call completed is ignored.
+/// Its buffers are the caller's: the client writes into them during the call and keeps none of them afterwards; an
+/// answer written after the call completed is ignored.
 /// </summary>
 public interface IServiceResponse
 {
@@ -408,8 +397,8 @@ public interface IServiceResponse
     void SetText(string name, string text);
 
     /// <summary>
-    /// Adds an item, in rank order, with its score: what a recall returns. Items beyond the call's
-    /// <see cref="ServiceCall.Limit"/> are dropped and counted; a non-finite score is stored as 0.
+    /// Adds an item, in rank order, with its score. Items beyond the call's <see cref="ServiceCall.Limit"/> are dropped
+    /// and counted; a non-finite score is stored as 0.
     /// </summary>
     void AddItem(long entityId, double score);
 
@@ -417,7 +406,6 @@ public interface IServiceResponse
     void AddItem(string entityId, double score);
 }
 
-/// <summary>Outcome of a service call.</summary>
 /// <remarks>
 /// A generative client reports what it knows about its output with the optional properties, e.g.
 /// <c>ServiceStatus.Ok with { OutputTokens = 37, Truncated = false }</c>. The engine counts them for every call
@@ -438,10 +426,9 @@ public readonly record struct ServiceStatus(bool Succeeded, string? Error = null
 }
 
 /// <summary>
-/// An external service the pipeline calls: a model server, a retrieval index, a filter, any business logic
-/// behind a protocol. It knows nothing about candidates, rows or columns: operators bind columns, queries and parameters
-/// to inputs, and outputs and items to columns and rows. Thread-safe: every request of every plan that binds it calls the
-/// one instance concurrently (the lifetime contract is on <see cref="Bindings.BindingContext"/>).
+/// An external service the pipeline calls. It knows nothing about candidates, rows or columns. Thread-safe: every
+/// request of every plan that binds it calls the one instance concurrently (the lifetime contract is on
+/// <see cref="Bindings.BindingContext"/>).
 /// </summary>
 /// <remarks>
 /// A call only reads: it must not change what a later call, request or anyone else sees (no write, no counter, no
@@ -450,17 +437,17 @@ public readonly record struct ServiceStatus(bool Succeeded, string? Error = null
 public interface IServiceClient
 {
     /// <summary>
-    /// The inputs and outputs of a version of the service, for checking the operators that call it at load time.
-    /// It may need I/O (a model server's metadata): the engine asks only when it loads a plan, after the client's
-    /// own load (<see cref="Bindings.ILoadable"/>), for every version the plan's nodes may call, concurrently, on the
-    /// thread pool (synchronous work before the first await included) and within the load's bound; the token is cancelled
-    /// when nobody waits for the answer any more, and the instance is not disposed before the method returned. A plan
+    /// The inputs and outputs of a version of the service, for checking the operators that call it at load time. It may
+    /// need I/O: the engine asks only when it loads a plan, after the client's own load
+    /// (<see cref="Bindings.ILoadable"/>), for every version the plan's nodes may call, concurrently, on the thread
+    /// pool (synchronous work before the first await included) and within the load's bound; the token is cancelled when
+    /// nobody waits for the answer any more, and the instance is not disposed before the method returned. A plan
     /// compiled without an engine (<c>stratarec validate</c>) asks a client that needs no load, on its own thread, and
     /// uses the answer only if it is immediate.
     /// </summary>
     /// <remarks>
-    /// Only operators that check a signature ask: the model operators. A service no model operator calls (a recall, a
-    /// filter) need not answer; by default it throws, and a model operator bound to it reports that at its node.
+    /// Only operators that check a signature ask: the model operators. A service no model operator calls need not
+    /// answer; by default it throws, and a model operator bound to it reports that at its node.
     /// </remarks>
     /// <exception cref="ArgumentException">The service has no such version; reported at the node. A
     /// <see cref="Bindings.BindingException"/> adds a hint.</exception>

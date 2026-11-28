@@ -9,8 +9,7 @@ using System.Text.Json.Serialization;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// An immutable <see href="https://www.rfc-editor.org/rfc/rfc6901">RFC 6901</see> JSON Pointer, the path syntax
-/// StrataRec uses for patch footprints, policy scopes and the location of every configuration error.
+/// An immutable <see href="https://www.rfc-editor.org/rfc/rfc6901">RFC 6901</see> JSON Pointer.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -58,7 +57,6 @@ public sealed class JsonPointer : IEquatable<JsonPointer>, IComparable<JsonPoint
     /// <summary>Number of reference tokens; 0 for <see cref="Root"/>.</summary>
     public int Depth => _tokens.Length;
 
-    /// <summary>True for the pointer to the whole document.</summary>
     public bool IsRoot => _tokens.IsEmpty;
 
     /// <summary>The last (innermost) unescaped token, or <see langword="null"/> for <see cref="Root"/>.</summary>
@@ -125,7 +123,7 @@ public sealed class JsonPointer : IEquatable<JsonPointer>, IComparable<JsonPoint
 
     /// <summary>
     /// Computes the pointer from the root of <paramref name="node"/>'s tree (the ancestor without a parent) to
-    /// <paramref name="node"/>. Useful for reporting where in a parsed document a problem was found.
+    /// <paramref name="node"/>.
     /// </summary>
     public static JsonPointer FromNode(JsonNode node)
     {

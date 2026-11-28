@@ -35,7 +35,7 @@ public sealed class ExperimentArtifact
     /// columns, e.g. <c>{ "exp_freshness_calibration": ["score.final"] }</c>, a request column written as
     /// <c>req.&lt;name&gt;</c>. The two experiments' interaction warnings on those columns are not repeated, so a
     /// reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction
-    /// of this release needs is a warning, so a review does not outlive the interaction it was for.
+    /// of this release needs is a warning.
     /// </summary>
     public Dictionary<string, List<string>>? ReviewedInteractions { get; init; }
 }

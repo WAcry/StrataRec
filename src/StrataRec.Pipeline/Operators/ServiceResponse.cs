@@ -53,8 +53,8 @@ public sealed class ServiceResponse : IServiceResponse
     public ReadOnlySpan<double> Scores => _scores.AsSpan(0, Count);
 
     /// <summary>
-    /// Items the service added past the call's limit, dropped because the response was full; 0 once the call was abandoned.
-    /// Not <see cref="ServiceStatus.Truncated"/>, which says a generation was cut short.
+    /// Items the service added past the call's limit; 0 once the call was abandoned. Not
+    /// <see cref="ServiceStatus.Truncated"/>, which says a generation was cut short.
     /// </summary>
     public int Dropped => Volatile.Read(ref _abandoned) ? 0 : _dropped;
 

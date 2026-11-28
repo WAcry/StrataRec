@@ -30,7 +30,6 @@ public enum FeatureState : byte
     Failed,
 }
 
-/// <summary>Outcome of making a set of features available.</summary>
 public readonly record struct FeatureFillResult(FeatureState State, string? Error = null)
 {
     public bool Failed => State == FeatureState.Failed;
@@ -47,8 +46,7 @@ public readonly record struct FeatureFillResult(FeatureState State, string? Erro
 /// underneath.</para>
 /// <para>Memory: every connector call holds the request's <see cref="RequestMemory"/> until the connector really
 /// completes, even when the request stopped waiting for it at the source timeout or deadline; the background context
-/// fetch holds it until its last group is stored and its last derived feature computed. Buffers therefore never return
-/// to the pool while anything may still write or read them.</para>
+/// fetch holds it until its last group is stored and its last derived feature computed.</para>
 /// </remarks>
 public sealed partial class FeatureFetcher : IIoTracker
 {
@@ -80,7 +78,7 @@ public sealed partial class FeatureFetcher : IIoTracker
     /// <param name="requestId">Sample request id for failure summaries.</param>
     /// <param name="events">Source health and failure summaries; null when the engine has no logger.</param>
     /// <param name="hook">Records every connector call, or answers them from a recording; null for ordinary requests.</param>
-    /// <param name="seed">The request's seed, which a source in mode service sends with its call, as a node does.</param>
+    /// <param name="seed">The request's seed, which a source in mode service sends with its call.</param>
     public FeatureFetcher(
         FeaturePlan plan,
         CandidateTable table,
@@ -133,14 +131,13 @@ public sealed partial class FeatureFetcher : IIoTracker
     /// <summary>
     /// Completes when every external operation this request started has really finished: each connector or store call
     /// that did not answer synchronously (also one whose result was rejected because it arrived after its time budget),
-    /// both its connector and its call site (which records it), each cache read's resolution of its misses, and the whole
-    /// background context fetch. Each releases its hold on the request memory just before it counts as finished.
+    /// both its connector and its call site, each cache read's resolution of its misses, and the whole background
+    /// context fetch. Each releases its hold on the request memory just before it counts as finished.
     /// </summary>
     /// <remarks>
-    /// The set of operations can grow while this waits. Each registers before its parent, which is tracked (the context
-    /// fetch, the read's resolution), completes, so a wait that finds nothing registered since it began has seen
-    /// everything: this waits round after round until one finds nothing new, and every round to its end before it
-    /// rethrows the first failure.
+    /// The set of operations can grow while this waits. Each registers before its parent completes, so a wait that
+    /// finds nothing registered since it began has seen everything: this waits round after round until one finds
+    /// nothing new, and every round to its end before it rethrows the first failure.
     /// </remarks>
     public async Task WhenIoCompleteAsync()
     {
@@ -229,22 +226,21 @@ public sealed partial class FeatureFetcher : IIoTracker
     }
 
     /// <summary>
-    /// Ensures every listed feature is filled for <paramref name="rows"/> only: distinct live physical rows, the output's
-    /// returned rows, known once the final order is, when no reader is left for the other live rows. The waves
-    /// of <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/>, but a fetch or a table read takes the keys of these
-    /// rows, a derived feature is computed for them, and only they are marked filled, so a later whole fill fills the
-    /// rest. A fetch already in flight (a prefetch) that asked for the key of one of these rows still unfilled on a needed
-    /// feature is completed for every live row it covers, as for any reader; any other is not waited for. With no rows
-    /// nothing is filled or waited for, context features included: no row reads them.
+    /// Ensures every listed feature is filled for <paramref name="rows"/> only: distinct live physical rows. The waves
+    /// of <see cref="EnsureAsync(ReadOnlySpan{int}, CancellationToken)"/>, but a fetch or a table read takes the keys
+    /// of these rows, a derived feature is computed for them, and only they are marked filled, so a later whole fill
+    /// fills the rest. A fetch already in flight (a prefetch) that asked for the key of one of these rows still
+    /// unfilled on a needed feature is completed for every live row it covers; any other is not waited for. With no
+    /// rows nothing is filled or waited for, context features included.
     /// </summary>
     /// <remarks>
     /// <para>The state, one per feature for the request, is recorded by the rules of a whole fill applied to the rows
     /// this fill fills, and a failure is never lowered. The state returned is the features' state for the request, so
     /// one that failed in an earlier fill fails here too.</para>
     /// <para>A prefetch these rows need nothing from is left in flight, settled as an unread one when the request ends
-    /// (or completed by a later whole fill). Need is judged by key, as the prefetch's backfill matches rows: a row of
-    /// these still unfilled on a feature it carries, whose key is one of its keys. One such row is enough: the prefetch
-    /// is completed, its failure recorded, and the rows whose keys it lacks are fetched by this fill.</para>
+    /// (or completed by a later whole fill). Need is judged by key: a row of these still unfilled on a feature it
+    /// carries, whose key is one of its keys. One such row is enough: the prefetch is completed, its failure recorded,
+    /// and the rows whose keys it lacks are fetched by this fill.</para>
     /// <para>The features and rows are read before this returns, so the caller may reuse their storage.</para>
     /// </remarks>
     public ValueTask<FeatureFillResult> EnsureAsync(ReadOnlySpan<int> features, ReadOnlySpan<int> rows, CancellationToken cancellationToken)

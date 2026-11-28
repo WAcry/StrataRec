@@ -16,7 +16,6 @@ namespace StrataRec.Core.Bindings;
 /// outside the shared instances, and its context has no secret store. It is never loaded or disposed: it does its I/O,
 /// and frees what it holds, in its <c>RunAsync</c>, which the table's host runs and cancels.</para>
 /// </remarks>
-/// <typeparam name="TInstance">The contract the instance implements, e.g. a service client.</typeparam>
 public interface IBindingFactory<out TInstance>
     where TInstance : class
 {

@@ -7,7 +7,7 @@ namespace StrataRec.Logging;
 /// <summary>Delivery class of a tap. The two classes use separate queues.</summary>
 public enum LogDelivery : byte
 {
-    /// <summary>Dropped (and counted) when its queue is full; for funnel analysis and debugging.</summary>
+    /// <summary>Dropped (and counted) when its queue is full.</summary>
     BestEffort = 1,
 
     /// <summary>At-least-once with gap detection: every batch gets a per-process sequence number.</summary>
@@ -15,8 +15,7 @@ public enum LogDelivery : byte
 }
 
 /// <summary>
-/// One tap firing: a fixed envelope plus a columnar payload. Batches own their data, so the request's
-/// candidate table can be returned to the pool while the batch waits in a queue.
+/// One tap firing: a fixed envelope plus a columnar payload. Batches own their data.
 /// </summary>
 public sealed class LogBatch
 {
@@ -27,10 +26,10 @@ public sealed class LogBatch
     public required string PipelineId { get; init; }
 
     /// <summary>
-    /// For a run a node of another pipeline called: that pipeline, the node and the call's place among the node's calls in
-    /// its run, as <c>feed/promoted#0</c>; for a run a called run called, the calls from the request's pipeline down,
-    /// as <c>home/blend#1 &gt; inner/blend#0</c>. Null for a run of the pipeline the request named. Two runs of one
-    /// pipeline in a request log under the same request and pipeline; this tells them apart.
+    /// For a run a node of another pipeline called: that pipeline, the node and the call's place among the node's calls
+    /// in its run, as <c>feed/promoted#0</c>; for a run a called run called, the calls from the request's pipeline
+    /// down, as <c>home/blend#1 &gt; inner/blend#0</c>. Null for a run of the pipeline the request named. Two runs of
+    /// one pipeline in a request log under the same request and pipeline.
     /// </summary>
     public string? CalledBy { get; init; }
 
@@ -39,9 +38,9 @@ public sealed class LogBatch
 
     /// <summary>
     /// For the record of a run that did not happen because a cache answered its call (<c>$experiments</c> of a called
-    /// pipeline, written so that exposure counts do not depend on the hit rate): the request whose run computed the
-    /// result, that request's time, and the call that ran it there, which is the <see cref="CalledBy"/> of what that
-    /// run logged. The called pipeline's other taps wrote under that request and that call. Null for a run.
+    /// pipeline): the request whose run computed the result, that request's time, and the call that ran it there, which
+    /// is the <see cref="CalledBy"/> of what that run logged. The called pipeline's other taps wrote under that request
+    /// and that call. Null for a run.
     /// </summary>
     public string? CachedFromRequestId { get; init; }
 
@@ -77,8 +76,7 @@ public sealed class LogBatch
     public int[]? RanksBefore { get; init; }
 
     /// <summary>
-    /// Inclusion probability of every row given the request was sampled: coordinated sampling keeps each row
-    /// with the same probability, so the batch holds one number, not one per row.
+    /// Inclusion probability of every row given the request was sampled.
     /// </summary>
     public required double RowProbability { get; init; }
 
@@ -86,8 +84,8 @@ public sealed class LogBatch
     public required LogColumn[] Columns { get; init; }
 
     /// <summary>
-    /// Per-request context fields (<c>context</c> of the tap), in the order of <see cref="LogSchema.Context"/>: field i's
-    /// type is <c>Schema.Context[i].Type</c>, by which a sink narrows the value (held promoted, as every value is).
+    /// Per-request context fields (<c>context</c> of the tap), in the order of <see cref="LogSchema.Context"/>: field
+    /// i's type is <c>Schema.Context[i].Type</c>, by which a sink narrows the value (held promoted).
     /// </summary>
     public required (string Name, ScalarValue Value)[] Context { get; init; }
 

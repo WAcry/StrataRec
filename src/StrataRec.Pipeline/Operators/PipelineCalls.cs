@@ -33,7 +33,6 @@ public sealed class PipelineInterface
     /// <summary>The pipelines its own nodes call, in any arm, sorted.</summary>
     public ImmutableArray<string> Calls { get; init; } = [];
 
-    /// <summary>The interface of a compiled plan.</summary>
     public static PipelineInterface Of(ExecutionPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
@@ -96,7 +95,6 @@ public enum PipelineLookupStatus
     Cycle,
 }
 
-/// <summary>The answer of an <see cref="IPipelineDirectory"/>.</summary>
 /// <param name="Interface">The pipeline's interface when <see cref="PipelineLookupStatus.Known"/>.</param>
 /// <param name="Detail">For <see cref="PipelineLookupStatus.Unknown"/>, a hint (a pipeline of a close name); for
 /// <see cref="PipelineLookupStatus.Cycle"/>, the calls from the pipeline back to itself, e.g. <c>a → b → a</c>; for
@@ -145,7 +143,6 @@ public sealed class PipelineCall
         Interface = known;
     }
 
-    /// <summary>The pipeline called.</summary>
     public string PipelineId { get; }
 
     /// <summary>
@@ -337,7 +334,6 @@ public sealed class PipelineCall
     private sealed record Checked(WeakReference<ExecutionPlan> Plan, string? Error);
 }
 
-/// <summary>What a call of a pipeline returned (<see cref="OperatorContext.CallPipelineAsync"/>).</summary>
 public sealed class PipelineCallResult
 {
     internal PipelineCallResult(string pipelineId, bool succeeded, string? error, ResultColumns columns, ResultValues values, CachedFrom? cached = null)
@@ -353,8 +349,8 @@ public sealed class PipelineCallResult
     public string PipelineId { get; }
 
     /// <summary>
-    /// The pipeline ran and returned a result. False when it failed, is not served, does not fit the call, or had no time
-    /// left: <see cref="Error"/> says which, and <see cref="Columns"/> and <see cref="Values"/> are empty.
+    /// False when it failed, is not served, does not fit the call, or had no time left: <see cref="Error"/> says which,
+    /// and <see cref="Columns"/> and <see cref="Values"/> are empty.
     /// </summary>
     public bool Succeeded { get; }
 
@@ -380,9 +376,8 @@ public sealed class PipelineCallResult
     public string CalledBy { get; internal set; } = string.Empty;
 
     /// <summary>
-    /// The pipeline ran and returned a result with a node of its own degraded, failed and skipped, or skipped for lack of
-    /// time or input. The calling node is degraded with it, whatever the operator does with the rows: what a node
-    /// builds on an incomplete answer is incomplete, as with a service's partial answer.
+    /// The pipeline ran and returned a result with a node of its own degraded, failed and skipped, or skipped for lack
+    /// of time or input. The calling node is degraded with it, whatever the operator does with the rows.
     /// </summary>
     public bool Degraded { get; internal init; }
 

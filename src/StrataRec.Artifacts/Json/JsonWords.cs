@@ -11,7 +11,7 @@ namespace StrataRec.Artifacts.Json;
 /// </summary>
 public static class JsonWords
 {
-    /// <summary>Longest value quoted in full; longer ones are cut, so a message stays one readable line.</summary>
+    /// <summary>Longest value quoted in full; longer ones are cut.</summary>
     public const int MaxQuotedLength = 40;
 
     /// <summary>

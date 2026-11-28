@@ -19,7 +19,7 @@ public abstract class CompiledExpression
     /// <summary>True when the expression reads any <c>col.*</c> symbol (otherwise it is request-level).</summary>
     public abstract bool IsRowDependent { get; }
 
-    /// <summary>Every symbol the expression reads (deduplicated), for dependency analysis and fetch planning.</summary>
+    /// <summary>Every symbol the expression reads (deduplicated).</summary>
     public abstract IReadOnlyList<Symbol> Reads { get; }
 
     /// <summary>

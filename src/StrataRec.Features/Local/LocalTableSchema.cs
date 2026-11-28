@@ -9,8 +9,8 @@ namespace StrataRec.Features.Local;
 /// what a record's version means and which maintenance applies.</summary>
 public enum LocalTableMode : byte
 {
-    /// <summary>Snapshots and an update stream push every entity in. The version is the event version of the update;
-    /// a key that is not in the table has no value (layer 3).</summary>
+    /// <summary>Snapshots and an update stream push every entity in. The version is the event version of the update; a
+    /// key that is not in the table has no value.</summary>
     Local = 1,
 
     /// <summary>Fetched values are written back on a miss. The version is the write time, so records can expire and be
@@ -77,7 +77,6 @@ public sealed class LocalTableSchema
     /// <summary>Logical source name, e.g. <c>item_store</c>.</summary>
     public string Source { get; }
 
-    /// <summary>Entity name, e.g. <c>item</c>.</summary>
     public string Entity { get; }
 
     /// <summary>The entity's key layout. What the table stores is its part types in order (<see cref="EntityKeyLayout.TypeText"/>).</summary>

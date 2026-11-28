@@ -48,8 +48,8 @@ public static class ConfigTypes
     };
 
     /// <summary>
-    /// Parses a type written at <paramref name="site"/>. On failure, <paramref name="message"/> says what is wrong with the
-    /// spelling and <paramref name="hint"/> suggests one (or lists the valid ones).
+    /// On failure, <paramref name="message"/> says what is wrong with the spelling and <paramref name="hint"/> suggests
+    /// one (or lists the valid ones).
     /// </summary>
     /// <param name="type">The type; for a map parameter, the type of its values.</param>
     /// <param name="isMap">True for a parameter written <c>map&lt;string,T&gt;</c>.</param>

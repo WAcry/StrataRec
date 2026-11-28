@@ -8,7 +8,7 @@ namespace StrataRec.Expressions;
 
 public static partial class ExpressionCompiler
 {
-    /// <summary>Longest accepted source text in characters; bounds compile-time work for unreviewed drafts.</summary>
+    /// <summary>Longest accepted source text in characters.</summary>
     public const int MaxSourceLength = 64 * 1024;
 
     private static readonly CompileOptions DefaultOptions = new();

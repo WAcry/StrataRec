@@ -52,7 +52,6 @@ public sealed class ResultValues
 
     public ResultValue this[int index] => _values[index];
 
-    /// <summary>The value named <paramref name="name"/>, as <c>result.Values["recalled"].AsInt64()</c> reads it.</summary>
     /// <exception cref="KeyNotFoundException">The output has no such value.</exception>
     public ScalarValue this[string name] =>
         TryGetValue(name, out var value) ? value : throw new KeyNotFoundException($"The output has no value '{name}'.");

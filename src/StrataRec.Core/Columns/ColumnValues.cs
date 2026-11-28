@@ -6,8 +6,8 @@ using StrataRec.Core.Values;
 namespace StrataRec.Core.Columns;
 
 /// <summary>
-/// Row-at-a-time conversion between column buffers and <see cref="ScalarValue"/>. Convenient for cold paths
-/// (defaults, request-level values, results, logs, tests); hot loops should use the typed buffers directly.
+/// Row-at-a-time conversion between column buffers and <see cref="ScalarValue"/>. Convenient for cold paths; hot loops
+/// should use the typed buffers directly.
 /// </summary>
 public static class ColumnValues
 {
@@ -116,9 +116,8 @@ public static class ColumnValues
 
     /// <summary>
     /// Like <see cref="Set"/>, but returns false and leaves the row untouched when the value cannot be stored as the
-    /// column's type: an int64 outside the range of an <c>int32</c> column, a <c>list&lt;int32&gt;</c> column's list with
-    /// any element outside it, or a list of another length than a <c>list&lt;E,N&gt;</c> column's. Never wraps, and never
-    /// stores a list of another length.
+    /// column's type: an int64 outside the range of an <c>int32</c> column, a <c>list&lt;int32&gt;</c> column's list
+    /// with any element outside it, or a list of another length than a <c>list&lt;E,N&gt;</c> column's.
     /// </summary>
     public static bool TrySet(ColumnBuffer column, int row, in ScalarValue value)
     {
@@ -212,8 +211,7 @@ public static class ColumnValues
 
     /// <summary>
     /// Why a present value does not fit <paramref name="type"/> (<see cref="FitsStorage"/> is false), as the end of a
-    /// sentence: <c>outside the int32 range [...]</c>, <c>a list of 3 elements, not 64</c>. For the errors of writers that
-    /// refuse it.
+    /// sentence: <c>outside the int32 range [...]</c>, <c>a list of 3 elements, not 64</c>.
     /// </summary>
     public static string Misfit(in ScalarValue value, ColumnType type)
     {
@@ -249,7 +247,7 @@ public static class ColumnValues
     /// The value as storage of <paramref name="type"/> holds it: float storage holds an integer as a float, float32
     /// storage rounds each float to float32 (one beyond the range becomes an infinity) and the value then prints as the
     /// float it is; every other type holds the promoted value unchanged. For values published without a column, such as
-    /// a context-level feature or its default, so they are what the same feature in a candidate column would be.
+    /// a context-level feature or its default.
     /// </summary>
     /// <remarks>A value already in its stored form is returned as it is, without allocating.</remarks>
     public static ScalarValue AsStored(in ScalarValue value, ColumnType type)
@@ -300,12 +298,11 @@ public static class ColumnValues
 
     /// <summary>
     /// A request-level value (a context feature's, a request column's) as storage of <paramref name="type"/> holds it
-    /// (<see cref="AsStored"/>), and whether the type holds it: what a column's writer and its commit decide for a value
-    /// per row, decided for one value. <see cref="StorageFit.NonFinite"/> is NaN/±∞ in float storage (a float beyond the
-    /// float32 range too, which float32 storage rounds to an infinity), or a float list holding one;
-    /// <see cref="StorageFit.OutOfRange"/> an integer or list element outside int32 storage, or a list of another length
-    /// than a <c>list&lt;E,N&gt;</c>'s. The caller replaces such a value with its default or missing, and
-    /// counts it, so a value of a declared type is the same wherever it is held.
+    /// (<see cref="AsStored"/>), and whether the type holds it. <see cref="StorageFit.NonFinite"/> is NaN/±∞ in float
+    /// storage (a float beyond the float32 range too, which float32 storage rounds to an infinity), or a float list
+    /// holding one; <see cref="StorageFit.OutOfRange"/> an integer or list element outside int32 storage, or a list of
+    /// another length than a <c>list&lt;E,N&gt;</c>'s. The caller replaces such a value with its default or missing,
+    /// and counts it.
     /// </summary>
     public static StorageFit Store(ref ScalarValue value, ColumnType type)
     {
@@ -339,9 +336,8 @@ public static class ColumnValues
 
     /// <summary>
     /// Replaces non-finite values on the given rows with <paramref name="defaultValue"/> (or marks them missing when
-    /// the default is missing). Returns the number of rows changed (metric <c>column_nonfinite_total</c>). A list row with
-    /// one non-finite element is replaced as a whole, as a list with an element out of int32 range is: a list with an
-    /// element taken out is wrong data.
+    /// the default is missing). Returns the number of rows changed (metric <c>column_nonfinite_total</c>). A list row
+    /// with one non-finite element is replaced as a whole.
     /// </summary>
     public static int SanitizeNonFinite(ColumnBuffer column, ReadOnlySpan<int> rows, in ScalarValue defaultValue)
     {
@@ -397,7 +393,6 @@ public static class ColumnValues
         return changed;
     }
 
-    /// <summary>True when every element is finite.</summary>
     public static bool AllFinite(ReadOnlySpan<double> values)
     {
         foreach (var v in values)
@@ -411,7 +406,6 @@ public static class ColumnValues
         return true;
     }
 
-    /// <inheritdoc cref="AllFinite(ReadOnlySpan{double})"/>
     public static bool AllFinite(ReadOnlySpan<float> values)
     {
         foreach (var v in values)

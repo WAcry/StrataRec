@@ -84,9 +84,9 @@ public sealed record PlanEnvironment
 
     /// <summary>
     /// The registered binding types as the bindings schema describes them: each with the kinds of binding that can name
-    /// it, by the contract its factory creates, and the settings type it binds for that contract, read as a binding of the
-    /// kind reads it (a factory of two contracts may bind different settings for each). A factory of no such contract is
-    /// named by no binding: neither described nor a capability.
+    /// it, by the contract its factory creates, and the settings type it binds for that contract (a factory of two
+    /// contracts may bind different settings for each). A factory of no such contract is named by no binding: neither
+    /// described nor a capability.
     /// </summary>
     public List<BindingSchemaSource> BindingSchemaSources()
     {
@@ -139,7 +139,7 @@ public sealed class SchemaSources
     /// <summary>Parameter schema entries declared by arms (add-only).</summary>
     public IReadOnlyDictionary<string, ParamSpec> ExtraParamSchema { get; init; } = new Dictionary<string, ParamSpec>();
 
-    /// <summary>Leaves only some arm sets (new keys of map parameters, arm-declared parameters): leaf → map/param name.</summary>
+    /// <summary>Leaves only some arm sets (new keys of map parameters, arm-declared parameters).</summary>
     public IReadOnlyCollection<string> ExtraParamLeaves { get; init; } = Array.Empty<string>();
 
     /// <summary>Funnel groups declared by arms (add-only).</summary>
@@ -928,7 +928,6 @@ public sealed class PlanBuilder
         return null;
     }
 
-    /// <summary>Compiles the output section.</summary>
     public OutputPlan? CompileOutput()
     {
         var output = _sources!.Pipeline.Output;
@@ -1031,8 +1030,7 @@ public sealed class PlanBuilder
     /// </summary>
     /// <remarks>
     /// Each rule here looks at a few nodes and taps; <see cref="DataFlowScopes"/> says which, for a caller that cannot
-    /// check every arm combination. A new rule needs its scope there, or past that limit it is not checked for the
-    /// combinations of three layers and more.
+    /// check every arm combination.
     /// </remarks>
     public void ValidateDataFlow(
         IReadOnlyList<CompiledNode> timeline,
@@ -2425,7 +2423,7 @@ public sealed class PlanBuilder
         return [.. called];
     }
 
-    /// <summary>Assembles the final plan. Call after every node, the output and the feature plan are compiled.</summary>
+    /// <summary>Call after every node, the output and the feature plan are compiled.</summary>
     public ExecutionPlan Build(
         string manifestId,
         FeaturePlan features,

@@ -14,8 +14,7 @@ public sealed class RecResultJsonOptions
 }
 
 /// <summary>
-/// A <see cref="RecResult"/> as JSON: one document for every host and the CLI's <c>run</c>, so what a service answers and
-/// what a developer sees locally read alike.
+/// A <see cref="RecResult"/> as JSON: one document for every host and the CLI's <c>run</c>.
 /// </summary>
 /// <remarks>
 /// <para>The document: <c>request_id</c>, <c>succeeded</c>, for a failure <c>error_kind</c> (<see cref="Name"/>),
@@ -25,11 +24,11 @@ public sealed class RecResultJsonOptions
 /// any, and <c>elapsed_ms</c>; then <c>column_producers</c> when asked for, and <c>trace</c>,
 /// <c>logs</c> and <c>explanation</c> (<see cref="WriteExplanation"/>) when the request asked for them
 /// (<see cref="DebugOptions"/>).</para>
-/// <para>An item's output columns are an object of their own, so no column name (<c>id</c>, <c>rank</c>) can collide with
-/// the item's members. An int64 id is a JSON number, written exactly; a string id a string. A missing value is
-/// <c>null</c> (never 0), and so is a non-finite float, which JSON cannot represent; floats are written exactly, not
-/// rounded: the shortest text that reads back as the same double, or for a float32 column as the same float.</para>
-/// <para>Formatting and escaping are the writer's: a service writes compact, the CLI indented.</para>
+/// <para>An item's output columns are an object of their own, so no column name (<c>id</c>, <c>rank</c>) can collide
+/// with the item's members. An int64 id is a JSON number, written exactly; a string id a string. A missing value is
+/// <c>null</c> (never 0), and so is a non-finite float; floats are written exactly, not rounded: the shortest text that
+/// reads back as the same double, or for a float32 column as the same float.</para>
+/// <para>Formatting and escaping are the writer's.</para>
 /// </remarks>
 public static class RecResultJson
 {
@@ -287,10 +286,9 @@ public static class RecResultJson
     }
 
     /// <summary>
-    /// A result's items as a JSON array, each <c>{ "rank", "id", "columns": { … } }</c>. The output columns are a
-    /// member of their own, so a column named <c>id</c> or <c>rank</c> cannot collide with the item's. A column's
-    /// declared type decides how its floats print (<see cref="ResultColumns.Types"/>): a <c>float32</c> or
-    /// <c>list&lt;float32&gt;</c> column's as floats.
+    /// A result's items as a JSON array, each <c>{ "rank", "id", "columns": { … } }</c>. A column's declared type
+    /// decides how its floats print (<see cref="ResultColumns.Types"/>): a <c>float32</c> or <c>list&lt;float32&gt;</c>
+    /// column's as floats.
     /// </summary>
     public static void WriteItems(Utf8JsonWriter json, ResultColumns items)
     {
@@ -397,10 +395,10 @@ public static class RecResultJson
     }
 
     /// <summary>
-    /// A value as JSON: missing is <c>null</c>, and so is a non-finite float (or float list element), which JSON cannot
-    /// represent; integers exact, floats in their shortest round-trip form, a float32 value (a float32 column's, a
-    /// <c>list&lt;float32&gt;</c> element) as the float: <c>0.1</c>, not the double <c>0.10000000149011612</c> it widens to.
-    /// Without a declared type, a value read from float32 storage is a float32 one (<see cref="ScalarValue.IsFloat32"/>).
+    /// A value as JSON: missing is <c>null</c>, and so is a non-finite float (or float list element); integers exact,
+    /// floats in their shortest round-trip form, a float32 value (a float32 column's, a <c>list&lt;float32&gt;</c>
+    /// element) as the float: <c>0.1</c>, not the double <c>0.10000000149011612</c> it widens to. Without a declared
+    /// type, a value read from float32 storage is a float32 one (<see cref="ScalarValue.IsFloat32"/>).
     /// </summary>
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value) =>
         WriteValue(json, value, float32: value.IsFloat32 || value.IsFloat32List);

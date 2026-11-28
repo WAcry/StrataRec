@@ -12,9 +12,8 @@ using StrataRec.Features.Cache;
 namespace StrataRec.Features.Local;
 
 /// <summary>
-/// The single writer of a <see cref="LocalFeatureTable"/>: applies updates, deletes, checkpoints
-/// and reloads, and compacts. Every call must come from one thread at a time (the update source's consumer, or the cache's
-/// background writer); readers never wait for it.
+/// The single writer of a <see cref="LocalFeatureTable"/>: applies updates, deletes, checkpoints and reloads, and
+/// compacts. Every call must come from one thread at a time; readers never wait for it.
 /// </summary>
 /// <remarks>
 /// <para>Published values are immutable, so a reader sees the old record or the new one, both complete.</para>
@@ -1430,12 +1429,12 @@ public sealed class LocalTableWriter : IFeatureTableWriter
 }
 
 /// <summary>
-/// One update being built: the source decodes each field straight into it, then commits. Unwritten fields
-/// keep the key's old values. A value-type handle, so building a record allocates nothing.
+/// One update being built: the source decodes each field straight into it, then commits. Unwritten fields keep the
+/// key's old values.
 /// </summary>
 /// <remarks>
-/// <para>Field indices are the schema's (<see cref="LocalTableSchema.FieldIndex"/>), resolved once per source, not per
-/// message. A setter of the wrong type for the field throws and names the right one.</para>
+/// <para>Field indices are the schema's (<see cref="LocalTableSchema.FieldIndex"/>). A setter of the wrong type for the
+/// field throws and names the right one.</para>
 /// <para>When the table already has a record of the key with this version or a newer one, the builder is
 /// <see cref="IsIgnored"/>: setters still accept values (a source need not check), and <see cref="Commit"/> returns false.</para>
 /// <para>The builder is valid until it is committed or until the writer's next <c>Begin</c>, <c>Delete</c>,
@@ -1467,8 +1466,7 @@ public readonly struct RecordBuilder
     public void SetFloat64(int field, double value) => Writer.SetFixed(_token, field, StorageKind.Float64, value);
 
     /// <summary>
-    /// A <c>string</c> value: a value the dictionary holds is not stored again, and every read hands out the
-    /// dictionary's instance, so a fill allocates no string, whatever the length.
+    /// A <c>string</c> value: every read hands out the dictionary's instance.
     /// </summary>
     public void SetString(int field, string value)
     {
@@ -1480,19 +1478,14 @@ public readonly struct RecordBuilder
     /// dictionary already holds.</summary>
     public void SetString(int field, ReadOnlySpan<char> value) => Writer.SetString(_token, field, value);
 
-    /// <summary>A <c>list&lt;bool&gt;</c> value.</summary>
-    /// <remarks>One setter per element type, as for scalars: the field's declared element type decides, and a setter of
-    /// another element type throws and names the right one. A fixed-length field (<c>list&lt;float32,64&gt;</c>) is set
-    /// the same way; a list of another length is stored as given, and a read replaces it like a request's other writers
-    /// do, so one bad record of a load does not stop the load.</remarks>
+    /// <remarks>One setter per element type: the field's declared element type decides, and a setter of another element
+    /// type throws and names the right one. A fixed-length field (<c>list&lt;float32,64&gt;</c>) is set the same way; a
+    /// list of another length is stored as given, and a read replaces it like a request's other writers do, so one bad
+    /// record of a load does not stop the load.</remarks>
     public void SetBoolList(int field, ReadOnlySpan<bool> value) => Writer.SetList(_token, field, value, nameof(SetBoolList));
 
-    /// <summary>A <c>list&lt;int32&gt;</c> value.</summary>
-    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     public void SetInt32List(int field, ReadOnlySpan<int> value) => Writer.SetList(_token, field, value, nameof(SetInt32List));
 
-    /// <summary>A <c>list&lt;int64&gt;</c> value.</summary>
-    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     public void SetInt64List(int field, ReadOnlySpan<long> value) => Writer.SetList(_token, field, value, nameof(SetInt64List));
 
     /// <summary>A <c>list&lt;float32&gt;</c> value, stored as given: a list holding NaN or ±∞ is kept, and the read path
@@ -1519,8 +1512,8 @@ public readonly struct RecordBuilder
     internal void SetList<T>(int field, ReadOnlySpan<T> value)
         where T : unmanaged => Writer.SetList(_token, field, value, "SetList");
 
-    /// <summary>Starts a list value (empty until items are added), for a source that decodes items one at a time; add
-    /// its items with the adder of the field's element type before setting another field.</summary>
+    /// <summary>Starts a list value (empty until items are added); add its items with the adder of the field's element
+    /// type before setting another field.</summary>
     public void StartList(int field) => Writer.StartList(_token, field);
 
     public void AddBoolItem(int field, bool item) => Writer.AddItem(_token, field, item, nameof(AddBoolItem));
@@ -1616,7 +1609,7 @@ public readonly struct RecordBuilder
         }
     }
 
-    /// <summary>Writes the record. Returns false when the update was ignored as stale.</summary>
+    /// <summary>Returns false when the update was ignored as stale.</summary>
     /// <exception cref="LocalTableFullException">The table would pass <c>max_bytes</c> even after compaction.</exception>
     public bool Commit() => Writer.Commit(_token);
 

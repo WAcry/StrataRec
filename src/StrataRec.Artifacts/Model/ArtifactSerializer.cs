@@ -46,7 +46,6 @@ public static class ArtifactSerializer
         return null;
     }
 
-    /// <summary>Deserializes an artifact document.</summary>
     /// <exception cref="ArtifactFormatException">The document does not match <typeparamref name="T"/>; the exception says where and why, in JSON words.</exception>
     public static T Deserialize<T>(JsonNode node, string? sourceName = null)
     {
@@ -118,8 +117,8 @@ public static class ArtifactSerializer
 
     /// <summary>
     /// Binds part of a document strictly, e.g. an operator's config, a node or a section of a patch: unknown keys are
-    /// errors, as everywhere else. Returns false with the error located relative to <paramref name="node"/> and worded
-    /// for the person who wrote it (see <see cref="JsonBindingErrors"/>).
+    /// errors. Returns false with the error located relative to <paramref name="node"/> and worded for the person who
+    /// wrote it (see <see cref="JsonBindingErrors"/>).
     /// </summary>
     /// <param name="subject">How a sentence names <paramref name="node"/>, e.g. <c>the config of TopK@1</c>.</param>
     public static bool TryBind<T>(JsonNode? node, string subject, [NotNullWhen(true)] out T? value, [NotNullWhen(false)] out JsonBindingError? error)

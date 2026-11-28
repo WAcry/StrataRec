@@ -28,7 +28,6 @@ public sealed class ArmYields
         }
     }
 
-    /// <summary>No experiment yields.</summary>
     public static ArmYields None { get; } = new([], [], []);
 
     /// <summary>True when no experiment yields to another: <see cref="Resolve"/> returns the arms it is given.</summary>

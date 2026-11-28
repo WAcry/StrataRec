@@ -68,14 +68,12 @@ internal readonly struct LocalFieldRead
 internal readonly record struct LocalFillCounts(int NonFinite, int OutOfRange);
 
 /// <summary>
-/// One generation of a <see cref="LocalFeatureTable"/>: pages of records, the index over them and the string
-/// dictionary. A request pins the table's current version once and does every lookup against it; a compaction or reload
-/// builds a new version and swaps it in.
+/// A request pins the table's current version once and does every lookup against it; a compaction or reload builds a
+/// new version and swaps it in.
 /// </summary>
 /// <remarks>
 /// <para><b>Reading is lock-free.</b></para>
-/// <para>Public members are the statistics. The reader API is internal: features of a local table are read through the
-/// feature catalog.</para>
+/// <para>The reader API is internal: features of a local table are read through the feature catalog.</para>
 /// </remarks>
 public sealed class TableVersion
 {

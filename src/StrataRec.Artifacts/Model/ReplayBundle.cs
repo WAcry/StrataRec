@@ -14,11 +14,10 @@ namespace StrataRec.Artifacts.Model;
 /// <remarks>
 /// <para>A plain JSON document with the same strict serializer as artifacts, so its JSON Schema comes from these types
 /// (<c>stratarec schema replay_bundle</c>) and a malformed bundle is reported with a JSON pointer.</para>
-/// <para>Values use the log encoding (missing is null, bool is 0 or 1) and are decoded with the type recorded
-/// next to them, never with the type of whatever configuration replays the bundle. Unlike logs, a bundle keeps the NaN
-/// and ±∞ the request observed, as the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> (per element in
-/// float lists): a replay must see the same values to make the same decisions. Bundles contain request inputs and feature
-/// values; who may read them is the environment's business.</para>
+/// <para>Values use the log encoding (missing is null, bool is 0 or 1) and are decoded with the type recorded next to
+/// them, never with the type of whatever configuration replays the bundle. Unlike logs, a bundle keeps the NaN and ±∞
+/// the request observed, as the strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> (per element in float
+/// lists). Bundles contain request inputs and feature values; who may read them is the environment's business.</para>
 /// </remarks>
 [Description("A recorded request for deterministic replay.")]
 public sealed class ReplayBundle
@@ -149,7 +148,6 @@ public sealed class ReplayRunRecord
     public required ReplayResultRecord Result { get; init; }
 }
 
-/// <summary>The execution decision at one timeline position.</summary>
 public sealed class ReplayPipelineCall
 {
     [Description("The node that called.")]
@@ -456,7 +454,6 @@ public sealed class ReplayResultRecord
     public Dictionary<string, string> ColumnProducers { get; init; } = new();
 }
 
-/// <summary>A returned item.</summary>
 public sealed class ReplayItem
 {
     [Description("Entity id: an int64 number or a string.")]

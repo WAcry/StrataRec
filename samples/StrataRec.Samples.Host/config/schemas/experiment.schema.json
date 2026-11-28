@@ -119,7 +119,7 @@
             }
           },
           "request_columns": {
-            "description": "Request columns nodes write, one value per request, read as req.<name> by what runs after the node that writes one: a later node's expressions and when, a log tap, the output's columns and values (not a funnel key, decided when the request starts, nor a derived feature). Written by RequestAggregate@1 (a count, sum, mean, min or max over the live candidates) or by a custom operator. Declared as candidate columns are (type, default, flow): a value no node wrote is missing, and a non-nullable one needs a node that cannot be skipped to write it before every reader. Experiments may add request columns, not change these.",
+            "description": "Request columns nodes write, one value per request, read as req.<name> by what runs after the node that writes one: a later node's expressions and when, a log tap, the output's columns and values (not a funnel key, decided when the request starts, nor a derived feature). Written by RequestAggregate@1 or by a custom operator. Declared as candidate columns are (type, default, flow): a value no node wrote is missing, and a non-nullable one needs a node that cannot be skipped to write it before every reader. Experiments may add request columns, not change these.",
             "type": "object",
             "additionalProperties": {
               "type": [
@@ -239,7 +239,7 @@
                   ]
                 },
                 "min_remaining_ms": {
-                  "description": "The node is skipped, as by a false when, when less than this many milliseconds are left of the request's deadline as it is about to start: for a node not worth starting late. Default: it starts whatever is left.",
+                  "description": "The node is skipped, as by a false when, when less than this many milliseconds are left of the request's deadline as it is about to start. Default: it starts whatever is left.",
                   "type": [
                     "integer",
                     "null"
@@ -1140,7 +1140,7 @@
                                   ],
                                   "properties": {
                                     "ttl_ms": {
-                                      "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
+                                      "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
                                       "type": [
                                         "integer",
                                         "null"
@@ -1219,7 +1219,7 @@
                             }
                           },
                           "max_calls": {
-                            "description": "The most rows it calls for, 1 to 1000: the first ones in rank order. Required: every row is a run of a pipeline, so the node says how many it may start. The rows after them get no values, and the node is degraded.",
+                            "description": "The most rows it calls for, 1 to 1000: the first ones in rank order. Required. The rows after them get no values, and the node is degraded.",
                             "type": [
                               "integer",
                               "null"
@@ -1240,7 +1240,7 @@
                             ],
                             "properties": {
                               "ttl_ms": {
-                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
+                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
                                 "type": [
                                   "integer",
                                   "null"
@@ -1348,7 +1348,7 @@
                             }
                           },
                           "limit_param": {
-                            "description": "Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already there does not use one up. Required, as every row source's limit is: it bounds the rows a request may hold . A parameter without a value (a map's key set to null) appends none.",
+                            "description": "Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already there does not use one up. Required. A parameter without a value (a map's key set to null) appends none.",
                             "type": [
                               "string",
                               "null"
@@ -1382,7 +1382,7 @@
                             ],
                             "properties": {
                               "ttl_ms": {
-                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
+                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
                                 "type": [
                                   "integer",
                                   "null"
@@ -2016,7 +2016,7 @@
       }
     },
     "reviewed_interactions": {
-      "description": "Interactions with experiments of other layers that were reviewed and may happen together: experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }, a request column written as req.<name>. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning, so a review does not outlive the interaction it was for.",
+      "description": "Interactions with experiments of other layers that were reviewed and may happen together: experiment id → the columns, e.g. { \"exp_freshness_calibration\": [\"score.final\"] }, a request column written as req.<name>. The two experiments' interaction warnings on those columns are not repeated, so a reviewed pair stops warning on every validate, build and load; a new column still warns. An entry no interaction of this release needs is a warning.",
       "type": [
         "object",
         "null"

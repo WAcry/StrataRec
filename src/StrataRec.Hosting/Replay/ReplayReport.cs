@@ -8,7 +8,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.Hosting.Replay;
 
-/// <summary>Options of <see cref="RecEngine.ReplayAsync"/>.</summary>
 public sealed class ReplayOptions
 {
     /// <summary>Arms to run with (<c>experiment/arm</c>) instead of the recorded assignment.</summary>
@@ -101,7 +100,7 @@ public sealed record ColumnChange(string Column, ScalarValue Recorded, ScalarVal
 
 /// <summary>
 /// An output column both results have, declared as another type in one (<c>float32</c> and <c>float64</c>, <c>int32</c>
-/// and <c>int32?</c>): equal values, but a host reads, and a JSON result prints, the column otherwise.
+/// and <c>int32?</c>).
 /// </summary>
 public sealed record RetypedColumn(string Column, ColumnType Recorded, ColumnType Replayed);
 
@@ -248,7 +247,6 @@ public sealed class ComparableResult
     }
 }
 
-/// <summary>Result comparison and ranking metrics: Top-K overlap, Kendall τ, score distributions.</summary>
 public static class ResultComparison
 {
     public static ResultDiff Diff(ComparableResult left, ComparableResult right)
@@ -440,7 +438,7 @@ public static class ResultComparison
 
     /// <summary>
     /// Two-sample Kolmogorov–Smirnov statistic: the largest gap between the empirical distributions (0–1), over the
-    /// finite values of each sample. NaN and ±∞ have no place in a distribution of scores; they are left out.
+    /// finite values of each sample.
     /// </summary>
     public static double KolmogorovSmirnov(IReadOnlyList<double> a, IReadOnlyList<double> b)
     {
@@ -474,8 +472,7 @@ public static class ResultComparison
     }
 
     /// <summary>
-    /// Summary of a sample's finite values: count, mean, min, p50, p90, p95, max (nearest-rank percentiles). NaN and ±∞
-    /// are left out, as in <see cref="KolmogorovSmirnov"/>.
+    /// Summary of a sample's finite values: count, mean, min, p50, p90, p95, max (nearest-rank percentiles).
     /// </summary>
     public static Distribution Summarize(IReadOnlyList<double> values)
     {

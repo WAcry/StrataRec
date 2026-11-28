@@ -51,9 +51,7 @@ public static class ReplayBundleFile
 
     /// <summary>
     /// Refuses a bundle of another format, at <c>/format</c>: every entry that takes a bundle (a file, or an object a
-    /// host deserialized from its own store) checks it before reading anything else, and a host that keeps bundles can
-    /// check them when it reads them. A format can change while the layout stays, so deserializing a bundle proves
-    /// nothing about its version.
+    /// host deserialized from its own store) checks it before reading anything else.
     /// </summary>
     /// <exception cref="ReplayBundleException">The bundle is of another format.</exception>
     public static void CheckFormat(ReplayBundle bundle)

@@ -183,11 +183,9 @@ public static class LogBatchJson
 
     /// <summary>Writes a value; missing becomes null (and is listed under <c>missing</c>). A float is written as the double
     /// it is held as, exact in both encodings; a batch writes its float32 fields as floats (<see cref="Write"/>).</summary>
-    /// <param name="nonFiniteAsStrings">
-    /// False for logs: a NaN or ±∞ float, and a float list with such an element, is written as null like a missing value
-    ///. True for replay bundles, which must keep what the request observed: such values are written as the
-    /// strings <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, per element in lists.
-    /// </param>
+    /// <param name="nonFiniteAsStrings">False for logs: a NaN or ±∞ float, and a float list with such an element, is
+    /// written as null like a missing value. True for replay bundles: such values are written as the strings
+    /// <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c>, per element in lists.</param>
     public static void WriteValue(Utf8JsonWriter json, in ScalarValue value, bool nonFiniteAsStrings = false)
     {
         switch (value.Kind)
@@ -285,13 +283,11 @@ public static class LogBatchJson
     /// </summary>
     /// <remarks>Non-finite floats were written as null, so they read back as missing; a number outside the
     /// type's range is not a value of it.</remarks>
-    /// <param name="nonFiniteAsStrings">
-    /// The replay-bundle encoding rather than the log's. A bundle accepts the strings <c>"NaN"</c>, <c>"Infinity"</c> and
-    /// <c>"-Infinity"</c> as float values and float list elements, as <see cref="WriteValue"/> writes them for bundles, and
-    /// reads a float32 value as the double written: a bundle keeps what the request saw, its inputs as the host gave them
-    /// (a float32 input's double, which the replay converts to the float again). A log holds float32 values as floats, so
-    /// there a float32 value reads as the float the text names (the shortest text of the float, or its exact double).
-    /// </param>
+    /// <param name="nonFiniteAsStrings">The replay-bundle encoding rather than the log's. A bundle accepts the strings
+    /// <c>"NaN"</c>, <c>"Infinity"</c> and <c>"-Infinity"</c> as float values and float list elements, as
+    /// <see cref="WriteValue"/> writes them for bundles, and reads a float32 value as the double written. A log holds
+    /// float32 values as floats, so there a float32 value reads as the float the text names (the shortest text of the
+    /// float, or its exact double).</param>
     public static bool TryReadValue(JsonElement json, ColumnType type, out ScalarValue value, out string? error, bool nonFiniteAsStrings = false)
     {
         static ScalarValue Float(ColumnType type, double d) =>
@@ -438,7 +434,7 @@ public static class LogBatchJson
         }
     }
 
-    /// <summary>The spelling of a non-finite value: <c>NaN</c>, <c>Infinity</c> or <c>-Infinity</c> (as JavaScript and System.Text.Json name them).</summary>
+    /// <summary>The spelling of a non-finite value: <c>NaN</c>, <c>Infinity</c> or <c>-Infinity</c>.</summary>
     public static string NonFiniteName(double value) =>
         double.IsNaN(value) ? "NaN" : value > 0 ? "Infinity" : "-Infinity";
 
@@ -524,9 +520,9 @@ public static class LogBatchJson
     }
 
     /// <summary>
-    /// The record a batch's <c>schema</c> id names: <c>{"log_schema": {"id", "tap_id", "columns", "context"}}</c>,
-    /// each field with its name, type and expression. A sink writes it once per id, before the first batch that names it
-    /// (<see cref="JsonLinesLogSink"/> does), so a reader of the log knows each column's type and definition.
+    /// The record a batch's <c>schema</c> id names: <c>{"log_schema": {"id", "tap_id", "columns", "context"}}</c>, each
+    /// field with its name, type and expression. A sink writes it once per id, before the first batch that names it
+    /// (<see cref="JsonLinesLogSink"/> does).
     /// </summary>
     public static void WriteSchema(Utf8JsonWriter json, LogSchema schema)
     {

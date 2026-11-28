@@ -19,7 +19,7 @@ public sealed class ReplaySideSummary
     /// <summary>Requests replayed on this side.</summary>
     public required int Requests { get; init; }
 
-    /// <summary>Engine time per replayed request; recorded mode answers I/O instantly, so this is CPU work only.</summary>
+    /// <summary>Engine time per replayed request; recorded mode answers I/O instantly.</summary>
     public required Distribution LatencyMs { get; init; }
 
     /// <summary>Replayed requests that returned no result.</summary>
@@ -53,7 +53,6 @@ public sealed class ReplaySideSummary
 /// <summary>Feature-missing rate of one field on both sides; null where a side never requested the field.</summary>
 public sealed record FieldMissingChange(string Source, string Field, double? Baseline, double? Candidate);
 
-/// <summary>Per-request comparison of the baseline and candidate results.</summary>
 public sealed record RequestComparison(
     string Name,
     string RequestId,
@@ -78,9 +77,8 @@ public sealed class ComparisonReport
     public required int Unreadable { get; init; }
 
     /// <summary>
-    /// Bundles of aborted requests (<see cref="ReplayOutcome.NotReplayed"/>): not replayed, so in neither side's metrics
-    /// and not in <see cref="Requests"/>. Neither are they an error of either configuration: the request had no result to
-    /// compare.
+    /// Bundles of aborted requests (<see cref="ReplayOutcome.NotReplayed"/>): not replayed, so in neither side's
+    /// metrics and not in <see cref="Requests"/>. Neither are they an error of either configuration.
     /// </summary>
     public required int AbortedInRecording { get; init; }
 

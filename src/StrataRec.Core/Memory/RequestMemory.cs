@@ -6,7 +6,7 @@ using StrataRec.Core.Diagnostics;
 namespace StrataRec.Core.Memory;
 
 /// <summary>
-/// Source of large reusable buffers. The engine uses <see cref="SharedArrayBufferPool"/>.
+/// The engine uses <see cref="SharedArrayBufferPool"/>.
 /// </summary>
 public interface IBufferPool
 {
@@ -37,15 +37,15 @@ public interface IRequestEndObserver
 }
 
 /// <summary>
-/// Per-request buffer ledger. Operators rent through it and never return what they rent with <see cref="Rent{T}"/>;
-/// everything is returned at once when the request and every external I/O it started have finished. A
-/// temporary that is over before its method returns is rented with <see cref="RentScratch{T}"/> and given back at once.
+/// Operators rent through it and never return what they rent with <see cref="Rent{T}"/>; everything is returned at once
+/// when the request and every external I/O it started have finished. A temporary that is over before its method returns
+/// is rented with <see cref="RentScratch{T}"/> and given back at once.
 /// </summary>
 /// <remarks>
 /// <para>The holder count starts at 1 (the request itself). Each external I/O calls <see cref="Hold"/> when it starts
 /// and <see cref="Release"/> when it completes or acknowledges cancellation; the request calls <see cref="Release"/>
 /// after it has produced its result. The last release returns all buffers and then tells the
-/// <see cref="IRequestEndObserver"/>, if any: the one moment from which nothing of the request can still run.</para>
+/// <see cref="IRequestEndObserver"/>, if any.</para>
 /// <para>A buffer the pool will not take back (an <see cref="IBufferPool"/> throws) is left to the GC, the others are
 /// still returned, and the failure goes to the event log as <see cref="RequestEvent.BufferReturnFailed"/>.
 /// <see cref="Release"/> never throws for the pool.</para>
@@ -53,10 +53,8 @@ public interface IRequestEndObserver
 public sealed class RequestMemory
 {
     /// <summary>
-    /// Whether <see cref="Release"/> fills returned buffers of unmanaged elements with <see cref="PoisonByte"/>, so
-    /// code that keeps using a buffer after its request reads garbage at once instead of another request's data. Set by
-    /// the <c>StrataRec.PoisonReturnedBuffers</c> runtime switch: production leaves it off (it writes every returned
-    /// byte once more).
+    /// Whether <see cref="Release"/> fills returned buffers of unmanaged elements with <see cref="PoisonByte"/>. Set by
+    /// the <c>StrataRec.PoisonReturnedBuffers</c> runtime switch.
     /// </summary>
     public static readonly bool PoisonReturnedBuffers =
         AppContext.TryGetSwitch("StrataRec.PoisonReturnedBuffers", out var poison) && poison;
@@ -144,12 +142,12 @@ public sealed class RequestMemory
     /// <see cref="RentedBytes"/>. Contents are unspecified.
     /// </summary>
     /// <remarks>Only for a buffer nothing else can still reference once it is given back: nothing an operator writes
-    /// into the table, hands to a client or keeps across an external call. One never given back (an exception between
-    /// the two) is only lost to the pool.</remarks>
+    /// into the table, hands to a client or keeps across an external call. One never given back is only lost to the
+    /// pool.</remarks>
     public T[] RentScratch<T>(int minimumLength) => _pool.Rent<T>(minimumLength);
 
-    /// <summary>Gives back a buffer of <see cref="RentScratch{T}"/>: poisoned when <see cref="PoisonReturnedBuffers"/> is on,
-    /// so a use after this fails in tests.</summary>
+    /// <summary>Gives back a buffer of <see cref="RentScratch{T}"/>: poisoned when <see cref="PoisonReturnedBuffers"/>
+    /// is on.</summary>
     public void ReturnScratch<T>(T[] array) => Returner<T>.Instance.Return(_pool, array);
 
     /// <summary>Registers an in-flight external operation that may still write into rented buffers.</summary>

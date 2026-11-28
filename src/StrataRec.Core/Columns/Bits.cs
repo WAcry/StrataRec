@@ -103,7 +103,6 @@ public static class Bits
         return count;
     }
 
-    /// <summary>destination &amp;= source.</summary>
     public static void And(Span<ulong> destination, ReadOnlySpan<ulong> source)
     {
         for (var i = 0; i < destination.Length; i++)
@@ -112,7 +111,6 @@ public static class Bits
         }
     }
 
-    /// <summary>destination |= source.</summary>
     public static void Or(Span<ulong> destination, ReadOnlySpan<ulong> source)
     {
         for (var i = 0; i < destination.Length; i++)

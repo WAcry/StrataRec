@@ -63,7 +63,6 @@ public interface ISecretResolver
 /// </summary>
 public sealed class SecretReference
 {
-    /// <summary>The scheme of a reference.</summary>
     public const string Scheme = "secret://";
 
     private readonly ISecretResolver? _resolver;

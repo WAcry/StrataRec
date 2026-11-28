@@ -3,7 +3,6 @@ using System.Text.Json.Nodes;
 
 namespace StrataRec.Artifacts.Json;
 
-/// <summary>How a value differs between two JSON documents (<see cref="JsonDiff"/>).</summary>
 public enum JsonChangeKind : byte
 {
     /// <summary>The member exists only in the second document.</summary>
@@ -16,16 +15,14 @@ public enum JsonChangeKind : byte
     Changed,
 }
 
-/// <summary>One difference between two JSON documents.</summary>
 /// <param name="Pointer">RFC 6901 pointer of the value that differs, relative to the compared roots.</param>
-/// <param name="Kind">Whether the value was added, removed or changed.</param>
 /// <param name="Before">The value in the first document: a detached copy; <see langword="null"/> when added (or JSON <c>null</c>).</param>
 /// <param name="After">The value in the second document: a detached copy; <see langword="null"/> when removed (or JSON <c>null</c>).</param>
 public sealed record JsonChange(string Pointer, JsonChangeKind Kind, JsonNode? Before, JsonNode? After);
 
 /// <summary>
-/// The semantic difference of two JSON documents, leaf by leaf: what a reviewer needs to see of a
-/// configuration change, without the noise of a line diff (member order, whitespace, comments, <c>1</c> vs <c>1.0</c>).
+/// The semantic difference of two JSON documents, leaf by leaf, without the noise of a line diff (member order,
+/// whitespace, comments, <c>1</c> vs <c>1.0</c>).
 /// </summary>
 /// <remarks>
 /// <para>

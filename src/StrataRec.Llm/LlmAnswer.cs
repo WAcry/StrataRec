@@ -33,18 +33,17 @@ public readonly record struct AnswerCounts(int Used, int Unknown, int Repeated, 
 }
 
 /// <summary>
-/// Parses generated answers. The one place that decides what an answer may look like, so every
-/// generative operator agrees: a JSON array of window rows (<c>LlmReranker@1</c>) or of new ids
-/// (<c>GenerativeRetriever@1</c>), or one value per row (<c>LlmAnnotator@1</c>).
+/// Parses generated answers. The one place that decides what an answer may look like: a JSON array of window rows
+/// (<c>LlmReranker@1</c>) or of new ids (<c>GenerativeRetriever@1</c>), or one value per row (<c>LlmAnnotator@1</c>).
 /// </summary>
 /// <remarks>
 /// <para>An answer is trimmed and, when it is wrapped in one Markdown code fence (<c>```json</c> or <c>```</c> on the
 /// first line, <c>```</c> at the end), the inside is taken. Nothing else is extracted from the text.</para>
 /// <para>An array answer must be one JSON array (RFC 8259: no comments, no trailing commas, nothing after it). Its
-/// elements are walked once, by one strict walk; what each names is the operator's (window rows by rank or id, or new ids
-/// of the table's key type), and every element is counted by what became of it (<see cref="AnswerCounts"/>): nested
-/// arrays and objects are elements of the wrong type. An answer that is not such an array is a failure, with the reason;
-/// a JSON error's line and byte count within the text parsed, after the trim and the fence.</para>
+/// elements are walked once; what each names is the operator's (window rows by rank or id, or new ids of the table's
+/// key type), and every element is counted by what became of it (<see cref="AnswerCounts"/>): nested arrays and objects
+/// are elements of the wrong type. An answer that is not such an array is a failure, with the reason; a JSON error's
+/// line and byte count within the text parsed, after the trim and the fence.</para>
 /// <para>A per-row value is the trimmed text, one of the declared categories, <c>true</c> / <c>false</c> (any case), or a
 /// number in JSON's syntax (invariant, no <c>+</c>, no leading zeros, no <c>NaN</c>) that is finite and fits the column.</para>
 /// </remarks>

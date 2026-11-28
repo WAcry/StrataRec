@@ -21,8 +21,8 @@ public interface IFeatureUpdateSource
     /// </summary>
     /// <remarks>
     /// <para>The writer has a single writer: the source must not call it from two threads at once (one call after
-    /// another from different threads, as an async method does, is fine). Loading may run synchronously on the calling
-    /// thread before the first await; the engine runs sources off the request path.</para>
+    /// another from different threads is fine). Loading may run synchronously on the calling thread before the first
+    /// await; the engine runs sources off the request path.</para>
     /// <para>A failure is thrown, preferably as <see cref="FeatureUpdateException"/> with where the bad data is and how
     /// to fix it. The table keeps every update written before the failure and its last complete reload; the engine may
     /// run the source again from the table's <see cref="LocalFeatureTable.Position"/>.</para>
@@ -56,7 +56,7 @@ public interface IFeatureTableWriter
     /// <summary>Starts an update of a table keyed by one int64 part.</summary>
     RecordBuilder Begin(long key, long version);
 
-    /// <summary>Starts an update of a table keyed by one string part, from the key's chars (no string needed).</summary>
+    /// <summary>Starts an update of a table keyed by one string part.</summary>
     RecordBuilder Begin(ReadOnlySpan<char> key, long version);
 
     /// <summary>Starts an update of a table keyed by one part.</summary>
@@ -95,13 +95,12 @@ public interface IFeatureTableWriter
     void AbortReload();
 }
 
-/// <summary>One partition's offset in an <see cref="UpdatePosition"/>.</summary>
 public readonly record struct PartitionOffset(int Partition, long Offset);
 
 /// <summary>
-/// Where an update stream stands: for each partition, the offset of the next update not yet
-/// applied (the convention of Kafka's committed offsets). A snapshot records the position its data covers, and the stream
-/// is consumed from there. A partition the position does not mention is at its start.
+/// Where an update stream stands: for each partition, the offset of the next update not yet applied. A snapshot records
+/// the position its data covers, and the stream is consumed from there. A partition the position does not mention is at
+/// its start.
 /// </summary>
 /// <remarks>Immutable. JSON form: an object from partition number to offset, e.g. <c>{"0": 1200, "1": 980}</c>.</remarks>
 public sealed class UpdatePosition : IEquatable<UpdatePosition>
@@ -159,7 +158,7 @@ public sealed class UpdatePosition : IEquatable<UpdatePosition>
         return 0;
     }
 
-    /// <summary>Reads the JSON form. Errors name the bad member relative to <paramref name="pointer"/>.</summary>
+    /// <summary>Errors name the bad member relative to <paramref name="pointer"/>.</summary>
     /// <exception cref="FormatException">Not an object of non-negative integer partition names to non-negative int64 offsets.</exception>
     public static UpdatePosition FromJson(JsonElement json, string pointer = "")
     {

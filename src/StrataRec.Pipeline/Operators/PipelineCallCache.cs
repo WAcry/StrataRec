@@ -27,10 +27,10 @@ namespace StrataRec.Pipeline.Operators;
 public sealed class PipelineCallCacheConfig
 {
     /// <summary>
-    /// How long a result is served, in milliseconds, e.g. <c>3600000</c>. Each result's lifetime varies by ±10% with its
-    /// key, so results computed together do not all expire together. Leave out every setting (<c>"cache": {}</c>) to keep
-    /// nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have
-    /// not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.
+    /// How long a result is served, in milliseconds, e.g. <c>3600000</c>. Each result's lifetime varies by ±10% with
+    /// its key. Leave out every setting (<c>"cache": {}</c>) to keep nothing: a call then takes the result of a run,
+    /// done or under way, only while its own request and the run's have not ended (the same request, or two its host
+    /// sends as one group), and runs the pipeline otherwise.
     /// </summary>
     public long? TtlMs { get; init; }
 

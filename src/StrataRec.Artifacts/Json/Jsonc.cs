@@ -55,7 +55,6 @@ public static class Jsonc
     };
 
     /// <summary>Parses a JSONC document into a mutable <see cref="JsonNode"/> tree.</summary>
-    /// <param name="json">The document text.</param>
     /// <param name="fileName">Optional file name used in error messages.</param>
     /// <returns>The root node, or <see langword="null"/> when the document is the literal <c>null</c>.</returns>
     /// <exception cref="JsoncException">The document is not valid JSONC or breaks one of the strictness rules.</exception>
@@ -80,8 +79,8 @@ public static class Jsonc
 
     /// <summary>
     /// Parses a UTF-8 encoded JSONC document as strictly as <see cref="Parse(ReadOnlySpan{byte}, string?)"/> into a
-    /// <see cref="JsonElement"/> that owns its data: for data read by key rather than edited, such as a connector's
-    /// fixture file. Bytes, not text: a file decoded first would have its invalid bytes replaced, not reported.
+    /// <see cref="JsonElement"/> that owns its data. Bytes, not text: a file decoded first would have its invalid bytes
+    /// replaced, not reported.
     /// </summary>
     /// <exception cref="JsoncException">The document is not valid JSONC or breaks one of the strictness rules.</exception>
     public static JsonElement ParseElement(ReadOnlySpan<byte> utf8Json, string? fileName = null)

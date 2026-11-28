@@ -14,7 +14,6 @@ namespace StrataRec.Artifacts.Json;
 /// </remarks>
 public sealed class JsoncException : JsonException
 {
-    /// <summary>The document is not well-formed JSONC.</summary>
     public const string SyntaxErrorCode = "JSONC_SYNTAX";
 
     /// <summary>An object contains the same key twice (compared after unescaping).</summary>
@@ -58,7 +57,6 @@ public sealed class JsoncException : JsonException
     /// <summary>1-based column in UTF-16 code units, or <see langword="null"/> when unknown.</summary>
     public int? Column { get; }
 
-    /// <summary>Optional suggestion for fixing the document.</summary>
     public string? Hint { get; }
 
     private static string Format(

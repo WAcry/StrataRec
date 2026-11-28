@@ -13,9 +13,8 @@ namespace StrataRec.Core.Columns;
 /// are inside the arena. Vectorized code may therefore scan whole physical ranges without bounds failures.</para>
 /// <para>A buffer made directly starts with no validity bitmap, meaning every row is valid: scratch buffers are read
 /// only on the rows their writer wrote. A slot of a <see cref="Tables.CandidateTable"/> always has a bitmap, and every
-/// row in it is missing until something writes it (the table's rule); writers mark what they write, through the
-/// <c>Set</c> methods, or after a bulk write through <see cref="SetValid(ReadOnlySpan{int})"/> or
-/// <see cref="SetValid(int, int)"/>.</para>
+/// row in it is missing until something writes it; writers mark what they write, through the <c>Set</c> methods, or
+/// after a bulk write through <see cref="SetValid(ReadOnlySpan{int})"/> or <see cref="SetValid(int, int)"/>.</para>
 /// <para>All arrays are rented from the owning <see cref="RequestMemory"/> and returned when the request ends.</para>
 /// </remarks>
 public abstract class ColumnBuffer
@@ -66,8 +65,8 @@ public abstract class ColumnBuffer
     }
 
     /// <summary>
-    /// Marks rows <c>[first, first + count)</c> present, for a writer that wrote their values in bulk (a row source writes
-    /// the rows it appended, which are consecutive). A no-op while the column has no validity bitmap.
+    /// Marks rows <c>[first, first + count)</c> present, for a writer that wrote their values in bulk. A no-op while
+    /// the column has no validity bitmap.
     /// </summary>
     public void SetValid(int first, int count)
     {
@@ -145,7 +144,6 @@ public abstract class ColumnBuffer
     /// <summary>Moves values into new buffers of <paramref name="newCapacity"/> rows; <see cref="Capacity"/> is updated afterwards.</summary>
     protected abstract void GatherValues(ReadOnlySpan<int> rows, int newCapacity);
 
-    /// <summary>Creates an empty column of the given type.</summary>
     public static ColumnBuffer Create(ColumnType type, int capacity, RequestMemory memory) => type.Kind switch
     {
         StorageKind.Bool => new ScalarColumn<bool>(type, capacity, memory),

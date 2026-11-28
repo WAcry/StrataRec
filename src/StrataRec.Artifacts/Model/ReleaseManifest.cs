@@ -11,8 +11,8 @@ public sealed class ReleaseManifest
     public required string Environment { get; init; }
 
     /// <summary>
-    /// Release order: a node applies a manifest only above the sequence its pipeline serves, so a slow or late delivery of an
-    /// older release never replaces a newer one. A revocation is a newer release like any other.
+    /// Release order: a node applies a manifest only above the sequence its pipeline serves. A revocation is a newer
+    /// release like any other.
     /// </summary>
     public long Seq { get; init; }
 
@@ -30,8 +30,7 @@ public sealed class ReleaseManifest
 
     /// <summary>
     /// Experiments <c>stratarec revoke</c> removed, by name: <c>stratarec build</c> refuses to release one of them
-    /// again unchanged, so the next build from a repository that still lists it does not undo the stop. A revocation
-    /// keeps what the one before it listed; a build lists nothing. Nodes do not read it.
+    /// again unchanged. A revocation keeps what the one before it listed; a build lists nothing. Nodes do not read it.
     /// </summary>
     public Dictionary<string, RevokedExperiment> Revoked { get; init; } = new();
 
@@ -51,7 +50,6 @@ public sealed class ReleaseManifest
     }
 }
 
-/// <summary>An experiment a revocation removed (<see cref="ReleaseManifest.Revoked"/>).</summary>
 public sealed class RevokedExperiment
 {
     /// <summary>Content id of the <see cref="ExperimentArtifact"/> it removed: a changed experiment is released again.</summary>
@@ -84,18 +82,16 @@ public sealed class ManifestExperiment
     public required string Layer { get; init; }
 
     /// <summary>
-    /// Experiments of this release this one yields to: on a request also in an arm of one of them, this
-    /// experiment runs in none of its arms (its layer runs the baseline, and the request records it as yielded), so the
-    /// two never run together, as if they shared a layer. For two experiments of different layers that conflict or
-    /// interact when putting them into one layer would cost too much traffic: this one gives up the
-    /// other's share. Omitted when it yields to none.
+    /// Experiments of this release this one yields to: on a request also in an arm of one of them, this experiment runs
+    /// in none of its arms (its layer runs the baseline, and the request records it as yielded), so the two never run
+    /// together. For two experiments of different layers that conflict or interact, where sharing one layer would cost
+    /// too much traffic. Omitted when it yields to none.
     /// </summary>
     public List<string>? YieldsTo { get; init; }
 
     /// <summary>
-    /// Capabilities the experiment requires of the binary beyond the baseline's, computed by the build from what its
-    /// compile used: removing the experiment removes them, so a revocation lets a binary that lacks them
-    /// serve the rest, and a controller rolling a binary back knows which experiments to remove.
+    /// Capabilities the experiment requires of the binary beyond the baseline's: removing the experiment removes them,
+    /// so a revocation lets a binary that lacks them serve the rest.
     /// </summary>
     public List<string> Requires { get; init; } = new();
 }

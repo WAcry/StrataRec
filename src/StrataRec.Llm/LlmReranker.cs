@@ -37,7 +37,7 @@ public sealed class LlmRerankerConfig
 
     /// <summary>
     /// What the answer lists: <c>rank</c>, the 1-based window positions <c>{{rank}}</c> shows, or <c>entity_id</c>, the
-    /// rows' entity ids (JSON integers for int64 keys, strings for string keys). No default: the prompt decides.
+    /// rows' entity ids (JSON integers for int64 keys, strings for string keys). No default.
     /// </summary>
     [AllowedValues("rank", "entity_id")]
     public required string Answer { get; init; }

@@ -35,11 +35,8 @@ public readonly struct RequestArms
 /// An experiment layer: a request is in at most one arm per layer, so the arms of one layer never run
 /// together, and arms of different layers may (every such combination is validated).
 /// </summary>
-/// <param name="Index">Layer index.</param>
-/// <param name="Name">Layer name.</param>
 public sealed record LayerInfo(int Index, string Name);
 
-/// <summary>An experiment in the plan.</summary>
 public sealed record ExperimentInfo(int Index, string Id, int LayerIndex, ImmutableArray<int> ArmIndices)
 {
     /// <summary>
@@ -49,7 +46,7 @@ public sealed record ExperimentInfo(int Index, string Id, int LayerIndex, Immuta
     public ImmutableArray<int> YieldsTo { get; init; } = [];
 }
 
-/// <summary>An experiment arm in the plan; <see cref="Id"/> is <c>experiment/arm</c>.</summary>
+/// <summary><see cref="Id"/> is <c>experiment/arm</c>.</summary>
 public sealed record ArmInfo(int Index, string Id, string ArmName, int ExperimentIndex, int LayerIndex);
 
 /// <summary>
@@ -62,7 +59,7 @@ public sealed class TimelineSlot
 
     public required string NodeId { get; init; }
 
-    /// <summary>Layers with at least one arm that modifies this node (L(n)).</summary>
+    /// <summary>Layers with at least one arm that modifies this node.</summary>
     public required ImmutableArray<int> TouchingLayers { get; init; }
 
     /// <summary>Per touching layer: global arm index → local index (0 = the layer does not modify the node).</summary>
@@ -77,7 +74,6 @@ public sealed class TimelineSlot
     /// <summary>Experiments whose site includes this position.</summary>
     public ImmutableArray<int> SiteExperiments { get; internal set; } = [];
 
-    /// <summary>Selects this request's variant.</summary>
     public CompiledNode? Select(in RequestArms arms) => Variants[IndexWith(arms, -1, -1)];
 
     /// <summary>
@@ -136,7 +132,6 @@ public sealed class ParamTable
     }
 }
 
-/// <summary>What the pipeline returns.</summary>
 public sealed class OutputPlan
 {
     public required ParamRef Limit { get; init; }
@@ -154,7 +149,7 @@ public sealed class OutputPlan
     /// </summary>
     public ImmutableArray<(string Name, CompiledExpression Expression)> Values { get; init; } = [];
 
-    /// <summary>The expressions of the output's columns, then of its values: for what looks at every expression it reads.</summary>
+    /// <summary>The expressions of the output's columns, then of its values.</summary>
     public IEnumerable<CompiledExpression> Expressions()
     {
         foreach (var (_, expression) in Columns)
@@ -205,7 +200,6 @@ public sealed class ExecutionPlan
     /// <summary>Fallback-only nodes (<c>role: fallback</c>) by id; selected per request like timeline positions.</summary>
     public required IReadOnlyDictionary<string, TimelineSlot> Fallbacks { get; init; }
 
-    /// <summary>The fallback variant of <paramref name="node"/> for this request, if any.</summary>
     public CompiledNode? SelectFallback(CompiledNode node, in RequestArms arms) =>
         node.FallbackNodeId is { } id && Fallbacks.TryGetValue(id, out var slot) ? slot.Select(arms) : null;
 
@@ -239,8 +233,7 @@ public sealed class ExecutionPlan
     public TimeSpan CompileTime { get; init; }
 
     /// <summary>
-    /// The pipelines the plan's nodes call (<see cref="CompiledNode.Calls"/>), of every variant and fallback, sorted:
-    /// which pipelines a request of this one may run.
+    /// The pipelines the plan's nodes call (<see cref="CompiledNode.Calls"/>), of every variant and fallback, sorted.
     /// </summary>
     public ImmutableArray<string> Calls { get; init; } = [];
 

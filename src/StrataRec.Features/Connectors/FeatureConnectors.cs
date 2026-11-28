@@ -13,9 +13,8 @@ namespace StrataRec.Features.Connectors;
 /// <remarks>
 /// <para>Read a key's parts by part: <see cref="Part"/> gives part p of every key, one entry per key, or a single entry
 /// for a shared part (<see cref="IsShared"/>), whose value every key of the batch has: a context part of a
-/// candidate-scoped entity (the country of a request's <c>(item, country)</c> keys). A store keyed by it can read one
-/// partition for the whole batch. <see cref="Keys"/> is the one-part key's keys; <see cref="Key"/> one part of one key.</para>
-/// <para>Pass it on by <c>in</c> where the signature allows (async methods cannot take <c>in</c> parameters).</para>
+/// candidate-scoped entity (the country of a request's <c>(item, country)</c> keys). <see cref="Keys"/> is the one-part
+/// key's keys; <see cref="Key"/> one part of one key.</para>
 /// <para>The keys live in the request's pooled buffers: they stay valid until the connector call completes,
 /// even past the request's own timeout, and not after. A connector that needs keys later must copy them.</para>
 /// </remarks>
@@ -28,7 +27,7 @@ public readonly struct EntityKeyBatch
     private readonly byte _parts;
     private readonly byte _shared;
 
-    /// <summary>A batch of one-part keys (the usual case): key i is <c>keys[i]</c>.</summary>
+    /// <summary>A batch of one-part keys: key i is <c>keys[i]</c>.</summary>
     public EntityKeyBatch(ReadOnlyMemory<EntityKey> keys)
         : this(keys, keys.Length, 0, keys.Length, 1, 0)
     {
@@ -51,7 +50,7 @@ public readonly struct EntityKeyBatch
     /// <summary>
     /// A batch of <paramref name="count"/> keys of <paramref name="layout"/>'s parts, from one memory per part
     /// (<paramref name="parts"/>[p]: <paramref name="count"/> keys, or one for a shared part), copied into a buffer of
-    /// its own. For a connector that calls another, and for tests.
+    /// its own.
     /// </summary>
     public static EntityKeyBatch Create(EntityKeyLayout layout, int count, params ReadOnlyMemory<EntityKey>[] parts)
     {
@@ -124,7 +123,6 @@ public readonly struct EntityKeyBatch
         }
     }
 
-    /// <summary>Part <paramref name="part"/> of key <paramref name="index"/>.</summary>
     public EntityKey Key(int index, int part)
     {
         if ((uint)index >= (uint)_count)
@@ -230,9 +228,9 @@ public readonly record struct CompiledFieldBinding(string Field, int FieldIndex,
 /// <para>Validity is tracked per field and key, and every (field, key) starts as missing: only values the connector
 /// actually wrote are ever read. A key absent from the response needs no call. Values written through
 /// <see cref="GetValues{T}"/> count once <see cref="SetValid"/> is called for that field and key; call it after the
-/// value is fully decoded, so a record that fails half-way never exposes an unwritten (pooled) value.
-/// <see cref="SetString"/> and the list setters (<see cref="SetInt64List"/> and its siblings) mark their value present
-/// themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no extra bookkeeping.</para>
+/// value is fully decoded. <see cref="SetString"/> and the list setters (<see cref="SetInt64List"/> and its siblings)
+/// mark their value present themselves. A connector reporting <see cref="FetchOutcome.Partial"/> therefore needs no
+/// extra bookkeeping.</para>
 /// <para>A writer belongs to one connector call while that call runs (each <c>max_batch</c> chunk gets its own), so
 /// implementations may write from any one thread at a time without synchronization. The chunks of one fetch share
 /// buffers: the memory <see cref="GetValues{T}"/> returns is this call's window of a fetch-wide array, so write only
@@ -265,46 +263,30 @@ public interface IFeatureBatchWriter
     /// <see cref="SetStringList"/> element: within this call, equal values return the same instance.
     /// </summary>
     /// <remarks>
-    /// <para>For a field whose values repeat across the keys of a call: a category, a brand, the tags of a
-    /// <c>list&lt;string&gt;</c>. A value that differs per key (a title, an id) gains nothing from it: decode that one
-    /// directly.</para>
     /// <para>The scope is the call: the table goes away with the writer, and nothing is kept process-wide. At most
-    /// 4,096 distinct values are kept; past that each call returns a new string. A lookup allocates nothing, and a
-    /// value seen before costs no string. A connector that wants reuse across requests holds its own pool, sized for
-    /// its data, and passes its strings to <see cref="SetString"/>.</para>
+    /// 4,096 distinct values are kept; past that each call returns a new string. A connector that wants reuse across
+    /// requests holds its own pool, sized for its data, and passes its strings to <see cref="SetString"/>.</para>
     /// </remarks>
     string Intern(ReadOnlySpan<char> value);
 
     /// <summary>
-    /// <see cref="Intern"/> for a value as UTF-8 bytes, as most stores return them: decoded without a string of its own
-    /// when the value was seen before. Invalid UTF-8 becomes U+FFFD, as <see cref="System.Text.Encoding.UTF8"/> decodes
-    /// it.
+    /// <see cref="Intern"/> for a value as UTF-8 bytes. Invalid UTF-8 becomes U+FFFD, as
+    /// <see cref="System.Text.Encoding.UTF8"/> decodes it.
     /// </summary>
     string InternUtf8(ReadOnlySpan<byte> utf8);
 
-    /// <summary>Writes a <c>list&lt;bool&gt;</c> field value.</summary>
-    /// <remarks>One setter per element type, named like the field's declared element type: the field's type decides the
-    /// width, so a connector decoding int32 ids (tags, topics, token ids) or float32 weights writes them as they are,
-    /// with no widened copy. A setter for another element type than the field's is a connector bug and throws. A
-    /// fixed-length field (<c>list&lt;float32,64&gt;</c>, an embedding) takes the same setter; a value of another length is
-    /// data, not a bug: the engine replaces it with the feature's default (or missing) where it stores it, and counts it
+    /// <remarks>A setter for another element type than the field's is a connector bug and throws. A fixed-length field
+    /// (<c>list&lt;float32,64&gt;</c>, an embedding) takes the same setter; a value of another length is data, not a
+    /// bug: the engine replaces it with the feature's default (or missing) where it stores it, and counts it
     /// (<c>column_out_of_range_total</c>), while recordings and the cache keep what the connector wrote.</remarks>
     void SetBoolList(int fieldIndex, int keyIndex, ReadOnlySpan<bool> value);
 
-    /// <summary>Writes a <c>list&lt;int32&gt;</c> field value.</summary>
-    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetInt32List(int fieldIndex, int keyIndex, ReadOnlySpan<int> value);
 
-    /// <summary>Writes a <c>list&lt;int64&gt;</c> field value.</summary>
-    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetInt64List(int fieldIndex, int keyIndex, ReadOnlySpan<long> value);
 
-    /// <summary>Writes a <c>list&lt;float32&gt;</c> field value.</summary>
-    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetFloat32List(int fieldIndex, int keyIndex, ReadOnlySpan<float> value);
 
-    /// <summary>Writes a <c>list&lt;float64&gt;</c> field value.</summary>
-    /// <inheritdoc cref="SetBoolList" path="/remarks"/>
     void SetFloat64List(int fieldIndex, int keyIndex, ReadOnlySpan<double> value);
 
     /// <summary>Writes a <c>list&lt;string&gt;</c> field value; no element may be null.</summary>
@@ -316,10 +298,10 @@ public enum FetchOutcome : byte
 {
     Ok = 1,
 
-    /// <summary>Some keys failed (e.g. one of several batched commands timed out); readers become Degraded.</summary>
+    /// <summary>Some keys failed; readers become Degraded.</summary>
     Partial,
 
-    /// <summary>The source failed; nodes reading its features fail (layer 2).</summary>
+    /// <summary>The source failed; nodes reading its features fail.</summary>
     Failed,
 }
 
@@ -330,7 +312,7 @@ public readonly record struct FetchStatus(FetchOutcome Outcome, int FailedKeys =
     public static FetchStatus Failed(string error) => new(FetchOutcome.Failed, 0, error);
 }
 
-/// <summary>A storage-specific feature fetcher. Implementations must be thread-safe.</summary>
+/// <summary>Implementations must be thread-safe.</summary>
 public interface IFeatureSourceConnector
 {
     /// <summary>Connector type and version, e.g. <c>redis_hash@1</c>.</summary>
@@ -344,14 +326,14 @@ public interface IFeatureSourceConnector
     bool Supports(EntityKeyLayout layout);
 
     /// <summary>
-    /// Fetches <paramref name="fields"/> for <paramref name="keys"/> and decodes them straight into
-    /// <paramref name="writer"/>. Must not write after it returns or after cancellation is acknowledged.
+    /// Must not write after it returns or after cancellation is acknowledged.
     /// </summary>
     /// <remarks>
-    /// <paramref name="fields"/> holds only the fields the request needs at this point (late materialization), so the same source may be called again later for other fields of the same keys. The engine stops
-    /// waiting at the source timeout or the request deadline, whichever comes first, and discards whatever the call
-    /// writes afterwards; the writer's buffers stay rented until the call actually completes. The same
-    /// holds for the keys of <paramref name="keys"/>: neither may be kept past completion.
+    /// <paramref name="fields"/> holds only the fields the request needs at this point, so the same source may be
+    /// called again later for other fields of the same keys. The engine stops waiting at the source timeout or the
+    /// request deadline, whichever comes first, and discards whatever the call writes afterwards; the writer's buffers
+    /// stay rented until the call actually completes. The same holds for the keys of <paramref name="keys"/>: neither
+    /// may be kept past completion.
     /// </remarks>
     ValueTask<FetchStatus> FetchAsync(
         EntityKeyBatch keys,

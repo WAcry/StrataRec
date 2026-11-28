@@ -12,8 +12,7 @@ public static class JsonIntegers
     private const int MaxDigits = 19;
 
     /// <summary>
-    /// The integer a JSON number value denotes, when it has no fractional part and fits a long. Plain integer text is
-    /// read without allocating.
+    /// The integer a JSON number value denotes, when it has no fractional part and fits a long.
     /// </summary>
     public static bool TryGetInt64(JsonNode? node, out long value)
     {

@@ -52,11 +52,10 @@ public sealed class FeatureRuntimeInfo
     public int FieldIndex { get; internal set; } = -1;
 
     /// <summary>
-    /// Scheduling wave, derived from the dependency graph. For a physical candidate feature, the
-    /// wave its fetch runs in: 0 when keyed by <c>entity_id</c>/context, w + 1 when keyed by a feature that becomes
-    /// available in wave w. For a derived feature, the wave after whose fetches it is computed: the latest wave of its
-    /// inputs, or -1 when it needs no candidate fetch at all (only <c>entity_id</c>, request inputs or context
-    /// features), in which case it is computed before wave 0.
+    /// For a physical candidate feature, the wave its fetch runs in: 0 when keyed by <c>entity_id</c>/context, w + 1
+    /// when keyed by a feature that becomes available in wave w. For a derived feature, the wave after whose fetches it
+    /// is computed: the latest wave of its inputs, or -1 when it needs no candidate fetch at all (only
+    /// <c>entity_id</c>, request inputs or context features), in which case it is computed before wave 0.
     /// </summary>
     public int Wave { get; internal set; }
 
@@ -104,11 +103,10 @@ internal readonly record struct ServiceArgSource(string Name, ColumnType Type, i
 
 /// <summary>
 /// Features that are supplied together: one source × one entity (same source within a wave is merged).
-/// How is the group's <see cref="Supply"/>: a fetched group calls its connector, a local group reads its table.
 /// </summary>
 /// <remarks>
 /// A group is the unit of merging, not of fetching: each fetch or read carries only the members the request needs at
-/// that point (late materialization), so other members can be supplied later, for other rows, or never.
+/// that point, so other members can be supplied later, for other rows, or never.
 /// </remarks>
 public sealed class FetchGroup
 {
@@ -495,10 +493,10 @@ public sealed class FeaturePlan
 
     /// <summary>
     /// Whether a plan that reads one feature of <paramref name="entity"/> from <paramref name="source"/> must hold
-    /// every physical feature of that table, as the plan builder registers them. That is every entity the binding's
-    /// cache applies to (<see cref="FeatureSourceResolver.Caches"/>). A <c>local</c> table is loaded whole by its
-    /// source, whatever the plan reads, and a <c>fetch</c> carries only the features a request needs: those plans hold
-    /// only what they read. False for a source with no binding or an unknown mode, which the feature plan reports.
+    /// every physical feature of that table. That is every entity the binding's cache applies to
+    /// (<see cref="FeatureSourceResolver.Caches"/>). A <c>local</c> table is loaded whole by its source, whatever the
+    /// plan reads, and a <c>fetch</c> carries only the features a request needs: those plans hold only what they read.
+    /// False for a source with no binding or an unknown mode, which the feature plan reports.
     /// </summary>
     public static bool NeedsWholeTable(SourceBindingArtifact bindings, string source, EntityDefinition entity)
     {

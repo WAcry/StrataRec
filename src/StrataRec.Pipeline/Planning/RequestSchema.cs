@@ -31,7 +31,6 @@ public sealed class RequestSchema
     private readonly int[] _contextIds; // the plan's context slot of each input; -1 for a schema not built with a plan
     private readonly byte[][] _utf8Names;
 
-    /// <summary>A schema of declared types, e.g. for a host that checks inputs against a schema it keeps itself.</summary>
     /// <param name="pipelineId">Named in messages: <c>not declared in the request_schema of pipeline 'p'</c>.</param>
     /// <param name="inputs">Input name → declared type (<c>int64</c>, <c>string?</c>, <c>list&lt;int32&gt;</c>, …).</param>
     public RequestSchema(string pipelineId, IReadOnlyDictionary<string, ColumnType> inputs)
@@ -191,8 +190,7 @@ public sealed class RequestSchema
     /// request must not hold (<see cref="StrictJson"/>: an input given twice, an escape that is not Unicode) is the one error
     /// reported then, at its pointer.
     /// </summary>
-    /// <remarks>Allocates the result and the values themselves (strings, arrays), nothing per input besides; errors only on
-    /// the error path. No input makes it throw.</remarks>
+    /// <remarks>No input makes it throw.</remarks>
     public bool TryRead(in JsonElement inputs, [NotNullWhen(true)] out RequestInputs? values, out IReadOnlyList<JsonBindingError> errors)
     {
         List<JsonBindingError>? problems = null;

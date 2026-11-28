@@ -6,7 +6,7 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Hosting.Workspace;
 
-/// <summary>An artifact loaded from a file: the typed model, its JSON document and its content id.</summary>
+/// <summary>An artifact loaded from a file.</summary>
 /// <param name="Value">The strictly deserialized model.</param>
 /// <param name="Document">The parsed JSON (comments and the editor's top-level <c>$schema</c> stripped); what is canonicalized and hashed.</param>
 /// <param name="Path">Path relative to the workspace root, used as the diagnostic artifact name.</param>
@@ -29,10 +29,10 @@ public sealed record LoadedArtifact<T>(T Value, JsonNode Document, string Path, 
 /// ├── tables/&lt;table_id&gt;.jsonc
 /// └── schemas/&lt;kind&gt;.schema.json        JSON Schemas the files name in "$schema" for editors (not read here)
 /// </code>
-/// File names must match the ids inside, so a path always tells you what a file defines; a file may end in
-/// <c>.jsonc</c> or <c>.json</c>, and one artifact defined by two files is an error. A file's top-level
-/// <c>$schema</c> is taken out before it is bound and hashed (<see cref="ArtifactSchemas.TryRemoveSchemaMember"/>).
-/// Every problem is reported as a diagnostic with the file and a JSON pointer, never as an exception.
+/// File names must match the ids inside; a file may end in <c>.jsonc</c> or <c>.json</c>, and one artifact defined by
+/// two files is an error. A file's top-level <c>$schema</c> is taken out before it is bound and hashed
+/// (<see cref="ArtifactSchemas.TryRemoveSchemaMember"/>). Every problem is reported as a diagnostic with the file and a
+/// JSON pointer, never as an exception.
 /// </remarks>
 public sealed class ConfigWorkspace
 {
@@ -169,9 +169,8 @@ public sealed class ConfigWorkspace
 
     /// <summary>
     /// The pipelines to compile or load for <paramref name="ids"/>: those, then the <c>fallback_pipeline</c> of each
-    /// that is not among them, since a fallback that is not served silently never happens. A fallback not in the
-    /// workspace is an error at the pipeline's <c>/fallback_pipeline</c>, and the pipeline is added to
-    /// <paramref name="unresolved"/>.
+    /// that is not among them. A fallback not in the workspace is an error at the pipeline's <c>/fallback_pipeline</c>,
+    /// and the pipeline is added to <paramref name="unresolved"/>.
     /// </summary>
     public List<string> WithFallbacks(IEnumerable<string> ids, DiagnosticBag diagnostics, out HashSet<string> unresolved)
     {
@@ -200,9 +199,9 @@ public sealed class ConfigWorkspace
     }
 
     /// <summary>
-    /// Warns, for each of <paramref name="ids"/> with a fallback pipeline, about inputs the fallback would fail requests
-    /// on (<see cref="RequestSchema.CheckFallback"/>); <paramref name="schemaOf"/> gives a pipeline's compiled schema,
-    /// null when it did not compile (its errors are reported already).
+    /// Warns, for each of <paramref name="ids"/> with a fallback pipeline, about inputs the fallback would fail
+    /// requests on (<see cref="RequestSchema.CheckFallback"/>); <paramref name="schemaOf"/> gives a pipeline's compiled
+    /// schema, null when it did not compile.
     /// </summary>
     public void CheckFallbackInputs(IEnumerable<string> ids, Func<string, RequestSchema?> schemaOf, DiagnosticBag diagnostics)
     {
@@ -484,17 +483,15 @@ public sealed class ConfigWorkspace
     }
 
     /// <summary>
-    /// The workspace-relative path of the file a diagnostic's artifact label names, for tools that print diagnostics with
-    /// a file, line and column: <c>pipeline:home_feed</c> is <c>pipelines/home_feed.jsonc</c> (a file is named by the id
-    /// inside it, which loading checks), <c>policy</c> is <c>policy.jsonc</c>, and a label that is a path (as loading and
-    /// release errors use) is that file. The whole label is matched first, since an id may contain spaces; only when it
-    /// names no file is the arm combination an error was found in (<c>pipeline:home_feed with exp_a/x + exp_b/y</c>)
-    /// taken off. Null for a label that names no file of the workspace (a manifest, the workspace as a whole) or a file
-    /// that does not exist: never another file.
+    /// The workspace-relative path of the file a diagnostic's artifact label names: <c>pipeline:home_feed</c> is
+    /// <c>pipelines/home_feed.jsonc</c>, <c>policy</c> is <c>policy.jsonc</c>, and a label that is a path is that file.
+    /// The whole label is matched first, since an id may contain spaces; only when it names no file is the arm
+    /// combination an error was found in (<c>pipeline:home_feed with exp_a/x + exp_b/y</c>) taken off. Null for a label
+    /// that names no file of the workspace (a manifest, the workspace as a whole) or a file that does not exist.
     /// </summary>
     /// <param name="root">The workspace directory.</param>
     /// <param name="artifact">The diagnostic's <see cref="ConfigDiagnostic.Artifact"/>.</param>
-    /// <param name="exact">True when <paramref name="artifact"/> is only the file's label, so the file says all it says.</param>
+    /// <param name="exact">True when <paramref name="artifact"/> is only the file's label.</param>
     public static string? FileOf(string root, string artifact, out bool exact)
     {
         exact = true;

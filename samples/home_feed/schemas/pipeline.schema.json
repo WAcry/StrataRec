@@ -74,7 +74,7 @@
       }
     },
     "request_columns": {
-      "description": "Request columns nodes write, one value per request, read as req.<name> by what runs after the node that writes one: a later node's expressions and when, a log tap, the output's columns and values (not a funnel key, decided when the request starts, nor a derived feature). Written by RequestAggregate@1 (a count, sum, mean, min or max over the live candidates) or by a custom operator. Declared as candidate columns are (type, default, flow): a value no node wrote is missing, and a non-nullable one needs a node that cannot be skipped to write it before every reader. Experiments may add request columns, not change these.",
+      "description": "Request columns nodes write, one value per request, read as req.<name> by what runs after the node that writes one: a later node's expressions and when, a log tap, the output's columns and values (not a funnel key, decided when the request starts, nor a derived feature). Written by RequestAggregate@1 or by a custom operator. Declared as candidate columns are (type, default, flow): a value no node wrote is missing, and a non-nullable one needs a node that cannot be skipped to write it before every reader. Experiments may add request columns, not change these.",
       "type": "object",
       "additionalProperties": {
         "type": "object",
@@ -221,7 +221,7 @@
             ]
           },
           "min_remaining_ms": {
-            "description": "The node is skipped, as by a false when, when less than this many milliseconds are left of the request's deadline as it is about to start: for a node not worth starting late. Default: it starts whatever is left.",
+            "description": "The node is skipped, as by a false when, when less than this many milliseconds are left of the request's deadline as it is about to start. Default: it starts whatever is left.",
             "type": [
               "integer",
               "null"
@@ -464,7 +464,7 @@
                       "type": "string"
                     },
                     "max_items": {
-                      "description": "The most rows the node appends: the first new ids of the answer. Also the node's row limit, which sizes the request's candidate table.",
+                      "description": "The most rows the node appends: the first new ids of the answer.",
                       "type": "integer"
                     },
                     "rank_col": {
@@ -760,7 +760,7 @@
                       "type": "integer"
                     },
                     "answer": {
-                      "description": "What the answer lists: rank, the 1-based window positions {{rank}} shows, or entity_id, the rows' entity ids (JSON integers for int64 keys, strings for string keys). No default: the prompt decides.",
+                      "description": "What the answer lists: rank, the 1-based window positions {{rank}} shows, or entity_id, the rows' entity ids (JSON integers for int64 keys, strings for string keys). No default.",
                       "type": "string",
                       "enum": [
                         "rank",
@@ -1140,7 +1140,7 @@
                             ],
                             "properties": {
                               "ttl_ms": {
-                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
+                                "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
                                 "type": [
                                   "integer",
                                   "null"
@@ -1209,7 +1209,7 @@
                       }
                     },
                     "max_calls": {
-                      "description": "The most rows it calls for, 1 to 1000: the first ones in rank order. Required: every row is a run of a pipeline, so the node says how many it may start. The rows after them get no values, and the node is degraded.",
+                      "description": "The most rows it calls for, 1 to 1000: the first ones in rank order. Required. The rows after them get no values, and the node is degraded.",
                       "type": "integer"
                     },
                     "timeout_ms": {
@@ -1227,7 +1227,7 @@
                       ],
                       "properties": {
                         "ttl_ms": {
-                          "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
+                          "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
                           "type": [
                             "integer",
                             "null"
@@ -1326,7 +1326,7 @@
                       }
                     },
                     "limit_param": {
-                      "description": "Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already there does not use one up. Required, as every row source's limit is: it bounds the rows a request may hold . A parameter without a value (a map's key set to null) appends none.",
+                      "description": "Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already there does not use one up. Required. A parameter without a value (a map's key set to null) appends none.",
                       "type": "string"
                     },
                     "columns": {
@@ -1354,7 +1354,7 @@
                       ],
                       "properties": {
                         "ttl_ms": {
-                          "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key, so results computed together do not all expire together. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
+                          "description": "How long a result is served, in milliseconds, e.g. 3600000. Each result's lifetime varies by ±10% with its key. Leave out every setting (\"cache\": {}) to keep nothing: a call then takes the result of a run, done or under way, only while its own request and the run's have not ended (the same request, or two its host sends as one group), and runs the pipeline otherwise.",
                           "type": [
                             "integer",
                             "null"
@@ -1724,7 +1724,7 @@
           }
         },
         "values": {
-          "description": "Output name → request-level expression (req.*, ctx.*, param.*; usually a plain req.* reference), returned once with the result, beside its items: what the request's nodes computed for the caller.",
+          "description": "Output name → request-level expression (req.*, ctx.*, param.*; usually a plain req.* reference), returned once with the result, beside its items.",
           "type": "object",
           "additionalProperties": {
             "type": "string"

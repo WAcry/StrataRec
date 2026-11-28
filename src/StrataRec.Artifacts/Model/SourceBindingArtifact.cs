@@ -87,8 +87,7 @@ public sealed class SourceBindingArtifact
 /// <c>mode</c> says where the values come from and selects which of the other settings apply: <c>fetch</c> uses
 /// <c>connector</c>, <c>timeout_ms</c>, <c>max_batch</c>, connector settings and optionally <c>cache</c>; <c>local</c>
 /// uses <c>max_bytes</c> and <c>bootstrap</c>; <c>service</c> uses <c>service</c> and <c>timeout_ms</c>. A setting the
-/// binding's mode does not take is an error, so a binding switched from one mode to another cannot keep a setting that
-/// silently does nothing.
+/// binding's mode does not take is an error.
 /// </remarks>
 public sealed class FeatureSourceBinding
 {
@@ -203,7 +202,6 @@ public sealed class CacheBinding
         "it fails or is slow, the keys go to the origin.")]
     public DistributedCacheBinding? Distributed { get; init; }
 
-    /// <summary>The form of <see cref="Version"/>.</summary>
     public const string VersionPattern = "^[A-Za-z0-9._-]{1,64}$";
 }
 

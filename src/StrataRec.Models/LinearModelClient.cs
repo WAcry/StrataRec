@@ -11,13 +11,12 @@ namespace StrataRec.Models;
 /// <c>activation(bias + Σ weight_i · input_i)</c> over float32 <c>[batch]</c> inputs.
 /// </summary>
 /// <remarks>
-/// <para>Intended for local development, tests, replay fixtures and as a cheap fallback model. Its signature declares
-/// every input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c> sends every column as its
-/// declared type, so it feeds float32 columns and writes float32 ones, and reports a column of another type mapped to
-/// it at load time (a float64, bool or int one weighs in through a float32 derived feature, e.g. <c>is_new ? 1.0 :
-/// 0.0</c>). A call of no batch (<see cref="ServiceCall.BatchSize"/> 0) whose inputs are float32 scalars (shape
-/// <c>[]</c>) is computed once, one value per output: what a feature source in mode <c>service</c> sends for the
-/// features of an entity with args. A call with another tensor fails. Settings:</para>
+/// <para>Its signature declares every input and output float32 <c>[-1]</c>, one value per row: <c>ModelScorer@1</c>
+/// sends every column as its declared type, so it feeds float32 columns and writes float32 ones, and reports a column
+/// of another type mapped to it at load time (a float64, bool or int one weighs in through a float32 derived feature,
+/// e.g. <c>is_new ? 1.0 : 0.0</c>). A call of no batch (<see cref="ServiceCall.BatchSize"/> 0) whose inputs are float32
+/// scalars (shape <c>[]</c>) is computed once, one value per output: what a feature source in mode <c>service</c> sends
+/// for the features of an entity with args. A call with another tensor fails. Settings:</para>
 /// <code>
 /// { "client": "linear@1",
 ///   "outputs": { "p_click": { "bias": -2.0, "weights": { "smoothed_ctr": 8.0 }, "activation": "sigmoid" } },
@@ -190,7 +189,6 @@ public sealed class LinearModelClient : IServiceClient
     }
 }
 
-/// <summary>One output of <see cref="LinearModelClient"/>.</summary>
 public sealed record LinearOutput(string Name, double Bias, IReadOnlyDictionary<string, double> Weights, bool Sigmoid);
 
 /// <summary>Settings of <c>linear@1</c>.</summary>

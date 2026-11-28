@@ -42,7 +42,6 @@ public sealed class CacheKeyspace
 
     public string Entity { get; }
 
-    /// <summary>Every key of the keyspace has this layout.</summary>
     public EntityKeyLayout Key { get; }
 
     /// <summary>
@@ -57,7 +56,7 @@ public sealed class CacheKeyspace
     /// <c>%25</c>, <c>:</c> as <c>%3A</c>), e.g. <c>10042:US</c>.
     /// </summary>
     /// <remarks>Unambiguous among keys of one layout: no part's text holds a <c>:</c>, so a text splits back into its
-    /// parts, and each position has one type. A one-part string is not escaped: nothing follows it.</remarks>
+    /// parts, and each position has one type. A one-part string is not escaped.</remarks>
     public static string KeyText(ReadOnlySpan<EntityKey> parts)
     {
         if (parts.Length == 1)
@@ -130,15 +129,15 @@ public readonly record struct CacheStoreEntry(string Key, ReadOnlyMemory<byte> R
 /// A distributed cache shared by a deployment's instances, of a feature source in mode <c>cache</c> or of a service
 /// with a <c>cache</c>: the engine reads it for the keys its in-process table misses, before the connector or the
 /// service's client, and writes back what they returned. Records are opaque bytes the engine encodes; the store only
-/// moves them. <c>redis@1</c> (package StrataRec.Redis) is one; a host can plug in another distributed cache.
+/// moves them.
 /// </summary>
 /// <remarks>
 /// <para>A store is a binding instance: the whole lifetime contract (create, share, load, dispose) is on
 /// <see cref="BindingContext"/>. Connect in <see cref="ILoadable.LoadAsync"/>, release the connection when disposed.</para>
-/// <para>The store is only an optimisation. A read that throws, or that the engine stops waiting for at the store's
-/// <c>timeout_ms</c>, sends its keys on to the connector or the client, while the fetch's or the call's bound (and so the
-/// request's deadline) leaves time to send them; a read cut off by that bound sends nothing on, as the connector or the
-/// client would be cut off too. A write that fails is counted and forgotten. So a store needs no retries of its own and should fail fast.</para>
+/// <para>A read that throws, or that the engine stops waiting for at the store's <c>timeout_ms</c>, sends its keys on
+/// to the connector or the client, while the fetch's or the call's bound (and so the request's deadline) leaves time to
+/// send them; a read cut off by that bound sends nothing on. A write that fails is counted and forgotten. So a store
+/// needs no retries of its own and should fail fast.</para>
 /// <para>Implementations must be thread-safe: every request of every plan sharing the instance reads it concurrently.</para>
 /// </remarks>
 public interface ICacheStore
@@ -152,12 +151,12 @@ public interface ICacheStore
     /// (<see cref="CacheKeyspace.KeyText"/>), stored under the keyspace's <see cref="CacheKeyspace.Prefix"/>.
     /// </summary>
     /// <remarks>
-    /// <para>Called inline on the request's thread, like a connector's fetch: the synchronous part (up to the first
-    /// asynchronous wait) runs there and the engine does not bound it; only the returned task is waited for, within the
-    /// tier's <c>timeout_ms</c> and the source's budget. So send the request and return: do the I/O asynchronously and
-    /// never block before returning. An answer the engine first finds complete after the tier's time or the source's
-    /// deadline is late, however it arrived: its records are not used, and its keys go to the connector if the source
-    /// has time left. Chunks not sent yet when the tier's time is up are not sent.</para>
+    /// <para>Called inline on the request's thread: the synchronous part (up to the first asynchronous wait) runs there
+    /// and the engine does not bound it; only the returned task is waited for, within the tier's <c>timeout_ms</c> and
+    /// the source's budget. So send the request and return: do the I/O asynchronously and never block before returning.
+    /// An answer the engine first finds complete after the tier's time or the source's deadline is late: its records
+    /// are not used, and its keys go to the connector if the source has time left. Chunks not sent yet when the tier's
+    /// time is up are not sent.</para>
     /// <para><paramref name="keys"/> and <paramref name="records"/> are the request's pooled buffers: valid until the returned
     /// task completes, also when the engine stopped waiting for it earlier, and not after. Write nothing into
     /// <paramref name="records"/> after completing; the bytes it points at must stay unchanged (a fresh array per value, or

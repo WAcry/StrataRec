@@ -47,9 +47,7 @@ public sealed class ExpressionCounters
     /// an <c>int32</c> column, a list with such an element written to a <c>list&lt;int32&gt;</c> column (counted once
     /// per list), or a list of another length written to a <c>list&lt;E,N&gt;</c> column, feature or context value.
     /// </summary>
-    /// <remarks>Kept apart from the non-finite count (<c>column_nonfinite_total</c>): NaN/±∞ points at the arithmetic
-    /// of an expression, an out-of-range value at a column declared too narrow for its data (or an embedding of another
-    /// model than the one declared).</remarks>
+    /// <remarks>Kept apart from the non-finite count (<c>column_nonfinite_total</c>).</remarks>
     public long OutOfRange => Interlocked.Read(ref _outOfRange);
 
     public void AddOutOfRange(long count) => Interlocked.Add(ref _outOfRange, count);

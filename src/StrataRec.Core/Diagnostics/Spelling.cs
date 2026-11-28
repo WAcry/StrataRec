@@ -1,19 +1,18 @@
 namespace StrataRec.Core.Diagnostics;
 
 /// <summary>
-/// "Did you mean.?" for misspelled names, so an error can say how to fix it (<c>diversty_cap</c> for
-/// <c>diversity_cap</c>).
+/// "Did you mean.?" for misspelled names (<c>diversty_cap</c> for <c>diversity_cap</c>).
 /// </summary>
 public static class Spelling
 {
     /// <summary>
     /// Returns the candidate closest to <paramref name="name"/> by <see cref="EditDistance"/>, or
-    /// <see langword="null"/> when none is close enough to be a plausible typo. Ties resolve to the ordinally
-    /// smallest candidate, so the suggestion is deterministic.
+    /// <see langword="null"/> when none is close enough to be a plausible typo. Ties resolve to the ordinally smallest
+    /// candidate.
     /// </summary>
     /// <remarks>
-    /// A candidate qualifies when its distance is at most a third of <paramref name="name"/>'s length, clamped to
-    /// [1, 3]: one edit for short names, up to three for long ones.
+    /// A candidate qualifies when its distance is at most a third of <paramref name="name"/>'s length, clamped to [1,
+    /// 3].
     /// </remarks>
     public static string? Closest(string name, IEnumerable<string> candidates)
     {

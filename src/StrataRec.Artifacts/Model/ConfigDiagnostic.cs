@@ -19,8 +19,6 @@ public enum DiagnosticSeverity : byte
 /// <param name="Code">Stable machine-readable code, e.g. <c>COLUMN_NO_PRODUCER</c>.</param>
 /// <param name="Artifact">Artifact or arm the problem is in, e.g. <c>pipeline:home_feed</c> or <c>exp_mmr/mmr</c>.</param>
 /// <param name="Pointer">RFC 6901 pointer into the artifact (or patchable view), e.g. <c>/nodes/fusion/config/base_expr</c>.</param>
-/// <param name="Message">What is wrong.</param>
-/// <param name="Hint">How to fix it, when known.</param>
 public sealed record ConfigDiagnostic(
     DiagnosticSeverity Severity,
     string Code,
@@ -69,7 +67,6 @@ public sealed record ConfigDiagnostic(
     }
 }
 
-/// <summary>Collects diagnostics during a compile or validation pass.</summary>
 public sealed class DiagnosticBag
 {
     private readonly List<ConfigDiagnostic> _items = new();
@@ -100,8 +97,7 @@ public sealed class DiagnosticBag
     public void Add(ConfigDiagnostic diagnostic) => _items.Add(diagnostic);
 
     /// <summary>
-    /// Removes and returns the diagnostics recorded since <paramref name="start"/> (a previous <see cref="Count"/>), so a
-    /// caller can re-attribute them, e.g. to the experiment arm whose patch caused them.
+    /// Removes and returns the diagnostics recorded since <paramref name="start"/> (a previous <see cref="Count"/>).
     /// </summary>
     public List<ConfigDiagnostic> RemoveFrom(int start)
     {

@@ -20,9 +20,8 @@ public enum EntityKeyPartKind : byte
     Feature,
 
     /// <summary>
-    /// A context-scope feature, <c>ctx.&lt;entity&gt;.&lt;feature&gt;</c> (physical or derived): one value per request, shared
-    /// like a request input, which the context prefetch stores before it fetches the entities keyed by it (a key resolved by
-    /// another source, such as a user id looked up from a login key).
+    /// A context-scope feature, <c>ctx.&lt;entity&gt;.&lt;feature&gt;</c> (physical or derived): one value per request,
+    /// shared like a request input, which the context prefetch stores before it fetches the entities keyed by it.
     /// </summary>
     ContextFeature,
 }
@@ -119,7 +118,7 @@ public sealed class EntityArgDefinition
 
 /// <summary>A feature an entity's key or arguments read: fetched (or computed) before the entity's features.</summary>
 /// <param name="Feature">The feature's catalog name.</param>
-/// <param name="Context">Whether it is a context feature (<c>ctx.</c>), as the reference says.</param>
+/// <param name="Context">Whether it is a context feature (<c>ctx.</c>).</param>
 /// <param name="Reference">The key part or argument as the catalog writes it.</param>
 /// <param name="Pointer">Where the catalog declares the part or argument.</param>
 public readonly record struct EntityFeatureRead(string Feature, bool Context, string Reference, string Pointer);
@@ -129,10 +128,10 @@ public readonly record struct EntityFeatureRead(string Feature, bool Context, st
 /// a service computes, its arguments and no key.
 /// </summary>
 /// <remarks>
-/// The key decides the rest. The entity is context-scoped (one key per request, <c>ctx.&lt;entity&gt;.*</c>) when every part
-/// is a context part (a request input or a context feature), candidate-scoped (one key per row, <c>col.&lt;entity&gt;.*</c>)
-/// otherwise; a part that is a feature makes the entity's features wait for that feature, as a foreign key does, on either
-/// side: a context entity keyed by a context feature is fetched once the source of that feature has answered.
+/// The entity is context-scoped (one key per request, <c>ctx.&lt;entity&gt;.*</c>) when every part is a context part (a
+/// request input or a context feature), candidate-scoped (one key per row, <c>col.&lt;entity&gt;.*</c>) otherwise; a
+/// part that is a feature makes the entity's features wait for that feature on either side: a context entity keyed by a
+/// context feature is fetched once the source of that feature has answered.
 /// </remarks>
 public sealed class EntityDefinition
 {
@@ -140,7 +139,7 @@ public sealed class EntityDefinition
 
     public required string Name { get; init; }
 
-    /// <summary>The key's parts, in declared order: the order of the tuple. Empty for an entity with <see cref="Args"/>.</summary>
+    /// <summary>The key's parts, in declared order. Empty for an entity with <see cref="Args"/>.</summary>
     public required IReadOnlyList<EntityKeyPartDefinition> Key { get; init; }
 
     /// <summary>
@@ -161,7 +160,8 @@ public sealed class EntityDefinition
 
     internal bool KeyIsList { get; init; }
 
-    /// <summary>Whether a part or an argument reads a feature: the entity's features are then fetched after it, as a foreign key's are.</summary>
+    /// <summary>Whether a part or an argument reads a feature: the entity's features are then fetched after
+    /// it.</summary>
     public bool HasFeatureParts => FeatureReads.Count > 0;
 
     /// <summary>Every part is a context part (a request input or a context feature), or the entity has arguments: one
@@ -269,8 +269,8 @@ public sealed class FeatureDefinition
 
     public required EntityDefinition Entity { get; init; }
 
-    /// <summary>Storage type. Physical features are nullable unless they declare a default. Derived features
-    /// without a default get their nullability from the expression when the plan is compiled.</summary>
+    /// <summary>Physical features are nullable unless they declare a default. Derived features without a default get
+    /// their nullability from the expression when the plan is compiled.</summary>
     public required ColumnType Type { get; init; }
 
     public string? Source { get; init; }
@@ -339,7 +339,7 @@ public sealed class FeatureCatalog
     /// </summary>
     public IReadOnlyCollection<string> Unusable { get; }
 
-    /// <summary>All features ordered by name (ordinal), so ids derived from positions are deterministic.</summary>
+    /// <summary>All features ordered by name (ordinal).</summary>
     public IReadOnlyList<FeatureDefinition> Features { get; }
 
     public bool TryGet(string name, out FeatureDefinition feature) => _features.TryGetValue(name, out feature!);

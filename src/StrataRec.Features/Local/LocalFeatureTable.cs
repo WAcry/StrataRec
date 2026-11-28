@@ -2,9 +2,9 @@ using StrataRec.Core.Diagnostics;
 
 namespace StrataRec.Features.Local;
 
-/// <summary>Limits and tuning of one <see cref="LocalFeatureTable"/>. A served table takes its options from its binding
-/// (<c>max_bytes</c>) and the engine's defaults. A <c>local</c> table's identity covers the binding, so its options never
-/// change; a cache table is kept when only its limits change, and takes the new ones (<see cref="LocalFeatureTable.Retune"/>).</summary>
+/// <summary>A served table takes its options from its binding (<c>max_bytes</c>) and the engine's defaults. A
+/// <c>local</c> table's identity covers the binding, so its options never change; a cache table is kept when only its
+/// limits change, and takes the new ones (<see cref="LocalFeatureTable.Retune"/>).</summary>
 public sealed class LocalFeatureTableOptions
 {
     public static LocalFeatureTableOptions Default { get; } = new();
@@ -16,10 +16,10 @@ public sealed class LocalFeatureTableOptions
     /// <summary>Largest page. Pages start small and double up to this; a record larger than it gets a page of its own.</summary>
     public int PageSize { get; init; } = 1 << 20;
 
-    /// <summary>Superseded bytes below this never trigger a compaction, so a small table is not rebuilt every few updates.</summary>
+    /// <summary>Superseded bytes below this never trigger a compaction.</summary>
     public long CompactionMinBytes { get; init; } = 1 << 20;
 
-    /// <summary>Keys the index holds before it first grows (a snapshot's record count, when known).</summary>
+    /// <summary>Keys the index holds before it first grows.</summary>
     public int InitialCapacity { get; init; }
 
     /// <summary>The hash of a hashed key (<see cref="TableKeys"/>); tests inject a weak one to force
@@ -186,15 +186,15 @@ public sealed class LocalFeatureTable
     /// <summary>
     /// True once the table holds a complete load: its first reload completed or its first checkpoint was written.
     /// Before that it is empty, and a request that reads it fails the features it needs instead of serving them as
-    /// missing (an empty table would answer "no value" for every key).
+    /// missing.
     /// </summary>
     public bool IsLoaded => _loaded.Task.IsCompleted;
 
     /// <summary>Completes when <see cref="IsLoaded"/> becomes true (never faults; a failed load is the source's error).</summary>
     public Task WhenLoaded => _loaded.Task;
 
-    /// <summary>Metric tags of the table: <c>stratarec.source</c>, <c>stratarec.entity</c>; recording a measurement
-    /// allocates nothing. Also for whoever runs the table's source (its failures).</summary>
+    /// <summary>Metric tags of the table: <c>stratarec.source</c>, <c>stratarec.entity</c>. Also for whoever runs the
+    /// table's source (its failures).</summary>
     public ReadOnlySpan<KeyValuePair<string, object?>> MetricTags => _tags;
 
     internal KeyValuePair<string, object?>[] HitTags { get; }

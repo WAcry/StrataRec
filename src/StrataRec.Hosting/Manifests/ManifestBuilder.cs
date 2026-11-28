@@ -99,8 +99,7 @@ public static class ManifestBuilder
     /// <c>seq</c> one more, <paramref name="manifestId"/> its <c>previous</c>), listing them in
     /// <see cref="ReleaseManifest.Revoked"/> with what the manifest revoked before. Nothing is compiled or validated.
     /// What the release requires loses what the removed experiments required
-    /// (<see cref="ManifestExperiment.Requires"/>), so removing the experiment that needs a capability a rolled-back
-    /// binary lacks makes the release one it serves. Null after reporting errors.
+    /// (<see cref="ManifestExperiment.Requires"/>). Null after reporting errors.
     /// </summary>
     /// <param name="experiments">Experiments of the manifest; a name it does not release changes nothing.</param>
     public static async ValueTask<ReleaseManifest?> RevokeAsync(
@@ -255,10 +254,10 @@ public static class ManifestBuilder
     }
 
     /// <summary>
-    /// Reads the manifest stored under <paramref name="manifestId"/>: what a node does with the id a
-    /// pointer names. Returns null after reporting <c>MANIFEST_ID_INVALID</c>, <c>MANIFEST_UNREADABLE</c> (the store
-    /// failed, or the blob is damaged), <c>MANIFEST_UNKNOWN</c> (the store does not have it) or <c>MANIFEST_SCHEMA</c>, at
-    /// the artifact <c>manifest:&lt;id&gt;</c>. Cancellation and failures of the store other than I/O propagate.
+    /// Reads the manifest stored under <paramref name="manifestId"/>. Returns null after reporting
+    /// <c>MANIFEST_ID_INVALID</c>, <c>MANIFEST_UNREADABLE</c> (the store failed, or the blob is damaged),
+    /// <c>MANIFEST_UNKNOWN</c> (the store does not have it) or <c>MANIFEST_SCHEMA</c>, at the artifact
+    /// <c>manifest:&lt;id&gt;</c>. Cancellation and failures of the store other than I/O propagate.
     /// </summary>
     public static async ValueTask<ReleaseManifest?> ReadAsync(
         IArtifactStore store, string manifestId, DiagnosticBag diagnostics, CancellationToken cancellationToken = default)

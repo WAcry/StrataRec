@@ -8,9 +8,8 @@ namespace StrataRec.Artifacts.Storage;
 /// A process-local <see cref="IArtifactStore"/> for tests, draft previews and single-process tools. Thread-safe.
 /// </summary>
 /// <remarks>
-/// Blobs are kept as private copies: <see cref="TryGetAsync"/> returns a fresh array each time, so callers cannot
-/// corrupt the store by mutating what they received. Reads are still verified against the id, as the interface
-/// requires.
+/// <see cref="TryGetAsync"/> returns a fresh array each time, so callers cannot corrupt the store by mutating what they
+/// received. Reads are still verified against the id.
 /// </remarks>
 public sealed class InMemoryArtifactStore : IArtifactStore
 {

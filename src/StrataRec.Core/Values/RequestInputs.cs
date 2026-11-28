@@ -16,7 +16,6 @@ public sealed class RequestInputs : IReadOnlyDictionary<string, ScalarValue>
     {
     }
 
-    /// <param name="capacity">How many inputs will be set.</param>
     public RequestInputs(int capacity) => _values = new Dictionary<string, ScalarValue>(capacity, StringComparer.Ordinal);
 
     /// <summary>Creates an empty, mutable instance.</summary>
@@ -56,7 +55,6 @@ public sealed class RequestInputs : IReadOnlyDictionary<string, ScalarValue>
 
     public bool TryGetValue(string key, [MaybeNullWhen(false)] out ScalarValue value) => _values.TryGetValue(key, out value);
 
-    /// <summary>A struct enumerator.</summary>
     public Dictionary<string, ScalarValue>.Enumerator GetEnumerator() => _values.GetEnumerator();
 
     IEnumerator<KeyValuePair<string, ScalarValue>> IEnumerable<KeyValuePair<string, ScalarValue>>.GetEnumerator() => _values.GetEnumerator();

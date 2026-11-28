@@ -43,7 +43,6 @@ public static class JsonCanonicalizer
     /// <exception cref="JsonCanonicalizationException">The tree contains a value outside I-JSON.</exception>
     public static byte[] Canonicalize(JsonNode? node) => JsonNodeUtilities.StrictUtf8.GetBytes(CanonicalizeToString(node));
 
-    /// <summary>Returns the canonical form of <paramref name="node"/> as a string (before UTF-8 encoding).</summary>
     /// <exception cref="JsonCanonicalizationException">The tree contains a value outside I-JSON.</exception>
     public static string CanonicalizeToString(JsonNode? node)
     {

@@ -3,7 +3,6 @@ using System.Globalization;
 
 namespace StrataRec.Core.Types;
 
-/// <summary>Physical storage kind of a column or value.</summary>
 public enum StorageKind : byte
 {
     Bool = 1,
@@ -12,15 +11,14 @@ public enum StorageKind : byte
     Float32,
     Float64,
     /// <summary>
-    /// A string of any length: a category, an id, a title, a prompt or a generated reason.
+    /// A string of any length.
     /// </summary>
     String,
 
     /// <summary>
     /// <c>list&lt;E&gt;</c> of one element kind (<see cref="ColumnType.Element"/>): <c>bool</c>, <c>int32</c>,
     /// <c>int64</c>, <c>float32</c>, <c>float64</c> or <c>string</c>, of any length or of a fixed one
-    /// (<c>list&lt;E,N&gt;</c>, <see cref="ColumnType.FixedLength"/>). A vector (an embedding) is a fixed-length float
-    /// list.
+    /// (<c>list&lt;E,N&gt;</c>, <see cref="ColumnType.FixedLength"/>). A vector is a fixed-length float list.
     /// </summary>
     List,
 }
@@ -36,12 +34,10 @@ public enum StorageKind : byte
 /// element written by whoever builds it.</para>
 /// <para>A list may declare its length (<c>list&lt;float32,64&gt;</c>, <see cref="FixedLength"/>): every value of the
 /// type then holds exactly that many elements. The storage is the same as a list of any length's; writers check the
-/// length instead, and a value of another length is replaced as a whole, like a list with an element outside int32
-/// storage.</para>
+/// length instead, and a value of another length is replaced as a whole.</para>
 /// </remarks>
 public readonly struct ColumnType : IEquatable<ColumnType>
 {
-    /// <param name="kind">The storage kind.</param>
     /// <param name="nullable">Whether a row may be missing.</param>
     /// <param name="element">A list's element kind (<see cref="IsListElement"/>); 0 for other kinds.</param>
     /// <param name="fixedLength">A list's length when the type fixes it (at least 1); 0 for a list of any length and for other kinds.</param>

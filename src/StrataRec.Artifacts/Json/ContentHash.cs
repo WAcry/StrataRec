@@ -5,9 +5,8 @@ using System.Text.Json.Nodes;
 namespace StrataRec.Artifacts.Json;
 
 /// <summary>
-/// Content ids of artifacts: <c>sha256:</c> followed by the 64 lowercase hex digits of the SHA-256 of the
-/// RFC 8785 canonical bytes. Equal content always yields an equal id, independent of key
-/// order, whitespace and comments, so manifests reference artifacts by id and nodes cache them by id.
+/// Content ids of artifacts: <c>sha256:</c> followed by the 64 lowercase hex digits of the SHA-256 of the RFC 8785
+/// canonical bytes. Equal content always yields an equal id, independent of key order, whitespace and comments.
 /// </summary>
 /// <remarks>
 /// Only the lowercase form is valid. Accepting uppercase digits would give one artifact two ids, and the id is
@@ -15,13 +14,10 @@ namespace StrataRec.Artifacts.Json;
 /// </remarks>
 public static class ContentHash
 {
-    /// <summary>The algorithm prefix of every content id.</summary>
     public const string Prefix = "sha256:";
 
-    /// <summary>Number of hex digits after the prefix.</summary>
     public const int HexDigestLength = 64;
 
-    /// <summary>Total length of a content id string.</summary>
     public const int ContentIdLength = 71;
 
     private const string LowerHex = "0123456789abcdef";

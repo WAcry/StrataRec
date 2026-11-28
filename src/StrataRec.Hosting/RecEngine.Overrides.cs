@@ -6,7 +6,6 @@ using StrataRec.Experiments.Compilation;
 
 namespace StrataRec.Hosting;
 
-/// <summary>Requests that try a configuration of their own (<see cref="DebugOptions.ConfigOverride"/>).</summary>
 public sealed partial class RecEngine
 {
     /// <summary>

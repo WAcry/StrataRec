@@ -26,9 +26,8 @@ public static class Batching
     /// rest. 9 items at most 4 a batch go as 3, 3 and 3, not 4, 4 and 1.
     /// </summary>
     /// <remarks>
-    /// <para>The count stays the fewest, so no call is added, and the size never exceeds <paramref name="size"/>: with
-    /// <c>k</c> batches it is the ceiling of items / <c>k</c>, the smallest largest batch any split into <c>k</c>
-    /// has.</para>
+    /// <para>The count stays the fewest, and the size never exceeds <paramref name="size"/>: with <c>k</c> batches it
+    /// is the ceiling of items / <c>k</c>, the smallest largest batch any split into <c>k</c> has.</para>
     /// </remarks>
     /// <param name="items">Non-negative.</param>
     /// <param name="size">Positive: the configured largest batch.</param>

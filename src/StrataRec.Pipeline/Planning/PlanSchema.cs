@@ -19,7 +19,6 @@ public enum ColumnKind : byte
     Output,
 }
 
-/// <summary>A logical column of a plan.</summary>
 public sealed class LogicalColumn
 {
     public required int Id { get; init; }
@@ -81,11 +80,10 @@ public sealed class ContextField
 
     /// <summary>
     /// The type as declared: in <c>request_schema</c> for a request input, in the catalog for a context feature, the
-    /// built-in's own for a built-in. <see cref="Type"/> is its promoted form, which expressions see. Incoming values are
-    /// validated against the declared type, so an <c>int32</c> or <c>list&lt;int32&gt;</c> input outside the int32 range
-    /// is rejected rather than passed through; and whatever hands the value on beyond the engine (a model input, a log
-    /// context field, a result column that is nothing but this value, a prompt) gives it at this type, as the user
-    /// declared it.
+    /// built-in's own for a built-in. <see cref="Type"/> is its promoted form, which expressions see. Incoming values
+    /// are validated against the declared type, so an <c>int32</c> or <c>list&lt;int32&gt;</c> input outside the int32
+    /// range is rejected rather than passed through; and whatever hands the value on beyond the engine (a model input,
+    /// a log context field, a result column that is nothing but this value, a prompt) gives it at this type.
     /// </summary>
     public ColumnType DeclaredType
     {
@@ -283,9 +281,8 @@ public sealed class PlanSchema
     /// (<see cref="CompiledExpression.Reference"/>), the type the name is declared with: a column's or feature's
     /// (<c>int32</c>, <c>float32?</c>, <c>list&lt;float32,64&gt;</c>), a context field's
     /// <see cref="ContextField.DeclaredType"/>, a parameter's; a host or log sink whose own types are narrow reads it
-    /// at that width. For a computed expression, which declares nothing, its promoted
-    /// <see cref="CompiledExpression.ResultType"/>, and a user who wants a computed value at a narrow type declares a
-    /// derived feature of that type and reads it.
+    /// at that width. For a computed expression, its promoted <see cref="CompiledExpression.ResultType"/>, and a user
+    /// who wants a computed value at a narrow type declares a derived feature of that type and reads it.
     /// </summary>
     public ColumnType DeclaredType(CompiledExpression expression)
     {

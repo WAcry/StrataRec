@@ -12,13 +12,11 @@ public sealed record CompileOptions
     /// </summary>
     public ColumnType? ExpectedType { get; init; }
 
-    /// <summary>True when the result may be nullable (writing a nullable column, log tap columns).</summary>
     public bool AllowNullableResult { get; init; }
 
     /// <summary>True for request-level sites (<c>when</c>, funnel keys, context-only values): <c>col.*</c> is an error.</summary>
     public bool RequestLevelOnly { get; init; }
 
-    /// <summary>Maximum nesting depth.</summary>
     public int MaxDepth { get; init; } = 32;
 
     public static CompileOptions Any { get; } = new() { AllowNullableResult = true };

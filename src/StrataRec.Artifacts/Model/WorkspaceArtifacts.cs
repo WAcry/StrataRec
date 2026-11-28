@@ -28,7 +28,6 @@ public sealed class ReleaseArtifact
     public Dictionary<string, ReleaseExperiment> Experiments { get; init; } = new();
 }
 
-/// <summary>An experiment in flight in a release.</summary>
 public sealed class ReleaseExperiment
 {
     /// <summary>
@@ -38,11 +37,10 @@ public sealed class ReleaseExperiment
     public required string Layer { get; init; }
 
     /// <summary>
-    /// Experiments of this release this one yields to: on a request also in an arm of one of them, this
-    /// experiment runs in none of its arms (its layer runs the baseline, and the request records it as yielded), so the
-    /// two never run together, as if they shared a layer. For two experiments of different layers that conflict or
-    /// interact when putting them into one layer would cost too much traffic: this one gives up the
-    /// other's share.
+    /// Experiments of this release this one yields to: on a request also in an arm of one of them, this experiment runs
+    /// in none of its arms (its layer runs the baseline, and the request records it as yielded), so the two never run
+    /// together. For two experiments of different layers that conflict or interact, where sharing one layer would cost
+    /// too much traffic.
     /// </summary>
     public List<string>? YieldsTo { get; init; }
 }

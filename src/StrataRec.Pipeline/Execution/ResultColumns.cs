@@ -4,17 +4,14 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Pipeline.Execution;
 
-/// <summary>A returned result row.</summary>
 public sealed record RankedItem(EntityKey Id, int Rank, IReadOnlyDictionary<string, ScalarValue> Columns);
 
 /// <summary>
-/// A result's items column by column: the ids in rank order, each output column's name and declared type, and its values
-/// in the same order. The form a result is built in; <c>RecResult.Items</c> are its rows (<see cref="Rows"/>), a dictionary
-/// per item, made the first time they are read.
+/// A result's items column by column: the ids in rank order, each output column's name and declared type, and its
+/// values in the same order. <c>RecResult.Items</c> are its rows (<see cref="Rows"/>), a dictionary per item, made the
+/// first time they are read.
 /// </summary>
 /// <remarks>
-/// <para>A caller that returns many rows and processes them further reads these columns instead, and no row dictionary
-/// is made.</para>
 /// <para>Values are held promoted, as every <see cref="ScalarValue"/> is; <see cref="Types"/> says what each column is
 /// declared as, so a host whose own types are narrow reads an <c>int32</c> column with <see cref="ScalarValue.AsInt32"/>
 /// and a <c>float32</c> one with <see cref="ScalarValue.AsFloat32"/>, exactly. An output column that is nothing but a
@@ -67,12 +64,9 @@ public sealed class ResultColumns
     }
 
     /// <summary>
-    /// The columns of <paramref name="items"/>, for a result made by hand (a test double of the engine): the output's
-    /// <paramref name="columns"/> in order with their types, as a pipeline declares them, and the items, each with a value
-    /// of every column and of no other; item i has rank i + 1.
+    /// The columns of <paramref name="items"/>: the output's <paramref name="columns"/> in order with their types, as a
+    /// pipeline declares them, and the items, each with a value of every column and of no other; item i has rank i + 1.
     /// </summary>
-    /// <remarks>The types are given rather than guessed from the values: a column whose values are all missing has no
-    /// type to guess, and a guess would make an int32 column int64.</remarks>
     /// <exception cref="ArgumentException">A column is defined twice, an item lacks a column or has another one, or a value
     /// is not one of its column's type (missing in a non-nullable column, an int64 in a float64 one, an int32 out of
     /// range).</exception>
@@ -148,7 +142,7 @@ public sealed class ResultColumns
     /// <summary>The output columns' names, in the output's order.</summary>
     public IReadOnlyList<string> Names => _names;
 
-    /// <summary>The output columns' declared types, in the order of <see cref="Names"/> (see the remarks).</summary>
+    /// <summary>The output columns' declared types, in the order of <see cref="Names"/>.</summary>
     public IReadOnlyList<ColumnType> Types => _types;
 
     /// <summary>The index of the output column <paramref name="name"/> in <see cref="Names"/> and <see cref="Types"/>;
@@ -175,7 +169,6 @@ public sealed class ResultColumns
     public ReadOnlySpan<ScalarValue> this[string name] =>
         TryGetColumn(name, out var values) ? values : throw new KeyNotFoundException($"The output has no column '{name}'.");
 
-    /// <summary>The values of the output column <paramref name="name"/>; false when the output has no such column.</summary>
     public bool TryGetColumn(string name, out ReadOnlySpan<ScalarValue> values)
     {
         var index = IndexOf(name);

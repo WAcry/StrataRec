@@ -7,8 +7,7 @@ namespace StrataRec.Hosting.Manifests;
 /// </summary>
 /// <remarks>
 /// <para>Teams on another configuration system serve releases by implementing this interface and
-/// <see cref="Artifacts.Storage.IArtifactStore"/>: a pointer in a key-value store, a database row, an HTTP endpoint with an
-/// ETag. <see cref="FileSystemManifestSource"/> reads the pointer files of a directory.</para>
+/// <see cref="Artifacts.Storage.IArtifactStore"/>.</para>
 /// <para>The engine keeps no last-known-good copy on disk: a host that must start while the control plane is down
 /// composes a source that falls back to a pointer baked into its image, and a store that falls back to a local copy of
 /// the blobs.</para>

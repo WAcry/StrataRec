@@ -100,8 +100,7 @@ public sealed class IoTarget
     /// (<see cref="IoCall.Complete"/>).
     /// </summary>
     /// <remarks>
-    /// The flow gets back the activity it had, and the call has no span: the half-started one is not stopped, which
-    /// would report it to the listeners as a finished span.
+    /// The flow gets back the activity it had, and the call has no span: the half-started one is not stopped.
     /// </remarks>
     public IoCall Start()
     {

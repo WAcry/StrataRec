@@ -10,10 +10,8 @@ namespace StrataRec.Core.Columns;
 /// </remarks>
 public static class Int32Range
 {
-    /// <summary>True when <paramref name="value"/> is in <c>[int.MinValue, int.MaxValue]</c>.</summary>
     public static bool Fits(long value) => OutsideBits(value) == 0;
 
-    /// <summary>True when every element fits in int32.</summary>
     public static bool AllFit(ReadOnlySpan<long> values)
     {
         ulong outside = 0;
@@ -35,7 +33,6 @@ public static class Int32Range
         }
     }
 
-    /// <summary>Copies int32 storage into int64 values (exact).</summary>
     public static void Widen(ReadOnlySpan<int> source, Span<long> destination)
     {
         destination = destination[..source.Length];

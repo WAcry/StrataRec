@@ -58,7 +58,7 @@ public sealed class ExplainContext
     /// <summary>The target's physical row, or -1 when it is not in the table.</summary>
     public int Row(int target) => _explainer.PendingRow(target);
 
-    /// <summary>The target was live before the node: the node saw it.</summary>
+    /// <summary>The target was live before the node.</summary>
     public bool WasAlive(int target) => _explainer.RankBefore(target) > 0;
 
     /// <summary>The target is live after the node.</summary>

@@ -4,26 +4,19 @@ using StrataRec.Artifacts.Json;
 namespace StrataRec.Artifacts.Storage;
 
 /// <summary>
-/// Content-addressed storage for artifacts: blobs are immutable and named by their
-/// <see cref="ContentHash"/>, so a node downloads each artifact once and any copy can be verified against its name.
+/// Content-addressed storage for artifacts: blobs are immutable and named by their <see cref="ContentHash"/>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Implementations must be safe for concurrent use. <see cref="PutAsync"/> is idempotent: storing equal content
-/// twice yields the same id and leaves one blob. <see cref="TryGetAsync"/> must verify the SHA-256 of the bytes it
-/// read against the id and throw <see cref="ArtifactIntegrityException"/> on mismatch, so a corrupted or tampered
-/// blob is never handed to the loader.
-/// </para>
-/// <para>
-/// Teams on other configuration systems integrate by implementing this interface (local files, S3-compatible
-/// storage, HTTP).
+/// Implementations must be safe for concurrent use. <see cref="PutAsync"/> is idempotent: storing equal content twice
+/// yields the same id and leaves one blob. <see cref="TryGetAsync"/> must verify the SHA-256 of the bytes it read
+/// against the id and throw <see cref="ArtifactIntegrityException"/> on mismatch.
 /// </para>
 /// </remarks>
 public interface IArtifactStore
 {
     /// <summary>Reads the canonical bytes stored under <paramref name="contentId"/>.</summary>
     /// <param name="contentId">A content id, <c>sha256:</c> plus 64 lowercase hex digits.</param>
-    /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The blob, owned by the caller, or <see langword="null"/> when the store does not have it.</returns>
     /// <exception cref="ArgumentException"><paramref name="contentId"/> is not a valid content id.</exception>
     /// <exception cref="ArtifactIntegrityException">The stored bytes do not hash to <paramref name="contentId"/>.</exception>

@@ -128,7 +128,6 @@ public sealed class TapSlot
     }
 }
 
-/// <summary>The logging part of a plan.</summary>
 public sealed class LogPlan
 {
     public static LogPlan Empty { get; } = new() { Groups = [], Taps = [] };

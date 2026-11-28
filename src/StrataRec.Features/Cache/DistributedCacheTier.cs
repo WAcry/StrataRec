@@ -17,9 +17,8 @@ namespace StrataRec.Features.Cache;
 /// each. Past <see cref="QueueBytes"/> waiting bytes (records, keys and entries) a batch is dropped and counted
 /// (<c>stratarec.cache.writes</c>, outcome <c>dropped</c>). An empty queue takes even a batch larger than the whole
 /// limit. A failed write is counted (<c>failed</c>) and forgotten.</para>
-/// <para><b>The queue belongs to the instance, not to a table.</b> Plans that share the instance share its queue, and
-/// the store is disposed only after the loop stopped, so no write runs on a disposed store; what is still queued then
-/// is dropped.</para>
+/// <para>Plans that share the instance share its queue, and the store is disposed only after the loop stopped, so no
+/// write runs on a disposed store; what is still queued then is dropped.</para>
 /// <para><b>The loop never faults.</b> It catches what the store throws, and what an observer throws: a metric listener
 /// that throws when a batch is counted. Such a failure is kept and reported by <see cref="DisposeAsync"/>; the loop
 /// goes on writing.</para>

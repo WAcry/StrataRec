@@ -6,7 +6,6 @@ using StrataRec.Pipeline.Operators;
 
 namespace StrataRec.Pipeline.Planning;
 
-/// <summary>What happens when a node fails.</summary>
 public enum FailurePolicy : byte
 {
     FailRequest = 1,
@@ -45,8 +44,7 @@ public readonly record struct NameRef(SymbolKind Kind, int Id);
 public readonly record struct ColumnDeclaration(int Logical, ColumnType Type);
 
 /// <summary>
-/// One compiled variant of a node: the operator instance plus everything the scheduler needs, all resolved to integer
-/// ids at load time. Immutable and shared by all requests of a plan.
+/// One compiled variant of a node. Immutable and shared by all requests of a plan.
 /// </summary>
 public sealed class CompiledNode
 {
@@ -59,8 +57,8 @@ public sealed class CompiledNode
     public required string Pointer { get; init; }
 
     /// <summary>
-    /// The fully merged definition this variant was compiled from (for explain-plan and dedup). A read-only element, since
-    /// every request and host shares it; <c>JsonObject.Create(Definition)</c> gives a tree of one's own to edit.
+    /// The fully merged definition this variant was compiled from. A read-only element, since every request and host
+    /// shares it; <c>JsonObject.Create(Definition)</c> gives a tree of one's own to edit.
     /// </summary>
     public required JsonElement Definition { get; init; }
 
@@ -136,14 +134,14 @@ public sealed class CompiledNode
 
     /// <summary>
     /// The request columns the node reads (<c>req.*</c>), by <see cref="ContextField.Id"/>, in its config and its
-    /// <c>when</c>: each has its value as of the position (a later node's write is not yet there), and a non-nullable one
-    /// must have a producer that cannot be skipped before it.
+    /// <c>when</c>: each has its value as of the position, and a non-nullable one must have a producer that cannot be
+    /// skipped before it.
     /// </summary>
     public ImmutableArray<int> RequestReads { get; init; } = [];
 
     /// <summary>
     /// The node's <c>when</c> reads a request column: it is evaluated at the node's position, when what the nodes
-    /// before it wrote is there, not ahead of it with the other conditions of its segment.
+    /// before it wrote is there.
     /// </summary>
     public bool WhenReadsRequest { get; init; }
 

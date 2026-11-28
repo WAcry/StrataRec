@@ -15,13 +15,12 @@ public enum StructureChangeKind : byte
 }
 
 /// <summary>
-/// A layer, experiment, arm or yield present on one side only, or an experiment in another layer. A yield
-/// changes no combination the comparison runs (the baseline and each arm alone) but what a request in both experiments
-/// runs, so it is reported here; a reversed one is one removed and one added.
+/// A layer, experiment, arm or yield present on one side only, or an experiment in another layer. A yield changes no
+/// combination the comparison runs (the baseline and each arm alone) but what a request in both experiments runs; a
+/// reversed one is one removed and one added.
 /// </summary>
 /// <param name="Kind"><c>layer</c>, <c>experiment</c>, <c>arm</c> or <c>yield</c>.</param>
 /// <param name="Id">The layer name, experiment id, <c>experiment/arm</c>, or for a yield the experiment that yields.</param>
-/// <param name="Change">What changed.</param>
 /// <param name="FromLayer">Its layer on the from side; null when absent there (and for layers and yields).</param>
 /// <param name="ToLayer">Its layer on the to side; null when absent there (and for layers and yields).</param>
 public sealed record StructureChange(string Kind, string Id, StructureChangeKind Change, string? FromLayer, string? ToLayer)
@@ -30,18 +29,15 @@ public sealed record StructureChange(string Kind, string Id, StructureChangeKind
     public string? YieldsTo { get; init; }
 }
 
-/// <summary>What differs for one arm combination.</summary>
 /// <param name="Label"><c>baseline</c>, or the arms joined with <c> + </c>.</param>
 /// <param name="Arms">The combination's arms, <c>experiment/arm</c>.</param>
 /// <param name="MissingOn"><c>from</c> or <c>to</c> when the combination does not exist on that side; it is then not compared.</param>
-/// <param name="MissingReason">Why it does not exist there.</param>
 /// <param name="Changes">Pointers into <see cref="EffectivePlan.ToDocument"/>, in pointer order; empty when <paramref name="MissingOn"/> is set.</param>
 public sealed record CombinationDiff(string Label, IReadOnlyList<string> Arms, string? MissingOn, string? MissingReason, IReadOnlyList<JsonChange> Changes);
 
 /// <summary>
 /// One side's plan of a combination holds a value RFC 8785 cannot hold exactly (<see cref="EffectivePlan.ToDocument"/>
-/// compares plans in that form), so the sides cannot be compared. It names the side and the combination, so that a tool
-/// reports where, as a diagnostic.
+/// compares plans in that form), so the sides cannot be compared. It names the side and the combination.
 /// </summary>
 public sealed class PlanDiffCanonicalizationException : Exception
 {
@@ -85,9 +81,9 @@ public sealed class PlanDiff
     public bool HasDifferences => Structure.Count > 0 || Combinations.Count > 0;
 
     /// <summary>
-    /// Compares two plans. Without <paramref name="arms"/>: the baseline, then each arm of either side alone, in ordinal
-    /// order of its id. With <paramref name="arms"/>: exactly that combination, resolved on each side as a request
-    /// forcing those arms is (<see cref="ExecutionPlan.ArmsFromIds"/>).
+    /// Without <paramref name="arms"/>: the baseline, then each arm of either side alone, in ordinal order of its id.
+    /// With <paramref name="arms"/>: exactly that combination, resolved on each side as a request forcing those arms is
+    /// (<see cref="ExecutionPlan.ArmsFromIds"/>).
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="arms"/> is valid on neither side (an unknown arm, or two arms of one layer).</exception>
     /// <exception cref="PlanDiffCanonicalizationException">A side's plan holds a value RFC 8785 cannot hold exactly.</exception>

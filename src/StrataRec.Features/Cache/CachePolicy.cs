@@ -5,13 +5,11 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Features.Cache;
 
 /// <summary>
-/// How long a cache's records are served: <c>ttl_ms</c> and <c>stale_if_error_ms</c> of one binding as a plan compiled it.
-/// A reader judges a record by its own plan's policy, from the record's write time, so the tiers hold records and no
-/// policy: two plans that share a table or a store may keep different times, and a binding that changes its times keeps
-/// its records.
+/// How long a cache's records are served: <c>ttl_ms</c> and <c>stale_if_error_ms</c> of one binding as a plan compiled
+/// it. A reader judges a record by its own plan's policy, from the record's write time: two plans that share a table or
+/// a store may keep different times, and a binding that changes its times keeps its records.
 /// </summary>
-/// <remarks>Each key's lifetime is the TTL ±10% by the key's hash, the same on every instance, so records written
-/// together do not all expire together.</remarks>
+/// <remarks>Each key's lifetime is the TTL ±10% by the key's hash, the same on every instance.</remarks>
 public sealed class CachePolicy
 {
     /// <summary>

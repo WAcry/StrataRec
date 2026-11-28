@@ -11,8 +11,7 @@ namespace StrataRec.Artifacts.Json;
 /// </summary>
 /// <remarks>
 /// Members are taken in ordinal order of their names, so the order they were written in does not matter. A string is
-/// its characters and a number its text: <c>1</c> and <c>1.0</c> differ, which makes two digests of the same
-/// configuration written two ways, never one digest of two configurations. The same in every process of a build.
+/// its characters and a number its text: <c>1</c> and <c>1.0</c> differ. The same in every process of a build.
 /// </remarks>
 public static class JsonDigest
 {

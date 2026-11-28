@@ -6,7 +6,7 @@ using StrataRec.Features.Connectors;
 namespace StrataRec.Features.Runtime;
 
 /// <summary>
-/// The request's view of one feature connector call as it finished: what was asked, how it ended and how long it took.
+/// The request's view of one feature connector call as it finished.
 /// </summary>
 /// <param name="Group">Source and entity the call fetched from.</param>
 /// <param name="Batch">The keys; valid only during <see cref="IFeatureCallHook.Record"/>.</param>
@@ -45,18 +45,17 @@ public interface IFeatureCallHook
 
     /// <summary>
     /// A call is about to be sent: returns its start order. Calls start on the request's thread, so the order is
-    /// deterministic, but for a context group keyed by context features, which starts where the last of them was stored (a
-    /// connector's completion), so its place follows when that was; may be called concurrently. Every begun call is later
-    /// passed to <see cref="Record"/> with this sequence; until then a recorder holds it as in flight, so a recording taken
-    /// when the request is aborted lists it as outstanding.
+    /// deterministic, but for a context group keyed by context features, which starts where the last of them was
+    /// stored; may be called concurrently. Every begun call is later passed to <see cref="Record"/> with this sequence;
+    /// until then a recorder holds it as in flight, so a recording taken when the request is aborted lists it as
+    /// outstanding.
     /// </summary>
     /// <param name="batch">The keys; valid only during the call.</param>
     int Begin(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields);
 
     /// <summary>
-    /// Records a finished call. <paramref name="values"/> is non-null only when the call answered within its budget
-    /// (ok or partial); a call that timed out may still be writing, so its staging is never read. Both arguments are
-    /// valid only during this call.
+    /// <paramref name="values"/> is non-null only when the call answered within its budget (ok or partial); a call that
+    /// timed out may still be writing, so its staging is never read. Both arguments are valid only during this call.
     /// </summary>
     void Record(in FeatureCallInfo call, IStagedFeatureValues? values);
 

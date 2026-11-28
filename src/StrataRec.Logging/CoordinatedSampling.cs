@@ -15,7 +15,7 @@ public static class CoordinatedSampling
 
     /// <summary>
     /// Request-level decision <c>hash01(seed, keyIndex, key) &lt; rate</c>. <paramref name="keyIndex"/> is the position
-    /// of the first non-missing key expression, so user-keyed and session-keyed requests never collide.
+    /// of the first non-missing key expression.
     /// </summary>
     public static bool SampleRequest(long groupSeed, int keyIndex, in ScalarValue key, double rate)
     {
@@ -36,7 +36,6 @@ public static class CoordinatedSampling
         return StableHash.ToUnit(hash.Finish()) < rate;
     }
 
-    /// <summary>Hash of the request id.</summary>
     public static long RequestHash(string requestId) => StableHash.SeedFromSalt(requestId);
 
     /// <summary>Row priority <c>u = hash01(groupSeed, request, entity)</c>, identical across taps of a group.</summary>

@@ -7,12 +7,11 @@ using StrataRec.Core.Values;
 namespace StrataRec.Logging;
 
 /// <summary>
-/// One logged column of a batch, laid out as Arrow lays out a column: the values of the batch's rows in one
-/// typed array, a validity bitmap, and for a list the offsets of each row's elements. A batch owns its columns, so the
-/// request's candidate table can go back to the pool while the batch waits in a queue.
+/// One logged column of a batch, laid out as Arrow lays out a column: the values of the batch's rows in one typed
+/// array, a validity bitmap, and for a list the offsets of each row's elements. A batch owns its columns.
 /// </summary>
 /// <remarks>
-/// <para>A sink reads the arrays directly; <see cref="Get"/> gives a row as a value, for cold readers.</para>
+/// <para>A sink reads the arrays directly; <see cref="Get"/> gives a row as a value.</para>
 /// <para>The arrays have the column's <see cref="Type"/>, so a sink whose own types are narrow (an int32 feature log, a
 /// float32 training table) writes them as they are: an <c>int32</c> column is an <c>int[]</c>, a
 /// <c>list&lt;float32,64&gt;</c> embedding a <c>float[]</c> of 64 elements per row.</para>
@@ -57,8 +56,7 @@ public sealed class LogColumn
 
     public bool IsMissing(int row) => Validity is { } validity && !Bits.Get(validity, row);
 
-    /// <summary>Row <paramref name="row"/> as a value (promoted, as every value is); a list row is copied. For tests and
-    /// cold readers.</summary>
+    /// <summary>Row <paramref name="row"/> as a value (promoted); a list row is copied.</summary>
     public ScalarValue Get(int row)
     {
         if (IsMissing(row))
@@ -103,12 +101,9 @@ public sealed class LogColumn
 
     /// <summary>
     /// The <paramref name="rows"/> of <paramref name="buffer"/> as a column of <paramref name="type"/>, in that order,
-    /// copied in the buffer's storage without widening. A NaN or ±∞ number and a list with such an element are missing:
-    /// logs carry no non-finite values.
+    /// copied in the buffer's storage without widening. A NaN or ±∞ number and a list with such an element are missing.
     /// </summary>
-    /// <remarks>A row is missing when the buffer's validity says so, whatever the type's nullability: a table slot is
-    /// missing until something writes it, and a log records what is there rather than whatever an unwritten row
-    /// holds.</remarks>
+    /// <remarks>A row is missing when the buffer's validity says so, whatever the type's nullability.</remarks>
     /// <exception cref="ArgumentException">The buffer does not store <paramref name="type"/> (another kind, or another
     /// element kind).</exception>
     public static LogColumn Capture(string name, ColumnType type, ColumnBuffer buffer, ReadOnlySpan<int> rows)
@@ -140,9 +135,9 @@ public sealed class LogColumn
         return new LogColumn(name, type, rows.Length, values, offsets, validity);
     }
 
-    /// <summary>A column from one value per row, for cold paths and tests: each value missing or a value of
-    /// <paramref name="type"/> held promoted, as <see cref="ColumnValues.Get"/> reads one, and narrowed here to the type's
-    /// storage. Non-finite values are missing, as in <see cref="Capture"/>.</summary>
+    /// <summary>A column from one value per row: each value missing or a value of <paramref name="type"/> held
+    /// promoted, as <see cref="ColumnValues.Get"/> reads one, and narrowed here to the type's storage. Non-finite
+    /// values are missing, as in <see cref="Capture"/>.</summary>
     /// <exception cref="InvalidOperationException">A value is not one of <paramref name="type"/> (another kind, or an
     /// integer outside an <c>int32</c> type's range).</exception>
     public static LogColumn FromValues(string name, ColumnType type, ReadOnlySpan<ScalarValue> values)
@@ -389,7 +384,7 @@ public sealed record LogSchema(string Id, string TapId, ImmutableArray<LogField>
     }
 }
 
-/// <summary>A logged column or context field: its name, type and the expression it is logged from.</summary>
+/// <summary>A logged column or context field.</summary>
 /// <param name="Type">
 /// The type a sink writes the field as. A field whose expression is a plain reference (<c>col.item.clicks</c>, a feature,
 /// <c>col.score.final@fusion</c>, <c>ctx.request.age</c>, <c>param.k</c>) has the type the name is declared with, nullability

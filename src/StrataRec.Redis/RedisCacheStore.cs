@@ -41,7 +41,7 @@ public sealed class RedisCacheStore : ICacheStore, ILoadable, IAsyncDisposable
 
     public string StoreType => Type;
 
-    /// <summary>Resolves the password and connects. A server that cannot be reached does not fail the load (see remarks).</summary>
+    /// <summary>Resolves the password and connects. A server that cannot be reached does not fail the load.</summary>
     /// <remarks>
     /// <para>A server that drops two connections before it answers their handshakes and refuses the third is the one
     /// case not told from a server that is down; it is then served as one: from the connector.</para>
@@ -310,7 +310,7 @@ public sealed class RedisSettings
     /// <summary>The server as host:port, e.g. <c>redis.internal:6379</c>; for a cluster, any of its nodes.</summary>
     public required string Endpoint { get; init; }
 
-    /// <summary>What every key starts with (default <c>stratarec:</c>), so that services sharing a server keep apart.</summary>
+    /// <summary>What every key starts with (default <c>stratarec:</c>).</summary>
     public string KeyPrefix { get; init; } = "stratarec:";
 
     /// <summary>The ACL user to authenticate as.</summary>

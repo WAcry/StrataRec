@@ -78,17 +78,16 @@ public readonly struct TableCheckpoint
 /// Columnar storage of every candidate in one request.
 /// </summary>
 /// <remarks>
-/// <para>Slots are allocated lazily on first write. Each slot has a fill bitmap marking which physical rows have been
-/// populated (with a value or an explicit "missing"); rows needing a fetch are <c>alive &amp; ~filled</c>.</para>
-/// <para>A row has no value in a slot until something writes it, and the table alone applies that rule: every row of a
-/// new slot is missing and unfilled, including rows appended before the slot existed (a row source's column that an
-/// earlier row source did not write); a row is missing and unfilled in every existing slot when it is appended; and
-/// <see cref="Rollback"/> makes the rows it releases so again. Writers mark what they write (the <c>Set</c> methods of
-/// the column buffers, or one of the bulk <c>SetValid</c> overloads after a bulk write).</para>
-/// <para>Data no successful attempt wrote is never visible either: <see cref="Rollback"/> drops every slot created since
-/// its checkpoint (a failed node's own outputs, or a shared row-source slot it started) and releases the rows the attempt
-/// appended in the slots that existed before, which keep everything else. A dropped slot reads as never written, through
-/// any read path (the current version or a pinned <c>col.x@node</c>), exactly as in a replay that skips the attempt.</para>
+/// <para>Each slot has a fill bitmap marking which physical rows have been populated (with a value or an explicit
+/// "missing"); rows needing a fetch are <c>alive &amp; ~filled</c>.</para>
+/// <para>A row has no value in a slot until something writes it: every row of a new slot is missing and unfilled,
+/// including rows appended before the slot existed; a row is missing and unfilled in every existing slot when it is
+/// appended; and <see cref="Rollback"/> makes the rows it releases so again. Writers mark what they write (the
+/// <c>Set</c> methods of the column buffers, or one of the bulk <c>SetValid</c> overloads after a bulk write).</para>
+/// <para>Data no successful attempt wrote is never visible either: <see cref="Rollback"/> drops every slot created
+/// since its checkpoint and releases the rows the attempt appended in the slots that existed before, which keep
+/// everything else. A dropped slot reads as never written, through any read path (the current version or a pinned
+/// <c>col.x@node</c>), exactly as in a replay that skips the attempt.</para>
 /// <para>Rows at or past <see cref="PhysicalRowCount"/> carry nothing that is read: a row's state in every slot is reset
 /// when it is appended, and <see cref="Rollback"/> releases the rows a failed attempt appended, so the next append
 /// reuses them.</para>
@@ -166,7 +165,7 @@ public sealed class CandidateTable
     /// <summary>Returns the slot's buffer, or null when nothing has been written to it yet.</summary>
     public ColumnBuffer? TryGetSlot(int slot) => _slots[slot];
 
-    /// <summary>Returns the slot's buffer, creating it on first use with every row missing (see the remarks).</summary>
+    /// <summary>Returns the slot's buffer, creating it on first use with every row missing.</summary>
     public ColumnBuffer GetOrCreateSlot(int slot)
     {
         if (_slots[slot] is { } existing)
@@ -181,10 +180,10 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// A buffer for another version of a slot that has one, every row missing as in a new slot, and not the slot's until
-    /// <see cref="ReplaceSlot"/>: a node that runs again in a request (a fallback node shared by several nodes) writes
-    /// here, so what it wrote before stays what readers see, the node itself included, until the new version is published,
-    /// and stays for good when the attempt fails.
+    /// A buffer for another version of a slot that has one, every row missing as in a new slot, and not the slot's
+    /// until <see cref="ReplaceSlot"/>: a node that runs again in a request writes here, so what it wrote before stays
+    /// what readers see, the node itself included, until the new version is published, and stays for good when the
+    /// attempt fails.
     /// </summary>
     public ColumnBuffer CreateDetached(int slot)
     {
@@ -236,8 +235,7 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// True when each of <paramref name="rows"/> (physical rows) is filled in the slot: the check of a fill that covers
-    /// some rows only (the output's returned rows).
+    /// True when each of <paramref name="rows"/> (physical rows) is filled in the slot.
     /// </summary>
     public bool IsFilled(int slot, ReadOnlySpan<int> rows)
     {
@@ -288,8 +286,8 @@ public sealed class CandidateTable
     public int FreeRows => Capacity - _totalAppended;
 
     /// <summary>
-    /// Gives back <paramref name="rows"/> of the append budget (at most <see cref="FreeRows"/>): a row source that has
-    /// finished below its limit. Slots created afterwards, and a <see cref="Compact"/>, are sized without them.
+    /// Gives back <paramref name="rows"/> of the append budget (at most <see cref="FreeRows"/>). Slots created
+    /// afterwards, and a <see cref="Compact"/>, are sized without them.
     /// </summary>
     public void ReleaseRowBudget(int rows)
     {
@@ -335,10 +333,10 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// Finds the physical row of a key (live or dropped) or returns -1: the last row appended with it, which is its live row
-    /// when it has one, since a key is appended only while it is not live (<see cref="AppendRows(ReadOnlySpan{long})"/>; a
-    /// dropped key a row source brought back is found at its new row, not at the dropped one). A key whose row a
-    /// <see cref="Compact"/> released has no row any more; <see cref="ContainsKey"/> still knows it.
+    /// Finds the physical row of a key (live or dropped) or returns -1: the last row appended with it, which is its
+    /// live row when it has one, since a key is appended only while it is not live
+    /// (<see cref="AppendRows(ReadOnlySpan{long})"/>). A key whose row a <see cref="Compact"/> released has no row any
+    /// more; <see cref="ContainsKey"/> still knows it.
     /// </summary>
     /// <remarks>
     /// A key of the other key type is never found.
@@ -462,9 +460,9 @@ public sealed class CandidateTable
     }
 
     /// <summary>
-    /// Rewrites every slot so that live rows occupy physical rows 0..n-1 in rank order and dropped rows are released
-    ///. Fill state moves with the values. Old arrays are returned when the request ends. The released keys
-    /// are kept: <see cref="ContainsKey"/> still finds them, so the built-in row sources do not append them again.
+    /// Rewrites every slot so that live rows occupy physical rows 0.n-1 in rank order and dropped rows are released.
+    /// Fill state moves with the values. Old arrays are returned when the request ends. The released keys are kept:
+    /// <see cref="ContainsKey"/> still finds them.
     /// </summary>
     public void Compact()
     {
@@ -541,9 +539,8 @@ public sealed class CandidateTable
     /// <see cref="ContainsKey"/> still knows a filtered key, and the rows earlier row sources wrote into a shared slot keep
     /// their values.
     /// </summary>
-    /// <exception cref="InvalidOperationException">
-    /// The table was compacted since the checkpoint (physical rows moved), or the checkpoint was never taken.
-    /// </exception>
+    /// <exception cref="InvalidOperationException">The table was compacted since the checkpoint, or the checkpoint was
+    /// never taken.</exception>
     public void Rollback(in TableCheckpoint checkpoint)
     {
         if (checkpoint.Order is null || checkpoint.Compactions != _compactions || checkpoint.PhysicalRows > PhysicalRowCount)

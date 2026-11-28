@@ -7,8 +7,8 @@ namespace StrataRec.Core.Tables;
 /// </summary>
 /// <remarks>
 /// A node writes into its own slots; only when it succeeds does the engine <see cref="Commit"/> them, which makes the
-/// new version visible to later readers. Failed or skipped nodes never commit, so half-written data is invisible.
-/// The bindings also record which node produced each committed version, for log lineage.
+/// new version visible to later readers. Failed or skipped nodes never commit, so half-written data is invisible. The
+/// bindings also record which node produced each committed version.
 /// </remarks>
 public sealed class OutputBindings
 {

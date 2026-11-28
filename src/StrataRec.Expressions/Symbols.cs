@@ -3,7 +3,6 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Expressions;
 
-/// <summary>What a name in an expression refers to.</summary>
 public enum SymbolKind : byte
 {
     /// <summary><c>col.*</c>: a candidate column. Resolved per request through <see cref="Core.Tables.OutputBindings"/>
@@ -50,20 +49,19 @@ public interface IExpressionScope
     /// </summary>
     bool TryResolve(string name, out Symbol symbol);
 
-    /// <summary>All names resolvable in this scope, used for "did you mean" suggestions.</summary>
+    /// <summary>All names resolvable in this scope.</summary>
     IEnumerable<string> KnownNames { get; }
 
     /// <summary>
-    /// True for a name that is declared but cannot be resolved because its declaration has an error, reported where it is
-    /// declared (a column or parameter of an unknown type). An expression that reads it does not compile, without an
-    /// error of its own: one mistake is reported once, not again at every use.
+    /// True for a name that is declared but cannot be resolved because its declaration has an error, reported where it
+    /// is declared (a column or parameter of an unknown type). An expression that reads it does not compile, without an
+    /// error of its own.
     /// </summary>
     bool IsUnusable(string name) => false;
 
     bool TryGetLookupTable(string name, out ILookupTable table);
 }
 
-/// <summary>A simple dictionary-backed scope, convenient for tests, tools and small embeddings.</summary>
 public sealed class DictionaryScope : IExpressionScope
 {
     private readonly Dictionary<string, Symbol> _symbols = new(StringComparer.Ordinal);

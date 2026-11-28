@@ -6,8 +6,7 @@ using StrataRec.Hosting.Manifests;
 namespace StrataRec.Hosting;
 
 /// <summary>
-/// What became of a release manifest a node tried to load: the status a node reports to the release
-/// controller, which decides from it whether to go on.
+/// What became of a release manifest a node tried to load: the status a node reports to the release controller.
 /// </summary>
 public enum ManifestLoadStatus
 {
@@ -39,10 +38,8 @@ public enum ManifestLoadStatus
 /// The outcome of <see cref="RecEngine.LoadManifestAsync"/>: what a node logs and reports to the release controller
 /// (<see cref="IReleaseStatusReporter"/>).
 /// </summary>
-/// <param name="PipelineId">The manifest's pipeline.</param>
 /// <param name="ManifestId">The manifest's content id.</param>
 /// <param name="Sequence">The manifest's <c>seq</c>; 0 when the manifest itself could not be read.</param>
-/// <param name="Status">What became of it.</param>
 /// <param name="MissingCapabilities">For <see cref="ManifestLoadStatus.Incompatible"/>, the capabilities the binary lacks,
 /// sorted (ordinal); empty otherwise.</param>
 /// <param name="Diagnostics">Every diagnostic of the attempt: the errors that rejected it, the warnings of a plan that was
@@ -71,9 +68,9 @@ public sealed record ManifestLoadResult(
     public string? ServedManifestId { get; init; }
 
     /// <summary>
-    /// When the attempt started, by the polling's clock (<see cref="ReleaseOptions.TimeProvider"/>); null for a load that
-    /// is not a release poll's. A node reports its background outcomes after the fact (<see cref="IReleaseStatusReporter"/>),
-    /// so this, not the time of the report, says when the node tried the manifest.
+    /// When the attempt started, by the polling's clock (<see cref="ReleaseOptions.TimeProvider"/>); null for a load
+    /// that is not a release poll's. A node reports its background outcomes after the fact
+    /// (<see cref="IReleaseStatusReporter"/>).
     /// </summary>
     public DateTimeOffset? AttemptedAt { get; init; }
 

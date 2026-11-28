@@ -54,15 +54,11 @@ public sealed class GroupAggregateOutput
 
 /// <summary>
 /// <c>GroupAggregate@1</c>: per group of rows (by a column, or all rows), a statistic written back to every row of the
-/// group (ColumnWriter). Composes with the other operators: at most two items per author is <c>rank</c> then
-/// <c>ExpressionFilter</c> on <c>col.author_rank &lt;= 2</c>; a score normalized over the request is <c>mean</c> and
-/// <c>std</c> without a group, then <c>ExpressionScorer</c>; a merchant's score in grouped results is <c>max</c> by
-/// merchant.
+/// group (ColumnWriter).
 /// </summary>
 /// <remarks>
 /// It aggregates the rows alive when it runs, in their order, so floating-point sums are deterministic; values are read
-/// as float64, as <c>MmrDiversifier@1</c> reads scores (int64 values beyond 2^53 lose their last bits). nothing is
-/// allocated per row, and the cost is O(n) per output, O(n log n) for integer keys and for rank.
+/// as float64, as <c>MmrDiversifier@1</c> reads scores (int64 values beyond 2^53 lose their last bits).
 /// </remarks>
 public sealed class GroupAggregateFactory : IOperatorFactory
 {

@@ -9,10 +9,10 @@ namespace StrataRec.Artifacts.Json;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is the plain RFC algorithm (section 2): object members merge recursively, <c>null</c> deletes a member,
-/// and any non-object patch value (including arrays) replaces the target wholesale. It is deliberately lenient, as
-/// the RFC is: deleting a missing member is a no-op and patching a missing member creates it. StrataRec's stricter
-/// checks on top of it live in <see cref="MergePatchAnalyzer"/>.
+/// This is the plain RFC algorithm (section 2): object members merge recursively, <c>null</c> deletes a member, and any
+/// non-object patch value (including arrays) replaces the target wholesale. It is deliberately lenient: deleting a
+/// missing member is a no-op and patching a missing member creates it. StrataRec's stricter checks on top of it live in
+/// <see cref="MergePatchAnalyzer"/>.
 /// </para>
 /// <para>
 /// Member names are compared exactly (ordinal), regardless of <see cref="JsonNodeOptions"/> on the inputs. The

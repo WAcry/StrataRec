@@ -7,8 +7,8 @@ namespace StrataRec.Core.Columns;
 /// A <c>string</c> column: one string reference per row, in an array rented from the request.
 /// </summary>
 /// <remarks>
-/// <para>A row never written holds null, read as the empty string: the array is rented, so every row is structurally
-/// readable, and validity says whether the row has a value.</para>
+/// <para>A row never written holds null, read as the empty string, so every row is structurally readable, and validity
+/// says whether the row has a value.</para>
 /// </remarks>
 public sealed class StringColumn : ColumnBuffer
 {
@@ -20,8 +20,8 @@ public sealed class StringColumn : ColumnBuffer
         _values = memory.RentCleared<string?>(capacity);
     }
 
-    /// <summary>The rented array, indexed by physical row (at least <see cref="ColumnBuffer.Capacity"/> long), for loops
-    /// that write many rows; a writer marks the rows it wrote valid. Replaced by <see cref="ColumnBuffer.Gather"/>.</summary>
+    /// <summary>The rented array, indexed by physical row (at least <see cref="ColumnBuffer.Capacity"/> long); a writer
+    /// marks the rows it wrote valid. Replaced by <see cref="ColumnBuffer.Gather"/>.</summary>
     public string?[] Values => _values;
 
     /// <summary>Returns the string at <paramref name="row"/>; empty when the row was never written.</summary>

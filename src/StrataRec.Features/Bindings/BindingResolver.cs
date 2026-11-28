@@ -11,9 +11,8 @@ namespace StrataRec.Features.Bindings;
 /// words whatever the kind.
 /// </summary>
 /// <remarks>
-/// Errors are reported here, at the binding, never at whatever reads it: an unknown type at the entry's selector (the
-/// binding is what to fix), wrong settings at the setting. A caller gets null and reports nothing more: one error is
-/// reported once.
+/// Errors are reported here, at the binding, never at whatever reads it: an unknown type at the entry's selector, wrong
+/// settings at the setting. A caller gets null and reports nothing more: one error is reported once.
 /// </remarks>
 public sealed class BindingResolver
 {
@@ -39,8 +38,8 @@ public sealed class BindingResolver
         Diagnostics = diagnostics;
     }
 
-    /// <summary>Where binding errors go: also where whoever resolves through this resolver reports the rest of its errors,
-    /// so one compile has one list.</summary>
+    /// <summary>Where binding errors go: also where whoever resolves through this resolver reports the rest of its
+    /// errors.</summary>
     public DiagnosticBag Diagnostics { get; }
 
     /// <summary>The bindings artifact, e.g. <c>bindings:local</c>.</summary>
@@ -112,8 +111,8 @@ public sealed class BindingResolver
     }
 
     /// <summary>
-    /// Checks entry <paramref name="name"/>'s settings by creating an instance that is not kept, for a kind whose instances
-    /// are created later, outside the shared ones (update sources, created with their tables); false (reported) when wrong.
+    /// Checks entry <paramref name="name"/>'s settings by creating an instance that is not kept, for a kind whose
+    /// instances are created later, outside the shared ones; false (reported) when wrong.
     /// </summary>
     public bool Check<T>(IBindingFactory<T> factory, BindingKind kind, string name, IReadOnlyDictionary<string, JsonElement> settings)
         where T : class

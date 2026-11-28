@@ -69,7 +69,7 @@ public static class PlanCompiler
     /// <summary>
     /// Compiles the baseline with the patches of <paramref name="armIds"/> (<c>experiment/arm</c>) applied in layer
     /// order, as a plain pipeline without experiments. Running it equals running the unified plan with those arms: an
-    /// arm whose experiment yields to the experiment of another of them is left out, as a request runs without it.
+    /// arm whose experiment yields to the experiment of another of them is left out.
     /// </summary>
     /// <param name="configOverride">A request's configuration override, applied after the arms, so it wins over them:
     /// an RFC 7396 merge patch of the patchable view (<see cref="PatchableView.Sections"/>), checked as the baseline
@@ -246,10 +246,9 @@ public static class PlanCompiler
     }
 
     /// <summary>
-    /// What a release of <paramref name="request"/> needs of a binary: the baseline's needs, and for each
-    /// experiment what it adds, so that every set of experiments left after revocations requires at least what it needs. No
-    /// plan is built and nothing is loaded. Null after reporting the errors of a compile that failed; its warnings are the
-    /// full compile's to report.
+    /// What a release of <paramref name="request"/> needs of a binary: the baseline's needs, and for each experiment
+    /// what it adds. No plan is built and nothing is loaded. Null after reporting the errors of a compile that failed;
+    /// its warnings are the full compile's to report.
     /// </summary>
     /// <remarks>
     /// <para>Too much is possible (a need no single removal ends goes to the baseline), too little is not.</para>

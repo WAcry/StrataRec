@@ -5,16 +5,16 @@ namespace StrataRec.Artifacts.Storage;
 
 /// <summary>
 /// An <see cref="IArtifactStore"/> over a local directory, laid out like the object store:
-/// <c>&lt;root&gt;/blobs/sha256/&lt;64 hex digits&gt;</c>. Used by <c>stratarec build</c> and as a node's local cache.
+/// <c>&lt;root&gt;/blobs/sha256/&lt;64 hex digits&gt;</c>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Writes are atomic: the canonical bytes go to a temporary file in the same directory (named
-/// <c>.&lt;hex&gt;.&lt;guid&gt;.tmp</c>, so listings can skip dot files), are flushed to disk, and are then renamed
-/// into place. Readers therefore see either no blob or a complete one, also across processes sharing the
-/// directory. Writes are idempotent: an existing blob whose bytes equal the canonical bytes is left untouched, and
-/// one that differs (for example truncated by a disk fault) is replaced. The rename itself is not followed by a
-/// directory fsync, so after a power loss a just-written blob may be missing, never partial.
+/// <c>.&lt;hex&gt;.&lt;guid&gt;.tmp</c>, so listings can skip dot files) and are then renamed into place. Readers
+/// therefore see either no blob or a complete one, also across processes sharing the directory. Writes are idempotent:
+/// an existing blob whose bytes equal the canonical bytes is left untouched, and one that differs is replaced. The
+/// rename itself is not followed by a directory fsync, so after a power loss a just-written blob may be missing, never
+/// partial.
 /// </para>
 /// <para>
 /// Blobs are stored uncompressed.

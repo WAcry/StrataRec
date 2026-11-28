@@ -10,24 +10,21 @@ public enum Effects : byte
 {
     None = 0,
 
-    /// <summary>Appends rows and writes columns for them (recall, exploration injection).</summary>
+    /// <summary>Appends rows and writes columns for them.</summary>
     RowSource = 1,
 
-    /// <summary>Drops rows; the relative order of survivors is unchanged (filters, truncation).</summary>
+    /// <summary>Drops rows; the relative order of survivors is unchanged.</summary>
     RowFilter = 2,
 
-    /// <summary>Changes row order (sorting, MMR, sliding-window quota).</summary>
     RowOrder = 4,
 
-    /// <summary>Writes new columns or new versions of flow columns (scoring, model inference).</summary>
+    /// <summary>Writes new columns or new versions of flow columns.</summary>
     ColumnWriter = 8,
 
-    /// <summary>Writes request columns, one value per request (<c>req.*</c>): a statistic of the candidates, a decision.</summary>
+    /// <summary>Writes request columns, one value per request (<c>req.*</c>).</summary>
     RequestWriter = 16,
 }
 
-/// <summary>Static description of an operator type and version.</summary>
-/// <param name="Name">Operator name, e.g. <c>TopK</c>.</param>
 /// <param name="Version">Major version; breaking config changes bump it.</param>
 /// <param name="Effects">
 /// Effects the operator may exercise, enforced: row changes at run time by <see cref="OperatorContext"/>, column writes at
@@ -44,7 +41,6 @@ public sealed record OperatorDescriptor(string Name, int Version, Effects Effect
 }
 
 /// <summary>A candidate column read by an operator.</summary>
-/// <param name="LogicalId">Logical column id.</param>
 /// <param name="FixedSlot">Physical slot for features/entity id/<c>@node</c> versions; -1 to resolve the committed version.</param>
 /// <param name="Type">Declared type.</param>
 /// <param name="Name">Column name without the <c>col.</c> prefix.</param>
@@ -77,17 +73,16 @@ public abstract class Operator
     public abstract ValueTask ExecuteAsync(OperatorContext context);
 
     /// <summary>
-    /// Maximum rows a <see cref="Effects.RowSource"/> operator may append for a request with these parameters
-    /// (row limits bound per-request memory). Other operators return 0.
+    /// Maximum rows a <see cref="Effects.RowSource"/> operator may append for a request with these parameters. Other
+    /// operators return 0.
     /// </summary>
     public virtual int GetRowLimit(ReadOnlySpan<ScalarValue> parameters) => 0;
 
     /// <summary>
     /// The named inputs an operator sends (input name → the expression it evaluates for it), for log taps'
-    /// <c>columns_from</c>: a tap's <c>columns_from</c> expands to these expressions, evaluated where the
-    /// tap is, so it logs what they read at the tap's point, not a copy of what the calls were sent (a node after the model
-    /// that rewrites a column it reads changes what an output tap logs). The model operators give theirs; a custom
-    /// operator that maps expressions to a service's inputs may too.
+    /// <c>columns_from</c>: a tap's <c>columns_from</c> expands to these expressions, evaluated where the tap is, so it
+    /// logs what they read at the tap's point, not a copy of what the calls were sent. The model operators give theirs;
+    /// a custom operator that maps expressions to a service's inputs may too.
     /// </summary>
     public virtual IReadOnlyDictionary<string, string> NamedInputs => EmptyInputs;
 

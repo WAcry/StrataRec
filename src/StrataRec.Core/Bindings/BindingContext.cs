@@ -4,7 +4,7 @@ namespace StrataRec.Core.Bindings;
 
 /// <summary>
 /// What a factory gets to create the instance one binding names: a service client, a feature connector, a distributed
-/// cache store or an update source, built in or written by the user.
+/// cache store or an update source.
 /// </summary>
 /// <remarks>
 /// <para><b>Update sources.</b> The update source of a <c>local</c> table is not a shared instance. Its context has no
@@ -76,11 +76,10 @@ public sealed class BindingContext
     /// resolve at load: what a <see cref="Bindings.SecretReference"/> member of a factory's settings type is bound with.
     /// Call it for a value a factory reads by hand.
     /// </summary>
-    /// <param name="value">The value as written.</param>
     /// <param name="pointer">The value's pointer within the binding, e.g. <c>/password</c>: errors are reported there,
     /// now and when the reference is resolved.</param>
     /// <exception cref="BindingException">The value is not a <c>secret://</c> reference with a name. The message never
-    /// quotes it: it may be a credential pasted in by mistake.</exception>
+    /// quotes it.</exception>
     public SecretReference SecretReference(JsonElement value, string pointer)
     {
         ArgumentNullException.ThrowIfNull(pointer);
@@ -102,7 +101,6 @@ public sealed class BindingContext
     /// malformed value is a configuration error that <c>validate</c> finds; whether the file exists is for the instance
     /// to find when it reads it.
     /// </summary>
-    /// <param name="value">The value as written.</param>
     /// <param name="pointer">The value's pointer within the binding, e.g. <c>/data_file</c>, for errors now and when the
     /// file is read.</param>
     /// <exception cref="BindingException">The value is not a non-empty string, not local, or malformed.</exception>

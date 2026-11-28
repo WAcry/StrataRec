@@ -7,7 +7,7 @@ namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
 /// Request-level values as a service call's inputs: what an operator sends from expressions over <c>ctx.*</c> and
-/// <c>param.*</c> (a recall's query; a filter's user segment).
+/// <c>param.*</c>.
 /// </summary>
 public static class ServiceInputs
 {
@@ -53,7 +53,6 @@ public static class ServiceInputs
         };
     }
 
-    /// <summary>The tensor element type of values of <paramref name="kind"/>.</summary>
     public static TensorElementType ElementType(StorageKind kind) => kind switch
     {
         StorageKind.Bool => TensorElementType.Bool,

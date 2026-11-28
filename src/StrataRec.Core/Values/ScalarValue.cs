@@ -52,7 +52,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
 
     public static ScalarValue FromFloat64(double value) => new(StorageKind.Float64, BitConverter.DoubleToInt64Bits(value), null);
 
-    /// <summary>A float32 value, held promoted like every float, that prints as the float it is (see the type's remarks).</summary>
+    /// <summary>A float32 value, held promoted like every float, that prints as the float it is.</summary>
     public static ScalarValue FromFloat32(float value) => new(StorageKind.Float64, BitConverter.DoubleToInt64Bits(value), SinglePrecision);
 
     /// <summary>True for a value made by <see cref="FromFloat32"/>: its double is exactly a float32 and prints as one.</summary>
@@ -62,11 +62,10 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
         value is null ? Missing : new(StorageKind.String, 0, value);
 
     /// <summary>A list value over <paramref name="value"/>, which it keeps without copying: do not change the array afterwards.</summary>
-    /// <remarks>A value is immutable, and one value may be shared by every request (a plan's default or parameter, an
-    /// expression's constant), so the list accessors are read-only spans: no reader can change what another reads. Copy
-    /// one (<c>ToArray()</c>) to sort or edit it. The array is the value's from then on, and a value outlives the request
-    /// that made it (in its result, in a cache, in the result of a call that another request takes): never an array
-    /// rented from a pool or from the request's memory (<c>RequestMemory.Rent</c>), which goes back and is used again. A value has no fixed length of its own: whether its length is the one a
+    /// <remarks>A value is immutable, and one value may be shared by every request, so the list accessors are read-only
+    /// spans. Copy one (<c>ToArray()</c>) to sort or edit it. The array is the value's from then on, and a value
+    /// outlives the request that made it: never an array rented from a pool or from the request's memory
+    /// (<c>RequestMemory.Rent</c>). A value has no fixed length of its own: whether its length is the one a
     /// <c>list&lt;E,N&gt;</c> holds is checked where it is converted or stored (<see cref="TryConvert"/>).</remarks>
     public static ScalarValue FromBoolList(bool[]? value) => List(StorageKind.Bool, value);
 
@@ -76,8 +75,8 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     /// <inheritdoc cref="FromBoolList"/>
     public static ScalarValue FromFloat64List(double[]? value) => List(StorageKind.Float64, value);
 
-    /// <summary>A <c>list&lt;float32&gt;</c> value, held promoted like every float, whose elements print as the floats they
-    /// are (see the type's remarks). Copies the elements.</summary>
+    /// <summary>A <c>list&lt;float32&gt;</c> value, held promoted like every float, whose elements print as the floats
+    /// they are. Copies the elements.</summary>
     public static ScalarValue FromFloat32List(ReadOnlySpan<float> value)
     {
         var doubles = new double[value.Length];
@@ -101,7 +100,6 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     /// <summary>True for a list made by <see cref="FromFloat32List"/>: its elements are exactly float32s and print as such.</summary>
     public bool IsFloat32List => Kind == StorageKind.List && (_bits & SinglePrecisionList) != 0;
 
-    /// <summary>The number of elements of a list, whatever their kind.</summary>
     public int ListLength => Kind == StorageKind.List ? ((Array)_ref!).Length : throw WrongKind(StorageKind.List);
 
     public bool AsBool() => Kind == StorageKind.Bool ? _bits != 0 : throw WrongKind(StorageKind.Bool);
@@ -120,8 +118,7 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     /// The value of an <c>int32</c> field as the int32 it is, for a reader that knows the declared type (a result column, a
     /// log context field): values are held promoted, and a value of an int32 type always fits.
     /// </summary>
-    /// <exception cref="InvalidOperationException">The value is not an int64 in the int32 range: it is not a value of an
-    /// int32 type, and narrowing it would wrap.</exception>
+    /// <exception cref="InvalidOperationException">The value is not an int64 in the int32 range.</exception>
     public int AsInt32() => Kind == StorageKind.Int64 && Int32Range.Fits(_bits)
         ? (int)_bits
         : throw new InvalidOperationException(Kind == StorageKind.Int64
@@ -131,9 +128,9 @@ public readonly struct ScalarValue : IEquatable<ScalarValue>
     /// <summary>
     /// The value of a <c>float32</c> field as a float, for a reader that knows the declared type: the float nearest the
     /// double (an int64 value is converted, as <see cref="AsFloat64"/> converts it). Exact for every value of a float32
-    /// field: one read from float32 storage holds a widened float, and one converted to a float32 type (a request input,
-    /// a default, a parameter) was rounded to the nearest float (<see cref="TryConvert"/>). Any other double is rounded as
-    /// storing it in a float32 column would round it.
+    /// field: one read from float32 storage holds a widened float, and one converted to a float32 type was rounded to
+    /// the nearest float (<see cref="TryConvert"/>). Any other double is rounded as storing it in a float32 column
+    /// would round it.
     /// </summary>
     public float AsFloat32() => (float)AsFloat64();
 

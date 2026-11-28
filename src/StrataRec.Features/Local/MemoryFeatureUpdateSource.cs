@@ -4,18 +4,20 @@ using StrataRec.Core.Values;
 
 namespace StrataRec.Features.Local;
 
-/// <summary>One update held by a <see cref="MemoryFeatureUpdateSource"/>: the key's parts in declared order (one for a
-/// one-part key), field values by physical name (<see cref="ScalarValue.Missing"/> clears a field), or a tombstone when
-/// <see cref="Fields"/> is null.</summary>
+/// <summary>One update held by a <see cref="MemoryFeatureUpdateSource"/>: the key's parts in declared order, field
+/// values by physical name (<see cref="ScalarValue.Missing"/> clears a field), or a tombstone when <see cref="Fields"/>
+/// is null.</summary>
 public sealed record MemoryFeatureUpdate(IReadOnlyList<EntityKey> Key, long Version, IReadOnlyDictionary<string, ScalarValue>? Fields)
 {
     public bool IsDelete => Fields is null;
 }
 
 /// <summary>
-/// <c>memory_updates@1</c>: an update stream held in memory, for tests and samples. Updates are appended with
-/// <see cref="Upsert(EntityKey[], long, IReadOnlyDictionary{string, ScalarValue})"/> and <see cref="Delete(EntityKey[], long)"/> (or their one-part forms); <see cref="RunAsync"/> applies them in order as one partition (offset =
-/// index of the next update), checkpoints after each batch, and waits for more until <see cref="Complete"/> or cancellation.
+/// <c>memory_updates@1</c>: an update stream held in memory. Updates are appended with
+/// <see cref="Upsert(EntityKey[], long, IReadOnlyDictionary{string, ScalarValue})"/> and
+/// <see cref="Delete(EntityKey[], long)"/> (or their one-part forms); <see cref="RunAsync"/> applies them in order as
+/// one partition (offset = index of the next update), checkpoints after each batch, and waits for more until
+/// <see cref="Complete"/> or cancellation.
 /// </summary>
 public sealed class MemoryFeatureUpdateSource : IFeatureUpdateSource
 {

@@ -55,7 +55,7 @@ public static class NodeOutcomeNames
         ? Names[(int)kind]
         : throw new ArgumentOutOfRangeException(nameof(kind), kind, "not a node outcome");
 
-    /// <summary>The kind a <see cref="Name"/> spells (a recording's node outcome); false for an unknown name.</summary>
+    /// <summary>The kind a <see cref="Name"/> spells; false for an unknown name.</summary>
     public static bool TryParse(string name, out NodeOutcomeKind kind)
     {
         for (var i = 1; i < Names.Length; i++)

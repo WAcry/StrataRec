@@ -10,14 +10,14 @@ public readonly record struct JsoncLocation(int Line, int Column, bool Exact);
 
 /// <summary>
 /// Finds the line and column of an RFC 6901 pointer in the JSONC text it points into, so a tool can print a diagnostic
-/// located by artifact and pointer as <c>file:line:column</c>, which terminals and editors open at the place.
+/// located by artifact and pointer as <c>file:line:column</c>.
 /// </summary>
 /// <remarks>
-/// <para>An object member is located at its key, where an editor shows a misspelled or missing key; an array element and
-/// the root at their value. With an offset into a string value (an expression or a template), the position is that
-/// character's, counting escapes as written (<c>\"</c> is two columns, one character).</para>
+/// <para>An object member is located at its key; an array element and the root at their value. With an offset into a
+/// string value (an expression or a template), the position is that character's, counting escapes as written (<c>\"</c>
+/// is two columns, one character).</para>
 /// <para>A pointer into a merged or patched view may not exist in the file (a node an arm adds, an entry a patch
-/// changes): the position is then its nearest ancestor that exists, never a guess.</para>
+/// changes): the position is then its nearest ancestor that exists.</para>
 /// </remarks>
 public static class JsoncLocator
 {

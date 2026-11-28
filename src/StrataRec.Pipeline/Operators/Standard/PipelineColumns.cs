@@ -58,8 +58,8 @@ public sealed class PipelineColumnsConfig
     public Dictionary<string, string>? Values { get; init; }
 
     /// <summary>
-    /// The most rows it calls for, 1 to 1000: the first ones in rank order. Required: every row is a run of a pipeline,
-    /// so the node says how many it may start. The rows after them get no values, and the node is degraded.
+    /// The most rows it calls for, 1 to 1000: the first ones in rank order. Required. The rows after them get no
+    /// values, and the node is degraded.
     /// </summary>
     public required int MaxCalls { get; init; }
 

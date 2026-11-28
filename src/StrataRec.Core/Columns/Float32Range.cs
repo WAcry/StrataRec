@@ -6,8 +6,8 @@ namespace StrataRec.Core.Columns;
 /// </summary>
 /// <remarks>
 /// A finite double beyond float32's largest value would be stored as an infinity. A value given in configuration or by
-/// the request is refused, as an int64 beyond int32 is for int32 storage: it is not a number anyone meant to store. A
-/// computed one is stored, becomes ±∞, and the non-finite rule replaces it. NaN and ±∞ are what they are in either width.
+/// the request is refused. A computed one is stored, becomes ±∞, and the non-finite rule replaces it. NaN and ±∞ are
+/// what they are in either width.
 /// </remarks>
 public static class Float32Range
 {

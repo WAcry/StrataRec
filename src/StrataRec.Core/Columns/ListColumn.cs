@@ -8,11 +8,10 @@ namespace StrataRec.Core.Columns;
 /// row's length (<c>size()</c>, a template's section, a copy's budget) reads it here without knowing the element type.
 /// </summary>
 /// <remarks>
-/// <para>Each row stores <c>(start, length)</c> into an append-only arena. Unlike strict CSR offsets, rows may be written in
-/// any order (backfill writes rows in arbitrary physical order), and zero-initialized rows are valid empty lists.</para>
-/// <para>A fixed-length list (an embedding) is stored the same way: a row is a contiguous span either way. The column
-/// does not check lengths; the writers that apply the type's rules do (<see cref="ColumnValues.TrySet"/>), as for int32
-/// narrowing. The type only sizes the first arena: N per row, so filling every row never grows it.</para>
+/// <para>Unlike strict CSR offsets, rows may be written in any order, and zero-initialized rows are valid empty
+/// lists.</para>
+/// <para>The column does not check lengths; the writers that apply the type's rules do
+/// (<see cref="ColumnValues.TrySet"/>).</para>
 /// </remarks>
 public abstract class ListColumn : ColumnBuffer
 {
@@ -31,7 +30,6 @@ public abstract class ListColumn : ColumnBuffer
         _lengths = memory.RentCleared<int>(capacity);
     }
 
-    /// <summary>Number of elements in the row's list (<c>size()</c> without touching the arena).</summary>
     public int LengthOf(int row) => _lengths[row];
 
     /// <summary>
@@ -104,9 +102,8 @@ public sealed class ListColumn<T> : ListColumn
     }
 
     /// <summary>
-    /// Makes the row's value a fresh extent of <paramref name="length"/> elements, marks the row present and returns the
-    /// extent to fill. Lets a writer convert while copying (int64 or float64 elements into int32 or float32 storage and
-    /// back) without a temporary array. The caller must write every element: the arena is rented and holds stale data.
+    /// Makes the row's value a fresh extent of <paramref name="length"/> elements, marks the row present and returns
+    /// the extent to fill. The caller must write every element: the arena is rented and holds stale data.
     /// </summary>
     /// <remarks>A span read from this column before the call stays valid: a growing arena is copied into a new
     /// array and the old one stays rented until the request ends, so in-place updates may read their source while

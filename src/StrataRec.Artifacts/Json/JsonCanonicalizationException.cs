@@ -22,7 +22,6 @@ public sealed class JsonCanonicalizationException : Exception
     /// <summary>Where the offending value is, relative to the canonicalized node.</summary>
     public JsonPointer Pointer { get; }
 
-    /// <summary>Optional suggestion for fixing the value.</summary>
     public string? Hint { get; }
 
     private static string Format(string message, JsonPointer? pointer, string? hint)

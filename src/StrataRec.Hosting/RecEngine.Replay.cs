@@ -12,7 +12,6 @@ using StrataRec.Pipeline.Replay;
 
 namespace StrataRec.Hosting;
 
-/// <summary>Recording requests into replay bundles and replaying them.</summary>
 public sealed partial class RecEngine
 {
     /// <summary>
@@ -28,8 +27,8 @@ public sealed partial class RecEngine
     /// <para>A bundle of an aborted request is not replayed: nothing executes, and the outcome carries the recorded reason,
     /// the node that was running and the recorded node decisions (<see cref="ReplayOutcome.NotReplayed"/>).</para>
     /// </remarks>
-    /// <exception cref="ReplayBundleException">The bundle is malformed or of another format (checked here too, for a bundle
-    /// a host deserialized itself); the pointer says where.</exception>
+    /// <exception cref="ReplayBundleException">The bundle is malformed or of another format; the pointer says
+    /// where.</exception>
     /// <exception cref="ObjectDisposedException">The engine is disposed (and the bundle is one to replay).</exception>
     public async ValueTask<ReplayOutcome> ReplayAsync(ReplayBundle bundle, ReplayOptions? options = null, CancellationToken cancellationToken = default)
     {

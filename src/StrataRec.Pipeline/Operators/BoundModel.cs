@@ -13,10 +13,8 @@ namespace StrataRec.Pipeline.Operators;
 /// </summary>
 /// <remarks>
 /// <para>Every version a request may use is in <see cref="Versions"/>, so the operator checks each one's signature at
-/// load (<see cref="Signature"/>): a version that does not fit would load cleanly and then fail on every request that
-/// chose it. Calls go through <see cref="OperatorContext.CallAsync"/> with the request's seed
-/// (<c>ctx.request.seed</c>), so they are bounded, measured, recorded and replayed like every other
-/// model call.</para>
+/// load (<see cref="Signature"/>). Calls go through <see cref="OperatorContext.CallAsync"/> with the request's seed
+/// (<c>ctx.request.seed</c>), so they are bounded, measured, recorded and replayed like every other model call.</para>
 /// </remarks>
 public sealed class BoundModel
 {
@@ -112,7 +110,6 @@ public sealed class BoundModel
         return context.Signature(Service, version, "/model");
     }
 
-    /// <summary>The version this request calls.</summary>
     public string? Version(OperatorContext context)
     {
         ArgumentNullException.ThrowIfNull(context);

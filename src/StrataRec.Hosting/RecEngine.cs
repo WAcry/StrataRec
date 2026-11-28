@@ -21,8 +21,8 @@ using StrataRec.Pipeline.Planning;
 namespace StrataRec.Hosting;
 
 /// <summary>
-/// What a host calls: <see cref="ExecuteAsync"/>, and two read-only questions a transport needs before it
-/// can build a request, so a host needs no concrete engine. Transport, authentication and threading belong to the host.
+/// What a host calls: <see cref="ExecuteAsync"/>, and two read-only questions a transport needs before it can build a
+/// request. Transport, authentication and threading belong to the host.
 /// </summary>
 public interface IRecEngine
 {
@@ -75,7 +75,6 @@ public enum RecErrorKind
     Failed,
 }
 
-/// <summary>A recommendation request.</summary>
 public sealed class RecRequest
 {
     public required string PipelineId { get; init; }
@@ -126,13 +125,12 @@ public sealed class RecRequest
 /// answered joins the group's read of the same record, the first asks the origin, and the others take what it gets
 /// when it is fresh by their own times. A failure is not shared. A result of a pipeline call that another request of
 /// the group computed says so (<see cref="CalledRun.Cached"/> names that request).</para>
-/// <para>A record is the group's while the request that read it is under way, and no longer, however many others
-/// took it: requests sent one after another share nothing through the group (the cache's tiers are what serve those),
-/// and nothing needs to be released, whatever becomes of the object. Each request keeps its own deadline, inputs, arms
-/// and result.</para>
+/// <para>A record is the group's while the request that read it is under way, and no longer, however many others took
+/// it: requests sent one after another share nothing through the group, and nothing needs to be released, whatever
+/// becomes of the object. Each request keeps its own deadline, inputs, arms and result.</para>
 /// <para>A request that is not served as any other is (<see cref="DebugOptions.ForceArms"/>, a
-/// <see cref="DebugOptions.ConfigOverride"/>, <see cref="DebugOptions.CaptureLogs"/>) writes no logs, so what it computed
-/// could not be traced from another request that took it: it runs on its own, as if it had no group.</para>
+/// <see cref="DebugOptions.ConfigOverride"/>, <see cref="DebugOptions.CaptureLogs"/>) writes no logs: it runs on its
+/// own, as if it had no group.</para>
 /// </remarks>
 public sealed class RequestGroup
 {
@@ -151,11 +149,10 @@ public sealed class RequestGroup
 public sealed class DebugOptions
 {
     /// <summary>
-    /// Arms to force (<c>experiment/arm</c>), overriding assignment; an empty list forces the baseline. Strict, unlike the
-    /// platform's arms: an unknown arm or two arms of one layer fail the request. An arm whose experiment yields to the
-    /// experiment of another forced arm (a release's <c>yields_to</c>) does not run and is recorded as yielded, as for a
-    /// request the platform assigned both: forcing shows what a request in those arms runs. The request writes no
-    /// persistent logs (see remarks).
+    /// Arms to force (<c>experiment/arm</c>), overriding assignment; an empty list forces the baseline. Strict, unlike
+    /// the platform's arms: an unknown arm or two arms of one layer fail the request. An arm whose experiment yields to
+    /// the experiment of another forced arm (a release's <c>yields_to</c>) does not run and is recorded as yielded, as
+    /// for a request the platform assigned both. The request writes no persistent logs (see remarks).
     /// </summary>
     public IReadOnlyList<string>? ForceArms { get; init; }
 
@@ -169,9 +166,9 @@ public sealed class DebugOptions
     /// </summary>
     /// <remarks>
     /// The request writes no persistent logs (its batches are returned when <see cref="CaptureLogs"/> is set). Its
-    /// record lists the arms applied and no triggered experiment, since the plan it ran has none. A recording carries
-    /// the override, and replaying it applies the override again. The fallback pipeline, when it serves, runs as
-    /// configured. The engine reads the object once, when it checks it: a CLR value wrapped in it
+    /// record lists the arms applied and no triggered experiment. A recording carries the override, and replaying it
+    /// applies the override again. The fallback pipeline, when it serves, runs as configured. The engine reads the
+    /// object once, when it checks it: a CLR value wrapped in it
     /// (<see cref="JsonValue.Create{T}(T, JsonNodeOptions?)"/>) is written then, and the JSON it wrote is what is
     /// compiled and recorded; what the host does with the object afterwards changes neither.
     /// </remarks>
@@ -200,10 +197,11 @@ public sealed class DebugOptions
     /// and does not change the request's outcome.
     /// </summary>
     /// <remarks>
-    /// An aborted request's bundle is a snapshot taken at the abort: calls still in flight are <c>outstanding</c>, and what
-    /// they return afterwards is not in it. Nothing waits for them, so the cancellation reaches the caller as promptly as
-    /// without recording. It is for inspection: having no result to reproduce, it is not replayed
-    /// (<see cref="Replay.ReplayOutcome.NotReplayed"/>). A request rejected or aborted before any pipeline ran has no bundle.
+    /// An aborted request's bundle is a snapshot taken at the abort: calls still in flight are <c>outstanding</c>, and
+    /// what they return afterwards is not in it. Nothing waits for them, so the cancellation reaches the caller as
+    /// promptly as without recording. It is for inspection: it is not replayed
+    /// (<see cref="Replay.ReplayOutcome.NotReplayed"/>). A request rejected or aborted before any pipeline ran has no
+    /// bundle.
     /// </remarks>
     public Action<ReplayBundle>? OnRecording { get; init; }
 
@@ -217,7 +215,6 @@ public sealed class DebugOptions
     /// </summary>
     public IReadOnlyList<EntityKey>? ExplainIds { get; init; }
 
-    /// <summary>The most ids <see cref="ExplainIds"/> may hold.</summary>
     public const int MaxExplainIds = ExplainTargets.MaxCount;
 }
 
@@ -253,17 +250,15 @@ public sealed record CalledRun(
 /// </remarks>
 /// <param name="Assigned">Assigned arms (<c>experiment/arm</c>) for intent-to-treat analysis.</param>
 /// <param name="Triggered">Experiments whose site the request reached, for triggered analysis.</param>
-/// <param name="Ignored">
-/// Arm ids the platform sent that the request did not run with, and why (<see cref="ExternalArms"/>), sorted by id;
-/// empty when every id applied. A request that ignores arms is still served: the platform's view of its exposure and
-/// this record differ, which is what offline analysis needs to see.
-/// </param>
+/// <param name="Ignored">Arm ids the platform sent that the request did not run with, and why
+/// (<see cref="ExternalArms"/>), sorted by id; empty when every id applied. A request that ignores arms is still
+/// served: the platform's view of its exposure and this record differ.</param>
 public sealed record ExperimentRecord(IReadOnlyList<string> Assigned, IReadOnlyList<string> Triggered, IReadOnlyList<IgnoredArm> Ignored);
 
-/// <summary>The result of a request. Write it as JSON with <see cref="RecResultJson"/>.</summary>
+/// <summary>Write it as JSON with <see cref="RecResultJson"/>.</summary>
 public sealed class RecResult
 {
-    /// <summary>The request's id (<see cref="RecRequest.RequestId"/>), so a result can be logged or written on its own.</summary>
+    /// <summary>The request's id (<see cref="RecRequest.RequestId"/>).</summary>
     public required string RequestId { get; init; }
 
     public required bool Succeeded { get; init; }
@@ -287,8 +282,7 @@ public sealed class RecResult
     public string? ErrorPointer { get; init; }
 
     /// <summary>
-    /// The returned items column by column: the form to read when a request returns many rows to process further (no
-    /// dictionary is made per row). Most callers read <see cref="Items"/>.
+    /// The returned items column by column: the form to read when a request returns many rows to process further.
     /// </summary>
     public required ResultColumns Columns { get; init; }
 
@@ -394,7 +388,6 @@ internal sealed class PlanLayout(ExecutionPlan plan)
     public IReadOnlyList<ArmInfo> Arms { get; } = plan.Arms;
 }
 
-/// <summary>Outcome of a plan load (applied or rejected).</summary>
 public sealed record PlanLoadResult(
     string PipelineId,
     bool Applied,
@@ -404,8 +397,8 @@ public sealed record PlanLoadResult(
     PlanReport Report)
 {
     /// <summary>
-    /// The plan compiled and loaded, and was not applied because its pipeline serves an equal or higher sequence by now
-    /// (a newer release won the race): not a failure, and nothing to retry.
+    /// The plan compiled and loaded, and was not applied because its pipeline serves an equal or higher sequence by
+    /// now: not a failure, and nothing to retry.
     /// </summary>
     public bool Stale { get; init; }
 }
@@ -514,9 +507,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
     /// A table that fails to load rejects the plan with <c>LOCAL_TABLE_LOAD_FAILED</c> naming the binding and the bad
     /// file, an instance with <c>BINDING_LOAD_FAILED</c> at its binding.
     /// </summary>
-    /// <param name="sequence">A plan never replaces one with an equal or higher sequence, so a slow load of an older
-    /// release cannot overwrite a newer one that finished first (<see cref="PlanLoadResult.Stale"/>). When omitted, a
-    /// ticket taken at the start of the call orders local loads; do not mix the two schemes for one pipeline.</param>
+    /// <param name="sequence">A plan never replaces one with an equal or higher sequence
+    /// (<see cref="PlanLoadResult.Stale"/>). When omitted, a ticket taken at the start of the call orders local loads;
+    /// do not mix the two schemes for one pipeline.</param>
     /// <param name="cancellationToken">Cancels the load until the plan is applied.</param>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled before the plan was
     /// applied; the current plan is unchanged.</exception>

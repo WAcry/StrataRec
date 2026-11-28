@@ -23,12 +23,12 @@ public sealed class PipelineArtifact
     public Dictionary<string, ColumnSpec> Columns { get; init; } = new();
 
     /// <summary>
-    /// Request columns nodes write, one value per request, read as <c>req.&lt;name&gt;</c> by what runs after the node that
-    /// writes one: a later node's expressions and <c>when</c>, a log tap, the output's <c>columns</c> and <c>values</c> (not a
-    /// funnel key, decided when the request starts, nor a derived feature). Written by <c>RequestAggregate@1</c> (a count,
-    /// sum, mean, min or max over the live candidates) or by a custom operator. Declared as candidate columns are (type,
-    /// default, flow): a value no node wrote is missing, and a non-nullable one needs a node that cannot be skipped to write
-    /// it before every reader. Experiments may add request columns, not change these.
+    /// Request columns nodes write, one value per request, read as <c>req.&lt;name&gt;</c> by what runs after the node
+    /// that writes one: a later node's expressions and <c>when</c>, a log tap, the output's <c>columns</c> and
+    /// <c>values</c> (not a funnel key, decided when the request starts, nor a derived feature). Written by
+    /// <c>RequestAggregate@1</c> or by a custom operator. Declared as candidate columns are (type, default, flow): a
+    /// value no node wrote is missing, and a non-nullable one needs a node that cannot be skipped to write it before
+    /// every reader. Experiments may add request columns, not change these.
     /// </summary>
     public Dictionary<string, ColumnSpec> RequestColumns { get; init; } = new();
 
@@ -71,7 +71,6 @@ public sealed class ColumnSpec
     public string? Description { get; init; }
 }
 
-/// <summary>Parameter schema entry.</summary>
 public sealed class ParamSpec
 {
     /// <summary><c>int64</c>, <c>float64</c>, <c>bool</c>, <c>string</c> or <c>map&lt;string,T&gt;</c>.</summary>
@@ -87,7 +86,6 @@ public sealed class ParamSpec
     public string? Description { get; init; }
 }
 
-/// <summary>A pipeline node.</summary>
 public sealed class NodeSpec
 {
     /// <summary>Semantic position; required unless <see cref="Role"/> is <c>fallback</c>.</summary>
@@ -109,7 +107,7 @@ public sealed class NodeSpec
 
     /// <summary>
     /// The node is skipped, as by a false <c>when</c>, when less than this many milliseconds are left of the request's
-    /// deadline as it is about to start: for a node not worth starting late. Default: it starts whatever is left.
+    /// deadline as it is about to start. Default: it starts whatever is left.
     /// </summary>
     public int? MinRemainingMs { get; init; }
 
@@ -151,7 +149,6 @@ public sealed class FunnelGroupSpec
     public required double Rate { get; init; }
 }
 
-/// <summary>Declarative log capture point.</summary>
 public sealed class LogTapSpec
 {
     public required string Group { get; init; }
@@ -193,7 +190,6 @@ public sealed class LogTapRowsSpec
     public int? MaxRows { get; init; }
 }
 
-/// <summary>What the pipeline returns.</summary>
 public sealed class OutputSpec
 {
     /// <summary>Parameter holding the number of results to return.</summary>
@@ -204,7 +200,7 @@ public sealed class OutputSpec
 
     /// <summary>
     /// Output name → request-level expression (<c>req.*</c>, <c>ctx.*</c>, <c>param.*</c>; usually a plain <c>req.*</c>
-    /// reference), returned once with the result, beside its items: what the request's nodes computed for the caller.
+    /// reference), returned once with the result, beside its items.
     /// </summary>
     public Dictionary<string, string> Values { get; init; } = new();
 }

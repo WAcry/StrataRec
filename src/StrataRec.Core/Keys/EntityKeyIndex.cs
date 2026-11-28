@@ -5,23 +5,21 @@ using StrataRec.Core.Memory;
 namespace StrataRec.Core.Keys;
 
 /// <summary>
-/// A request-scoped hash index from entity keys to <c>int</c> values (key indices, row numbers). Every array is rented
-/// from the request's <see cref="RequestMemory"/>, so building, probing and growing it allocate nothing per key.
+/// A request-scoped hash index from entity keys to <c>int</c> values (key indices, row numbers).
 /// </summary>
 /// <remarks>
-/// <para>Entries are stored densely in insertion order, so <see cref="Int64Keys"/> / <see cref="StringKeys"/> double as
-/// the list of distinct keys in first-seen order.</para>
+/// <para><see cref="Int64Keys"/> / <see cref="StringKeys"/> double as the list of distinct keys in first-seen
+/// order.</para>
 /// <para>One key type per index. String keys compare ordinally. Lookups of a key of the other type find nothing.</para>
-/// <para>Growth rents twice the space and leaves the old arrays on the request's ledger until the request ends, like
-/// Compact does; callers that know an upper bound on the number of keys pass it as the capacity and never grow. An index
-/// built and dropped within one computation (a recall merge) is a scratch index instead: its arrays are scratch buffers
+/// <para>Growth rents twice the space and leaves the old arrays on the request's ledger until the request ends; callers
+/// that know an upper bound on the number of keys pass it as the capacity and never grow. An index built and dropped
+/// within one computation is a scratch index instead: its arrays are scratch buffers
 /// (<see cref="RequestMemory.RentScratch{T}"/>), the ones it outgrows go back at once, and <see cref="ReturnArrays"/>
 /// gives back the rest.</para>
 /// <para>Not thread-safe; used on the request's logical thread. Nothing may use it after its memory is released.</para>
 /// </remarks>
 public sealed class EntityKeyIndex
 {
-    /// <summary>Largest supported capacity: the slot table (twice the capacity) must stay within array pool limits.</summary>
     public const int MaxCapacity = 1 << 29;
 
     private const int MinSlots = 16;
@@ -330,9 +328,8 @@ public sealed class EntityKeyIndex
     }
 
     /// <summary>
-    /// Empties the index and readies it for <paramref name="capacity"/> keys of <paramref name="keyType"/> without growing.
-    /// A caller that indexes one batch after another (the local read) keeps one index and costs no object per
-    /// batch; arrays are rented again only when the capacity or the key type needs more than the index holds.
+    /// Empties the index and readies it for <paramref name="capacity"/> keys of <paramref name="keyType"/> without
+    /// growing.
     /// </summary>
     public void Reset(EntityKeyType keyType, int capacity)
     {

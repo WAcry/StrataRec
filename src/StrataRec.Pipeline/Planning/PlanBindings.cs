@@ -28,7 +28,6 @@ public enum SignatureStatus : byte
     Unchecked,
 }
 
-/// <summary>A model signature as a compile sees it.</summary>
 public readonly record struct SignatureLookup(SignatureStatus Status, ServiceSignature? Signature = null, string? Error = null, string? Hint = null)
 {
     public static SignatureLookup Unchecked => new(SignatureStatus.Unchecked);
@@ -53,11 +52,11 @@ public readonly record struct SignatureLookup(SignatureStatus Status, ServiceSig
 }
 
 /// <summary>
-/// What a plan's compile acquires from its engine: its local tables, the instances its bindings name,
-/// and the model signatures its nodes are checked against, which may need those instances loaded. The engine's
-/// implementation is the plan's binding lease (Hosting): it shares tables and instances with the other plans by identity,
-/// loads them, and keeps them until no request of the plan can still use them. <see cref="UnloadedBindings"/> is the one
-/// for compiling without serving.
+/// What a plan's compile acquires from its engine: its local tables, the instances its bindings name, and the model
+/// signatures its nodes are checked against, which may need those instances loaded. The engine's implementation is the
+/// plan's binding lease: it shares tables and instances with the other plans by identity, loads them, and keeps them
+/// until no request of the plan can still use them. <see cref="UnloadedBindings"/> is the one for compiling without
+/// serving.
 /// </summary>
 public interface IPlanBindings : ILocalTableProvider, IBindingInstances
 {
@@ -75,8 +74,7 @@ public interface IPlanBindings : ILocalTableProvider, IBindingInstances
 /// compiles without the files, connections or secrets its instances need at load. A model signature is checked only when
 /// the client needs no load and answers at once; the others are checked when an engine loads the plan.
 /// </summary>
-/// <remarks>Not thread-safe: one per compile (shared by its validation passes). Instances are not disposed; none of them
-/// was loaded.</remarks>
+/// <remarks>Not thread-safe: one per compile (shared by its validation passes). Instances are not disposed.</remarks>
 public sealed class UnloadedBindings : IPlanBindings
 {
     private readonly Dictionary<TableKey, LocalFeatureTable> _tables = new();

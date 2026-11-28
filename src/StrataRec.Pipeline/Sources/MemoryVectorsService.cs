@@ -22,7 +22,6 @@ namespace StrataRec.Pipeline.Sources;
 /// not a list of float32s or float64s (the declared type of the expression it is, e.g. <c>list&lt;float32,64&gt;</c>), a
 /// vector of another length than the items', or a score that is not finite (vectors too large for a float64 dot product)
 /// is a failed call, naming them. A float32 vector is scored in float64, as a float64 one.</para>
-/// <para>An exhaustive scan, for the few thousand items of a fixture.</para>
 /// </remarks>
 public sealed class MemoryVectorsService : IServiceClient
 {

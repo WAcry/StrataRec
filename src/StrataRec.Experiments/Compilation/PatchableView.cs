@@ -32,7 +32,7 @@ public sealed class PatchableView
 
     public FeatureCatalogArtifact Catalog { get; }
 
-    /// <summary>The view document. Treat as read-only; it is shared by every compile over this view.</summary>
+    /// <summary>Treat as read-only; it is shared by every compile over this view.</summary>
     public JsonObject Document { get; }
 
     /// <summary><c>/nodes</c>: node id → definition.</summary>

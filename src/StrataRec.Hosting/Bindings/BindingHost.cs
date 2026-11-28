@@ -9,7 +9,6 @@ using StrataRec.Features.Local;
 
 namespace StrataRec.Hosting.Bindings;
 
-/// <summary>Options of a <see cref="BindingHost"/>.</summary>
 public sealed class BindingHostOptions
 {
     /// <summary>
@@ -23,13 +22,12 @@ public sealed class BindingHostOptions
     /// <summary>Delay before the first restart of a failed update source; it doubles with every failure in a row.</summary>
     public TimeSpan RestartDelay { get; init; } = TimeSpan.FromSeconds(1);
 
-    /// <summary>The longest delay between restarts.</summary>
     public TimeSpan MaxRestartDelay { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// The longest an instance's load (<see cref="ILoadable.LoadAsync"/>) may take, and the longest a plan load waits for
-    /// the model signatures it asked for. A model file is read, or a connection made, within it, or the plans that need
-    /// the instance are rejected. A local table's first load has no such bound: a large snapshot may take minutes.
+    /// The longest an instance's load (<see cref="ILoadable.LoadAsync"/>) may take, and the longest a plan load waits
+    /// for the model signatures it asked for. A model file is read, or a connection made, within it, or the plans that
+    /// need the instance are rejected. A local table's first load has no such bound.
     /// </summary>
     public TimeSpan LoadTimeout { get; init; } = TimeSpan.FromMinutes(2);
 

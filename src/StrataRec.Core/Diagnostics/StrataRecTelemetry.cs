@@ -5,9 +5,8 @@ namespace StrataRec.Core.Diagnostics;
 
 /// <summary>
 /// The engine's one <see cref="System.Diagnostics.Metrics.Meter"/> and one
-/// <see cref="System.Diagnostics.ActivitySource"/>, both named <see cref="Name"/>. Hosts subscribe
-/// by name (OpenTelemetry: <c>AddMeter("StrataRec")</c>, <c>AddSource("StrataRec")</c>); the engine references no
-/// exporter.
+/// <see cref="System.Diagnostics.ActivitySource"/>, both named <see cref="Name"/>. Hosts subscribe by name
+/// (OpenTelemetry: <c>AddMeter("StrataRec")</c>, <c>AddSource("StrataRec")</c>).
 /// </summary>
 public static class StrataRecTelemetry
 {
@@ -22,7 +21,7 @@ public static class StrataRecTelemetry
 }
 
 /// <summary>
-/// Tag (attribute) keys. Metric tags take only bounded values; span-only keys may carry ids.
+/// Metric tags take only bounded values; span-only keys may carry ids.
 /// </summary>
 public static class StrataRecTags
 {
@@ -50,7 +49,7 @@ public static class StrataRecTags
 
     /// <summary>
     /// Catalog name of a feature (with <see cref="Source"/>: what a source supplies, field by field). Bounded by the
-    /// catalog, as node ids are by the pipelines.
+    /// catalog.
     /// </summary>
     public const string Feature = "stratarec.feature";
 
@@ -122,12 +121,11 @@ public static class StrataRecTags
 }
 
 /// <summary>
-/// Span helpers. A request gets one span; node and external-I/O child spans exist only while that span is recorded
+/// A request gets one span; node and external-I/O child spans exist only while that span is recorded
 /// (<see cref="Activity.Recorded"/>).
 /// </summary>
 public static class StrataRecTracing
 {
-    /// <summary>Operation name of the per-request span.</summary>
     public const string RequestSpanName = "stratarec.request";
 
     /// <summary>

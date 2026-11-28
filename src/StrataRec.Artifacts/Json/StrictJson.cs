@@ -15,8 +15,7 @@ namespace StrataRec.Artifacts.Json;
 /// <c>0xFF</c>, which <see cref="JsonDocument"/> keeps until the text is read).
 /// </summary>
 /// <remarks>
-/// Checked once where the request comes in, either is an invalid request at its pointer (RFC 8259 section 4 leaves
-/// duplicate names undefined; I-JSON, RFC 7493, forbids both).
+/// Checked once where the request comes in, either is an invalid request at its pointer.
 /// </remarks>
 public static class StrictJson
 {

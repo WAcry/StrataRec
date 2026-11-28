@@ -8,7 +8,6 @@ using StrataRec.Core.Threading;
 
 namespace StrataRec.Logging;
 
-/// <summary>Queue sizes and timing of a <see cref="LogPipeline"/>.</summary>
 public sealed class LogPipelineOptions
 {
     /// <summary>
@@ -19,21 +18,20 @@ public sealed class LogPipelineOptions
 
     /// <summary>
     /// Memory the durable queue may hold in memory. A batch that does not fit goes to <see cref="DurableOverflow"/>;
-    /// without one it is lost, counted in <see cref="LogPipeline.DurableOverflow"/>, and leaves a sequence gap downstream.
-    /// A sink that stops accepting writes fills this, and only this, so it bounds what a stuck sink costs the process.
+    /// without one it is lost, counted in <see cref="LogPipeline.DurableOverflow"/>, and leaves a sequence gap
+    /// downstream. A sink that stops accepting writes fills this, and only this.
     /// </summary>
     public long DurableMaxBytes { get; init; } = 256L << 20;
 
     /// <summary>
-    /// Spill hook for durable batches the memory queue cannot take (the local disk buffer). Called
-    /// on the request thread with the batch, which already carries its <c>seq</c>; return true when the batch was
-    /// persisted and will be delivered later (e.g. appended to a local file replayed at startup). Must be fast.
+    /// Spill hook for durable batches the memory queue cannot take. Called on the request thread with the batch, which
+    /// already carries its <c>seq</c>; return true when the batch was persisted and will be delivered later. Must be
+    /// fast.
     /// </summary>
     public Func<LogBatch, bool>? DurableOverflow { get; init; }
 
     /// <summary>
-    /// Receives batches a sink rejected permanently (<see cref="LogBatchRejectedException"/>): they are never retried,
-    /// so a malformed batch cannot block the durable stream behind it.
+    /// Receives batches a sink rejected permanently (<see cref="LogBatchRejectedException"/>): they are never retried.
     /// </summary>
     public Action<LogBatch, Exception>? Rejected { get; init; }
 
@@ -47,9 +45,8 @@ public sealed class LogPipelineOptions
     public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// The longest wait between two attempts to write a durable batch the sink failed; the waits double from 10 ms (from
-    /// this, when it is shorter) up to it. At least <see cref="MinRetryDelay"/>: without a wait a failing sink would be
-    /// retried in a busy loop.
+    /// The longest wait between two attempts to write a durable batch the sink failed; the waits double from 10 ms
+    /// (from this, when it is shorter) up to it. At least <see cref="MinRetryDelay"/>.
     /// </summary>
     public TimeSpan MaxRetryDelay { get; init; } = TimeSpan.FromSeconds(5);
 
@@ -58,19 +55,18 @@ public sealed class LogPipelineOptions
 
     /// <summary>
     /// The longest <see cref="DrainTimeout"/>: disposal waits for the consumers for the drain timeout and half a second
-    /// more, in one timer's wait.
+    /// more.
     /// </summary>
     public static readonly TimeSpan MaxDrainTimeout = LongestWait - LogPipeline.ShutdownGrace;
 
     /// <summary>
-    /// The shortest <see cref="MaxRetryDelay"/>, 1 ms: a timer waits whole milliseconds, so a shorter delay is none.
+    /// The shortest <see cref="MaxRetryDelay"/>, 1 ms.
     /// </summary>
     public static readonly TimeSpan MinRetryDelay = TimeSpan.FromMilliseconds(1);
 
     /// <summary>
     /// Throws an <see cref="ArgumentOutOfRangeException"/> naming the first option out of its range. The pipeline
-    /// checks its options before it starts its consumers, and a host checks them when it registers the pipeline: a
-    /// value that cannot work fails at startup, not once logs are written.
+    /// checks its options before it starts its consumers, and a host checks them when it registers the pipeline.
     /// </summary>
     public void Validate()
     {
@@ -96,7 +92,6 @@ public sealed class LogPipelineOptions
 /// <summary>What happened to a submitted batch.</summary>
 public enum LogAdmission : byte
 {
-    /// <summary>Queued for the sink.</summary>
     Queued = 1,
 
     /// <summary>A durable batch the memory queue could not take, persisted by <see cref="LogPipelineOptions.DurableOverflow"/>.</summary>
@@ -124,7 +119,6 @@ public sealed class LogBatchRejectedException : Exception
     public IReadOnlyList<LogBatch> Batches { get; }
 }
 
-/// <summary>Delivery counters of one tap (drops are counted so offline weights can be corrected).</summary>
 public readonly record struct TapLogStats(string TapId, long Delivered, long Dropped);
 
 /// <summary>
@@ -198,7 +192,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
 
     /// <summary>
     /// Enqueues a finished batch. Never blocks the request thread; the result says whether the batch was queued,
-    /// spilled or dropped, so publishers and metrics can see durable loss as it happens.
+    /// spilled or dropped.
     /// </summary>
     public LogAdmission Submit(LogBatch batch)
     {
@@ -282,7 +276,6 @@ public sealed partial class LogPipeline : IAsyncDisposable
     /// <summary>Memory the durable queue holds now (<see cref="LogBatch.ApproximateBytes"/> of its batches).</summary>
     public long DurableQueuedBytes => Interlocked.Read(ref _durableBytes);
 
-    /// <summary>Memory the best-effort queue holds now.</summary>
     public long BestEffortQueuedBytes => Interlocked.Read(ref _bestEffortBytes);
 
     /// <summary>
@@ -343,7 +336,7 @@ public sealed partial class LogPipeline : IAsyncDisposable
         return list;
     }
 
-    /// <summary>Waits until every queued batch was written or dropped (tests, CLI, graceful shutdown).</summary>
+    /// <summary>Waits until every queued batch was written or dropped.</summary>
     public async Task FlushAsync(CancellationToken cancellationToken = default)
     {
         while (Interlocked.Read(ref _pending) > 0)

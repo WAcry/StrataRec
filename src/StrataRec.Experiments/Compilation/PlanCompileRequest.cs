@@ -6,7 +6,6 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Experiments.Compilation;
 
-/// <summary>Everything needed to compile one pipeline's unified plan.</summary>
 public sealed class PlanCompileRequest
 {
     public required PipelineArtifact Pipeline { get; init; }
@@ -48,7 +47,6 @@ public sealed class PlanCompileRequest
     /// </summary>
     public bool ValidateArmsIndependently { get; init; } = true;
 
-    /// <summary>Upper bound on arm combinations per node.</summary>
     public int MaxCombinationsPerNode { get; init; } = 1024;
 
     /// <summary>Upper bound on arm combinations enumerated by the data-flow check.</summary>
@@ -56,9 +54,8 @@ public sealed class PlanCompileRequest
 
     /// <summary>
     /// When set, experiments past <c>expires_at</c> are rejected and those expiring within
-    /// <see cref="ExpiryWarningDays"/> are warned about. Set only where a release is decided
-    /// (<c>validate</c>, <c>build</c>): loading a plan, replaying a recorded request or explaining one must not start
-    /// failing on a calendar date.
+    /// <see cref="ExpiryWarningDays"/> are warned about. Set only where a release is decided (<c>validate</c>,
+    /// <c>build</c>).
     /// </summary>
     public DateOnly? Today { get; init; }
 
@@ -67,11 +64,10 @@ public sealed class PlanCompileRequest
 }
 
 /// <summary>
-/// What a release needs of a binary: the baseline's capabilities, and each experiment's beyond them, so
-/// removing an experiment removes exactly what it needed.
+/// What a release needs of a binary: the baseline's capabilities, and each experiment's beyond them.
 /// </summary>
 /// <param name="Baseline">What the pipeline without experiments needs, sorted.</param>
-/// <param name="Experiments">Experiment id → what it needs that the baseline does not, sorted (empty for most).</param>
+/// <param name="Experiments">Experiment id → what it needs that the baseline does not, sorted.</param>
 public sealed record ReleaseRequirements(IReadOnlyList<string> Baseline, IReadOnlyDictionary<string, IReadOnlyList<string>> Experiments);
 
 /// <summary>An experiment and the layer it runs in (layers come from the manifest, not the artifact).</summary>
@@ -109,11 +105,10 @@ public sealed class PlanCompilation
 
     /// <summary>
     /// The configuration override <see cref="PlanCompiler.CompileMerged"/> compiled, as its check read it
-    /// (<see cref="StrictJson.Check(JsonNode?, int, out JsonNode?)"/>): a copy of the host's tree in which every CLR value
-    /// it wrapped is the JSON it wrote once (but a number or string the canonical form reports), and a wrapped
-    /// <see cref="System.Text.Json.JsonElement"/> the JSON of the element. Whoever keeps the override for this
-    /// compile (a recording of the request) keeps this one: the host's tree would write those values again, perhaps
-    /// differently. Null without an override, or when the override failed its check.
+    /// (<see cref="StrictJson.Check(JsonNode?, int, out JsonNode?)"/>): a copy of the host's tree in which every CLR
+    /// value it wrapped is the JSON it wrote once (but a number or string the canonical form reports), and a wrapped
+    /// <see cref="System.Text.Json.JsonElement"/> the JSON of the element. Whoever keeps the override for this compile
+    /// (a recording of the request) keeps this one. Null without an override, or when the override failed its check.
     /// </summary>
     public JsonObject? ConfigOverride { get; internal set; }
 
@@ -158,17 +153,14 @@ public sealed class PlanReport
 }
 
 /// <summary>
-/// One experiment yielding to another (<see cref="ExperimentPlacement.YieldsTo"/>): <paramref name="Experiment"/> runs in
-/// none of its arms on a request also in an arm of <paramref name="To"/>, so it loses the traffic <paramref name="To"/>
-/// runs on.
+/// One experiment yielding to another (<see cref="ExperimentPlacement.YieldsTo"/>): <paramref name="Experiment"/> runs
+/// in none of its arms on a request also in an arm of <paramref name="To"/>.
 /// </summary>
 /// <param name="Resolves">What would be checked between their arms if they could run together: the conflicting paths
 /// (<c>PATCH_CONFLICT</c>) and the interactions (<c>INTERACTION_FLOW_COLUMN</c>, <c>INTERACTION_READ</c>), sorted; empty
 /// when there is neither (<c>YIELD_UNUSED</c>).</param>
 public sealed record YieldReport(string Experiment, string To, IReadOnlyList<string> Resolves);
 
-/// <summary>Variants of one node id.</summary>
-/// <param name="NodeId">Node id.</param>
 /// <param name="Layers">Layers whose arms modify the node, L(n).</param>
 /// <param name="Combinations">C(n).</param>
 /// <param name="Variants">Distinct non-empty compiled definitions.</param>

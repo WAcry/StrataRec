@@ -132,7 +132,6 @@ public sealed class TrendingSettings
 /// <summary>One item of <c>trending@1</c>.</summary>
 public sealed class TrendingItem
 {
-    /// <summary>The item's id.</summary>
     public required long Id { get; init; }
 
     /// <summary>How much it trends: a higher score ranks first.</summary>

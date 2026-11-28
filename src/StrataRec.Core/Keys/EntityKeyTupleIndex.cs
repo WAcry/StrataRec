@@ -6,15 +6,14 @@ namespace StrataRec.Core.Keys;
 
 /// <summary>
 /// <see cref="EntityKeyIndex"/> for keys of several parts: a request-scoped hash index from tuples of
-/// <see cref="EntityKey"/>s to <c>int</c> values, every array rented from the request's <see cref="RequestMemory"/>, so
-/// deduplicating thousands of tuples allocates nothing per tuple.
+/// <see cref="EntityKey"/>s to <c>int</c> values, every array rented from the request's <see cref="RequestMemory"/>.
 /// </summary>
 /// <remarks>
 /// <para>For the parts that vary per key only: the shared parts of a batch (a request input) are the same for every key,
 /// so a caller leaves them out and indexes the rest. A key whose only varying part is one column is an
 /// <see cref="EntityKeyIndex"/>, which compares and hashes one <c>long</c> or string; this index is for two or more.</para>
 /// <para>Parts are stored part-major (<see cref="PartKeys"/>): part p of every entry is one contiguous run, in
-/// insertion order, which is how a batch of keys lays them out.</para>
+/// insertion order.</para>
 /// <para>Not thread-safe; used on the request's logical thread. Nothing may use it after its memory is released.</para>
 /// </remarks>
 public sealed class EntityKeyTupleIndex
@@ -58,7 +57,6 @@ public sealed class EntityKeyTupleIndex
         return _parts.AsSpan(part * _maxCount, _count);
     }
 
-    /// <summary>Part <paramref name="part"/> of entry <paramref name="entry"/>.</summary>
     public EntityKey Part(int entry, int part)
     {
         if ((uint)entry >= (uint)_count || (uint)part >= (uint)_partCount)

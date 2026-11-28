@@ -11,8 +11,8 @@ public enum ExplainStepKind : byte
     Ran = 1,
 
     /// <summary>
-    /// The node's attempt failed (<see cref="ExplainStep.Detail"/> says why), so the table is as it was before the attempt
-    ///: nothing it did to the candidate stays. A fallback that then ran has a step of its own.
+    /// The node's attempt failed (<see cref="ExplainStep.Detail"/> says why), so the table is as it was before the
+    /// attempt. A fallback that then ran has a step of its own.
     /// </summary>
     RolledBack,
 
@@ -36,7 +36,7 @@ public enum ExplainChange : byte
     Dropped,
 }
 
-/// <summary>Where an explained candidate ended, so "why is it not in the result" has a one-word answer.</summary>
+/// <summary>Where an explained candidate ended.</summary>
 public enum ExplainVerdict : byte
 {
     /// <summary>In the result, at <see cref="CandidateExplanation.Rank"/>.</summary>

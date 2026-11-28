@@ -74,12 +74,8 @@ public enum RequestEvent : byte
 /// </remarks>
 public sealed partial class RequestEventLog : IDisposable
 {
-    /// <summary>Default summary window.</summary>
     public static readonly TimeSpan DefaultWindow = TimeSpan.FromSeconds(10);
 
-    /// <summary>
-    /// Default <see cref="HeldAfter"/>.
-    /// </summary>
     public static readonly TimeSpan DefaultHeldAfter = TimeSpan.FromSeconds(30);
 
     private readonly ILogger _logger;

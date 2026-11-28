@@ -73,16 +73,16 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// The task that has stored context feature <paramref name="feature"/>, one the plan prefetches: its group's, a derived
-    /// one's computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>, a key or an operator reads it), or for any
-    /// other derived one the whole prefetch's. Features stored together share a task. For an operator that reads context
-    /// features while it runs rather than before it starts (a recall source's query values): it waits for these
-    /// tasks, then reads each feature's state with <see cref="ContextStoredState"/>.
+    /// The task that has stored context feature <paramref name="feature"/>, one the plan prefetches: its group's, a
+    /// derived one's computed early (<see cref="FeatureRuntimeInfo.ComputedEarly"/>, a key or an operator reads it), or
+    /// for any other derived one the whole prefetch's. Features stored together share a task. For an operator that
+    /// reads context features while it runs rather than before it starts: it waits for these tasks, then reads each
+    /// feature's state with <see cref="ContextStoredState"/>.
     /// </summary>
-    /// <remarks>Call it on the operator's flow while the request runs. An operator that stopped waiting (the node's budget)
-    /// reads nothing more of the request's, so nothing it does outlives the request's memory.</remarks>
-    /// <exception cref="InvalidOperationException">The feature is not a context feature (the operator's defect), or the
-    /// prefetch has not started (<see cref="StartContextFetch"/>).</exception>
+    /// <remarks>Call it on the operator's flow while the request runs. An operator that stopped waiting reads nothing
+    /// more of the request's, so nothing it does outlives the request's memory.</remarks>
+    /// <exception cref="InvalidOperationException">The feature is not a context feature, or the prefetch has not
+    /// started (<see cref="StartContextFetch"/>).</exception>
     public Task ContextStoredTask(int feature)
     {
         if (!_plan.Features[feature].IsContext)
@@ -95,8 +95,8 @@ public sealed partial class FeatureFetcher
     }
 
     /// <summary>
-    /// The state of context feature <paramref name="feature"/> once its task (<see cref="ContextStoredTask"/>) has completed:
-    /// final from then on. A prefetch that faulted (a defect) or was cancelled rethrows here.
+    /// The state of context feature <paramref name="feature"/> once its task (<see cref="ContextStoredTask"/>) has
+    /// completed: final from then on. A prefetch that faulted or was cancelled rethrows here.
     /// </summary>
     /// <remarks>As <see cref="ContextStoredTask"/>: on the operator's flow while the request runs.</remarks>
     /// <exception cref="InvalidOperationException">Its task has not completed: the state may still change.</exception>

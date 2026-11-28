@@ -13,9 +13,8 @@ using StrataRec.Core.Services;
 namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
-/// Everything an <see cref="IOperatorFactory"/> may use while compiling one node variant. Every column, parameter
-/// and expression the operator resolves through this context is recorded as a read or write of the node; those sets
-/// drive fetch planning, data-flow validation and experiment footprints.
+/// Everything an <see cref="IOperatorFactory"/> may use while compiling one node variant. Every column, parameter and
+/// expression the operator resolves through this context is recorded as a read or write of the node.
 /// </summary>
 public sealed class OperatorCompileContext
 {
@@ -77,8 +76,8 @@ public sealed class OperatorCompileContext
     public OperatorDescriptor Descriptor { get; }
 
     /// <summary>
-    /// The names an operator may read, for looking one up without reading it (listing names, suggesting one). To read a
-    /// name outside an expression, use <see cref="TryResolveRead"/>, which records the read.
+    /// The names an operator may read, for looking one up without reading it. To read a name outside an expression, use
+    /// <see cref="TryResolveRead"/>, which records the read.
     /// </summary>
     public IExpressionScope Scope => _scope;
 
@@ -166,15 +165,13 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
-    /// Resolves an output column the node writes. With <paramref name="implicitType"/>, a column nothing has declared
-    /// is declared with that type, so the write declares it, and a declared one keeps its declared type, which the
-    /// caller checks it can write; without, the column must be declared. A node that writes a declared column as
-    /// declared and declares an undeclared one passes its type either way, rather than asking the schema first: whether
-    /// a column is declared can differ between arm combinations, which compile the node once.
+    /// With <paramref name="implicitType"/>, a column nothing has declared is declared with that type, and a declared
+    /// one keeps its declared type, which the caller checks it can write; without, the column must be declared. A node
+    /// that writes a declared column as declared and declares an undeclared one passes its type either way, rather than
+    /// asking the schema first.
     /// </summary>
     /// <exception cref="InvalidOperationException">The operator declares neither <see cref="Effects.ColumnWriter"/> nor
-    /// <see cref="Effects.RowSource"/>: its descriptor is wrong, which is the operator author's bug, not the
-    /// configuration's.</exception>
+    /// <see cref="Effects.RowSource"/>.</exception>
     public bool TryWriteColumn(string name, string configKey, ColumnType? implicitType, out OutputColumn column)
     {
         if ((Descriptor.Effects & (Effects.ColumnWriter | Effects.RowSource)) == 0)
@@ -250,10 +247,9 @@ public sealed class OperatorCompileContext
     /// commits. A request column is always declared.
     /// </summary>
     /// <param name="configKey">Pointer suffix under <c>/config</c> for diagnostics, e.g. <c>/values/candidates.count</c>.</param>
-    /// <param name="suggested">The type the operator would write, for the hint when the column is not declared: the
-    /// declaration to add is then the one the operator accepts.</param>
-    /// <exception cref="InvalidOperationException">The operator does not declare <see cref="Effects.RequestWriter"/>:
-    /// its descriptor is wrong, the operator author's bug.</exception>
+    /// <param name="suggested">The type the operator would write, for the hint when the column is not declared.</param>
+    /// <exception cref="InvalidOperationException">The operator does not declare
+    /// <see cref="Effects.RequestWriter"/>.</exception>
     public bool TryWriteRequestColumn(string name, string configKey, out RequestOutput output, ColumnType? suggested = null)
     {
         if ((Descriptor.Effects & Effects.RequestWriter) == 0)
@@ -327,13 +323,12 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
-    /// Compiles a request-level expression (<c>ctx.*</c> and <c>param.*</c>; <c>col.*</c> is an error) whose context features
-    /// the operator waits for itself while it runs (<see cref="OperatorContext.WhenEachReadyAsync"/>), instead of the executor
-    /// filling them before the node starts. For an operator that sends several calls of which only some read context
-    /// features (a recall source's query): each call waits for its own features and the others start at once,
-    /// where a feature filled before the node would hold back every call. The features remain reads of the node: they are
-    /// prefetched with the request's context, and data-flow checks, experiment footprints and taps see them. Returns null
-    /// after reporting errors.
+    /// Compiles a request-level expression (<c>ctx.*</c> and <c>param.*</c>; <c>col.*</c> is an error) whose context
+    /// features the operator waits for itself while it runs (<see cref="OperatorContext.WhenEachReadyAsync"/>), instead
+    /// of the executor filling them before the node starts. For an operator that sends several calls of which only some
+    /// read context features (a recall source's query): each call waits for its own features and the others start at
+    /// once. The features remain reads of the node: they are prefetched with the request's context, and data-flow
+    /// checks, experiment footprints and taps see them. Returns null after reporting errors.
     /// </summary>
     /// <param name="expectedType">The result type the operator needs, or null for any; the result may be nullable.</param>
     public CompiledExpression? CompileAwaitedExpression(string? source, string configKey, ColumnType? expectedType = null)
@@ -382,9 +377,9 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>Resolves a parameter leaf the operator reads.</summary>
-    /// <param name="within">A range the operator needs every value in (MMR's λ in [0, 1]): the parameter must be declared
-    /// with a min and a max inside it. Values are checked against the declaration, and experiments cannot widen it
-    ///, so every value the operator reads is in range, without a check per request.</param>
+    /// <param name="within">A range the operator needs every value in (MMR's λ in [0, 1]): the parameter must be
+    /// declared with a min and a max inside it. Values are checked against the declaration, and experiments cannot
+    /// widen it, so every value the operator reads is in range.</param>
     public bool TryParam(string name, string configKey, out ParamRef parameter, StorageKind? expectedKind = null, (double Min, double Max)? within = null)
     {
         parameter = default;
@@ -427,11 +422,11 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
-    /// All leaves of a map parameter (e.g. every <c>recall_quotas.*</c>), ordered by key: the baseline's and every key an
-    /// arm adds. A key only an arm adds is missing in a request without that arm, whose own compile does not have it, so
-    /// the node must treat a missing leaf as an absent entry when it runs, and derive nothing from the set of leaves that
-    /// a compile without that key would see otherwise (a position, a count). Binding one leaf by name
-    /// (<see cref="TryParam"/>) needs it declared where the node is.
+    /// All leaves of a map parameter (e.g. every <c>recall_quotas.*</c>), ordered by key: the baseline's and every key
+    /// an arm adds. A key only an arm adds is missing in a request without that arm, so the node must treat a missing
+    /// leaf as an absent entry when it runs, and derive nothing from the set of leaves that a compile without that key
+    /// would see otherwise (a position, a count). Binding one leaf by name (<see cref="TryParam"/>) needs it declared
+    /// where the node is.
     /// </summary>
     public List<ParamRef> MapParam(string mapName, string configKey, StorageKind? expectedKind = null)
     {
@@ -629,8 +624,8 @@ public sealed class OperatorCompileContext
     }
 
     /// <summary>
-    /// Declares that the operator reads the ids of the result's rows as keys of <paramref name="type"/> (into a list
-    /// column, say), whatever this pipeline's own keys are: the pipeline's keys must be of that type.
+    /// Declares that the operator reads the ids of the result's rows as keys of <paramref name="type"/>, whatever this
+    /// pipeline's own keys are: the pipeline's keys must be of that type.
     /// </summary>
     public bool CallReadsKeys(PipelineCall call, string configKey, EntityKeyType type)
     {
@@ -777,10 +772,10 @@ public sealed class OperatorCompileContext
     private readonly HashSet<int> _selfReads = new();
 
     /// <summary>
-    /// Resolves a name the operator reads outside an expression (<c>col.x</c>, <c>ctx.request.y</c>, <c>param.z</c>, as
-    /// a prompt template's references are written) and records the read, as <see cref="CompileExpression"/>,
-    /// <see cref="TryReadColumn"/> and <see cref="TryParam"/> do for theirs: the fetch planner then fetches a feature
-    /// before the node runs, and data-flow validation and experiment footprints see the read.
+    /// Resolves a name the operator reads outside an expression (<c>col.x</c>, <c>ctx.request.y</c>, <c>param.z</c>)
+    /// and records the read, as <see cref="CompileExpression"/>, <see cref="TryReadColumn"/> and <see cref="TryParam"/>
+    /// do for theirs: the fetch planner then fetches a feature before the node runs, and data-flow validation and
+    /// experiment footprints see the read.
     /// </summary>
     /// <returns>
     /// False when the name is unknown, which the caller reports where it wrote the name, or declared with an error, which
@@ -895,7 +890,7 @@ public sealed class OperatorCompileContext
 
 /// <summary>
 /// The context features some awaited expressions read (<see cref="OperatorCompileContext.AwaitedReadsOf"/>), which an
-/// operator waits for while it runs, with <see cref="OperatorContext.WhenEachReadyAsync"/>. Built once, when the node compiles.
+/// operator waits for while it runs, with <see cref="OperatorContext.WhenEachReadyAsync"/>.
 /// </summary>
 public sealed class AwaitedReads
 {
@@ -904,7 +899,6 @@ public sealed class AwaitedReads
     /// <summary>Nothing to wait for: the expressions read request inputs and parameters only.</summary>
     public static AwaitedReads None { get; } = new(ImmutableArray<int>.Empty);
 
-    /// <summary>True when there is nothing to wait for.</summary>
     public bool IsEmpty => Features.IsEmpty;
 
     /// <summary>The features, by index in the plan's feature list, ascending.</summary>

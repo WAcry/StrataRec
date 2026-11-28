@@ -32,7 +32,7 @@ public static class RecRequestJson
 {
     private static readonly string[] Members = { "inputs", "request_id", "assignment" };
 
-    /// <summary>Reads <paramref name="document"/>; <see cref="JsonValueKind.Undefined"/> (an empty body) is a document without members.</summary>
+    /// <summary><see cref="JsonValueKind.Undefined"/> (an empty body) is a document without members.</summary>
     public static bool TryRead(
         in JsonElement document, RequestSchema schema, out RecRequestDocument request, out IReadOnlyList<JsonBindingError> errors)
     {

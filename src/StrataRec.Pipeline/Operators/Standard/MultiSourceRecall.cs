@@ -38,21 +38,20 @@ public sealed class MultiSourceRecallConfig
 }
 
 /// <summary>
-/// <c>MultiSourceRecall@1</c> (RowSource): calls every source with a positive quota concurrently, merges results in
-/// the declared source order (independent of arrival order), deduplicates by <c>entity_id</c> and appends
-/// the rows with <c>recall.sources_mask</c>, <c>recall.best_rank</c>, <c>recall.best_score</c> and
-/// <c>recall.primary_source</c>. Fails only if every called source fails; otherwise Degraded. Bit <c>i</c> of the mask
-/// is the <c>i</c>-th source in merge order among those the request has a quota for (0 included): a source only an
-/// experiment's arm gives a quota has none without that arm, and takes no bit there, as in a compile without it.
+/// <c>MultiSourceRecall@1</c> (RowSource): calls every source with a positive quota concurrently, merges results in the
+/// declared source order (independent of arrival order), deduplicates by <c>entity_id</c> and appends the rows with
+/// <c>recall.sources_mask</c>, <c>recall.best_rank</c>, <c>recall.best_score</c> and <c>recall.primary_source</c>.
+/// Fails only if every called source fails; otherwise Degraded. Bit <c>i</c> of the mask is the <c>i</c>-th source in
+/// merge order among those the request has a quota for (0 included): a source only an experiment's arm gives a quota
+/// has none without that arm, and takes no bit there.
 /// </summary>
 /// <remarks>
 /// A source sees only what its call sends: when the node gives it a query
 /// (<see cref="MultiSourceRecallConfig.Queries"/>), the query's values, evaluated from the request's context (a
 /// two-tower service the user's embedding or features, a request field such as <c>ctx.request.region</c>); without one,
-/// no inputs. The features a query reads are not filled before the node runs, as a node's reads are: each source with a
-/// query is sent once its own features are stored, so the sources without one start at once and a slow user feature
-/// delays only the sources that read it. A source whose query reads a feature that failed is not sent, and counts as a
-/// failed source.
+/// no inputs. The features a query reads are not filled before the node runs: each source with a query is sent once its
+/// own features are stored, so the sources without one start at once and a slow user feature delays only the sources
+/// that read it. A source whose query reads a feature that failed is not sent, and counts as a failed source.
 /// </remarks>
 public sealed class MultiSourceRecallFactory : IOperatorFactory
 {

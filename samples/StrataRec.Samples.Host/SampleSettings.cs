@@ -12,7 +12,7 @@ namespace StrataRec.Samples.Host;
 /// The directory of an artifact store to serve release manifests from (<c>stratarec build --store</c>, then
 /// <c>stratarec publish</c>), absolute; null serves the workspace in <paramref name="ConfigRoot"/> as it is at startup.
 /// </param>
-/// <param name="Pipelines">The pipelines a node serving releases loads: a store has no workspace to list them.</param>
+/// <param name="Pipelines">The pipelines a node serving releases loads.</param>
 /// <param name="ReleasePoll">How often a node serving releases reads the pointers.</param>
 public sealed record SampleSettings(
     string ConfigRoot, string Environment, TimeSpan Deadline, string? Store, IReadOnlyList<string> Pipelines, TimeSpan ReleasePoll)

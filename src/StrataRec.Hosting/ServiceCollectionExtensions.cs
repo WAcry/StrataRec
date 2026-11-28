@@ -13,14 +13,12 @@ using StrataRec.Pipeline.Planning;
 
 namespace StrataRec.Hosting;
 
-/// <summary>Options for <see cref="ServiceCollectionExtensions.AddStrataRec"/>.</summary>
 public sealed class StrataRecOptions
 {
     /// <summary>
-    /// Configuration directory. A relative path resolves against the host's content root
-    /// (<see cref="IHostEnvironment.ContentRootPath"/>), where appsettings.json is read from too, or against the current
-    /// directory without a host environment. When the host serves <see cref="Releases"/>, no workspace is read, and this is
-    /// only the directory relative paths in bindings resolve against (as when the workspace was validated), unless
+    /// A relative path resolves against the host's content root (<see cref="IHostEnvironment.ContentRootPath"/>), or
+    /// against the current directory without a host environment. When the host serves <see cref="Releases"/>, no
+    /// workspace is read, and this is only the directory relative paths in bindings resolve against, unless
     /// <see cref="PlanEnvironment"/> sets one.
     /// </summary>
     public string ConfigRoot { get; set; } = "config";
@@ -33,7 +31,7 @@ public sealed class StrataRecOptions
 
     /// <summary>
     /// Pipelines to serve; empty serves every pipeline in the workspace. Required when the host serves
-    /// <see cref="Releases"/>, which have no workspace to list them, and then with the fallback pipelines they name.
+    /// <see cref="Releases"/>, and then with the fallback pipelines they name.
     /// </summary>
     public List<string> Pipelines { get; } = new();
 
@@ -69,9 +67,8 @@ public sealed class StrataRecOptions
 /// <see cref="PollInterval"/>, then after twice as long, and so on up to <see cref="MaxRetryInterval"/>; a pointer that could
 /// not be read is read again on the same schedule. A new id starts over.</para>
 /// <para>Each pipeline is polled on its own, so a slow load or an unresponsive pointer of one pipeline never delays
-/// another's release (an emergency revocation included); loads of different pipelines may run at the same time. The
-/// <see cref="IReleaseStatusReporter"/> is told the outcomes after the fact, off the polling: a slow reporter delays only
-/// the reports.</para>
+/// another's release; loads of different pipelines may run at the same time. The <see cref="IReleaseStatusReporter"/>
+/// is told the outcomes after the fact, off the polling: a slow reporter delays only the reports.</para>
 /// <para>No last-known-good copy is kept on disk: a host that must start while the control plane is down composes an
 /// <see cref="IManifestSource"/> that falls back to a pointer baked into its image.</para>
 /// </remarks>
@@ -99,7 +96,6 @@ public sealed class ReleaseOptions
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 }
 
-/// <summary>Registers the engine in a host's service container.</summary>
 public static class ServiceCollectionExtensions
 {
     /// <remarks>

@@ -9,7 +9,7 @@ using StrataRec.Core.Types;
 namespace StrataRec.Features.Connectors;
 
 /// <summary>
-/// <c>memory@1</c>: serves features from an in-memory JSON document. For local runs, tests, replays and samples.
+/// <c>memory@1</c>: serves features from an in-memory JSON document.
 /// </summary>
 /// <remarks>
 /// Settings: either <c>"data"</c> (inline object) or <c>"data_file"</c> (path relative to the config root), plus optional

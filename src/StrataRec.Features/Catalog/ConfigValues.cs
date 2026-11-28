@@ -21,9 +21,9 @@ namespace StrataRec.Features.Catalog;
 public static class ConfigValues
 {
     /// <summary>
-    /// Converts <paramref name="node"/>, a configuration value, to a value of <paramref name="type"/> (promoted storage). An
-    /// integer written with a fraction or an exponent beyond ±2^53 whose canonical form (RFC 8785) is another integer is an
-    /// error: the configuration is stored in that form, and a plan built from it would read the other integer.
+    /// Converts <paramref name="node"/>, a configuration value, to a value of <paramref name="type"/> (promoted
+    /// storage). An integer written with a fraction or an exponent beyond ±2^53 whose canonical form (RFC 8785) is
+    /// another integer is an error.
     /// </summary>
     /// <param name="error">
     /// What is wrong, in the words of the JSON written (<see cref="JsonWords"/>), as the rest of a sentence whose subject
@@ -53,9 +53,8 @@ public static class ConfigValues
     }
 
     /// <summary>
-    /// Converts <paramref name="element"/>, a request's value, to a value of <paramref name="type"/> (promoted storage); JSON
-    /// <c>null</c> and an absent value (<see cref="JsonValueKind.Undefined"/>) are missing. Allocates only the value (a
-    /// string, an array).
+    /// Converts <paramref name="element"/>, a request's value, to a value of <paramref name="type"/> (promoted
+    /// storage); JSON <c>null</c> and an absent value (<see cref="JsonValueKind.Undefined"/>) are missing.
     /// </summary>
     /// <param name="error">As for <see cref="TryToScalar(JsonNode?, ColumnType, out ScalarValue, out string?)"/>.</param>
     public static bool TryToScalar(in JsonElement element, ColumnType type, out ScalarValue value, [NotNullWhen(false)] out string? error) =>

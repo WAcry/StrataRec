@@ -23,7 +23,6 @@ public enum IgnoredArmReason
 
 /// <summary>An arm id the platform sent that the request did not run with, and why.</summary>
 /// <param name="Id">The id as sent (a null id is unknown, recorded as the empty string).</param>
-/// <param name="Reason">Why it was ignored.</param>
 public readonly record struct IgnoredArm(string Id, IgnoredArmReason Reason)
 {
     /// <summary>The reason as replay bundles, metrics and the CLI spell it: <c>unknown</c>, <c>layer_conflict</c> or <c>yielded</c>.</summary>
@@ -152,7 +151,7 @@ public static class ExternalArms
     /// <paramref name="arms"/> as they run (<see cref="ExecutionPlan.Yields"/>): an arm whose experiment yields to the
     /// experiment of another of them is added to <paramref name="ignored"/> as <see cref="IgnoredArmReason.Yielded"/>,
     /// sorted by id with the rest, and its layer runs the baseline. Every source of a request's arms goes through it,
-    /// forced arms too: they show what a request in those arms runs.
+    /// forced arms too.
     /// </summary>
     /// <param name="ignored">The ids already ignored, sorted by id; returned as it is (no allocation) when no arm yields.</param>
     public static RequestArms Yield(ExecutionPlan plan, in RequestArms arms, IgnoredArm[] ignored, out IgnoredArm[] withYielded)

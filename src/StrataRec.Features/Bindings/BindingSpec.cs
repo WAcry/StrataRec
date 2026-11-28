@@ -7,9 +7,8 @@ using StrataRec.Core.Bindings;
 namespace StrataRec.Features.Bindings;
 
 /// <summary>
-/// What a plan needs from one binding instance, of any <see cref="BindingKind"/>, with the
-/// <see cref="Identity"/> that decides whether an instance created for an earlier plan can serve this one. The
-/// counterpart of <see cref="Local.LocalTableSpec"/> for everything a binding names that is not a local table.
+/// What a plan needs from one binding instance, of any <see cref="BindingKind"/>, with the <see cref="Identity"/> that
+/// decides whether an instance created for an earlier plan can serve this one.
 /// </summary>
 public sealed class BindingSpec
 {
@@ -35,8 +34,8 @@ public sealed class BindingSpec
     /// <param name="settings">The binding's own settings, passed to the factory.</param>
     /// <param name="baseDirectory">Where relative paths resolve (relative: against the current directory; null: the current
     /// directory); pinned now (<see cref="BindingContext.PinBaseDirectory"/>), it is part of the identity.</param>
-    /// <param name="factory">The factory that creates the instance: instances are only shared between plans that would have
-    /// created them with the same factory, so two engines with different registries never share one.</param>
+    /// <param name="factory">The factory that creates the instance: instances are only shared between plans that would
+    /// have created them with the same factory.</param>
     /// <param name="artifact">The bindings artifact, e.g. <c>bindings:local</c>, for errors.</param>
     public static BindingSpec Create(
         BindingKind kind, string name, string type, IReadOnlyDictionary<string, JsonElement> settings, string? baseDirectory, object factory,
@@ -71,11 +70,10 @@ public sealed class BindingSpec
     /// <summary>
     /// The one rule for sharing an instance across plans: two specs with the same identity (and the same
     /// <see cref="Factory"/>) are served by one instance, so a new plan takes over a loaded model or an open connection
-    /// instead of creating it again. The identity is the RFC 8785 canonical JSON of the section, the logical name (the
-    /// factory is given it), the type, the binding's own settings as written and the absolute
-    /// <see cref="BaseDirectory"/>. What the framework itself reads from a binding (<c>timeout_ms</c>,
-    /// <c>max_batch</c>,) is not part of it, so changing a timeout never reloads a model; nor is anything else in the
-    /// configuration.
+    /// instead of creating it again. The identity is the RFC 8785 canonical JSON of the section, the logical name, the
+    /// type, the binding's own settings as written and the absolute <see cref="BaseDirectory"/>. What the framework
+    /// itself reads from a binding (<c>timeout_ms</c>, <c>max_batch</c>,) is not part of it, so changing a timeout
+    /// never reloads a model; nor is anything else in the configuration.
     /// </summary>
     /// <remarks>Credentials are referenced, never inlined (<see cref="SecretReference"/>): the identity holds no secret, and
     /// a rotated secret keeps the instance, which resolves its secrets when it loads.</remarks>
@@ -151,8 +149,7 @@ public interface IBindingInstances
         where T : class;
 }
 
-/// <summary>Creates a new instance for every acquisition, with no secret store and no load: for compiling pieces of a plan
-/// on their own (tests).</summary>
+/// <summary>Creates a new instance for every acquisition, with no secret store and no load.</summary>
 public sealed class UnsharedInstances : IBindingInstances
 {
     public static UnsharedInstances Instance { get; } = new();

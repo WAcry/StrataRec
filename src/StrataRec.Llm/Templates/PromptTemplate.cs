@@ -22,7 +22,7 @@ public enum PromptScope : byte
     /// <summary>Once per row (<c>LlmAnnotator@1</c>): <c>col.*</c> is that row's value, anywhere; there is no <c>rows</c> or <c>rank</c>.</summary>
     Row,
 
-    /// <summary>Once per request (<c>GenerativeRetriever@1</c>): <c>ctx.*</c> and <c>param.*</c> only, since no row is shown.</summary>
+    /// <summary>Once per request (<c>GenerativeRetriever@1</c>): <c>ctx.*</c> and <c>param.*</c> only.</summary>
     Request,
 }
 
@@ -32,8 +32,8 @@ public enum PromptScope : byte
 /// <para>A list renders only as a section, one item at a time (<c>{{#ctx.tags}}{{.}}, {{/ctx.tags}}</c>).</para>
 /// <para>An inverted section renders when the list is empty, the bool false or the value missing. A section over a
 /// value that always has one (a non-nullable string or number) is a load error.</para>
-/// <para><b>Missing is explicit</b>: <c>{{x}}</c> of a nullable reference must be inside a <c>{{#x}}</c> section on the
-/// same name, or it is a load error (<c>MUSTACHE_NULLABLE</c>).</para>
+/// <para><c>{{x}}</c> of a nullable reference must be inside a <c>{{#x}}</c> section on the same name, or it is a load
+/// error (<c>MUSTACHE_NULLABLE</c>).</para>
 /// <para><b>Errors</b> are reported at the template's config pointer with the character offset of the tag at fault and a
 /// hint.</para>
 /// </remarks>

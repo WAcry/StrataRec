@@ -21,15 +21,14 @@ namespace StrataRec.Pipeline.Operators;
 
 /// <summary>
 /// The runtime view one node attempt gets of its request. Row-set operations are available only for the effects the
-/// operator declared, so declarations and behavior cannot drift apart.
+/// operator declared.
 /// </summary>
 /// <remarks>
-/// <para>The attempt has an absolute deadline, its time budget, and <see cref="CancellationToken"/> is
-/// cancelled at it or with the caller's token. Cancellation is cooperative, so the framework does not rely on it at its
-/// I/O boundary: <see cref="CallAsync"/> waits for a service no longer than the deadline (or the call's own timeout) and
-/// the caller allow, whether or not the client honours its token. A client still running then is abandoned: it keeps the
-/// request memory held until it really completes, and nothing it writes afterwards is read. An attempt whose operator
-/// returns only after the deadline has timed out all the same.</para>
+/// <para>The attempt has an absolute deadline, its time budget, and <see cref="CancellationToken"/> is cancelled at it
+/// or with the caller's token. <see cref="CallAsync"/> waits for a service no longer than the deadline (or the call's
+/// own timeout) and the caller allow, whether or not the client honours its token. A client still running then is
+/// abandoned: it keeps the request memory held until it really completes, and nothing it writes afterwards is read. An
+/// attempt whose operator returns only after the deadline has timed out all the same.</para>
 /// <para>Custom operators doing their own I/O outside <see cref="CallAsync"/> are responsible for bounding it: by
 /// <see cref="CancellationToken"/> when the client honours it, or by waiting no longer than <see cref="BudgetRemaining"/>
 /// and keeping every buffer the client may still write alive (through <see cref="RequestMemory.Hold"/>) until it completes.
@@ -131,13 +130,13 @@ public sealed class OperatorContext : IServiceCallScope
     /// <summary>
     /// This node's buffer for an output column. Written values become visible only if the node succeeds. A row source
     /// writes only the rows it appended; after a node has written its own version of the column, the buffer is that
-    /// version, so the appended rows get their values in the column readers see (a score for injected rows).
+    /// version, so the appended rows get their values in the column readers see.
     /// </summary>
     /// <remarks>
-    /// Every attempt writes a version of its own. A node that runs again in a request (a fallback node shared by several
-    /// nodes) does not get the buffer of what it wrote before: that stays what readers see, this node included, until this
-    /// attempt commits, and stays for good when it fails. So a row the attempt does not write is missing, as in any new
-    /// version, and never keeps the earlier run's value.
+    /// Every attempt writes a version of its own. A node that runs again in a request (a fallback node shared by
+    /// several nodes) does not get the buffer of what it wrote before: that stays what readers see, this node included,
+    /// until this attempt commits, and stays for good when it fails. So a row the attempt does not write is missing,
+    /// and never keeps the earlier run's value.
     /// </remarks>
     public ColumnBuffer Output(in OutputColumn column)
     {
@@ -177,11 +176,12 @@ public sealed class OperatorContext : IServiceCallScope
     public ScalarValue ContextValue(int contextId) => _state.Context[contextId];
 
     /// <summary>
-    /// Stages the value of a request column the node writes (<see cref="OperatorCompileContext.TryWriteRequestColumn"/>);
-    /// the last value staged is the one written. When the node commits, the value is stored as the column's type holds it,
-    /// as a column's are: a float32 column's rounded, NaN/±∞ and an integer outside an int32 column's range replaced by the
-    /// column's default or missing (and counted); a non-nullable column left missing fails the node. When the attempt
-    /// fails, nothing it staged is written. Requires <see cref="Effects.RequestWriter"/>.
+    /// Stages the value of a request column the node writes
+    /// (<see cref="OperatorCompileContext.TryWriteRequestColumn"/>); the last value staged is the one written. When the
+    /// node commits, the value is stored as the column's type holds it: a float32 column's rounded, NaN/±∞ and an
+    /// integer outside an int32 column's range replaced by the column's default or missing (and counted); a
+    /// non-nullable column left missing fails the node. When the attempt fails, nothing it staged is written. Requires
+    /// <see cref="Effects.RequestWriter"/>.
     /// </summary>
     /// <param name="value">A value of the column's type, held promoted as every <see cref="ScalarValue"/> is (an integer for a
     /// float column is a float); missing to leave the column missing.</param>
@@ -396,8 +396,8 @@ public sealed class OperatorContext : IServiceCallScope
     }
 
     /// <summary>
-    /// Sets a new ranking. A permutation of the live rows needs <see cref="Effects.RowOrder"/>; dropping rows also
-    /// needs <see cref="Effects.RowFilter"/>.
+    /// A permutation of the live rows needs <see cref="Effects.RowOrder"/>; dropping rows also needs
+    /// <see cref="Effects.RowFilter"/>.
     /// </summary>
     public void SetOrder(ReadOnlySpan<int> newOrder)
     {
@@ -412,9 +412,9 @@ public sealed class OperatorContext : IServiceCallScope
     }
 
     /// <summary>
-    /// Appends rows. Requires <see cref="Effects.RowSource"/>. A key is appended only while it is not live: skip the keys
+    /// Requires <see cref="Effects.RowSource"/>. A key is appended only while it is not live: skip the keys
     /// <see cref="CandidateTableView.FindRow"/> finds at a live row, or every key the request has seen
-    /// (<see cref="CandidateTableView.ContainsKey"/>), as the built-in row sources do.
+    /// (<see cref="CandidateTableView.ContainsKey"/>).
     /// </summary>
     public int AppendRows(ReadOnlySpan<long> keys)
     {
@@ -422,7 +422,8 @@ public sealed class OperatorContext : IServiceCallScope
         return _state.Table.AppendRows(keys);
     }
 
-    /// <summary>Appends rows with string keys. Requires <see cref="Effects.RowSource"/>. A key is appended only while it is not live (see the int64 overload).</summary>
+    /// <summary>Requires <see cref="Effects.RowSource"/>. A key is appended only while it is not live (see the int64
+    /// overload).</summary>
     public int AppendRows(IReadOnlyList<string> keys)
     {
         Require(Effects.RowSource, nameof(AppendRows));
@@ -431,14 +432,13 @@ public sealed class OperatorContext : IServiceCallScope
 
     /// <summary>
     /// Calls another pipeline for this request, with the handle the node declared
-    /// (<see cref="OperatorCompileContext.TryCallPipeline"/>), and returns its result.
+    /// (<see cref="OperatorCompileContext.TryCallPipeline"/>).
     /// </summary>
     /// <param name="inputs">
     /// The inputs the operator passes, each declared with <see cref="OperatorCompileContext.TryCallInput"/>. Every
     /// other input the pipeline declares gets this request's input of the same name, when it has one.
     /// </param>
-    /// <param name="timeout">The called run's deadline, when less than what is left of the node's budget: the run
-    /// serves within it as a request does within its deadline.</param>
+    /// <param name="timeout">The called run's deadline, when less than what is left of the node's budget.</param>
     /// <returns>
     /// A call that cannot be answered is a failed result, never an exception: the pipeline is not served, does not fit
     /// the call, rejects the inputs, fails, or no time is left.

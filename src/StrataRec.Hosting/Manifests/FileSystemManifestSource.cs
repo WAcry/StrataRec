@@ -12,9 +12,8 @@ namespace StrataRec.Hosting.Manifests;
 /// (<see cref="GetManifestIdAsync"/>).
 /// </summary>
 /// <remarks>
-/// A pointer is strict JSON: an object whose <c>manifest</c> is a content id. Other members are ignored, so a release
-/// controller may record more (who published, when) without breaking nodes that do not know them. A pointer is replaced
-/// atomically, so a reader sees the old pointer or the new one.
+/// A pointer is strict JSON: an object whose <c>manifest</c> is a content id. Other members are ignored. A pointer is
+/// replaced atomically, so a reader sees the old pointer or the new one.
 /// </remarks>
 public sealed class FileSystemManifestSource : IManifestSource
 {
@@ -31,8 +30,7 @@ public sealed class FileSystemManifestSource : IManifestSource
     public string Root { get; }
 
     /// <summary>
-    /// How to name a pipeline or an environment whose pointer this source keeps (<see cref="GetPointerPath"/>): the
-    /// hint of every tool that reports a name it refused, and of a host that cannot read its pointer under such a name.
+    /// How to name a pipeline or an environment whose pointer this source keeps (<see cref="GetPointerPath"/>).
     /// </summary>
     public const string NameHint =
         "pipeline ids and environment names are the file names of pointers: use letters, digits, '_', '-' and '.', and do not start with '.'; " +
@@ -52,11 +50,12 @@ public sealed class FileSystemManifestSource : IManifestSource
         Path.Combine(Root, "pointers", Segment(environment, nameof(environment)), Segment(pipelineId, nameof(pipelineId)) + ".json");
 
     /// <summary>
-    /// The pointer files under the root, of <paramref name="environment"/> or of every environment, sorted by environment,
-    /// then pipeline (ordinal). Whether a file's content is a valid pointer is <see cref="GetManifestIdAsync"/>'s to say;
-    /// what cannot be listed is listed with its <see cref="PointerFile.Error"/>, so one bad entry does not hide the others
-    ///: a directory that cannot be read, a file name no pointer can have. Lock and temporary files, and
-    /// anything else whose name starts with a dot, are skipped: no pipeline or environment may be named so.
+    /// The pointer files under the root, of <paramref name="environment"/> or of every environment, sorted by
+    /// environment, then pipeline (ordinal). Whether a file's content is a valid pointer is
+    /// <see cref="GetManifestIdAsync"/>'s to say; what cannot be listed is listed with its
+    /// <see cref="PointerFile.Error"/>, so one bad entry does not hide the others: a directory that cannot be read, a
+    /// file name no pointer can have. Lock and temporary files, and anything else whose name starts with a dot, are
+    /// skipped.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="environment"/> is not a name a pointer can have.</exception>
     public IReadOnlyList<PointerFile> ListPointers(string? environment = null)

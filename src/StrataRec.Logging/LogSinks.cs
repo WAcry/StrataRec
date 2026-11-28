@@ -3,8 +3,7 @@ using System.Text;
 namespace StrataRec.Logging;
 
 /// <summary>
-/// Destination of encoded log batches: a message queue, object storage, a file. Throwing signals a
-/// failed write; durable batches are retried, best-effort ones are dropped and counted. Throw
+/// Throwing signals a failed write; durable batches are retried, best-effort ones are dropped and counted. Throw
 /// <see cref="LogBatchRejectedException"/> for batches that can never be written, after writing all the others.
 /// </summary>
 public interface ILogSink
@@ -12,7 +11,6 @@ public interface ILogSink
     ValueTask WriteAsync(IReadOnlyList<LogBatch> batches, CancellationToken cancellationToken);
 }
 
-/// <summary>Keeps batches in memory: tests, <c>stratarec run --logs</c>, replays.</summary>
 public sealed class InMemoryLogSink : ILogSink
 {
     private readonly List<LogBatch> _batches = new();

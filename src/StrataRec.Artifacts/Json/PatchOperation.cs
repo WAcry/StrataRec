@@ -27,9 +27,6 @@ public enum PatchOpKind
 /// </summary>
 public sealed class PatchOperation
 {
-    /// <summary>Creates a footprint entry.</summary>
-    /// <param name="path">The path the operation covers.</param>
-    /// <param name="kind">What happens at the path.</param>
     /// <param name="value">
     /// For <see cref="PatchOpKind.Add"/> and <see cref="PatchOpKind.Replace"/>, the value the path will hold after
     /// the merge (may be <see langword="null"/> when not tracked); must be <see langword="null"/> for
@@ -56,7 +53,6 @@ public sealed class PatchOperation
     /// <summary>The path covered by this operation; the whole subtree below it is affected.</summary>
     public JsonPointer Path { get; }
 
-    /// <summary>What the patch does at <see cref="Path"/>.</summary>
     public PatchOpKind Kind { get; }
 
     /// <summary>
@@ -99,7 +95,6 @@ public sealed record FootprintConflict(PatchOperation First, PatchOperation Seco
     public override string ToString() => $"{First} overlaps {Second}";
 }
 
-/// <summary>The result of <see cref="MergePatchAnalyzer.Analyze"/>.</summary>
 public sealed class MergePatchAnalysis
 {
     internal MergePatchAnalysis(IReadOnlyList<PatchOperation> footprint, IReadOnlyList<PatchDiagnostic> errors)
@@ -118,7 +113,7 @@ public sealed class MergePatchAnalysis
         Additions = additions.AsReadOnly();
     }
 
-    /// <summary>All operations, sorted by path (<see cref="JsonPointer.CompareTo"/>), so the order is deterministic.</summary>
+    /// <summary>All operations, sorted by path (<see cref="JsonPointer.CompareTo"/>).</summary>
     public IReadOnlyList<PatchOperation> Footprint { get; }
 
     /// <summary>

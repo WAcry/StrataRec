@@ -3,9 +3,9 @@ using System.Diagnostics.Metrics;
 namespace StrataRec.Core.Diagnostics;
 
 /// <summary>
-/// Every instrument the engine records, on the <see cref="StrataRecTelemetry.Meter"/>. Names, units and
-/// tag sets are a stable public interface: dashboards and alerts are built on them, and how they are exported (OTLP
-/// exponential histograms, VictoriaMetrics, fixed buckets) is configured by the host per name.
+/// Every instrument the engine records, on the <see cref="StrataRecTelemetry.Meter"/>. Names, units and tag sets are a
+/// stable public interface: how they are exported (OTLP exponential histograms, VictoriaMetrics, fixed buckets) is
+/// configured by the host per name.
 /// </summary>
 /// <remarks>
 /// <para>Label rules: tags take only bounded values — pipeline, node, data source, catalog feature,
@@ -15,7 +15,7 @@ namespace StrataRec.Core.Diagnostics;
 /// <para>Histograms advise bucket boundaries that grow by a fixed ratio (<see cref="InstrumentAdvice{T}"/>): exporters
 /// with fixed buckets can adopt them; exponential-histogram exporters ignore them.</para>
 /// <para>Custom operators and connectors may record into these instruments with the same tag keys
-/// (<see cref="StrataRecTags"/>), so their calls appear under the same names.</para>
+/// (<see cref="StrataRecTags"/>).</para>
 /// </remarks>
 public static class StrataRecMetrics
 {
@@ -94,9 +94,9 @@ public static class StrataRecMetrics
     public static readonly Counter<long> RequestDegraded = Meter.CreateCounter<long>(Names.RequestDegraded, "{request}", "Successful requests served degraded.");
 
     /// <summary>
-    /// <see cref="RequestDuration"/> per assigned arm, for health gates and experiment guardrails. A request is recorded
-    /// once per arm it is assigned (one per layer), so the series of one experiment sum to its traffic and the
-    /// request-level totals are never inflated by layering. Tags: <c>stratarec.pipeline</c>, <c>stratarec.arm</c>.
+    /// <see cref="RequestDuration"/> per assigned arm. A request is recorded once per arm it is assigned (one per
+    /// layer), so the series of one experiment sum to its traffic and the request-level totals are never inflated by
+    /// layering. Tags: <c>stratarec.pipeline</c>, <c>stratarec.arm</c>.
     /// </summary>
     public static readonly Histogram<double> ArmRequestDuration = Seconds(Names.ArmRequestDuration, "End-to-end request latency per assigned experiment arm.");
 
@@ -110,12 +110,11 @@ public static class StrataRecMetrics
     public static readonly Counter<long> ArmRequestDegraded = Meter.CreateCounter<long>(Names.ArmRequestDegraded, "{request}", "Degraded results per assigned experiment arm.");
 
     /// <summary>
-    /// Arm ids from the experimentation platform that a request did not run with: the platform and the
-    /// served release disagree, or the release has the arm's experiment yield, so the platform's view of exposure is off by
-    /// these. Not tagged by arm: an unknown id is platform input, unbounded. Tags: <c>stratarec.pipeline</c>,
-    /// <c>stratarec.outcome</c> = <c>unknown</c> (the served plan has no such arm) | <c>layer_conflict</c> (two arms of one
-    /// layer came, and that layer ran its baseline) | <c>yielded</c> (its experiment yields to another experiment the
-    /// request is in, and its layer ran its baseline: the traffic it gives up).
+    /// Arm ids from the experimentation platform that a request did not run with: the platform and the served release
+    /// disagree, or the release has the arm's experiment yield. Not tagged by arm. Tags: <c>stratarec.pipeline</c>,
+    /// <c>stratarec.outcome</c> = <c>unknown</c> (the served plan has no such arm) | <c>layer_conflict</c> (two arms of
+    /// one layer came, and that layer ran its baseline) | <c>yielded</c> (its experiment yields to another experiment
+    /// the request is in, and its layer ran its baseline: the traffic it gives up).
     /// </summary>
     public static readonly Counter<long> RequestArmsIgnored = Meter.CreateCounter<long>(Names.RequestArmsIgnored, "{arm}", "Arm ids from the experiment platform that requests ignored, by reason.");
 
@@ -144,14 +143,11 @@ public static class StrataRecMetrics
     public static readonly Counter<long> IoErrors = Meter.CreateCounter<long>(Names.IoErrors, "{call}", "Failed calls of external dependencies.");
 
     /// <summary>
-    /// What a call sent, per call made, whatever its outcome but the caller's cancellation (a call that failed or timed out
-    /// sent it all the same): the
-    /// keys of a feature connector's chunk or a distributed cache read, and the rows of a service call about rows, its
-    /// <c>BatchSize</c> (the items a model scores or a filter checks, the pairs a pairwise model compares, 1 for a listwise
-    /// call's list or a generative call's prompt; a cache sends and counts only the items it missed). The sum is the load a
-    /// dependency takes, the cost that a pairwise window's square drives. Calls about no rows (a recall, a
-    /// feature service's) are not counted. Tags:
-    /// <c>stratarec.io.role</c>, <c>stratarec.io.target</c>.
+    /// What a call sent, per call made, whatever its outcome but the caller's cancellation: the keys of a feature
+    /// connector's chunk or a distributed cache read, and the rows of a service call about rows, its <c>BatchSize</c>
+    /// (the items a model scores or a filter checks, the pairs a pairwise model compares, 1 for a listwise call's list
+    /// or a generative call's prompt; a cache sends and counts only the items it missed). Calls about no rows (a
+    /// recall, a feature service's) are not counted. Tags: <c>stratarec.io.role</c>, <c>stratarec.io.target</c>.
     /// </summary>
     public static readonly Histogram<long> IoKeys = Meter.CreateHistogram<long>(Names.IoKeys, "{key}",
         "Keys or rows per call of an external dependency.", null, new InstrumentAdvice<long> { HistogramBucketBoundaries = CountBuckets });
@@ -178,9 +174,9 @@ public static class StrataRecMetrics
     public static readonly Histogram<long> NodeRowsOut = Rows(Names.NodeRowsOut, "Live rows after a node.");
 
     /// <summary>
-    /// Node outcomes. Tags: <c>stratarec.pipeline</c>, <c>stratarec.node</c>, <c>stratarec.outcome</c> =
-    /// <c>succeeded</c> | <c>degraded</c> | <c>fallback</c> | <c>skipped_when</c> | <c>skipped_deadline</c> |
-    /// <c>skipped_input</c> | <c>failed</c> | <c>aborted</c> (the caller cancelled the request while the node ran).
+    /// Tags: <c>stratarec.pipeline</c>, <c>stratarec.node</c>, <c>stratarec.outcome</c> = <c>succeeded</c> |
+    /// <c>degraded</c> | <c>fallback</c> | <c>skipped_when</c> | <c>skipped_deadline</c> | <c>skipped_input</c> |
+    /// <c>failed</c> | <c>aborted</c> (the caller cancelled the request while the node ran).
     /// </summary>
     public static readonly Counter<long> NodeOutcomes = Meter.CreateCounter<long>(Names.NodeOutcomes, "{node}", "Node outcomes by category.");
 
@@ -199,17 +195,15 @@ public static class StrataRecMetrics
     public static readonly Counter<long> ColumnOutOfRange = Meter.CreateCounter<long>(Names.ColumnOutOfRange, "{value}", "Values outside the int32 storage range or a list's fixed length, replaced or masked.");
 
     /// <summary>
-    /// Values a feature source was asked for, by whether it had them: the missing ratio is
-    /// <c>missing / (present + missing)</c>, per source and per feature. A source, or one of its fields,
-    /// that stops returning data shows here before it shows in ranking quality. Each distinct key of a read counts once per
-    /// requested feature, and only when the source answered for it: the keys of a chunk that failed or timed out are
-    /// counted by <see cref="IoErrors"/> instead; a <c>local</c> source answers every key, a cached source every
-    /// key its memory tier had fresh or its distributed tier or connector answered. Rows without a key (a missing foreign or
-    /// context key) are not asked for. A default does not make a value present, and a non-finite value the source returned
-    /// is present (its replacement is <see cref="ColumnNonFinite"/>). Tags: <c>stratarec.source</c>,
-    /// <c>stratarec.feature</c>, <c>stratarec.outcome</c> = <c>present</c> |
-    /// <c>missing</c>. Features are bounded by the catalog, like node ids by the pipelines; a host that wants per-source
-    /// totals only drops <c>stratarec.feature</c> with a view.
+    /// Values a feature source was asked for, by whether it had them: the missing ratio is <c>missing / (present +
+    /// missing)</c>, per source and per feature. Each distinct key of a read counts once per requested feature, and
+    /// only when the source answered for it: the keys of a chunk that failed or timed out are counted by
+    /// <see cref="IoErrors"/> instead; a <c>local</c> source answers every key, a cached source every key its memory
+    /// tier had fresh or its distributed tier or connector answered. Rows without a key (a missing foreign or context
+    /// key) are not asked for. A default does not make a value present, and a non-finite value the source returned is
+    /// present (its replacement is <see cref="ColumnNonFinite"/>). Tags: <c>stratarec.source</c>,
+    /// <c>stratarec.feature</c>, <c>stratarec.outcome</c> = <c>present</c> | <c>missing</c>. Features are bounded by
+    /// the catalog; a host that wants per-source totals only drops <c>stratarec.feature</c> with a view.
     /// </summary>
     public static readonly Counter<long> SourceValues = Meter.CreateCounter<long>(Names.SourceValues, "{value}", "Feature values requested from sources, by present or missing.");
 
@@ -231,7 +225,7 @@ public static class StrataRecMetrics
     /// <c>stratarec.source</c>, <c>stratarec.entity</c>.</summary>
     public static readonly Gauge<long> LocalRecords = Meter.CreateGauge<long>(Names.LocalRecords, "{record}", "Records of local feature tables.");
 
-    /// <summary>Compactions of a local table. Tags: <c>stratarec.source</c>, <c>stratarec.entity</c>.</summary>
+    /// <summary>Tags: <c>stratarec.source</c>, <c>stratarec.entity</c>.</summary>
     public static readonly Counter<long> LocalCompactions = Meter.CreateCounter<long>(Names.LocalCompactions, "{compaction}", "Compactions of local feature tables.");
 
     /// <summary>Time to load a local table completely (one snapshot load). Tags: <c>stratarec.source</c>, <c>stratarec.entity</c>.</summary>
@@ -245,9 +239,8 @@ public static class StrataRecMetrics
 
     /// <summary>
     /// When a local table last reached a complete position (a snapshot load or a stream checkpoint), in Unix seconds:
-    /// the age of its data is the current time minus this (<c>time() - stratarec_local_load_last_success</c>), which
-    /// keeps growing while a source fails or a snapshot job stops publishing. Tags: <c>stratarec.source</c>,
-    /// <c>stratarec.entity</c>.
+    /// the age of its data is the current time minus this (<c>time() - stratarec_local_load_last_success</c>). Tags:
+    /// <c>stratarec.source</c>, <c>stratarec.entity</c>.
     /// </summary>
     public static readonly Gauge<double> LocalLoadLastSuccess = Meter.CreateGauge<double>(Names.LocalLoadLastSuccess, "s", "Unix time of the last complete load or checkpoint of local feature tables.");
 
@@ -288,29 +281,29 @@ public static class StrataRecMetrics
     public static readonly Counter<long> IoOutputTokens = Meter.CreateCounter<long>(Names.IoOutputTokens, "{token}", "Tokens generated by services.");
 
     /// <summary>
-    /// Service calls whose client stopped at the call's <c>max_output_tokens</c> (<c>ServiceStatus.Truncated</c>): their
-    /// text may be cut short, so an operator that parses it may fail. Counted like <see cref="IoOutputTokens"/>. Tags:
-    /// <c>stratarec.io.role</c>, <c>stratarec.io.target</c>.
+    /// Service calls whose client stopped at the call's <c>max_output_tokens</c> (<c>ServiceStatus.Truncated</c>).
+    /// Counted like <see cref="IoOutputTokens"/>. Tags: <c>stratarec.io.role</c>, <c>stratarec.io.target</c>.
     /// </summary>
     public static readonly Counter<long> IoTruncated = Meter.CreateCounter<long>(Names.IoTruncated, "{call}", "Service calls cut at their output token limit.");
 
     /// <summary>
-    /// The elements of a generated answer that an operator parses into rows (<c>LlmReranker@1</c>: window ranks or entity
-    /// ids; <c>GenerativeRetriever@1</c>: new ids), by what became of them: what the model got wrong is visible without
-    /// reading answers. Counted once per parsed answer, only while a listener is enabled, and never in a
-    /// replay. Tags: <c>stratarec.io.role</c> = <c>model</c>, <c>stratarec.io.target</c>, <c>stratarec.outcome</c> = <c>used</c> (named a row, which the new order places
-    /// or the retriever appends) | <c>unknown</c> (named no row of the window: out of range, an id not in it; or a value of
-    /// the wrong JSON type) | <c>repeated</c> (named a row or id an earlier element named) | <c>present</c> (a retriever's id
-    /// the table already has, skipped) | <c>over_limit</c> (after the retriever's <c>max_items</c>, not read).
+    /// The elements of a generated answer that an operator parses into rows (<c>LlmReranker@1</c>: window ranks or
+    /// entity ids; <c>GenerativeRetriever@1</c>: new ids), by what became of them. Counted once per parsed answer, only
+    /// while a listener is enabled, and never in a replay. Tags: <c>stratarec.io.role</c> = <c>model</c>,
+    /// <c>stratarec.io.target</c>, <c>stratarec.outcome</c> = <c>used</c> (named a row, which the new order places or
+    /// the retriever appends) | <c>unknown</c> (named no row of the window: out of range, an id not in it; or a value
+    /// of the wrong JSON type) | <c>repeated</c> (named a row or id an earlier element named) | <c>present</c> (a
+    /// retriever's id the table already has, skipped) | <c>over_limit</c> (after the retriever's <c>max_items</c>, not
+    /// read).
     /// </summary>
     public static readonly Counter<long> ModelAnswerIds = Meter.CreateCounter<long>(Names.ModelAnswerIds, "{id}", "Elements of generated answers, by whether they named a row.");
 
     /// <summary>
-    /// Per-row answers of a generative model (<c>LlmAnnotator@1</c>: one call per row), by what became of them: how often
-    /// rows are left without a value, and whether the calls or the answers are why. Counted once per node run, only while a
-    /// listener is enabled, and never in a replay. Tags: <c>stratarec.io.role</c> = <c>model</c>, <c>stratarec.io.target</c>, <c>stratarec.outcome</c> = <c>used</c>
-    /// (written to the row) | <c>unusable</c> (the call answered, but not a value of the column: empty, not one of the
-    /// categories, not a bool, not a number in range) | <c>failed</c> (the call failed, threw or returned no text).
+    /// Per-row answers of a generative model (<c>LlmAnnotator@1</c>: one call per row), by what became of them. Counted
+    /// once per node run, only while a listener is enabled, and never in a replay. Tags: <c>stratarec.io.role</c> =
+    /// <c>model</c>, <c>stratarec.io.target</c>, <c>stratarec.outcome</c> = <c>used</c> (written to the row) |
+    /// <c>unusable</c> (the call answered, but not a value of the column: empty, not one of the categories, not a bool,
+    /// not a number in range) | <c>failed</c> (the call failed, threw or returned no text).
     /// </summary>
     public static readonly Counter<long> ModelAnswers = Meter.CreateCounter<long>(Names.ModelAnswers, "{answer}", "Per-row answers of generative models, by whether they were used.");
 
@@ -324,11 +317,10 @@ public static class StrataRecMetrics
     public static readonly Gauge<long> PlanSequence = Meter.CreateGauge<long>(Names.PlanSequence, null, "Release sequence of the served plan.");
 
     /// <summary>
-    /// Plan loads. Tags: <c>stratarec.pipeline</c>, <c>stratarec.outcome</c> = <c>applied</c> |
-    /// <c>compile_failed</c> | <c>bindings_failed</c> (a local table it reads, or a client or connector it uses, failed its first load) |
-    /// <c>stale</c> | and for release manifests <c>incompatible</c> (the binary lacks a capability the
-    /// manifest requires) |
-    /// <c>artifacts_failed</c> (the manifest or an artifact it names could not be read).
+    /// Tags: <c>stratarec.pipeline</c>, <c>stratarec.outcome</c> = <c>applied</c> | <c>compile_failed</c> |
+    /// <c>bindings_failed</c> (a local table it reads, or a client or connector it uses, failed its first load) |
+    /// <c>stale</c> | and for release manifests <c>incompatible</c> (the binary lacks a capability the manifest
+    /// requires) | <c>artifacts_failed</c> (the manifest or an artifact it names could not be read).
     /// </summary>
     public static readonly Counter<long> PlanLoads = Meter.CreateCounter<long>(Names.PlanLoads, "{load}", "Plan loads by outcome.");
 
@@ -336,8 +328,8 @@ public static class StrataRecMetrics
     public static readonly UpDownCounter<long> LogQueueDepth = Meter.CreateUpDownCounter<long>(Names.LogQueueDepth, "{batch}", "Log batches queued or being written.");
 
     /// <summary>
-    /// Batches per tap and fate; drops feed the offline weight correction. Tags: <c>stratarec.tap</c>,
-    /// <c>stratarec.outcome</c> = <c>delivered</c> | <c>dropped</c>.
+    /// Batches per tap and fate. Tags: <c>stratarec.tap</c>, <c>stratarec.outcome</c> = <c>delivered</c> |
+    /// <c>dropped</c>.
     /// </summary>
     public static readonly Counter<long> LogBatches = Meter.CreateCounter<long>(Names.LogBatches, "{batch}", "Log batches delivered or dropped per tap.");
 

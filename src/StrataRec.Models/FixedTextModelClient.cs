@@ -5,10 +5,9 @@ using StrataRec.Core.Services;
 namespace StrataRec.Models;
 
 /// <summary>
-/// <c>fixed_text@1</c>: a stand-in for a generative model (an LLM reached through a text-in, text-out client) that answers
-/// every call with the same fixed texts. A dev or test environment binds the real model's logical name to it, and the
-/// pipelines that call the model (<c>LlmReranker@1</c>) stay unchanged, as with <c>random@1</c> for scoring models
-///.
+/// <c>fixed_text@1</c>: a stand-in for a generative model that answers every call with the same fixed texts. A dev or
+/// test environment binds the real model's logical name to it, and the pipelines that call the model
+/// (<c>LlmReranker@1</c>) stay unchanged, as with <c>random@1</c> for scoring models.
 /// </summary>
 /// <remarks>
 /// <para>The settings declare the text inputs it accepts and each output's fixed text:</para>
@@ -17,12 +16,11 @@ namespace StrataRec.Models;
 ///   "inputs": ["system", "user"],              // the model's text inputs (the prompts the operator renders)
 ///   "outputs": { "answer": "[3, 1, 2]" } }     // each text output and what every call answers
 /// </code>
-/// <para>Its signature declares every input and output as text (one string, shape <c>[]</c>), for any version, so the
-/// calling operator's load-time signature check passes as against the real model. A call fails unless it sends every
-/// declared input as text, as a real model's would; it then sets every output to its fixed text and reports no token
+/// <para>Its signature declares every input and output as text (one string, shape <c>[]</c>), for any version. A call
+/// fails unless it sends every declared input as text; it then sets every output to its fixed text and reports no token
 /// count (<see cref="ServiceStatus.OutputTokens"/> null) and no truncation. It is deterministic: the answer depends on
-/// neither the prompts nor the seed, so a test chooses the answer it needs. A call allocates nothing; the client is
-/// immutable, needs no load and holds nothing to release.</para>
+/// neither the prompts nor the seed. A call allocates nothing; the client is immutable, needs no load and holds nothing
+/// to release.</para>
 /// </remarks>
 public sealed class FixedTextModelClient : IServiceClient
 {
@@ -100,8 +98,8 @@ public sealed class FixedTextModelClient : IServiceClient
 public sealed class FixedTextSettings
 {
     /// <summary>
-    /// The model's text input names, as its signature declares them (the prompts the calling operator renders), e.g.
-    /// <c>["system", "user"]</c>: at least one, each once.
+    /// The model's text input names, as its signature declares them, e.g. <c>["system", "user"]</c>: at least one, each
+    /// once.
     /// </summary>
     public required List<string> Inputs { get; init; }
 
@@ -109,7 +107,6 @@ public sealed class FixedTextSettings
     public required Dictionary<string, string> Outputs { get; init; }
 }
 
-/// <summary>Creates <see cref="FixedTextModelClient"/>s from binding settings.</summary>
 public sealed class FixedTextModelClientFactory : BindingFactory<IServiceClient, FixedTextSettings>
 {
     public const string TypeName = "fixed_text@1";

@@ -32,9 +32,9 @@ public sealed class CacheTableOptions
     public bool Kept { get; init; } = true;
 
     /// <summary>
-    /// The most bytes waiting for the table's writer (records and keys); a write-back past it is dropped and counted
-    /// (the key is fetched again on its next miss), but for one larger than the whole limit handed to an empty queue,
-    /// which takes it. 0 takes a sixteenth of <c>max_bytes</c>, between 1 MiB and 64 MiB.
+    /// The most bytes waiting for the table's writer (records and keys); a write-back past it is dropped and counted,
+    /// but for one larger than the whole limit handed to an empty queue, which takes it. 0 takes a sixteenth of
+    /// <c>max_bytes</c>, between 1 MiB and 64 MiB.
     /// </summary>
     public long WriteQueueBytes { get; init; }
 
@@ -154,10 +154,9 @@ internal sealed class CacheWriteBatch(EntityKey[] keys, ReadOnlyMemory<byte>[] r
 /// <para><b>Write-back is off the request path.</b> A read hands its records over with <see cref="TryWriteBack"/>,
 /// which never waits: past <see cref="CacheTableOptions.WriteQueueBytes"/> waiting bytes the batch is dropped and
 /// counted (an empty queue takes even a larger one). The engine runs the writer; until it runs, the table counts as
-/// loaded at once, since an empty cache is a complete one (every key misses).</para>
+/// loaded at once.</para>
 /// <para><b>Eviction.</b> The writer reclaims records past the stale window, then aims for three quarters of
-/// <c>max_bytes</c>. If all remaining candidates are visited, the writer can still admit a new key. Victims are removed
-/// only when the pending record fits.</para>
+/// <c>max_bytes</c>. Victims are removed only when the pending record fits.</para>
 /// </remarks>
 public sealed class LocalTableCache
 {
@@ -215,7 +214,6 @@ public sealed class LocalTableCache
 
     private static readonly CacheWriteBatch Nothing = new([], [], 0);
 
-    /// <summary>Bytes handed to the writer and not written yet, as charged.</summary>
     public long QueuedBytes => Volatile.Read(ref _queuedBytes);
 
     internal CacheRecordLayout Layout { get; }

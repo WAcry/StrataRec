@@ -29,8 +29,8 @@ public readonly record struct EntityKey(long Int64Value, string? StringValue)
 /// <param name="Reference">What the catalog keys the entity by: <c>ctx.request.country</c>, <c>col.entity_id</c>,
 /// <c>col.item.author_id</c>.</param>
 /// <param name="Type">The part's type (an <c>int32</c> reference is an <c>int64</c> part).</param>
-/// <param name="IsShared">True for a context part (<c>ctx.*</c>): one value per request, so every key of a batch has the
-/// same value. A store keyed by it can read one partition for the whole batch.</param>
+/// <param name="IsShared">True for a context part (<c>ctx.*</c>): one value per request, so every key of a batch has
+/// the same value.</param>
 public readonly record struct EntityKeyPart(string Reference, EntityKeyType Type, bool IsShared);
 
 /// <summary>
@@ -47,7 +47,6 @@ public readonly record struct EntityKeyPart(string Reference, EntityKeyType Type
 /// </remarks>
 public sealed class EntityKeyLayout : IEquatable<EntityKeyLayout>
 {
-    /// <summary>The most parts a key has.</summary>
     public const int MaxParts = 8;
 
     private readonly EntityKeyPart[] _parts;
@@ -91,7 +90,7 @@ public sealed class EntityKeyLayout : IEquatable<EntityKeyLayout>
         TypeText = DescribeTypes(_parts);
     }
 
-    /// <summary>A key of one varying part: a table built outside a catalog (a test, a tool), whose reference is only a label.</summary>
+    /// <summary>A key of one varying part: a table built outside a catalog, whose reference is only a label.</summary>
     public static EntityKeyLayout Single(EntityKeyType type, string reference = "key") => new([new EntityKeyPart(reference, type, IsShared: false)]);
 
     /// <summary>A key of varying parts of <paramref name="types"/>, labelled <c>key/0</c>, <c>key/1</c>, … (tables built outside a catalog).</summary>

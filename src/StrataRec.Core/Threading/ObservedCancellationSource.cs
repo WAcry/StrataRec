@@ -92,7 +92,7 @@ public class ObservedCancellationSource : CancellationTokenSource
     private int _state;
 
     /// <param name="site">The token's site, for the metric and the request event.</param>
-    /// <param name="linkedTo">A token this one is cancelled with; none by default.</param>
+    /// <param name="linkedTo">A token this one is cancelled with.</param>
     /// <param name="events">Where a failure is summarized, if anywhere.</param>
     /// <param name="requestId">The request a failure is sampled with.</param>
     public ObservedCancellationSource(CancellationSite site, CancellationToken linkedTo = default, RequestEventLog? events = null, string? requestId = null)
@@ -106,7 +106,6 @@ public class ObservedCancellationSource : CancellationTokenSource
         }
     }
 
-    /// <summary>Which token this is.</summary>
     public CancellationSite Site => _site;
 
     internal RequestEventLog? Events => _events;
@@ -153,7 +152,7 @@ public class ObservedCancellationSource : CancellationTokenSource
     /// Of concurrent cancellations (the timer, the linked token, the framework), one wins and cancels. The others add
     /// no callbacks and wait for its: they return its task once it has published it, and before that, while the winner
     /// is still starting, a task that completes with its callbacks (and does not fault). A source whose disposal was
-    /// requested is not cancelled (a completed task): whoever held the token has ended.
+    /// requested is not cancelled (a completed task).
     /// </remarks>
     public Task CancelObservedAsync()
     {
@@ -259,15 +258,12 @@ public class ObservedCancellationSource : CancellationTokenSource
 
     /// <summary>
     /// Stops the timer and the link at once; the base disposal waits for the callbacks of a cancellation that are still
-    /// to run. The base disposal clears the registrations, and a cancellation's callbacks are taken from them only when
-    /// its work item runs on the pool, so disposing in between would drop every callback, silently (the callbacks' task
-    /// still succeeds). Whoever held the token may well have ended before that work item ran: it saw the cancellation
-    /// flag.
+    /// to run.
     /// </summary>
     /// <remarks>
     /// <para>Requested with no cancellation started, the disposal is at once, and a later cancellation is none.</para>
     /// <para>The first disposal arranges everything; later ones return. The base disposal runs once. A cancellation
-    /// through the base <c>Cancel</c> runs its callbacks before it returns, so it needs no waiting.</para>
+    /// through the base <c>Cancel</c> runs its callbacks before it returns.</para>
     /// </remarks>
     protected override void Dispose(bool disposing)
     {

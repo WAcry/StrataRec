@@ -25,10 +25,7 @@ public sealed record OperatorSchemaSource(string Id, string Description, Type Co
 public sealed record BindingSchemaSource(BindingKind Kind, string Type, Type SettingsType);
 
 /// <summary>
-/// JSON Schema (2020-12) of the artifacts and operator configs, generated from the C# types that bind them,
-/// so that an editor completes and checks a file against exactly what the engine accepts. One place builds them all:
-/// <c>stratarec schema</c> prints them, writes them into a workspace's <c>schemas/</c> and checks that the ones there are
-/// current.
+/// JSON Schema (2020-12) of the artifacts and operator configs, generated from the C# types that bind them.
 /// </summary>
 /// <remarks>
 /// <para>What a type cannot say is added here: each member's description (its <see cref="DescriptionAttribute"/>, else
@@ -39,12 +36,10 @@ public sealed record BindingSchemaSource(BindingKind Kind, string Type, Type Set
 /// <c>$schema</c>, which its schema declares and the engine ignores (<see cref="TryRemoveSchemaMember"/>).</para>
 /// <para>Beyond 2020-12, the schemas carry the keywords VS Code's JSON service reads and other validators ignore as
 /// unknown keywords: <c>allowComments</c> and <c>allowTrailingCommas</c> (files are JSONC) and <c>enumDescriptions</c>
-/// (what each operator does). The text is stable (<see cref="ToText"/>): the same binary writes the same bytes, so a
-/// committed copy can be compared.</para>
+/// (what each operator does). The text is stable (<see cref="ToText"/>): the same binary writes the same bytes.</para>
 /// </remarks>
 public static class ArtifactSchemas
 {
-    /// <summary>The JSON Schema dialect of every schema here.</summary>
     public const string Dialect = "https://json-schema.org/draft/2020-12/schema";
 
     /// <summary>The top-level member with which a workspace file names its schema for editors.</summary>
@@ -72,8 +67,8 @@ public static class ArtifactSchemas
 
     /// <summary>
     /// What a workspace file writes in <c>$schema</c> to name the schema of <paramref name="kind"/> in the workspace's
-    /// <see cref="DirectoryName"/>: a path relative to the file, as editors resolve it, e.g.
-    /// <c>../schemas/pipeline.schema.json</c> for <c>pipelines/home_feed.jsonc</c>.
+    /// <see cref="DirectoryName"/>: a path relative to the file, e.g. <c>../schemas/pipeline.schema.json</c> for
+    /// <c>pipelines/home_feed.jsonc</c>.
     /// </summary>
     /// <param name="path">The file's path relative to the workspace root, with <c>/</c> separators.</param>
     public static string Reference(string path, string kind)
@@ -96,8 +91,8 @@ public static class ArtifactSchemas
     /// bindings' entries against the settings of each of <paramref name="bindings"/>.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="kind"/> is not an artifact kind.</exception>
-    /// <exception cref="InvalidOperationException">A settings type declares a member the framework reads from the binding
-    /// itself (e.g. <c>timeout_ms</c>): the factory would never see it.</exception>
+    /// <exception cref="InvalidOperationException">A settings type declares a member the framework reads from the
+    /// binding itself (e.g. <c>timeout_ms</c>).</exception>
     public static JsonObject Artifact(string kind, IReadOnlyList<OperatorSchemaSource> operators, IReadOnlyList<BindingSchemaSource>? bindings = null)
     {
         ArgumentNullException.ThrowIfNull(operators);

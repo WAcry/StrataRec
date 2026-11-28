@@ -216,7 +216,7 @@
                           "type": "string"
                         },
                         "key_prefix": {
-                          "description": "What every key starts with (default stratarec:), so that services sharing a server keep apart.",
+                          "description": "What every key starts with (default stratarec:).",
                           "type": "string"
                         },
                         "user": {
@@ -420,7 +420,7 @@
                           "type": "string"
                         },
                         "key_prefix": {
-                          "description": "What every key starts with (default stratarec:), so that services sharing a server keep apart.",
+                          "description": "What every key starts with (default stratarec:).",
                           "type": "string"
                         },
                         "user": {
@@ -480,7 +480,7 @@
                 "timeout_ms": {},
                 "cache": {},
                 "inputs": {
-                  "description": "The model's text input names, as its signature declares them (the prompts the calling operator renders), e.g. [\"system\", \"user\"]: at least one, each once.",
+                  "description": "The model's text input names, as its signature declares them, e.g. [\"system\", \"user\"]: at least one, each once.",
                   "type": "array",
                   "items": {
                     "type": "string"
@@ -837,7 +837,7 @@
                           "type": "string"
                         },
                         "key_prefix": {
-                          "description": "What every key starts with (default stratarec:), so that services sharing a server keep apart.",
+                          "description": "What every key starts with (default stratarec:).",
                           "type": "string"
                         },
                         "user": {

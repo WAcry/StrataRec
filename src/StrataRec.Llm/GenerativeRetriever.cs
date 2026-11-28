@@ -36,8 +36,7 @@ public sealed class GenerativeRetrieverConfig
     public required string Output { get; init; }
 
     /// <summary>
-    /// The most rows the node appends: the first new ids of the answer. Also the node's row limit, which sizes the request's
-    /// candidate table.
+    /// The most rows the node appends: the first new ids of the answer.
     /// </summary>
     public required int MaxItems { get; init; }
 
@@ -64,8 +63,8 @@ public sealed class GenerativeRetrieverConfig
 /// answer.</para>
 /// <para>An id already in the table keeps its row, its place and its values; the count of <c>present</c> ids shows how
 /// much the model repeats the other sources.</para>
-/// <para>The appended rows have no features yet: the fetch planner fills them before any later node reads one, like the
-/// rows of any row source; an id no feature source knows has its features' defaults or missing values.</para>
+/// <para>The appended rows have no features yet: the fetch planner fills them before any later node reads one; an id no
+/// feature source knows has its features' defaults or missing values.</para>
 /// <para>The node fails, appending nothing (<c>on_failure</c> decides), when the call fails or when the answer is not
 /// such an array. The message names the model and quotes the start of the answer; when the client said it stopped at
 /// <c>max_output_tokens</c>, it says so.</para>

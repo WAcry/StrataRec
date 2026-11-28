@@ -22,9 +22,8 @@ public sealed class PipelineSourceConfig
     public Dictionary<string, string>? Inputs { get; init; }
 
     /// <summary>
-    /// Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row already
-    /// there does not use one up. Required, as every row source's limit is: it bounds the rows a request may hold
-    ///. A parameter without a value (a map's key set to null) appends none.
+    /// Parameter holding the most rows to append: the result's first rows the request has not seen yet, so a row
+    /// already there does not use one up. Required. A parameter without a value (a map's key set to null) appends none.
     /// </summary>
     public required string LimitParam { get; init; }
 
@@ -57,13 +56,9 @@ public sealed class PipelineSourceConfig
 
 /// <summary>
 /// <c>PipelineSource@1</c> (RowSource): calls another pipeline for the request and appends the rows it returns, in its
-/// order, after the rows already there. A key the request has seen is skipped, as by every row source, and rows that no
-/// longer fit the table are dropped. Fails when the call fails, so <c>on_failure</c> decides whether the request goes on
-/// without them.
+/// order, after the rows already there. A key the request has seen is skipped, and rows that no longer fit the table
+/// are dropped. Fails when the call fails, so <c>on_failure</c> decides whether the request goes on without them.
 /// </summary>
-/// <remarks>
-/// <c>PipelineColumns@1</c> keeps them as a row's lists.
-/// </remarks>
 public sealed class PipelineSourceFactory : IOperatorFactory
 {
     public OperatorDescriptor Descriptor { get; } = new("PipelineSource", 1, Effects.RowSource, typeof(PipelineSourceConfig),

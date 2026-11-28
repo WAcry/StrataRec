@@ -41,10 +41,9 @@ public sealed class RequestAggregateValue
 }
 
 /// <summary>
-/// <c>RequestAggregate@1</c>: statistics of the live candidates written to request columns (RequestWriter), one value per
-/// request: how many candidates a node left, the best score, the share from one source. Later nodes read them as
-/// <c>req.*</c> in expressions and <c>when</c> (a threshold relative to the best score, a reranker that runs only above a
-/// number of candidates), taps log them in <c>context</c>, and <c>output.values</c> returns them to the caller.
+/// <c>RequestAggregate@1</c>: statistics of the live candidates written to request columns (RequestWriter), one value
+/// per request. Later nodes read them as <c>req.*</c> in expressions and <c>when</c>, taps log them in <c>context</c>,
+/// and <c>output.values</c> returns them to the caller.
 /// </summary>
 /// <remarks>
 /// It aggregates the rows alive when it runs, in their order, so floating-point sums are deterministic. Integer sums
