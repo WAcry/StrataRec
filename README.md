@@ -16,16 +16,16 @@ dotnet test StrataRec.sln           # 单元测试 + 集成测试
 
 dotnet run --project src/StrataRec.Cli -- validate     -c samples/home_feed
 dotnet run --project src/StrataRec.Cli -- explain-plan -c samples/home_feed   # --arms exp/arm：这个组合实际执行的节点、定义和每个节点读写的列
-dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace --logs   # 冷进程第一个请求含 JIT，超时可加 --deadline-ms 5000
+dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --trace --logs
 dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --record bundles/1001.json
-dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --format text --explain 17,1   # 可读的结果；每个 id 落在哪、每个节点之后的状态
-dotnet run --project src/StrataRec.Cli -- replay       -c samples/home_feed bundles   # 用录制的 I/O 重现并对比（--explain 同样可用）；compare --baseline 对比两份配置
+dotnet run --project src/StrataRec.Cli -- run          -c samples/home_feed -r samples/home_feed/requests/user_1001.json --format text --explain 17,1   # 可读的结果；每个 id 落在哪
+dotnet run --project src/StrataRec.Cli -- replay       -c samples/home_feed bundles   # 用录制的 I/O 重现并对比
 dotnet run --project src/StrataRec.Cli -- diff         --from <旧工作区或 manifest> --to samples/home_feed   # 按臂组合对比两份配置
-dotnet run --project src/StrataRec.Cli -- build        -c samples/home_feed -s store   # 产物按哈希写进 store；加载这份 manifest 的节点录制的包，replay -s store 就在录制时的 manifest 上回放（在工作区上录制的包仍用 -c）
-dotnet run --project src/StrataRec.Cli -- publish      -s store <manifest id 或文件>   # 让 store 里的指针指向它（seq 必须更大）；设置了 Releases 的服务节点会加载它
-dotnet run --project src/StrataRec.Cli -- revoke       -s store -p home_feed exp_mmr_diversity   # 紧急停止：立即发布去掉这个实验的 manifest，并撤销之前所有的 manifest
-dotnet run --project src/StrataRec.Cli -- status       -s store   # store 发布的内容：每条流水线、每个环境的 manifest、实验和正在生效的停止
-dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产物的 JSON Schema；schema --out <工作区>/schemas 写进工作区，供编辑器使用
+dotnet run --project src/StrataRec.Cli -- build        -c samples/home_feed -s store   # 产物按哈希写进 store
+dotnet run --project src/StrataRec.Cli -- publish      -s store <manifest id 或文件>   # 让 store 里的指针指向它
+dotnet run --project src/StrataRec.Cli -- revoke       -s store -p home_feed exp_mmr_diversity   # 紧急停止：立即发布去掉这个实验的 manifest
+dotnet run --project src/StrataRec.Cli -- status       -s store   # store 发布的内容
+dotnet run --project src/StrataRec.Cli -- schema pipeline          # 各类产物的 JSON Schema
 dotnet run --project src/StrataRec.Cli -- operators                # 算子及其声明的效果
 ```
 
@@ -65,7 +65,7 @@ curl -s -X POST localhost:5000/recommend/trending_feed -H 'content-type: applica
 dotnet run --project samples/StrataRec.Samples.Host -- stratarec validate -c config   # 宿主自己的二进制带着自定义组件跑全部 stratarec 命令（-c 相对项目目录）
 ```
 
-生产环境的节点服务 manifest 而不是工作区：CI 用 `stratarec build --store` 写产物和 manifest（序号默认接着已发布的那个，`stratarec diff --to <id> -s <store>` 看这次改了什么）、`stratarec run -m <id> -s <store>` 像节点一样加载它并跑一个请求、`stratarec publish` 改指针，出了问题用 `stratarec revoke` 立即停掉一个实验（之后的 `build` 不会把它原样带回来），`stratarec status -s <store>` 看 store 现在发布的是什么、有哪些停止正在生效；宿主在 `AddStrataRec` 里设置 `Releases`、列出 `Pipelines`，并注册 `IManifestSource` 和 `IArtifactStore`（本地目录各有现成的实现，其他存储实现这两个接口）。节点启动时加载每条流水线的 manifest，任何一条没有应用成功就不启动；之后按间隔轮询，新的 manifest 在后台编译、原子替换。缺少 manifest 所需能力的节点报 `incompatible`，继续服务当前计划。
+生产环境的节点服务 manifest 而不是工作区：CI 用 `stratarec build --store` 写产物和 manifest、`stratarec publish` 改指针，出了问题用 `stratarec revoke` 立即停掉一个实验，`stratarec status -s <store>` 看 store 现在发布的是什么；宿主在 `AddStrataRec` 里设置 `Releases`、列出 `Pipelines`，并注册 `IManifestSource` 和 `IArtifactStore`（本地目录各有现成的实现，其他存储实现这两个接口）。
 
 ## 示例工作区
 
@@ -85,11 +85,11 @@ samples/home_feed/
 内置算子按组合使用，大多数排序策略不需要自定义算子（`stratarec operators` 列出全部算子，`stratarec schema operator <算子>` 给出配置的 Schema）：
 
 ```jsonc
-// 过滤看过的物品：请求带上列表（request_schema 里 "seen_ids": { "type": "list<int64>" }），按请求排序一次，每行二分查找
+// 过滤看过的物品：请求带上列表（request_schema 里 "seen_ids": { "type": "list<int64>" }）
 "seen_filter": { "order": 150, "op": "ExpressionFilter@1",
   "config": { "predicate": "!(col.entity_id in ctx.request.seen_ids)" } },
 
-// 每个作者最多两条：组内名次（顺序同 TopK），再过滤；没有作者的物品不受限
+// 每个作者最多两条：组内名次，再过滤；没有作者的物品不受限
 "author_rank": { "order": 512, "op": "GroupAggregate@1",
   "config": { "group_col": "item.author_id", "outputs": { "group.author_rank": { "fn": "rank", "value_col": "score.final" } } } },
 "author_cap": { "order": 515, "op": "ExpressionFilter@1", "config": { "predicate": "(col.group.author_rank ?? 1) <= 2" } },
@@ -107,12 +107,11 @@ samples/home_feed/
   "config": { "values": { "candidates.recalled": { "fn": "count" } } } },
 "diversity_cap": { "order": 520, "op": "SlidingWindowQuota@1", "when": "req.candidates.recalled >= 10", "config": { "...": "..." } },
 
-// 把另一条流水线的结果并入候选（例如广告流水线的前几名）：同一个请求、同一次实验分配，时间是这个节点剩下的预算；
-// 失败时按 on_failure 处理。promo.bid 在 columns 里声明为可空，is_promoted 读的时候写 col.is_promoted ?? false
+// 把另一条流水线的结果并入候选（例如广告流水线的前几名），失败时按 on_failure 处理。promo.bid 在 columns 里声明为可空，is_promoted 读的时候写 col.is_promoted ?? false
 "promoted": { "order": 130, "op": "PipelineSource@1", "on_failure": "skip",
   "config": { "pipeline": "promoted", "limit_param": "promoted_k", "columns": { "promo.bid": "bid" }, "mark": "is_promoted" } },
 
-// 确定性的探索扰动：ctx.request.seed 是内置字段（默认由请求 ID 哈希得到），同一请求给同样的结果，可以回放
+// 确定性的探索扰动：ctx.request.seed 是内置字段，同一请求给同样的结果，可以回放
 // （score.final 声明为 "flow": true，才能被几个节点依次改写）
 "explore": { "order": 468, "op": "ExpressionScorer@1",
   "config": { "output_col": "score.final", "expr": "col.score.final + 0.05 * hash01(ctx.request.seed, col.entity_id)" } },
@@ -137,15 +136,6 @@ samples/home_feed/
 宿主示例的 `config/pipelines/shelves.jsonc` 是完整的一页，`Components/DistinctHeads.cs` 是它跨栏目的规则。
 
 类目打散用 `SlidingWindowQuota@1`（任意连续 `window` 个名次里同一组最多 `max_per_window` 个），相似内容打散用 `MmrDiversifier@1`，多目标融合用 `CompositeMultiplierScorer@1`（每个乘子、加项可以被实验单独修改）；`samples/home_feed` 里都有用法。
-
-## 基准
-
-```sh
-dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*ExpressionBenchmarks*'
-dotnet run -c Release --project tests/StrataRec.Benchmarks -- --filter '*PipelineBenchmarks*'
-```
-
-`PipelineBenchmarks` 端到端执行 `home_feed` 请求，候选数为 500 和 5,000。
 
 ## 文档
 
