@@ -364,12 +364,12 @@ internal sealed class ServiceRecordBuilder
     /// tier's queue with each record's time to live); a full queue drops them, counted.
     /// </summary>
     /// <param name="policy">The times the records are kept for; null for the cache's own (a service's binding's).</param>
-    public void WriteBack(long nowMs, CachePolicy? policy = null)
+    public void WriteBack(CachePolicy? policy = null)
     {
         var count = _records.Count;
-        if (count == 0)
+        if (count == 0 || !_cache.Kept)
         {
-            return;
+            return; // nothing to hand over, or no tier to hand it to: the record was the request's alone
         }
 
         var bytes = _writer.Bytes;
@@ -396,7 +396,7 @@ internal sealed class ServiceRecordBuilder
         if (_cache.Distributed is { } distributed)
         {
             var entries = new CacheStoreEntry[count];
-            var ttl = (policy ?? _cache.Policy).StoreTimeToLive(_writtenMs, nowMs);
+            var ttl = (policy ?? _cache.Policy).StoreTimeToLive(_writtenMs, _cache.TableCache.NowMs());
             for (var i = 0; i < count; i++)
             {
                 entries[i] = new CacheStoreEntry(ServiceCache.KeyText(_records[i].Key), records[i], ttl);

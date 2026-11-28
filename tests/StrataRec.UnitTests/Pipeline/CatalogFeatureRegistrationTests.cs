@@ -199,7 +199,10 @@ public sealed class CatalogFeatureRegistrationTests
         var cached = Plan(features: Extra,
             itemStore: """{ "connector": "memory@1", "data": {}, "timeout_ms": 30000, "cache": { "ttl_ms": 60000, "memory": { "max_bytes": "1MiB" } } }""");
 
+        var unkept = Plan(features: Extra, itemStore: """{ "connector": "memory@1", "data": {}, "timeout_ms": 30000, "cache": { } }""");
+
         Assert.Equal(["item.boost", "item.score"], Names(fetched));
+        Assert.Equal(Names(fetched), Names(unkept)); // a cache that keeps nothing writes no record back: the candidates' features are a fetch's
 
         // A miss writes back whole records, so every field of the table is fetched: all of them are in the plan.
         Assert.Equal(["item.author_id", "item.boost", "item.extra", "item.score"], Names(cached));

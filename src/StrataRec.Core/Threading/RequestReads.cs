@@ -24,7 +24,8 @@ namespace StrataRec.Core.Threading;
 /// context entity's features, a service call about no items, a pipeline call. Reads of many keys (the candidates'
 /// features, a service call about items) are not joined: two runs' candidates overlap in part, and a wait per key is a
 /// cost per row.</para>
-/// <para>One per request that has more than one run or is of a host's group; any other has none and pays nothing.</para>
+/// <para>One per request, whatever its plan: whether two reads of a request share does not depend on what else the
+/// request runs. A replay has none (it reads no cache).</para>
 /// <para><b>Requests of one group</b>. The requests a host sends for one thing at the same time (a page's feed and its
 /// promoted row) read the same things as the runs of one request do, and share the same way: each has its own of this
 /// over the group's reads (<see cref="Group"/>). A read is the group's for as long as a request that joined it is under

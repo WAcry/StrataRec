@@ -30,6 +30,7 @@ public class RequestReadsTests
         var later = reads.Join(Table, 7, 0, out var third); // kept for the request
         Assert.False(third);
         Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await later.WaitAsync(bound, CallDeadline.After(60_000)));
+        reads.End(); // of a request on its own: its reads go with it, there is nothing to let go of
     }
 
     [Fact]
@@ -114,6 +115,7 @@ public class RequestReadsTests
         var joined = second.Join(Table, 7, 0, out var other);
         read.Complete("record");
         first.End();
+        first.End(); // ended once: again lets go of nothing more
 
         Assert.True(reader);
         Assert.False(other);
@@ -236,6 +238,7 @@ public class RequestReadsTests
     /// </summary>
     [Theory]
     [InlineData("cancelled")]
+    [InlineData("cancelled and own time")] // the read's own time comes first of the two times, and the caller's end is still the one said
     [InlineData("bound")]
     [InlineData("bound and own time")] // the bound's end is the node's: it is said first
     [InlineData("own time")]
@@ -244,7 +247,7 @@ public class RequestReadsTests
         var reads = new RequestReads();
         reads.Join(Table, 7, 0, out _).Complete("record");
         using var caller = new CancellationTokenSource();
-        if (how == "cancelled")
+        if (how.StartsWith("cancelled", StringComparison.Ordinal))
         {
             caller.Cancel();
         }

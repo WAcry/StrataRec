@@ -94,6 +94,8 @@ public class RequestReadsEndToEndTests
             ? string.Empty
             : string.Join(",", i.Columns["games"].AsInt64List().ToArray()) + " at " + string.Join(",", i.Columns["bids"].AsFloat64List().ToArray())).ToList();
 
+    private static List<double> Tenure(RecResult result) => result.Items.Select(i => i.Columns["tenure"].AsFloat64()).ToList();
+
     private static TaskCompletionSource Gate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>
@@ -205,6 +207,13 @@ public class RequestReadsEndToEndTests
         Assert.True(expected.Succeeded && first.Succeeded && second.Succeeded, expected.Error ?? first.Error ?? second.Error);
         Assert.Equal(Lists(expected), Lists(first));
         Assert.Equal(Lists(expected), Lists(second));
+        if (of == "a user's features")
+        {
+            // The page's own read of the user: of the whole record, which its runs took for the fields they read.
+            Assert.Equal([420, 420, 420], Tenure(first));
+            Assert.Equal(Tenure(expected), Tenure(first));
+        }
+
         Assert.Equal(2 * asked, origin()); // nothing was kept for the second request
         Assert.Equal((0, 0), (stores.Gets, stores.Records));
         Assert.Equal(2 * taken, metrics.Of(StrataRecMetrics.Names.CacheKeys)
@@ -215,6 +224,38 @@ public class RequestReadsEndToEndTests
             Assert.Equal(["req-1 by page/content#0"], first.Calls!.Where(c => c.Cached is not null).Select(c => $"{c.Cached!.RequestId} by {c.Cached.CalledBy}"));
             Assert.Equal(["req-2 by page/content#0"], second.Calls!.Where(c => c.Cached is not null).Select(c => $"{c.Cached!.RequestId} by {c.Cached.CalledBy}"));
         }
+    }
+
+    /// <summary>
+    /// The reads of one request share whatever its plan is: a request of one run, of a pipeline that calls no other,
+    /// asks a service once for two equal calls its node makes at once, through a cache that keeps nothing.
+    /// </summary>
+    [Fact]
+    public async Task ARequestOfOneRun_SharesItsReadsToo()
+    {
+        var lists = new CountedLists { HoldFrom = 51 }; // the node's calls: the pipeline's own recall asks for fewer
+        var release = Gate();
+        lists.Hold = release.Task;
+        var pair = new TwoLimits(large: 51, small: 51);
+        var host = Host(listCache: "\"cache\": { }", more: root => ReplayTests.Edit(root, "pipelines/promoted.jsonc", "\"nodes\": {",
+            "\"nodes\": {\n \"pair\": { \"order\": 50, \"op\": \"TwoLimits@1\", \"config\": { \"service\": \"popular\" } },"));
+        await using var rig = new Rig(host, stores: new SharedStores(), bind: bindings => bindings.Add(new CountedConnectors()).Add(lists), operators: [pair], pipelines: ["promoted"]);
+        Task<RecResult> running;
+        try
+        {
+            running = rig.Run("req-1", pipeline: "promoted", inputs: new RequestInputs().Set("user_id", 1001).Set("slots", 3)).AsTask();
+            Assert.Equal(1, lists.Calls); // the first of the two is held, and the second waits for it
+        }
+        finally
+        {
+            release.SetResult();
+        }
+
+        var result = await running;
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.True(Assert.Single(pair.Large).Succeeded && Assert.Single(pair.Small).Succeeded);
+        Assert.Equal(2, lists.Calls); // the node's one call, and the pipeline's own recall
     }
 
     /// <summary>

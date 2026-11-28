@@ -38,6 +38,8 @@ public class CacheBindingTests
     [InlineData("""{ "ttl_ms": 60000 }""", "CACHE_TIERS", "or remove 'ttl_ms': a cache with no settings keeps nothing")]
     [InlineData("""{ "ttl_ms": -1, "version": "a b" }""", "CACHE_TIERS", "or remove 'ttl_ms' and 'version':")]
     [InlineData("""{ "stale_if_error_ms": 1000 }""", "CACHE_TIERS", "or remove 'stale_if_error_ms':")]
+    [InlineData("""{ "version": "v" }""", "CACHE_TIERS", "share (with \"ttl_ms\": 60000, how long a value is served); or remove")] // a tier needs the time too
+    [InlineData("""{ "ttl_ms": 60000 }""", "CACHE_TIERS", "share; or remove")]
     public void ATierWithoutATime_OrATimeWithoutATier_IsOneErrorAtTheCache(string cache, string code, string hint)
     {
         var error = Assert.Single(Errors(Build($$"""{ "connector": "memory@1", "cache": {{cache}} }""")));

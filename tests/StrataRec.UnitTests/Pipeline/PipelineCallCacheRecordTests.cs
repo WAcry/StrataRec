@@ -222,7 +222,7 @@ public sealed class PipelineCallCacheRecordTests
         }
 
         builder.End(Key);
-        builder.WriteBack(rig.Clock.NowMs);
+        builder.WriteBack();
         rig.Apply();
 
         Assert.Equal(1, rig.Table.Pin().RecordCount);
@@ -275,7 +275,7 @@ public sealed class PipelineCallCacheRecordTests
         }
 
         builder.End(Key);
-        builder.WriteBack(rig.Clock.NowMs);
+        builder.WriteBack();
         rig.Apply();
 
         Assert.Equal(1, rig.Table.Pin().RecordCount);

@@ -687,6 +687,30 @@ public class CacheTableTests
     }
 
     /// <summary>
+    /// A cache's table without an in-process tier holds nothing and reports no size. Its zeros would be recorded over
+    /// the size of the table another plan's bindings keep of the same source and entity: the instruments' tags are the
+    /// same.
+    /// </summary>
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 0)]
+    public void ATableThatKeepsNothingInProcess_ReportsNoSize(bool memory, int reported)
+    {
+        var source = "sized-" + Guid.NewGuid().ToString("N"); // the measurements of this table alone
+        using var records = new MeasurementHook(StrataRecMetrics.Names.LocalRecords, static () => { }, (StrataRecTags.Source, source));
+        using var bytes = new MeasurementHook(StrataRecMetrics.Names.LocalBytes, static () => { }, (StrataRecTags.Source, source));
+        var schema = new LocalTableSchema(source, "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("v", ColumnType.Float64)]);
+        var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
+        {
+            MaxBytes = 16 << 10, Cache = new CacheTableOptions { TtlMs = 60_000, Memory = memory, Clock = new ManualClock() },
+        });
+
+        table.Writer.Checkpoint(UpdatePosition.Empty); // as a cache's writer does when it starts
+
+        Assert.Equal((reported, reported), (records.Calls, bytes.Calls));
+    }
+
+    /// <summary>
     /// A record that fits the table is written while records can still go for it: an eviction whose estimate falls short
     /// (a table of a few pages, where the room a record needs is a page and not its own size) frees more, as a lowered
     /// limit does. It was tried once: of three records much larger than those the table held, two were refused, and a

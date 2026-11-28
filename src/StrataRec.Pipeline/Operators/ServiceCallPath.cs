@@ -116,7 +116,8 @@ internal static class ServiceCallPath
         }
 
         // A cache that keeps nothing serves the one kind of call a request's other calls share: about no items, of a
-        // request with other runs. Any other call of it is a call without a cache, which builds no record for nothing.
+        // run with reads to share through. Any other call of it is a call without a cache, which builds no record for
+        // nothing.
         if (service.Cache is { } cache && (cache.Kept || (call.Items.IsEmpty && scope.Reads is not null)))
         {
             return await CachedServiceCall.RunAsync(scope, service, cache, call, response).ConfigureAwait(false);

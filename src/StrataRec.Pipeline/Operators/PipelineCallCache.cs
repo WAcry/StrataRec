@@ -399,7 +399,7 @@ internal sealed class PipelineCallCache
         var builder = new ServiceRecordBuilder(_tiers, 1, startedMs);
         Encode(builder, columns, values, from, exposures);
         builder.End(key);
-        builder.WriteBack(NowMs(), Policy);
+        builder.WriteBack(Policy);
     }
 
     private void Count(CacheTier tier, CacheKeyOutcome outcome) => _tiers.TableCache.CountKeys(tier, outcome, 1);

@@ -821,10 +821,9 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         LoadedPipeline? fallback = null;
         RequestCalls? calls = null; // what the pipelines the request's nodes call ran, when a run calls any
 
-        // What the request's runs share of their cached reads: with the requests of its group from the start, and
-        // otherwise among themselves once a run calls a pipeline (RequestCalls). A request that writes no logs is not of
-        // its group (RequestGroup).
-        var reads = request.Group is { } group && WritesLogs(request) ? new RequestReads(group.Reads) : null;
+        // What the request's runs share of their cached reads: among themselves, or with the requests of its group. A
+        // request that writes no logs is not of its group (RequestGroup).
+        var reads = request.Group is { } group && WritesLogs(request) ? new RequestReads(group.Reads) : new RequestReads();
         LoadedPipeline? overridden = null; // the plan compiled for a configuration override, entered until the finally below
         IReadOnlyList<string>? merged = null; // the arms such a plan has merged in: it runs with none of its own
         try
@@ -942,7 +941,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         finally
         {
-            reads?.End(); // what its reads left the group is the group's only while another request that uses it runs
+            reads.End(); // what its reads left the group is the group's only while another request that uses it runs
             pipeline?.Bindings.RequestEnded();
             fallback?.Bindings.RequestEnded();
             EndOverride(overridden);
@@ -1148,11 +1147,11 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
     /// <param name="pipeline">Entered by the caller (<see cref="Enter"/>); the run joins its lease until its calls end.</param>
     /// <param name="runs">Collects the run's recording on every exit; null when the request does not record.</param>
-    /// <param name="reads">The request's reads among those of its group (<see cref="RequestGroup"/>); null for a request on its own.</param>
+    /// <param name="reads">The request's reads, which its runs share (<see cref="RequestReads"/>).</param>
     /// <param name="calls">Collects what the pipelines the run's nodes call ran (<see cref="RequestCalls"/>); made on the first such run.</param>
     private ValueTask<PipelineResult> Run(
         LoadedPipeline pipeline, RecRequest request, RequestInputs inputs, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, RunCapture? runs,
-        RequestReads? reads, ref RequestCalls? calls, CancellationToken cancellationToken) =>
+        RequestReads reads, ref RequestCalls? calls, CancellationToken cancellationToken) =>
         _executor.ExecuteAsync(pipeline.Plan, new PipelineRequest
         {
             RequestId = request.RequestId,
@@ -1166,7 +1165,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             ExplainIds = request.Debug?.ExplainIds,
             OnRecording = runs is null ? null : runs.Add,
             Calls = pipeline.Plan.Calls.IsEmpty ? null : new RunCalls(calls ??= new RequestCalls(this, request, reads), pipeline.Plan.PipelineId, 0),
-            Reads = reads ?? calls?.Reads, // after Calls: a run that calls none, of a request on its own, shares with none
+            Reads = reads,
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
 

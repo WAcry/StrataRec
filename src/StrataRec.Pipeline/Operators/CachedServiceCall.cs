@@ -893,7 +893,7 @@ internal sealed class CachedServiceCall
             {
                 builder.End(_keys[0]);
                 _reading?.Complete(builder.Record(0));
-                builder.WriteBack(_cache.TableCache.NowMs());
+                builder.WriteBack();
             }
 
             return;
@@ -936,7 +936,7 @@ internal sealed class CachedServiceCall
             items.End(_keys[subRows is null ? row : subRows[row]]);
         }
 
-        items.WriteBack(_cache.TableCache.NowMs());
+        items.WriteBack();
     }
 
     /// <summary>

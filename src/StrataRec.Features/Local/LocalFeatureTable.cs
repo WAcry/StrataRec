@@ -248,9 +248,18 @@ public sealed class LocalFeatureTable
         _loaded.TrySetResult();
     }
 
-    /// <summary>Records the current version's bytes and records: at each checkpoint, and after a cache's writes.</summary>
+    /// <summary>
+    /// Records the current version's bytes and records: at each checkpoint, and after a cache's writes. Not for a
+    /// cache without an in-process tier: its table holds nothing, and its zeros would be recorded over the size of the
+    /// table another plan's bindings keep of the same source and entity, whose instruments have the same tags.
+    /// </summary>
     internal void RecordSize()
     {
+        if (Cache is { Memory: false })
+        {
+            return;
+        }
+
         var version = Pin();
         StrataRecMetrics.LocalBytes.Record(version.Bytes, _tags);
         StrataRecMetrics.LocalRecords.Record(version.RecordCount, _tags);

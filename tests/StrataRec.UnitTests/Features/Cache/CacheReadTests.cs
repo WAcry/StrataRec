@@ -533,6 +533,45 @@ public class CacheReadTests
         }
     }
 
+    /// <summary>
+    /// A cache read is recorded as the connector call it made would be without the cache: a timeout is a timeout and
+    /// not an error, and an answer in part says how many keys the connector could not answer.
+    /// </summary>
+    [Theory]
+    [InlineData("partial", IoOutcome.Partial, 1)]
+    [InlineData("timeout", IoOutcome.Timeout, 0)]
+    [InlineData("failed", IoOutcome.Error, 0)]
+    public async Task ACacheReadsRecording_SaysHowItsCallEnded_AsAFetchsDoes(string how, IoOutcome outcome, int failedKeys)
+    {
+        var recorded = new List<(IoOutcome Outcome, int FailedKeys)>();
+        foreach (var cached in new[] { false, true })
+        {
+            var connector = new ScriptedConnector((keys, fields, writer, _) =>
+            {
+                switch (how)
+                {
+                    case "timeout": throw new TimeoutException("the store's own");
+                    case "failed": return ValueTask.FromResult(FetchStatus.Failed("down"));
+                }
+
+                ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
+                return ValueTask.FromResult(new FetchStatus(FetchOutcome.Partial, 1, "one shard is down"));
+            });
+            var rig = cached ? new FeatureTestRig().CacheSource("item_store", connector, ttlMs: 1_000) : new FeatureTestRig().Source("item_store", connector);
+            var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+            rig.Build();
+            var recorder = new RecordingHook();
+
+            await rig.NewRequest([1, 2], hook: recorder).EnsureAsync(clicks);
+
+            var call = Assert.Single(recorder.Calls);
+            recorded.Add((call.Outcome, call.Status.FailedKeys));
+        }
+
+        Assert.Equal((outcome, failedKeys), recorded[0]);
+        Assert.Equal(recorded[0], recorded[1]);
+    }
+
     [Fact]
     public async Task ARecordedCacheRead_IsOneCall_WhoseReplayGivesTheSameValuesAndStates()
     {

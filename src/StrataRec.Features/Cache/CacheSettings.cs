@@ -75,8 +75,9 @@ internal static class CacheSettings
                 // One error, whatever the settings' values: whether they apply at all is what there is to decide first.
                 diagnostics.Error("CACHE_TIERS", artifact, pointer,
                     $"The cache of {owner.Noun} '{owner.Name}' gives {given} but neither a 'memory' nor a 'distributed' tier: nothing would keep its values.",
-                    "add \"memory\": { \"max_bytes\": \"64MiB\" } to keep them in process, or \"distributed\": { \"store\": \"redis@1\", ... } to keep them in a store the instances share; "
-                    + $"or remove {given}: a cache with no settings keeps nothing, and has the reads of one request share a value");
+                    "add \"memory\": { \"max_bytes\": \"64MiB\" } to keep them in process, or \"distributed\": { \"store\": \"redis@1\", ... } to keep them in a store the instances share"
+                    + (cache.TtlMs is null ? " (with \"ttl_ms\": 60000, how long a value is served)" : string.Empty)
+                    + $"; or remove {given}: a cache with no settings keeps nothing, and has the reads of one request share a value");
                 return false;
             }
 

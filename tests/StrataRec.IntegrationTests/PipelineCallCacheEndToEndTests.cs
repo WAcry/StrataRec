@@ -1584,10 +1584,10 @@ public sealed class PipelineCallCacheEndToEndTests
     /// one whose cache gives a time does not (<c>PIPELINE_CALL_CACHE_UNBOUND</c>).
     /// </summary>
     [Fact]
-    public void ANodesCacheWithNoSettings_NeedsNoTierOfTheEnvironment()
+    public async Task ANodesCacheWithNoSettings_NeedsNoTierOfTheEnvironment()
     {
         var host = Host("{ }", bound: null);
-        var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new Probe()) });
+        await using var engine = new RecEngine(new PlanEnvironment { BaseDirectory = host.Root, Operators = OperatorRegistry.CreateDefault().Add(new Probe()) });
 
         var load = engine.Load(Compile(host.Root, "feed"));
 
