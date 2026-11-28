@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The mechanical gate: the rules of AGENTS.md that a script can check, checked.
 
-    python3 scripts/gate.py [--base <commit>]     every static check, then notes on the change: its size, the pages it made longer (under a second)
+    python3 scripts/gate.py [--base <commit>]     every static check, then notes on the change: its size, the pages it made longer, its comment growth (under a second)
     python3 scripts/gate.py slow <TestResults>    the slowest tests of the last run (scripts/check.sh writes the reports)
     python3 scripts/gate.py selftest              proves that every check still bites, on a small made-up repository
 
@@ -68,7 +68,7 @@ HISTORY = re.compile(r"\bused to be\b|\b(?:it|they|we|this|that|which|who|one|wh
 DECLARED = re.compile(r"^(\s*)((?:(?:public|internal|private|protected|file|sealed|static|abstract|readonly|partial|ref|unsafe|new)\s+)*)"
                       r"(class|struct|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)")
 RAW_QUOTES = re.compile(r'"{3,}')
-TAG_ONLY = re.compile(r"^/{2,}\s*(?:</?(?:summary|remarks|para|returns|value|example|code|list|item|description|term)\b[^>]*>\s*)*$")
+TAG_ONLY = re.compile(r"^/{2,}\s*(?:</?(?:summary|remarks|para|returns|value|example|code|list|item|description|term|param|typeparam|exception)\b[^>]*>\s*)*$")
 PUBLIC_TYPE = re.compile(r"^\s*public\s+(?:(?:sealed|static|abstract|readonly|partial|ref|unsafe)\s+)*"
                          r"(?:(?:class|struct|interface|enum|record(?:\s+(?:struct|class))?)\s+([A-Za-z_][A-Za-z0-9_]*)"
                          r"|delegate\s+[^;(]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*[<(])", re.M)

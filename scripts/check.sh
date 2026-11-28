@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Everything a change passes before it is handed over, cheapest first: the static gate (under a second), the build
 # (warnings are errors), every test, the slow-test check. CI runs the same steps (.github/workflows/ci.yml).
-#   scripts/check.sh [--base <commit>]     the base of the rule-file check and the size note; origin/main by default
+#   scripts/check.sh [--base <commit>]     the base of the rule-file check and the notes on the change; origin/main by default
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

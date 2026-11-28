@@ -16,14 +16,14 @@ description: 改动涉及按行、按特征的路径（候选表、列缓冲、�
 
 ## 2. 分配：有测试守着
 
-分配测试断言的是性质（不随候选数增长、同步路径零分配），不是某个字节数：
+分配测试断言的主要是性质（不随候选数增长、同步路径零分配），少数给一次调用设一个宽的字节上限：
 
 ```sh
 dotnet test --project tests/StrataRec.IntegrationTests -c Release --filter-class StrataRec.IntegrationTests.RequestAllocationTests
 dotnet test --project tests/StrataRec.UnitTests -c Release --filter-class "*AllocationTests"
 ```
 
-新增一条按行的路径时，给它加同样性质的测试：让一个用到这条路径的配置在 250 和 4,000 个候选下各跑一次，比较分配。测量照 `RequestAllocationTests` 的做法（先预热，读当前线程的分配字节数，允许几 KB 的抖动），测试类放进 `AllocationMeasurement` 这个串行的集合里，免得别的测试的分配混进来；现有的示例配置不会自动覆盖新的分支。每请求的字节数是估算，看趋势，不设硬门槛。
+新增一条按行的路径时，给它加同样性质的测试：让一个用到这条路径的配置在 250 和 4,000 个候选下各跑一次，比较分配。测量照 `RequestAllocationTests` 的做法（先预热，读当前线程的分配字节数，允许几 KB 的抖动），测试类放进串行的集合里（单元测试是 `AllocationMeasurement`，集成测试是 `ProcessWideListenersCollection`），免得别的测试的分配混进来；现有的示例配置不会自动覆盖新的分支。每请求的字节数是估算，看趋势，不设硬门槛。
 
 ## 3. 耗时：改动前后各跑一次基准
 
