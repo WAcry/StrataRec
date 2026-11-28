@@ -535,15 +535,18 @@ public class CacheReadTests
 
     /// <summary>
     /// A cache read is recorded as the connector call it made would be without the cache: a timeout is a timeout and
-    /// not an error, and an answer in part says how many keys the connector could not answer.
+    /// not an error, an answer in part says how many keys the connector could not answer, a failure that came without
+    /// words is recorded without any, and a read that had no time to send its call says it sent none.
     /// </summary>
     [Theory]
-    [InlineData("partial", IoOutcome.Partial, 1)]
-    [InlineData("timeout", IoOutcome.Timeout, 0)]
-    [InlineData("failed", IoOutcome.Error, 0)]
-    public async Task ACacheReadsRecording_SaysHowItsCallEnded_AsAFetchsDoes(string how, IoOutcome outcome, int failedKeys)
+    [InlineData("partial", IoOutcome.Partial, 1, true)]
+    [InlineData("timeout", IoOutcome.Timeout, 0, true)]
+    [InlineData("failed", IoOutcome.Error, 0, true)]
+    [InlineData("failed without words", IoOutcome.Error, 0, true)]
+    [InlineData("no time left", IoOutcome.Timeout, 0, false)]
+    public async Task ACacheReadsRecording_SaysHowItsCallEnded_AsAFetchsDoes(string how, IoOutcome outcome, int failedKeys, bool sent)
     {
-        var recorded = new List<(IoOutcome Outcome, int FailedKeys)>();
+        var recorded = new List<(IoOutcome Outcome, int FailedKeys, bool Sent, bool Words)>();
         foreach (var cached in new[] { false, true })
         {
             var connector = new ScriptedConnector((keys, fields, writer, _) =>
@@ -552,6 +555,7 @@ public class CacheReadTests
                 {
                     case "timeout": throw new TimeoutException("the store's own");
                     case "failed": return ValueTask.FromResult(FetchStatus.Failed("down"));
+                    case "failed without words": return ValueTask.FromResult(new FetchStatus(FetchOutcome.Failed));
                 }
 
                 ScriptedConnector.WriteAll(keys, fields, writer, (key, _) => key * 1.5);
@@ -562,14 +566,36 @@ public class CacheReadTests
             rig.Build();
             var recorder = new RecordingHook();
 
-            await rig.NewRequest([1, 2], hook: recorder).EnsureAsync(clicks);
+            await rig.NewRequest([1, 2], hook: recorder, deadlineMs: how == "no time left" ? 0 : FeatureTestRig.UntimedMs).EnsureAsync(clicks);
 
             var call = Assert.Single(recorder.Calls);
-            recorded.Add((call.Outcome, call.Status.FailedKeys));
+            recorded.Add((call.Outcome, call.Status.FailedKeys, call.Sent, call.Status.Error is not null));
+            Assert.Equal(sent ? 1 : 0, connector.Calls.Count); // a call that was not sent is one the connector did not get
         }
 
-        Assert.Equal((outcome, failedKeys), recorded[0]);
+        Assert.Equal((outcome, failedKeys, sent, how != "failed without words"), recorded[0]);
         Assert.Equal(recorded[0], recorded[1]);
+    }
+
+    /// <summary>
+    /// A read of several chunks reports its first failure, whether or not that one came with words: a chunk that failed
+    /// without any is not passed over for the next one's timeout.
+    /// </summary>
+    [Fact]
+    public async Task ACacheReadOfSeveralChunks_ReportsItsFirstFailure_WithWordsOrWithout()
+    {
+        var connector = new ScriptedConnector((keys, _, _, _) =>
+            keys.Keys.ToArray()[0].Int64Value == 1 ? ValueTask.FromResult(new FetchStatus(FetchOutcome.Failed)) : throw new TimeoutException("the store's own"));
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, ttlMs: 1_000, maxBatch: 1);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        var recorder = new RecordingHook();
+
+        await rig.NewRequest([1, 2], hook: recorder).EnsureAsync(clicks);
+
+        var call = Assert.Single(recorder.Calls);
+        Assert.Equal((IoOutcome.Error, FetchOutcome.Failed, null), (call.Outcome, call.Status.Outcome, call.Status.Error));
+        Assert.Equal(2, connector.Calls.Count);
     }
 
     [Fact]
@@ -826,7 +852,7 @@ public class CacheReadTests
                 }
             }
 
-            Calls.Enqueue(new RecordedRead(keys, call.Status, call.Outcome, recorded));
+            Calls.Enqueue(new RecordedRead(keys, call.Status, call.Outcome, recorded, call.Sent));
         }
 
         public FetchStatus Replay(FetchGroup group, in EntityKeyBatch batch, ImmutableArray<CompiledFieldBinding> fields, IFeatureBatchWriter writer) =>
@@ -866,5 +892,5 @@ public class CacheReadTests
         }
     }
 
-    private sealed record RecordedRead(long[] Keys, FetchStatus Status, IoOutcome Outcome, double?[]? Values);
+    private sealed record RecordedRead(long[] Keys, FetchStatus Status, IoOutcome Outcome, double?[]? Values, bool Sent);
 }

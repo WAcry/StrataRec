@@ -274,7 +274,7 @@ public static class StrataRecMetrics
 
     /// <summary>
     /// Keys a request read from a tier of a cached source or a service's cache (its items, or its whole call), by what the tier had. Tags: <c>stratarec.source</c>,
-    /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c> = <c>memory</c> | <c>distributed</c>, <c>stratarec.outcome</c> =
+    /// <c>stratarec.entity</c>, <c>stratarec.cache.tier</c> = <c>memory</c> | <c>distributed</c> | <c>request</c> (<see cref="StrataRecTags.CacheTier"/>), <c>stratarec.outcome</c> =
     /// <c>hit</c> (served, within its TTL) | <c>miss</c> (no record) | <c>expired</c> (a record past its TTL, so the key went
     /// on) | <c>stale</c> (an expired record served because the connector or the service failed) | <c>mismatch</c> (distributed only: a
     /// record of another field set or format, e.g. written by an instance on another catalog version) | <c>error</c>

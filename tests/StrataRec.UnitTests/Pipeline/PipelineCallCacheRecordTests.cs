@@ -34,6 +34,51 @@ public sealed class PipelineCallCacheRecordTests
         return new Rig(new PipelineCallCache(tiers, new CachePolicy(ttlMs, staleIfErrorMs), null), tiers, table, clock);
     }
 
+    /// <summary>
+    /// A result that no tier keeps is not encoded: the request's own calls have it as it is, so the cache does not
+    /// read it again to build a record for nobody.
+    /// </summary>
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 0)]
+    public void AResultThatIsNotKept_IsNotEncoded(bool kept, int read)
+    {
+        var clock = new ManualClock();
+        var options = new LocalFeatureTableOptions
+        {
+            MaxBytes = 8 << 20, Cache = new CacheTableOptions { TtlMs = CacheSettings.MaxMs, Memory = kept, Kept = kept, Clock = clock },
+        };
+        var table = new LocalFeatureTable(ServiceCache.Schema("p", PipelineCallCache.Entity), options);
+        var cache = new PipelineCallCache(new ServiceCache("p", table, table.Cache!.Policy, null, 0, string.Empty), CachePolicy.Unlimited, null);
+        var columns = new ResultColumns([EntityKey.FromInt64(7)], ["score"], [ColumnType.Float64], [[ScalarValue.FromFloat64(0.5)]]);
+        var exposures = new CountedExposures();
+
+        cache.Write(Key, columns, ResultValues.Empty, new CachedFrom("req", 1, "feed/n#0"), exposures, clock.NowMs);
+
+        Assert.Equal(read, exposures.Read);
+    }
+
+    /// <summary>No exposures, counting how often their number is asked for.</summary>
+    private sealed class CountedExposures : IReadOnlyList<CallExposure>
+    {
+        public int Read { get; private set; }
+
+        public int Count
+        {
+            get
+            {
+                Read++;
+                return 0;
+            }
+        }
+
+        public CallExposure this[int index] => throw new ArgumentOutOfRangeException(nameof(index));
+
+        public IEnumerator<CallExposure> GetEnumerator() => Enumerable.Empty<CallExposure>().GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private static readonly ColumnType[] Types =
     [
         ColumnType.Bool.AsNullable(), ColumnType.Int64.AsNullable(), ColumnType.Int32.AsNullable(), ColumnType.Float64.AsNullable(), ColumnType.Float32.AsNullable(),

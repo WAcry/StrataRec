@@ -372,6 +372,10 @@ internal sealed class ServiceRecordBuilder
             return; // nothing to hand over, or no tier to hand it to: the record was the request's alone
         }
 
+        // The host's clock is read, for the store's time to live, before anything is handed over: one that throws
+        // leaves neither tier written.
+        var distributed = _cache.Distributed;
+        var ttl = distributed is null ? default : (policy ?? _cache.Policy).StoreTimeToLive(_writtenMs, _cache.TableCache.NowMs());
         var bytes = _writer.Bytes;
         var memory = _cache.TableCache.Memory;
         var keys = memory ? new EntityKey[2 * count] : []; // the in-process tier's, when the cache has one
@@ -393,10 +397,9 @@ internal sealed class ServiceRecordBuilder
             _cache.TableCache.TryWriteBack(new CacheWriteBatch(keys, records, count, partCount: 2));
         }
 
-        if (_cache.Distributed is { } distributed)
+        if (distributed is not null)
         {
             var entries = new CacheStoreEntry[count];
-            var ttl = (policy ?? _cache.Policy).StoreTimeToLive(_writtenMs, _cache.TableCache.NowMs());
             for (var i = 0; i < count; i++)
             {
                 entries[i] = new CacheStoreEntry(ServiceCache.KeyText(_records[i].Key), records[i], ttl);

@@ -687,18 +687,19 @@ public class CacheTableTests
     }
 
     /// <summary>
-    /// A cache's table without an in-process tier holds nothing and reports no size. Its zeros would be recorded over
-    /// the size of the table another plan's bindings keep of the same source and entity: the instruments' tags are the
-    /// same.
+    /// A cache's table without an in-process tier holds nothing and loads nothing, and reports neither a size nor a
+    /// load. Its zeros, and the time its writer started, would be recorded over those of the table another plan's
+    /// bindings keep of the same source and entity: the instruments' tags are the same.
     /// </summary>
     [Theory]
     [InlineData(true, 1)]
     [InlineData(false, 0)]
-    public void ATableThatKeepsNothingInProcess_ReportsNoSize(bool memory, int reported)
+    public void ATableThatKeepsNothingInProcess_ReportsNoSize_AndNoLoad(bool memory, int reported)
     {
         var source = "sized-" + Guid.NewGuid().ToString("N"); // the measurements of this table alone
         using var records = new MeasurementHook(StrataRecMetrics.Names.LocalRecords, static () => { }, (StrataRecTags.Source, source));
         using var bytes = new MeasurementHook(StrataRecMetrics.Names.LocalBytes, static () => { }, (StrataRecTags.Source, source));
+        using var loaded = new MeasurementHook(StrataRecMetrics.Names.LocalLoadLastSuccess, static () => { }, (StrataRecTags.Source, source));
         var schema = new LocalTableSchema(source, "item", EntityKeyType.Int64, LocalTableMode.Cache, [new("v", ColumnType.Float64)]);
         var table = new LocalFeatureTable(schema, new LocalFeatureTableOptions
         {
@@ -707,7 +708,7 @@ public class CacheTableTests
 
         table.Writer.Checkpoint(UpdatePosition.Empty); // as a cache's writer does when it starts
 
-        Assert.Equal((reported, reported), (records.Calls, bytes.Calls));
+        Assert.Equal((reported, reported, reported), (records.Calls, bytes.Calls, loaded.Calls));
     }
 
     /// <summary>

@@ -30,7 +30,10 @@ public class RequestReadsTests
         var later = reads.Join(Table, 7, 0, out var third); // kept for the request
         Assert.False(third);
         Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await later.WaitAsync(bound, CallDeadline.After(60_000)));
-        reads.End(); // of a request on its own: its reads go with it, there is nothing to let go of
+
+        reads.End(); // a read that outlives its request reads for itself, of a request on its own too
+        Assert.NotSame(read, reads.Join(Table, 7, 0, out var outlived));
+        Assert.True(outlived);
     }
 
     [Fact]
@@ -98,12 +101,13 @@ public class RequestReadsTests
     }
 
     /// <summary>
-    /// The requests of one group share a read as the runs of one request do, while a request that joined it is under
-    /// way: the read outlives the request that made it for as long as another holds it, and is gone with the last, so
-    /// a request that comes after reads for itself and the group holds nothing of requests that ended.
+    /// The requests of one group share a read as the runs of one request do, while the request that made it is under
+    /// way. The read leaves with that request, however many others took its record: a record lives no longer than the
+    /// request that read it, so requests that overlap one after another do not hand it on, and the group holds nothing
+    /// of a request that ended.
     /// </summary>
     [Fact]
-    public async Task RequestsOfOneGroup_ShareARead_WhileOneThatJoinedItIsUnderWay()
+    public async Task RequestsOfOneGroup_ShareARead_WhileTheRequestThatMadeItIsUnderWay()
     {
         var group = new RequestReads.Group();
         var first = new RequestReads(group);
@@ -114,23 +118,48 @@ public class RequestReadsTests
         first.Join(Table, 7, 0, out _); // another run of the same request
         var joined = second.Join(Table, 7, 0, out var other);
         read.Complete("record");
-        first.End();
-        first.End(); // ended once: again lets go of nothing more
+        var third = new RequestReads(group); // begun while the first, which read the record, is under way
+        var kept = third.Join(Table, 7, 0, out var taken);
 
         Assert.True(reader);
-        Assert.False(other);
+        Assert.False(other || taken);
         Assert.Same(read, joined);
-        var third = new RequestReads(group); // begun while the second, which holds the read, is under way
-        var kept = third.Join(Table, 7, 0, out var taken);
-        Assert.False(taken); // before the wait: a read of its own would never end
         Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await kept.WaitAsync(bound, CallDeadline.None));
 
-        second.End();
-        Assert.Equal(1, group.Count); // the third's
-        third.End();
+        first.End();
+        first.End(); // ended once: again changes nothing
         Assert.Equal(0, group.Count);
-        new RequestReads(group).Join(Table, 7, 0, out var after);
+        Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await joined.WaitAsync(bound, CallDeadline.None)); // what it took, it has
+
+        var next = new RequestReads(group).Join(Table, 7, 0, out var after); // while the second and third, which took the record, are under way
         Assert.True(after);
+        Assert.NotSame(read, next);
+        Assert.Same(next, second.Join(Table, 7, 0, out var again)); // the second's next read is of the record being read now
+        Assert.False(again);
+    }
+
+    /// <summary>
+    /// A read still under way when its request ends is given to no other request, as a result that comes after its
+    /// time is not used: those waiting for it ask the origin themselves, and what the reader gets later is nobody's.
+    /// </summary>
+    [Fact]
+    public async Task AReadStillUnderWayWhenItsRequestEnds_IsGivenToNoOther()
+    {
+        var group = new RequestReads.Group();
+        var first = new RequestReads(group);
+        var second = new RequestReads(group);
+        using var bound = Bound();
+        var read = first.Join(Table, 7, 0, out _);
+        var waiting = second.Join(Table, 7, 0, out _).WaitAsync(bound, CallDeadline.None);
+
+        first.End();
+        read.Complete("late");
+
+        Assert.Equal(new SharedAnswer(SharedEnd.Withdrawn, null), await waiting);
+        Assert.Equal(0, group.Count);
+        var own = second.Join(Table, 7, 0, out var reader);
+        Assert.True(reader);
+        Assert.NotSame(read, own);
     }
 
     /// <summary>

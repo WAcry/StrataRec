@@ -127,9 +127,10 @@ public sealed class RecRequest
 /// answered joins the group's read of the same record, the first asks the origin, and the others take what it gets
 /// when it is fresh by their own times. A failure is not shared. A result of a pipeline call that another request of
 /// the group computed says so (<see cref="CalledRun.Cached"/> names that request).</para>
-/// <para>A record is the group's while a request that used it is under way, and no longer: requests sent one after
-/// another share nothing through the group (the cache's tiers are what serve those), and nothing needs to be released,
-/// whatever becomes of the object. Each request keeps its own deadline, inputs, arms and result.</para>
+/// <para>A record is the group's while the request that read it is under way, and no longer, however many others
+/// took it: requests sent one after another share nothing through the group (the cache's tiers are what serve those),
+/// and nothing needs to be released, whatever becomes of the object. Each request keeps its own deadline, inputs, arms
+/// and result.</para>
 /// <para>A request that is not served as any other is (<see cref="DebugOptions.ForceArms"/>, a
 /// <see cref="DebugOptions.ConfigOverride"/>, <see cref="DebugOptions.CaptureLogs"/>) writes no logs, so what it computed
 /// could not be traced from another request that took it: it runs on its own, as if it had no group.</para>
@@ -941,7 +942,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         finally
         {
-            reads.End(); // what its reads left the group is the group's only while another request that uses it runs
+            reads.End(); // what it read was its group's while it ran, and what it is still reading is nobody else's
             pipeline?.Bindings.RequestEnded();
             fallback?.Bindings.RequestEnded();
             EndOverride(overridden);

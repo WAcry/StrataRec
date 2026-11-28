@@ -244,18 +244,25 @@ public sealed class LocalFeatureTable
         Volatile.Write(ref _position, position);
         Volatile.Write(ref _completions, _completions + 1);
         RecordSize();
-        StrataRecMetrics.LocalLoadLastSuccess.Record(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0, _tags);
+        if (Reports)
+        {
+            StrataRecMetrics.LocalLoadLastSuccess.Record(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0, _tags);
+        }
+
         _loaded.TrySetResult();
     }
 
     /// <summary>
-    /// Records the current version's bytes and records: at each checkpoint, and after a cache's writes. Not for a
-    /// cache without an in-process tier: its table holds nothing, and its zeros would be recorded over the size of the
-    /// table another plan's bindings keep of the same source and entity, whose instruments have the same tags.
+    /// Whether the table reports its size and its loads. Not a cache's without an in-process tier: it holds nothing and
+    /// loads nothing, and its zeros and the time its writer started would be recorded over those of the table another
+    /// plan's bindings keep of the same source and entity, whose instruments have the same tags.
     /// </summary>
+    private bool Reports => Cache is not { Memory: false };
+
+    /// <summary>Records the current version's bytes and records: at each checkpoint, and after a cache's writes.</summary>
     internal void RecordSize()
     {
-        if (Cache is { Memory: false })
+        if (!Reports)
         {
             return;
         }

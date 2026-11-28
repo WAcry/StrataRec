@@ -28,15 +28,16 @@ namespace StrataRec.Core.Threading;
 /// request runs. A replay has none (it reads no cache).</para>
 /// <para><b>Requests of one group</b>. The requests a host sends for one thing at the same time (a page's feed and its
 /// promoted row) read the same things as the runs of one request do, and share the same way: each has its own of this
-/// over the group's reads (<see cref="Group"/>). A read is the group's for as long as a request that joined it is under
-/// way, and then leaves: what the group holds is bounded by its requests under way, whatever the host does with the
-/// group afterwards, and a request sent later reads for itself (the tiers are what serve requests that follow one
-/// another).</para>
+/// over the group's reads (<see cref="Group"/>). A read is the group's for as long as the request that made it is
+/// under way, and leaves with it (<see cref="End"/>): a record lives no longer than the request that read it, however
+/// many others took it and however long the host keeps the group, and one still being read when its request ends is
+/// not given to the others, as a result that comes after its time is not used. A request that comes later reads for
+/// itself (the tiers are what serve requests that follow one another).</para>
 /// </remarks>
 internal sealed class RequestReads
 {
     private readonly Group _group;
-    private readonly List<SharedRead>? _joined; // of a request of a host's group: the reads it holds there until it ends
+    private readonly List<SharedRead>? _made; // of a request of a host's group: the reads it made there, which leave with it
     private bool _ended;
 
     /// <summary>The reads of a request on its own: gone with it.</summary>
@@ -46,7 +47,7 @@ internal sealed class RequestReads
     public RequestReads(Group group)
     {
         _group = group;
-        _joined = new List<SharedRead>();
+        _made = new List<SharedRead>();
     }
 
     /// <summary>
@@ -74,48 +75,49 @@ internal sealed class RequestReads
         {
             if (_ended)
             {
-                // A read that outlived its request (a call the request stopped waiting for): nothing holds what it
-                // would leave in the group, so it reads for itself.
+                // A read that outlived its request (a call the request stopped waiting for) reads for itself: what it
+                // gets is nobody else's.
                 reader = true;
                 return new SharedRead(null, slot);
             }
 
             ref var read = ref CollectionsMarshal.GetValueRefOrAddDefault(_group.Reads, slot, out var joined);
             reader = !joined;
-            read ??= new SharedRead(_group, slot);
-            if (_joined is not null)
+            if (reader)
             {
-                read.Holds++;
-                _joined.Add(read);
+                read = new SharedRead(_group, slot);
+                _made?.Add(read);
             }
 
-            return read;
+            return read!;
         }
     }
 
     /// <summary>
-    /// The request ended: the reads it joined are the group's only while another request that joined them is under
-    /// way. Nothing to do for a request on its own, whose reads go with it.
+    /// The request ended: its reads read for themselves from now on, and those it made leave the group. One still under
+    /// way is withdrawn, so the reads of other requests that wait for it ask the origin themselves and what it gets
+    /// later is given to none. Ending again changes nothing.
     /// </summary>
     public void End()
     {
-        if (_joined is null)
-        {
-            return;
-        }
-
         lock (_group.Gate)
         {
             _ended = true;
-            foreach (var read in _joined)
+            if (_made is null)
             {
-                if (--read.Holds == 0)
-                {
-                    _group.Leave(read);
-                }
+                return; // a request on its own: its reads go with it
             }
 
-            _joined.Clear();
+            foreach (var read in _made)
+            {
+                _group.Leave(read);
+            }
+        }
+
+        // Nothing is added once the request has ended. Outside the gate, which a read takes to leave.
+        foreach (var read in _made)
+        {
+            read.Withdraw();
         }
     }
 
@@ -181,9 +183,6 @@ internal sealed class RequestReads
         }
 
         internal Slot Slot { get; }
-
-        /// <summary>The requests of a host's group under way that joined the read; under the group's gate.</summary>
-        internal int Holds { get; set; }
 
         private readonly TaskCompletionSource<SharedAnswer> _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

@@ -7,6 +7,7 @@ using StrataRec.Core.Memory;
 using StrataRec.Core.Services;
 using StrataRec.Core.Values;
 using StrataRec.Features.Cache;
+using StrataRec.Features.Local;
 using StrataRec.Pipeline.Execution;
 using StrataRec.Pipeline.Operators;
 using StrataRec.Pipeline.Planning;
@@ -695,6 +696,56 @@ public sealed class ServiceCacheRecordTests
         Assert.Null(context.DegradedReason);
         Assert.Single(rig.Service.Calls); // the first call's
         memory.Release();
+    }
+
+    /// <summary>
+    /// A call about items through a cache that keeps nothing is the call without the cache: nothing would keep, and no
+    /// other call would take, what a cache builds for each item, so it takes from the request's memory what the plain
+    /// call takes and no more.
+    /// </summary>
+    [Fact]
+    public async Task ACallAboutItems_ThroughACacheThatKeepsNothing_TakesWhatACallWithoutACacheTakes()
+    {
+        var options = new LocalFeatureTableOptions
+        {
+            MaxBytes = 1 << 20, Cache = new CacheTableOptions { TtlMs = CacheSettings.MaxMs, Memory = false, Kept = false, Clock = new ManualClock() },
+        };
+        var table = new LocalFeatureTable(ServiceCache.Schema("m"), options);
+        var cache = new ServiceCache("m", table, table.Cache!.Policy, null, 10_000, "m@1");
+        var service = new CountingService();
+        var rented = new List<long>();
+        foreach (var bound in new[] { new BoundService("m", service, IoRoles.Model, null, null), new BoundService("m", service, IoRoles.Model, null, cache) })
+        {
+            var pool = new CountingPool();
+            var memory = new RequestMemory(pool);
+            var response = new ServiceResponse(memory);
+
+            var status = await Context(memory, TestContext.Current.CancellationToken, long.MaxValue).CallAsync(bound, ServiceCacheRig.Items([11, 22, 33], [1f, 2f, 3f]), response);
+
+            Assert.True(status.Succeeded, status.Error);
+            Assert.Equal(3, ServiceCacheRig.Floats(response, "p").Length);
+            rented.Add(pool.Rented);
+            memory.Release();
+        }
+
+        Assert.Equal(2, service.Calls.Count);
+        Assert.Equal(rented[0], rented[1]);
+    }
+
+    /// <summary>Counts the elements rented from it.</summary>
+    private sealed class CountingPool : IBufferPool
+    {
+        private long _rented;
+
+        public long Rented => Interlocked.Read(ref _rented);
+
+        public T[] Rent<T>(int minimumLength)
+        {
+            Interlocked.Add(ref _rented, minimumLength);
+            return SharedArrayBufferPool.Instance.Rent<T>(minimumLength);
+        }
+
+        public void Return<T>(T[] array, bool clearArray) => SharedArrayBufferPool.Instance.Return(array, clearArray);
     }
 
     private static OperatorContext Context(RequestMemory memory, CancellationToken token, long deadline) => new(new RequestState

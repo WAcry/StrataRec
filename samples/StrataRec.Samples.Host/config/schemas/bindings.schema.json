@@ -132,7 +132,7 @@
             ],
             "properties": {
               "ttl_ms": {
-                "description": "How long a value fetched from the origin (the connector, or the service) is served, in milliseconds: required with a tier. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together. A cache with no member at all, \"cache\": {}, keeps nothing: the reads of one request share a value (the features of the request's user, a call of a service about no items) and the next request asks the origin again.",
+                "description": "How long a value fetched from the origin (the connector, or the service) is served, in milliseconds: required with a tier. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together. A cache with no member at all, \"cache\": {}, keeps nothing: a value (the features of the request's user, a call of a service about no items) is shared by the reads of the request that fetched it, and of the requests its host sends with it as one group, until that request ends; a later request asks the origin again.",
                 "type": [
                   "integer",
                   "null"
@@ -322,7 +322,7 @@
             ],
             "properties": {
               "ttl_ms": {
-                "description": "How long a value fetched from the origin (the connector, or the service) is served, in milliseconds: required with a tier. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together. A cache with no member at all, \"cache\": {}, keeps nothing: the reads of one request share a value (the features of the request's user, a call of a service about no items) and the next request asks the origin again.",
+                "description": "How long a value fetched from the origin (the connector, or the service) is served, in milliseconds: required with a tier. Each key's lifetime varies by ±10% with the key's hash, so values written together do not all expire together. A cache with no member at all, \"cache\": {}, keeps nothing: a value (the features of the request's user, a call of a service about no items) is shared by the reads of the request that fetched it, and of the requests its host sends with it as one group, until that request ends; a later request asks the origin again.",
                 "type": [
                   "integer",
                   "null"

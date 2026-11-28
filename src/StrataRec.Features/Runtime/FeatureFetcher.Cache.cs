@@ -298,7 +298,7 @@ public sealed partial class FeatureFetcher
         {
             if (read.Cancellation is null)
             {
-                read.Fail(NoTimeLeft.Error, IoOutcome.Timeout);
+                read.Fail(NoTimeLeft.Error, IoOutcome.Timeout, sent: false);
             }
             else
             {
@@ -369,7 +369,8 @@ public sealed partial class FeatureFetcher
                 return fresh;
             case SharedEnd.CutOff or SharedEnd.TimedOut:
                 var cancelled = read.Cancellation!.Caller.IsCancellationRequested;
-                read.Fail((cancelled ? Cancelled(read.Group) : TimedOut(read.Group, read.BudgetMs)).Error, cancelled ? IoOutcome.Cancelled : IoOutcome.Timeout);
+                read.Fail((cancelled ? Cancelled(read.Group) : TimedOut(read.Group, read.BudgetMs)).Error, cancelled ? IoOutcome.Cancelled : IoOutcome.Timeout,
+                    sent: false); // it waited for another read's call and sent none
                 return true;
             default:
                 return false;
@@ -511,7 +512,7 @@ public sealed partial class FeatureFetcher
 
         if (Stopwatch.GetTimestamp() >= bound.Deadline)
         {
-            read.Fail(NoTimeLeft.Error, IoOutcome.Timeout); // the distributed tier took the whole budget
+            read.Fail(NoTimeLeft.Error, IoOutcome.Timeout, sent: false); // the distributed tier took the whole budget
             return;
         }
 
@@ -561,7 +562,7 @@ public sealed partial class FeatureFetcher
             var status = StatusOf(group, read.BudgetMs, answered);
             if (status.Outcome == FetchOutcome.Failed)
             {
-                read.Fail(status.Error, answered.Outcome); // its keys stay unanswered; its staging is never read
+                read.Fail(status.Error, answered.Outcome, answered.Sent); // its keys stay unanswered; its staging is never read
                 continue;
             }
 
@@ -887,7 +888,8 @@ public sealed partial class FeatureFetcher
         var tableFields = TableFields(read.Group, read.Features);
         var fields = ImmutableCollectionsMarshal.AsImmutableArray(read.Fields!);
         recorder.Record(
-            new FeatureCallInfo(read.Group, read.Batch, fields, read.Sequence, true, status, outcome, Stopwatch.GetElapsedTime(read.Started)),
+            new FeatureCallInfo(read.Group, read.Batch, fields, read.Sequence, status.Outcome != FetchOutcome.Failed || read.Sent, status, outcome,
+                Stopwatch.GetElapsedTime(read.Started)),
             status.Outcome == FetchOutcome.Failed ? null : new CacheReadValues(read, tableFields));
     }
 
@@ -1126,8 +1128,13 @@ public sealed partial class FeatureFetcher
 
         public string? Error { get; set; }
 
-        /// <summary>How the call that gave <see cref="Error"/> ended, for the read's recording when no key got a value.</summary>
+        /// <summary>How the read's first call to fail ended, for the read's recording when no key got a value.</summary>
         public IoOutcome Failure { get; private set; } = IoOutcome.Error;
+
+        /// <summary>Whether that call was sent: false when the read had no time left, or its caller had cancelled, before it.</summary>
+        public bool Sent { get; private set; } = true;
+
+        private bool _failed;
 
         /// <summary>The keys the connector said it could not answer, in the chunks it answered in part.</summary>
         public int PartialKeys { get; set; }
@@ -1178,13 +1185,15 @@ public sealed partial class FeatureFetcher
             return texts;
         }
 
-        /// <summary>The read's first failure is the one it reports.</summary>
-        public void Fail(string? error, IoOutcome outcome)
+        /// <summary>The read's first failure is the one it reports, whether or not it came with words.</summary>
+        public void Fail(string? error, IoOutcome outcome, bool sent = true)
         {
-            if (Error is null)
+            if (!_failed)
             {
-                Error = error;
+                _failed = true;
+                Error ??= error;
                 Failure = outcome;
+                Sent = sent;
             }
         }
 
@@ -1205,13 +1214,18 @@ public sealed partial class FeatureFetcher
                 return FetchStatus.Ok;
             }
 
+            if (FailedKeys == KeyCount)
+            {
+                return new FetchStatus(FetchOutcome.Failed, 0, Error); // as its call said it, with words or without
+            }
+
             var error = Error ?? $"source '{Group.SourceName}' answered in part";
             if (StaleKeys > 0)
             {
                 error += $"; {StaleKeys} key(s) served stale from the cache (stale_if_error_ms)";
             }
 
-            return FailedKeys == KeyCount ? FetchStatus.Failed(error) : new FetchStatus(FetchOutcome.Partial, FailedKeys + PartialKeys, error);
+            return new FetchStatus(FetchOutcome.Partial, FailedKeys + PartialKeys, error);
         }
 
         /// <summary>The value the read served for (table field, key), as stored (non-finite values too); for recordings and context reads.</summary>
