@@ -24,12 +24,29 @@ namespace StrataRec.Core.Threading;
 /// context entity's features, a service call about no items, a pipeline call. Reads of many keys (the candidates'
 /// features, a service call about items) are not joined: two runs' candidates overlap in part, and a wait per key is a
 /// cost per row.</para>
-/// <para>One per request that has more than one run; a request of one run has none and pays nothing.</para>
+/// <para>One per request that has more than one run or is of a host's group; any other has none and pays nothing.</para>
+/// <para><b>Requests of one group</b>. The requests a host sends for one thing at the same time (a page's feed and its
+/// promoted row) read the same things as the runs of one request do, and share the same way: each has its own of this
+/// over the group's reads (<see cref="Group"/>). A read is the group's for as long as a request that joined it is under
+/// way, and then leaves: what the group holds is bounded by its requests under way, whatever the host does with the
+/// group afterwards, and a request sent later reads for itself (the tiers are what serve requests that follow one
+/// another).</para>
 /// </remarks>
 internal sealed class RequestReads
 {
-    private readonly Lock _gate = new();
-    private readonly Dictionary<Slot, SharedRead> _reads = new();
+    private readonly Group _group;
+    private readonly List<SharedRead>? _joined; // of a request of a host's group: the reads it holds there until it ends
+    private bool _ended;
+
+    /// <summary>The reads of a request on its own: gone with it.</summary>
+    public RequestReads() => _group = new Group();
+
+    /// <summary>The reads of one request of <paramref name="group"/>, which must <see cref="End"/> them when it ends.</summary>
+    public RequestReads(Group group)
+    {
+        _group = group;
+        _joined = new List<SharedRead>();
+    }
 
     /// <summary>
     /// The request's read of the record <paramref name="key"/> of <paramref name="table"/>'s cache from its origin: the
@@ -52,20 +69,87 @@ internal sealed class RequestReads
     public SharedRead Join(object table, UInt128 key, long limit, out bool reader, object? plan = null)
     {
         var slot = new Slot(table, plan, key, limit);
-        lock (_gate)
+        lock (_group.Gate)
         {
-            ref var read = ref CollectionsMarshal.GetValueRefOrAddDefault(_reads, slot, out var joined);
+            if (_ended)
+            {
+                // A read that outlived its request (a call the request stopped waiting for): nothing holds what it
+                // would leave in the group, so it reads for itself.
+                reader = true;
+                return new SharedRead(null, slot);
+            }
+
+            ref var read = ref CollectionsMarshal.GetValueRefOrAddDefault(_group.Reads, slot, out var joined);
             reader = !joined;
-            return read ??= new SharedRead(this, slot);
+            read ??= new SharedRead(_group, slot);
+            if (_joined is not null)
+            {
+                read.Holds++;
+                _joined.Add(read);
+            }
+
+            return read;
         }
     }
 
-    /// <summary>A read that ended without a record leaves its place: the next read of the record asks the origin.</summary>
-    private void Remove(in Slot slot)
+    /// <summary>
+    /// The request ended: the reads it joined are the group's only while another request that joined them is under
+    /// way. Nothing to do for a request on its own, whose reads go with it.
+    /// </summary>
+    public void End()
     {
-        lock (_gate)
+        if (_joined is null)
         {
-            _reads.Remove(slot);
+            return;
+        }
+
+        lock (_group.Gate)
+        {
+            _ended = true;
+            foreach (var read in _joined)
+            {
+                if (--read.Holds == 0)
+                {
+                    _group.Leave(read);
+                }
+            }
+
+            _joined.Clear();
+        }
+    }
+
+    /// <summary>
+    /// The reads under way or done that the requests of one group share: one request's own, or those of the requests a
+    /// host sends as one.
+    /// </summary>
+    internal sealed class Group
+    {
+        internal Lock Gate { get; } = new();
+
+        internal Dictionary<Slot, SharedRead> Reads { get; } = new();
+
+        /// <summary>The reads the group holds now; for tests.</summary>
+        internal int Count
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    return Reads.Count;
+                }
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="read"/> leaves its place, if it still has it: the next read of the record asks the origin. Under
+        /// <see cref="Gate"/>.
+        /// </summary>
+        internal void Leave(SharedRead read)
+        {
+            if (Reads.TryGetValue(read.Slot, out var current) && ReferenceEquals(current, read))
+            {
+                Reads.Remove(read.Slot);
+            }
         }
     }
 
@@ -87,14 +171,18 @@ internal sealed class RequestReads
     /// <summary>One record's read from its origin, shared by the reads of a request (<see cref="RequestReads"/>).</summary>
     internal sealed class SharedRead
     {
-        private readonly RequestReads _reads;
-        private readonly Slot _slot;
+        private readonly Group? _group; // null for a read no other can join
 
-        internal SharedRead(RequestReads reads, in Slot slot)
+        internal SharedRead(Group? group, in Slot slot)
         {
-            _reads = reads;
-            _slot = slot;
+            _group = group;
+            Slot = slot;
         }
+
+        internal Slot Slot { get; }
+
+        /// <summary>The requests of a host's group under way that joined the read; under the group's gate.</summary>
+        internal int Holds { get; set; }
 
         private readonly TaskCompletionSource<SharedAnswer> _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -109,7 +197,14 @@ internal sealed class RequestReads
         {
             if (!_answer.Task.IsCompleted)
             {
-                _reads.Remove(_slot); // first: a read that sees this one ended finds its place free
+                if (_group is { } group)
+                {
+                    lock (group.Gate)
+                    {
+                        group.Leave(this); // first: a read that sees this one ended finds its place free
+                    }
+                }
+
                 _answer.TrySetResult(default);
             }
         }

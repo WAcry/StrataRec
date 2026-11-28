@@ -23,7 +23,8 @@ public sealed partial class RecEngine
     /// they triggered, the platform's arms they ignored, and their captured log batches. One per request that calls any,
     /// shared by its runs; calls may end on any thread.
     /// </summary>
-    private sealed class RequestCalls(RecEngine engine, RecRequest request)
+    /// <param name="reads">The request's reads among those of its group; null for a request on its own, whose runs share among themselves.</param>
+    private sealed class RequestCalls(RecEngine engine, RecRequest request, RequestReads? reads)
     {
         private readonly Lock _gate = new();
         private readonly SortedSet<string> _assigned = new(StringComparer.Ordinal);
@@ -38,7 +39,7 @@ public sealed partial class RecEngine
         public RecRequest Request => request;
 
         /// <summary>What the cached reads of the request's runs share: every run of the request is handed it.</summary>
-        public RequestReads Reads { get; } = new();
+        public RequestReads Reads { get; } = reads ?? new RequestReads();
 
         /// <summary>The request asked for its trace: the called runs are kept with theirs (<see cref="RecResult.Calls"/>).</summary>
         public bool Traces => request.Debug?.Trace == true;

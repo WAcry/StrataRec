@@ -97,6 +97,68 @@ public class RequestReadsTests
     }
 
     /// <summary>
+    /// The requests of one group share a read as the runs of one request do, while a request that joined it is under
+    /// way: the read outlives the request that made it for as long as another holds it, and is gone with the last, so
+    /// a request that comes after reads for itself and the group holds nothing of requests that ended.
+    /// </summary>
+    [Fact]
+    public async Task RequestsOfOneGroup_ShareARead_WhileOneThatJoinedItIsUnderWay()
+    {
+        var group = new RequestReads.Group();
+        var first = new RequestReads(group);
+        var second = new RequestReads(group);
+        using var bound = Bound();
+
+        var read = first.Join(Table, 7, 0, out var reader);
+        first.Join(Table, 7, 0, out _); // another run of the same request
+        var joined = second.Join(Table, 7, 0, out var other);
+        read.Complete("record");
+        first.End();
+
+        Assert.True(reader);
+        Assert.False(other);
+        Assert.Same(read, joined);
+        var third = new RequestReads(group); // begun while the second, which holds the read, is under way
+        var kept = third.Join(Table, 7, 0, out var taken);
+        Assert.False(taken); // before the wait: a read of its own would never end
+        Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await kept.WaitAsync(bound, CallDeadline.None));
+
+        second.End();
+        Assert.Equal(1, group.Count); // the third's
+        third.End();
+        Assert.Equal(0, group.Count);
+        new RequestReads(group).Join(Table, 7, 0, out var after);
+        Assert.True(after);
+    }
+
+    /// <summary>
+    /// What a request does with the group once it has ended changes nothing for the others: a read of it that is still
+    /// under way reads for itself, and the end of a request whose read withdrew does not take the place of the read
+    /// another request has made of the record since.
+    /// </summary>
+    [Fact]
+    public void ARequestThatEnded_LeavesTheGroupAsItIs()
+    {
+        var group = new RequestReads.Group();
+        var ended = new RequestReads(group);
+        var withdrawn = ended.Join(Table, 7, 0, out _);
+        withdrawn.Withdraw();
+        var other = new RequestReads(group);
+        var current = other.Join(Table, 7, 0, out var reader);
+
+        ended.End();
+        var late = ended.Join(Table, 8, 0, out var alone);
+        late.Complete("record");
+        late.Withdraw();
+
+        Assert.True(reader && alone);
+        Assert.Same(current, new RequestReads(group).Join(Table, 7, 0, out var joined));
+        Assert.False(joined);
+        new RequestReads(group).Join(Table, 8, 0, out var unseen); // the late read was the ended request's alone
+        Assert.True(unseen);
+    }
+
+    /// <summary>
     /// A wait ends with its own bound, whatever the reader does: when its caller cancels, when its bound runs out, and at
     /// its own deadline; the read goes on for the others.
     /// </summary>

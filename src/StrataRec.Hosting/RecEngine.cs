@@ -108,6 +108,36 @@ public sealed class RecRequest
 
     /// <summary>Request time in Unix milliseconds; defaults to now. Set it to replay a request exactly.</summary>
     public long? TimeMs { get; init; }
+
+    /// <summary>
+    /// The requests this one is sent with for one thing (<see cref="RequestGroup"/>): their cached reads are shared as
+    /// those of one request's runs are. Null for a request on its own.
+    /// </summary>
+    public RequestGroup? Group { get; init; }
+}
+
+/// <summary>
+/// Requests a host sends at the same time for one thing: the feed and the promoted row of one page visit, each a
+/// request of its own pipeline. They read the same things (the user's features, a call of a service with the same
+/// inputs, a call of a pipeline), and without a group each asks the origin, since no cache tier has yet what the other
+/// is still getting. Make one for the visit and give it to each of its requests (<see cref="RecRequest.Group"/>).
+/// </summary>
+/// <remarks>
+/// <para>What is shared, and how, is what the runs of one request share: a read through a declared cache that no tier
+/// answered joins the group's read of the same record, the first asks the origin, and the others take what it gets
+/// when it is fresh by their own times. A failure is not shared. A result of a pipeline call that another request of
+/// the group computed says so (<see cref="CalledRun.Cached"/> names that request).</para>
+/// <para>A record is the group's while a request that used it is under way, and no longer: requests sent one after
+/// another share nothing through the group (the cache's tiers are what serve those), and nothing needs to be released,
+/// whatever becomes of the object. Each request keeps its own deadline, inputs, arms and result.</para>
+/// <para>A request that is not served as any other is (<see cref="DebugOptions.ForceArms"/>, a
+/// <see cref="DebugOptions.ConfigOverride"/>, <see cref="DebugOptions.CaptureLogs"/>) writes no logs, so what it computed
+/// could not be traced from another request that took it: it runs on its own, as if it had no group.</para>
+/// </remarks>
+public sealed class RequestGroup
+{
+    /// <summary>The reads of the group's requests under way.</summary>
+    internal RequestReads.Group Reads { get; } = new();
 }
 
 /// <summary>Debugging controls, authorized by the host.</summary>
@@ -790,6 +820,11 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         IReadOnlyList<IgnoredArm> ignored = Array.Empty<IgnoredArm>();
         LoadedPipeline? fallback = null;
         RequestCalls? calls = null; // what the pipelines the request's nodes call ran, when a run calls any
+
+        // What the request's runs share of their cached reads: with the requests of its group from the start, and
+        // otherwise among themselves once a run calls a pipeline (RequestCalls). A request that writes no logs is not of
+        // its group (RequestGroup).
+        var reads = request.Group is { } group && WritesLogs(request) ? new RequestReads(group.Reads) : null;
         LoadedPipeline? overridden = null; // the plan compiled for a configuration override, entered until the finally below
         IReadOnlyList<string>? merged = null; // the arms such a plan has merged in: it runs with none of its own
         try
@@ -863,7 +898,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
                 }
             }
 
-            var executed = await Run(running, request, request.Inputs, runArms, remaining, seed, timeMs, runs, ref calls, cancellationToken).ConfigureAwait(false);
+            var executed = await Run(running, request, request.Inputs, runArms, remaining, seed, timeMs, runs, reads, ref calls, cancellationToken).ConfigureAwait(false);
             remaining = request.Deadline - Stopwatch.GetElapsedTime(started);
 
             // A disposal since the primary ran leaves the request with the primary's result, as when no fallback is served.
@@ -880,7 +915,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             // the inputs it declares (FallbackInputs).
             degraded = true;
             var served = await Run(fallback, request, FallbackInputs(request.Inputs, fallback.Plan.RequestSchema), RequestArms.None, remaining, seed, timeMs, runs,
-                ref calls, cancellationToken).ConfigureAwait(false);
+                reads, ref calls, cancellationToken).ConfigureAwait(false);
             var converted = ToResult(request, fallback, served, ignored, fallbackId);
             result = Combine(request, executed, converted, served, ignored, fallbackId, merged);
             result = record ? Recorded(request, pipeline, seed!.Value, timeMs!.Value, result, executed, served, overridden?.ConfigOverride) : result;
@@ -907,6 +942,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         finally
         {
+            reads?.End(); // what its reads left the group is the group's only while another request that uses it runs
             pipeline?.Bindings.RequestEnded();
             fallback?.Bindings.RequestEnded();
             EndOverride(overridden);
@@ -1112,10 +1148,11 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
 
     /// <param name="pipeline">Entered by the caller (<see cref="Enter"/>); the run joins its lease until its calls end.</param>
     /// <param name="runs">Collects the run's recording on every exit; null when the request does not record.</param>
+    /// <param name="reads">The request's reads among those of its group (<see cref="RequestGroup"/>); null for a request on its own.</param>
     /// <param name="calls">Collects what the pipelines the run's nodes call ran (<see cref="RequestCalls"/>); made on the first such run.</param>
     private ValueTask<PipelineResult> Run(
         LoadedPipeline pipeline, RecRequest request, RequestInputs inputs, RequestArms arms, TimeSpan deadline, long? seed, long? timeMs, RunCapture? runs,
-        ref RequestCalls? calls, CancellationToken cancellationToken) =>
+        RequestReads? reads, ref RequestCalls? calls, CancellationToken cancellationToken) =>
         _executor.ExecuteAsync(pipeline.Plan, new PipelineRequest
         {
             RequestId = request.RequestId,
@@ -1128,8 +1165,8 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
             WriteLogs = WritesLogs(request), // for the fallback's run too: it serves a request a debugger shaped
             ExplainIds = request.Debug?.ExplainIds,
             OnRecording = runs is null ? null : runs.Add,
-            Calls = pipeline.Plan.Calls.IsEmpty ? null : new RunCalls(calls ??= new RequestCalls(this, request), pipeline.Plan.PipelineId, 0),
-            Reads = calls?.Reads, // after Calls: a run that calls none shares with none
+            Calls = pipeline.Plan.Calls.IsEmpty ? null : new RunCalls(calls ??= new RequestCalls(this, request, reads), pipeline.Plan.PipelineId, 0),
+            Reads = reads ?? calls?.Reads, // after Calls: a run that calls none, of a request on its own, shares with none
             OnEnd = pipeline.Bindings.Join(), // last: the executor, called next, ends it on every outcome
         }, cancellationToken);
 

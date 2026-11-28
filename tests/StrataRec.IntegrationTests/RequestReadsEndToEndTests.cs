@@ -218,6 +218,105 @@ public class RequestReadsEndToEndTests
     }
 
     /// <summary>
+    /// The requests a host sends as one group share their reads as the runs of one request do: under way together, they
+    /// ask the origin once (a connector, a service, a pipeline), here through caches that keep nothing, so that nothing
+    /// but the group answers the second. A result of a pipeline call says which request of the group computed it. What
+    /// the requests read is the group's only while they are under way: the same group given to a request sent after
+    /// them shares nothing, and holds nothing once that one has ended.
+    /// </summary>
+    [Theory]
+    [InlineData("a user's features")]
+    [InlineData("a service's answer")]
+    [InlineData("a pipeline's result")]
+    public async Task RequestsOfOneGroup_UnderWayTogether_AskTheOriginOnce(string of)
+    {
+        const string None = "\"cache\": { }";
+        const string Twice = """
+            "config": { "by": "col.entity_id", "ids": "games", "columns": { "bids": "bid" }, "max_calls": 10,
+                        "pipelines": { "5": { "pipeline": "promoted", "inputs": { "slots": "3" }, "cache": { } },
+                                       "8": { "pipeline": "promoted", "inputs": { "slots": "3" }, "cache": { } } },
+                        "computed_by": { "request_id": "games.from", "time_ms": "games.at", "called_by": "games.by" } }
+            """;
+        var connectors = new CountedConnectors();
+        var lists = new CountedLists { HoldFrom = 20 }; // a run of promoted's: the page's own recall asks for 3
+        var release = Gate();
+        var called = of == "a pipeline's result";
+        await using var rig = Engine(called ? Host(content: Twice) : Host(userCache: None, listCache: None), connectors, lists);
+        Func<int> origin = of switch
+        {
+            "a user's features" => () => connectors.Calls,
+            "a service's answer" => () => lists.Calls,
+            _ => () => rig.Probe.Runs,
+        };
+        switch (of)
+        {
+            case "a user's features": connectors.Hold = release.Task; break;
+            case "a service's answer": lists.Hold = release.Task; break;
+            default: rig.Probe.Hold = release.Task; break;
+        }
+
+        // The requests are of promoted itself, one run each, but for a pipeline's result: of the page that calls it.
+        var pipeline = called ? "page" : "promoted";
+        var inputs = new RequestInputs().Set("user_id", 1001).Set("slots", 3);
+        var group = new RequestGroup();
+        Task<RecResult> first, second;
+        try
+        {
+            first = rig.Run("req-a", pipeline: pipeline, inputs: called ? null : inputs, group: group).AsTask();
+            Assert.Equal(1, origin()); // held
+            second = rig.Run("req-b", pipeline: pipeline, inputs: called ? null : inputs, group: group).AsTask();
+            Assert.Equal(1, origin()); // the second request waits for what the first one gets
+        }
+        finally
+        {
+            release.SetResult(); // whatever was found: a held request keeps the engine from closing
+        }
+
+        var (a, b) = (await first, await second);
+        var third = await rig.Run("req-c", pipeline: pipeline, inputs: called ? null : inputs, group: group);
+
+        Assert.True(a.Succeeded && b.Succeeded && third.Succeeded, a.Error ?? b.Error ?? third.Error);
+        Assert.Equal(a.Items.Select(i => i.Id.ToString()), b.Items.Select(i => i.Id.ToString()));
+        Assert.Equal(2, origin()); // the third request's own: nothing of the first two is left to it
+        Assert.Equal(0, group.Reads.Count);
+        if (called)
+        {
+            Assert.All(b.Calls!, c => Assert.Equal("req-a", c.Cached?.RequestId));
+            Assert.Equal(["req-c"], third.Calls!.Where(c => c.Cached is not null).Select(c => c.Cached!.RequestId));
+        }
+    }
+
+    /// <summary>
+    /// A request that writes no logs (here one that captures them) is not of its group: what it computed could not be
+    /// traced from another request that took it, so it asks the origin itself, and leaves the group nothing.
+    /// </summary>
+    [Fact]
+    public async Task ARequestThatWritesNoLogs_IsNotOfItsGroup()
+    {
+        var connectors = new CountedConnectors();
+        var release = Gate();
+        connectors.Hold = release.Task;
+        await using var rig = Engine(Host(userCache: "\"cache\": { }"), connectors);
+        var inputs = new RequestInputs().Set("user_id", 1001).Set("slots", 3);
+        var group = new RequestGroup();
+
+        Task<RecResult> captured, served;
+        try
+        {
+            captured = rig.Run("req-a", pipeline: "promoted", inputs: inputs, group: group, debug: new DebugOptions { CaptureLogs = true }).AsTask();
+            Assert.Equal((1, 0), (connectors.Calls, group.Reads.Count));
+            served = rig.Run("req-b", pipeline: "promoted", inputs: inputs, group: group).AsTask();
+            Assert.Equal((2, 1), (connectors.Calls, group.Reads.Count)); // its own read, which the first did not leave it
+        }
+        finally
+        {
+            release.SetResult();
+        }
+
+        Assert.True((await captured).Succeeded && (await served).Succeeded);
+    }
+
+    /// <summary>
     /// A record got for the request is taken by its other reads as a tier's is: while fresh by their own times. One the
     /// connector gave after its ttl had passed leaves the reads that waited to ask themselves, as each would have found
     /// the record expired.

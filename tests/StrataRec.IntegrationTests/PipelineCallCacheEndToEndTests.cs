@@ -157,9 +157,10 @@ public sealed class PipelineCallCacheEndToEndTests
         /// <param name="ask">The platform assigned nothing with the request: the engine's provider is asked.</param>
         public ValueTask<RecResult> Run(
             string requestId, long timeMs = T0, IReadOnlyList<string>? assignment = null, RequestInputs? inputs = null, DebugOptions? debug = null, string pipeline = "feed",
-            bool ask = false) =>
+            bool ask = false, RequestGroup? group = null) =>
             Engine.ExecuteAsync(new RecRequest
             {
+                Group = group,
                 PipelineId = pipeline,
                 RequestId = requestId,
                 Inputs = inputs ?? new RequestInputs().Set("user_id", 1001),
