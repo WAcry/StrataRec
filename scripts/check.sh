@@ -14,5 +14,5 @@ find TestResults -name '*.trx' -delete 2>/dev/null || true
 dotnet test StrataRec.sln -c Release --no-build -p:TestReports=true --results-directory TestResults
 python3 scripts/gate.py slow TestResults
 # Again at the end, where it is read: what the gate noted about the change (its size, pages it made longer, baselines that can go down).
-printf '%s\n' "$gate" | grep -E '^(size|docs|sleeps|commits):' || true
+printf '%s\n' "$gate" | grep -E '^(size|docs|comments|sleeps|commits):' || true
 echo "check: ok"

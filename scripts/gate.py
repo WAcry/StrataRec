@@ -11,7 +11,9 @@ commit of its own that says why (AGENTS.md section 6). After changing this file,
 The checks read text, not the compiled program, and each says what it covers: `names` finds a backticked name that no
 longer occurs outside the documents (not whether it is declared, or means what the sentence says); `terms` reads the
 names of public types and delegates (not members, configuration keys or comments); `commits` reads the commits of one
-line of history (not merges). What they cannot see is for the review (.agents/skills/north-star-review).
+line of history (not merges); `comments` measures comment blocks and knows public API by the declaration under a block
+and the types around it by indentation (not whether a comment repeats the code, or is worth its lines). What they
+cannot see is for the review (.agents/skills/north-star-review).
 """
 import glob
 import os
@@ -28,6 +30,11 @@ DECISION_CHARS = 80_000        # one area's decisions must fit in what an agent 
 SLEEP_BASELINE = 56            # Thread.Sleep / Task.Delay(<a time>) in tests: only goes down
 SLOW_NOTE_S, SLOW_FAIL_S = 2.0, float(os.environ.get("GATE_SLOW_FAIL_S", 30))   # CI's shared runners set a wider limit
 SIZE_PROJECTS, SIZE_LINES = 8, 1500   # nineteen in twenty changes here touch fewer src projects and add fewer src lines
+# A comment is a document next to the code, read with every read of its file (docs/development.md section 11). Internal
+# code and tests get a line or two at most; a public contract (what callers outside the assembly may rely on, which is
+# often all a user's agent sees) rarely needs more than a screen of a type's members.
+NOTE_LINES, CONTRACT_LINES = 4, 16
+NOTE_SHARE = 0.2               # a change's comments in internal code, per line of code it adds, above which the gate notes it
 
 # The judges (AGENTS.md section 6): directories end with a slash, files are whole names. The two build files turn
 # warnings into errors and ban APIs for every project, which is a rule like the others.
@@ -53,6 +60,15 @@ POINTER = (re.compile(r"^(?:I?[A-Z][a-z0-9]+){2,}$"),        # CandidateTable, I
 PATH = re.compile(r"^(?:src|tests|samples|docs|scripts|\.github|\.agents)/[\w./@-]+$")
 EXCUSE = re.compile(r"(?://|/\*|^\s*\*).*\b(TODO|FIXME|HACK)\b")   # in a comment; a string or a name may say them
 SLEEP = re.compile(r"Thread\.Sleep\s*\(|Task\.Delay\s*\((?!\s*Timeout\.Infinite)")
+# Words that only a comment narrating the past uses. Few on purpose: "no longer", "previously", "the old version" also
+# describe what a program does at run time, and a check that is wrong teaches to game it. The rest is for the review.
+HISTORY = re.compile(r"\bused to be\b|\b(?:it|they|we|this|that|which|who|one|what) used to\b|\b(?:formerly|originally)\b"
+                     r"|\b(?:at|in|since|before|after|until|as of|commit) (?=[0-9a-f]*[a-f])(?=[0-9a-f]*\d)[0-9a-f]{7,12}\b"
+                     r"|\b20\d\d-\d\d-\d\d(?=\s*[:)])|\b(?:was|were|has been|have been) fixed\b|\breview (?:round|found)\b", re.I)
+DECLARED = re.compile(r"^(\s*)((?:(?:public|internal|private|protected|file|sealed|static|abstract|readonly|partial|ref|unsafe|new)\s+)*)"
+                      r"(class|struct|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)")
+RAW_QUOTES = re.compile(r'"{3,}')
+TAG_ONLY = re.compile(r"^/{2,}\s*(?:</?(?:summary|remarks|para|returns|value|example|code|list|item|description|term)\b[^>]*>\s*)*$")
 PUBLIC_TYPE = re.compile(r"^\s*public\s+(?:(?:sealed|static|abstract|readonly|partial|ref|unsafe)\s+)*"
                          r"(?:(?:class|struct|interface|enum|record(?:\s+(?:struct|class))?)\s+([A-Za-z_][A-Za-z0-9_]*)"
                          r"|delegate\s+[^;(]*?\b([A-Za-z_][A-Za-z0-9_]*)\s*[<(])", re.M)
@@ -103,13 +119,131 @@ def budgets(repo):
                       "the code, or split the area in two (.agents/skills/record-decision).")
 
 
+def opens(modifiers):
+    words = modifiers.split()
+    return ("public" in words or "protected" in words) and "private" not in words
+
+
+def comment_blocks(text, public_partials, contracts=True):
+    """The comment blocks of a C# file: (first line, last line, lines of text, documents public API). A line of only XML
+    tags (<summary>) or nothing is not text. A block documents public API when the declaration under it is public or
+    protected and every type around it is too; types are told apart by indentation. Lines inside a raw string literal
+    (a JSONC configuration in a test) are not comments."""
+    lines = text.split("\n")
+    blocks, types, raw, i = [], [], False, 0
+
+    def around(indent):
+        for depth, public, kind in reversed(types):
+            if depth < indent:
+                return public, kind
+        return True, None
+
+    def public_type(match):
+        modifiers, name = match.group(2), match.group(4)
+        explicit = re.search(r"\b(?:public|internal|private|protected|file)\b", modifiers)
+        return opens(modifiers) or (not explicit and "partial" in modifiers.split() and name in public_partials)
+
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if raw or not stripped.startswith("//"):
+            declared = None if raw else DECLARED.match(lines[i])
+            if declared:
+                depth = len(declared.group(1))
+                while types and types[-1][0] >= depth:
+                    types.pop()
+                types.append((depth, around(depth)[0] and public_type(declared), declared.group(3)))
+            if len(RAW_QUOTES.findall(lines[i])) % 2 == 1:
+                raw = not raw
+            i += 1
+            continue
+        start = i
+        while i < len(lines) and lines[i].strip().startswith("//"):
+            i += 1
+        public = False
+        if contracts and stripped.startswith("///"):
+            indent = len(lines[start]) - len(lines[start].lstrip())
+            for line in lines[i:i + 30]:
+                if line.strip() and len(line) - len(line.lstrip()) == indent and not line.strip().startswith("["):
+                    outer, kind = around(indent)
+                    declared = DECLARED.match(line)
+                    head = line.split("(", 1)[0]
+                    mine = public_type(declared) if declared else (
+                        opens(head) or (kind in ("interface", "enum") and not re.search(r"\b(?:private|internal)\b", head)))
+                    public = outer and mine
+                    break
+        text = sum(1 for line in lines[start:i] if not TAG_ONLY.match(line.strip()))
+        blocks.append((start + 1, i, text, public))
+    return blocks
+
+
+def public_partials(repo):
+    """Partial types declared public in some file: a part elsewhere may leave the modifier out."""
+    names = set()
+    for path in repo.under(("src/", "samples/"), (".cs",)):
+        for match in re.finditer(DECLARED.pattern, repo.read(path), re.M):
+            if "partial" in match.group(2).split() and opens(match.group(2)):
+                names.add(match.group(4))
+    return names
+
+
 def comments(repo):
-    """No excuse comments: what is found in the code is copied by the next change."""
+    """Comments are documents next to the code (docs/development.md section 11): none that excuse, narrate the past, or
+    run longer than what they are for needs."""
+    partials = public_partials(repo)
     for path in repo.under(CODE, (".cs",)):
-        for number, line in enumerate(repo.read(path).split("\n"), 1):
+        text = repo.read(path)
+        lines = text.split("\n")
+        for number, line in enumerate(lines, 1):
             if EXCUSE.search(line):
                 repo.fail("comments", f"{path}:{number}", "an excuse comment (TODO, FIXME, HACK). Do it now, or record why it "
                           "is not done as a decision (.agents/skills/record-decision); later changes copy what they find.")
+        for first, last, length, public in comment_blocks(text, partials, contracts=not path.startswith("tests/")):
+            for number in range(first, last + 1):
+                said = HISTORY.search(lines[number - 1])
+                if said:
+                    repo.fail("comments", f"{path}:{number}", f"a comment that narrates the past ('{said.group(0)}'). Say what "
+                              "holds now, or nothing: what the code did before and what was fixed are the commit message's, and "
+                              "the test guards it (docs/development.md section 11).")
+                    break
+            limit = CONTRACT_LINES if public else NOTE_LINES
+            if length > limit:
+                repo.fail("comments", f"{path}:{first}", (
+                    f"a {length}-line contract, the limit is {limit}. Keep what a caller outside the assembly relies on (what it "
+                    "promises, its preconditions, how it fails); delete how it is implemented, why, and what it used to do"
+                    if public else
+                    f"a {length}-line comment in internal code or a test, the limit is {limit}. Delete what the code, the names "
+                    "or the test's name already say, and any history; keep only the constraint a reader would otherwise break, "
+                    "in a line or two. A longer reason is a decision (.agents/skills/record-decision)")
+                    + " (docs/development.md section 11).")
+
+
+def comment_growth(repo, base):
+    """Not a check: notes a change whose comments in internal code and tests grow faster than its code (lines of text,
+    counted in each changed file before and after, so moving or rewrapping a comment is not growth)."""
+    changed = repo.git("diff", "--name-only", "-z", base, "--", "*.cs") if base else None
+    if changed is None:
+        return
+    paths = [p for p in changed.split("\0") if p.startswith(CODE)]
+    paths += [p for p in (repo.git("ls-files", "--others", "--exclude-standard", "-z", "--", "*.cs") or "").split("\0") if p.startswith(CODE)]
+    partials, notes, code = public_partials(repo), 0, 0
+
+    def count(text, path):
+        lines = text.split("\n")
+        commented, internal = set(), 0
+        for first, last, length, public in comment_blocks(text, partials, contracts=not path.startswith("tests/")):
+            commented.update(range(first, last + 1))
+            internal += 0 if public else length
+        return internal, sum(1 for n, line in enumerate(lines, 1)
+                             if n not in commented and line.strip() not in ("", "{", "}", "};", "});"))
+
+    for path in paths:
+        before = count(repo.git("show", f"{base}:{path}") or "", path)
+        after = count(repo.read(path), path)
+        notes, code = notes + after[0] - before[0], code + after[1] - before[1]
+    if notes >= 10 and notes > NOTE_SHARE * max(code, 0):
+        repo.notes.append(f"comments: +{notes} lines of comments in internal code and tests for {code:+} lines of code since "
+                          f"{base[:9]}. The reader has the code: keep a comment only for what reading it would not tell, in a "
+                          "line or two (docs/development.md section 11).")
 
 
 def sleeps(repo):
@@ -308,9 +442,18 @@ def selftest():
         "src/StrataRec.Core/CandidateTable.cs": "public sealed class CandidateTable { }\n"
                                                 'class C { string a = "timeout_ms", b = "COLUMN_NO_PRODUCER", c = "TODO"; }\n',
         "src/StrataRec.Core/名字.cs": "public sealed class Named { }\n",
+        # A contract of public API may be longer than a note; so may one on a part of a partial type that is public in
+        # another file. A raw string's lines are not comments; "used to" describing a purpose is not the past.
+        "src/StrataRec.Core/Contract.cs": "namespace X;\n\npublic sealed class Api\n{\n" + "    /// contract\n" * CONTRACT_LINES
+            + "    public void Run() { }\n\n    internal sealed class Inner\n    {\n" + "        // note\n" * NOTE_LINES
+            + "        public void Go() { }\n\n        /// <summary>\n" + "        /// note\n" * NOTE_LINES
+            + "        /// </summary>\n        public void Stop() { }\n    }\n}\n\npublic partial class Split { }\n",
+        "src/StrataRec.Core/Split.cs": "namespace X;\n\npartial class Split\n{\n" + "    /// contract\n" * CONTRACT_LINES
+            + "    public int Size { get; }\n\n    // The key used to find the record; a clock that starts at 2026-01-01.\n}\n",
+        "tests/T/ConfigTests.cs": 'var config = """\n' + "  // a JSONC comment\n" * (NOTE_LINES + 2) + '  {}\n  """;\n',
         "src/StrataRec.Pipeline/StrataRec.Pipeline.csproj": '<Project><ItemGroup><ProjectReference Include="..\\StrataRec.Core\\'
                                                             'StrataRec.Core.csproj" /></ItemGroup></Project>',
-        "tests/T/WaitTests.cs": "await Task.Delay(Timeout.Infinite, token);\n" + "// was Thread.Sleep(50)\n" * (SLEEP_BASELINE + 1),
+        "tests/T/WaitTests.cs": "await Task.Delay(Timeout.Infinite, token);\n" + "// was Thread.Sleep(50)\nint x;\n" * (SLEEP_BASELINE + 1),
     }
     breaks = [
         ("budget", "AGENTS.md", clean["AGENTS.md"] + "x\n" * AGENTS_LINES),
@@ -318,6 +461,15 @@ def selftest():
         ("budget", "docs/decisions/execution.md", "x" * (DECISION_CHARS + 1)),
         ("comments", "src/StrataRec.Core/Later.cs", "// TODO: handle the empty table\n"),
         ("comments", "src/StrataRec.Core/名字.cs", "/// <summary>HACK around the pool.</summary>\n"),
+        ("comments", "src/StrataRec.Core/Note.cs", "class N\n{\n" + "    // a note\n" * (NOTE_LINES + 1) + "    void M() { }\n}\n"),
+        ("comments", "src/StrataRec.Core/Hidden.cs", "internal sealed class H\n{\n" + "    /// a note\n" * (NOTE_LINES + 1)
+                                                     + "    public void M() { }\n}\n"),
+        ("comments", "src/StrataRec.Core/Long.cs", "public sealed class L\n{\n" + "    /// contract\n" * (CONTRACT_LINES + 1)
+                                                   + "    public void M() { }\n}\n"),
+        ("comments", "tests/T/StoryTests.cs", "public sealed class S\n{\n" + "    /// the scenario\n" * (NOTE_LINES + 1)
+                                              + "    [Fact]\n    public void Works() { }\n}\n"),
+        ("comments", "src/StrataRec.Core/Past.cs", "class P\n{\n    // A poison batch used to be retried forever.\n    void M() { }\n}\n"),
+        ("comments", "src/StrataRec.Core/Dated.cs", "class D\n{\n    // (2026-11-22: the client's error)\n    void M() { }\n}\n"),
         ("sleeps", "tests/T/SleepTests.cs", "Thread.Sleep (50);\n" * (SLEEP_BASELINE + 1)),
         ("names", "docs/decisions/execution.md", "- **x.** `RemovedType` did this.\n"),
         ("names", "docs/decisions/execution.md", "- **x.** the key `removed_key`.\n"),
@@ -368,6 +520,12 @@ def selftest():
         pages(repo, repo.git("rev-parse", "HEAD").strip())
         if len(repo.notes) != 1 or "README.md +1" not in repo.notes[0] or "decisions" in repo.notes[0]:
             problems.append(f"the note on longer pages gave: {repo.notes or 'nothing'}")
+        for comments_per_line, expected in ((0, 0), (1, 1)):
+            write(root, "src/Grow.cs", "class G\n{\n" + ("    // step\n" * comments_per_line + "    int a;\n") * 12 + "}\n")
+            repo.notes = []
+            comment_growth(repo, repo.git("rev-parse", "HEAD").strip())
+            if len(repo.notes) != expected or (expected and "+12 lines of comments" not in repo.notes[0]):
+                problems.append(f"the note on growing comments gave: {repo.notes or 'nothing'} for {comments_per_line} comment(s) a line")
     with tempfile.TemporaryDirectory() as root:
         row = '<UnitTestResult testName="{}" duration="00:00:{}" outcome="Passed" />'
         for name, seconds, expected in (("fast", "00.5000000", 0), ("slow", f"{SLOW_FAIL_S + 1:010.7f}", 1)):
@@ -382,7 +540,7 @@ def selftest():
                 problems.append(f"the slow-test check returned {code} for a {seconds} s test")
     for problem in problems:
         print("gate: selftest:", problem)
-    print("selftest: " + ("FAILED" if problems else f"every check bites ({len(breaks) + 4} cases)"))
+    print("selftest: " + ("FAILED" if problems else f"every check bites ({len(breaks) + 6} cases)"))
     return 1 if problems else 0
 
 
@@ -398,6 +556,7 @@ def main(argv):
     run(repo, base)
     size(repo, base)
     pages(repo, base)
+    comment_growth(repo, base)
     for line in repo.failures + repo.notes:
         print(line)
     print(f"gate: {len(repo.failures)} failure(s)" if repo.failures else "gate: ok")

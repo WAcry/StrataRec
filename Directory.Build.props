@@ -9,7 +9,7 @@
     <Deterministic>true</Deterministic>
     <InvariantGlobalization>true</InvariantGlobalization>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <!-- CS1591: public API docs are encouraged but not yet enforced.
+    <!-- CS1591: a public member whose name and signature say its contract needs no comment (docs/development.md section 11).
          CS8524: a switch expression that names every value of an enum is exhaustive. Without a default arm, adding a
          value then fails to compile (CS8509) at every such switch; an undefined value still throws at run time. -->
     <NoWarn>$(NoWarn);CS1591;CS1573;CS8524</NoWarn>
