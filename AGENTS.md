@@ -31,7 +31,7 @@ StrataRec 是面向 .NET 10+ 的进程内推荐执行引擎：一次推荐请求
 - 相同的计划、输入、时间、外部回答和臂，得到相同的结果；随机只来自请求种子的稳定哈希。
 - 向外交付的值是使用者声明的类型和宽度；进来的输入只做文档写明的放宽（`int32`→`int64`、整数→浮点），没有别的隐式转换。
 - 配置只用广泛使用的标准（JSONC、RFC 7396、RFC 6901、JSON Schema、CEL 语法、Mustache），严格绑定；错误带精确位置和一句修法，一个错误只报一次。
-- `src/` 里没有 LINQ，热路径不按行分配（`BannedSymbols.txt` 在构建时强制）。
+- `src/` 不用 LINQ，热路径不按行分配（`BannedSymbols.txt` 在构建时强制）。
 
 项目的依赖方向在 `docs/architecture.md` 的表里，只能指向表中更靠上的项目，核心不引用扩展包（`StrataRec.Redis`、`StrataRec.Llm`）。
 
