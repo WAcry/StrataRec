@@ -536,7 +536,8 @@ public class CacheReadTests
     /// <summary>
     /// A cache read is recorded as the connector call it made would be without the cache: a timeout is a timeout and
     /// not an error, an answer in part says how many keys the connector could not answer, a failure that came without
-    /// words is recorded without any, and a read that had no time to send its call says it sent none.
+    /// words is given the words a replay of the recording gives it (the request fails with the same words in both),
+    /// and a read that had no time to send its call says it sent none.
     /// </summary>
     [Theory]
     [InlineData("partial", IoOutcome.Partial, 1, true)]
@@ -546,7 +547,7 @@ public class CacheReadTests
     [InlineData("no time left", IoOutcome.Timeout, 0, false)]
     public async Task ACacheReadsRecording_SaysHowItsCallEnded_AsAFetchsDoes(string how, IoOutcome outcome, int failedKeys, bool sent)
     {
-        var recorded = new List<(IoOutcome Outcome, int FailedKeys, bool Sent, bool Words)>();
+        var recorded = new List<(IoOutcome Outcome, int FailedKeys, bool Sent, string? Words)>();
         foreach (var cached in new[] { false, true })
         {
             var connector = new ScriptedConnector((keys, fields, writer, _) =>
@@ -566,14 +567,16 @@ public class CacheReadTests
             rig.Build();
             var recorder = new RecordingHook();
 
-            await rig.NewRequest([1, 2], hook: recorder, deadlineMs: how == "no time left" ? 0 : FeatureTestRig.UntimedMs).EnsureAsync(clicks);
+            var fill = await rig.NewRequest([1, 2], hook: recorder, deadlineMs: how == "no time left" ? 0 : FeatureTestRig.UntimedMs).EnsureAsync(clicks);
 
             var call = Assert.Single(recorder.Calls);
-            recorded.Add((call.Outcome, call.Status.FailedKeys, call.Sent, call.Status.Error is not null));
+            Assert.NotNull(call.Status.Error);
+            Assert.Contains(call.Status.Error, fill.Error); // what the request is told is what the recording has
+            recorded.Add((call.Outcome, call.Status.FailedKeys, call.Sent, how == "failed without words" ? call.Status.Error : null));
             Assert.Equal(sent ? 1 : 0, connector.Calls.Count); // a call that was not sent is one the connector did not get
         }
 
-        Assert.Equal((outcome, failedKeys, sent, how != "failed without words"), recorded[0]);
+        Assert.Equal((outcome, failedKeys, sent, how == "failed without words" ? "source 'item_store' failed" : null), recorded[0]);
         Assert.Equal(recorded[0], recorded[1]);
     }
 
@@ -582,7 +585,7 @@ public class CacheReadTests
     /// without any is not passed over for the next one's timeout.
     /// </summary>
     [Fact]
-    public async Task ACacheReadOfSeveralChunks_ReportsItsFirstFailure_WithWordsOrWithout()
+    public async Task ACacheReadOfSeveralChunks_ReportsItsFirstFailure()
     {
         var connector = new ScriptedConnector((keys, _, _, _) =>
             keys.Keys.ToArray()[0].Int64Value == 1 ? ValueTask.FromResult(new FetchStatus(FetchOutcome.Failed)) : throw new TimeoutException("the store's own"));
@@ -594,8 +597,33 @@ public class CacheReadTests
         await rig.NewRequest([1, 2], hook: recorder).EnsureAsync(clicks);
 
         var call = Assert.Single(recorder.Calls);
-        Assert.Equal((IoOutcome.Error, FetchOutcome.Failed, null), (call.Outcome, call.Status.Outcome, call.Status.Error));
+        Assert.Equal((IoOutcome.Error, FetchOutcome.Failed, "source 'item_store' failed"), (call.Outcome, call.Status.Outcome, call.Status.Error));
         Assert.Equal(2, connector.Calls.Count);
+    }
+
+    /// <summary>
+    /// A read that had no time to ask its origin and served what the cache had past its time says it sent no call,
+    /// though it gave values: the recording's "sent" is about the call, not about what the read could still give.
+    /// </summary>
+    [Fact]
+    public async Task ACacheReadThatServedStaleWithNoTimeToAsk_IsRecordedAsHavingSentNoCall()
+    {
+        var connector = ScriptedConnector.Values((key, _) => key * 1.5);
+        var rig = new FeatureTestRig().CacheSource("item_store", connector, ttlMs: 1_000, staleIfErrorMs: 60_000);
+        var clicks = rig.Physical("item.clicks", FeatureTestRig.Item, ColumnType.Float64, "item_store");
+        rig.Build();
+        await rig.NewRequest([1, 2]).EnsureAsync(clicks);
+        rig.WriteBack("item_store");
+        rig.Clock.AdvanceMs(5_000); // expired, within the stale window
+        var recorder = new RecordingHook();
+
+        var fill = await rig.NewRequest([1, 2], hook: recorder, deadlineMs: 0).EnsureAsync(clicks);
+
+        var call = Assert.Single(recorder.Calls);
+        Assert.Equal(FeatureState.Degraded, fill.State);
+        Assert.Equal((IoOutcome.Partial, false), (call.Outcome, call.Sent));
+        Assert.Equal(new double?[] { 1.5, 3.0 }, call.Values);
+        Assert.Single(connector.Calls); // the first request's
     }
 
     [Fact]

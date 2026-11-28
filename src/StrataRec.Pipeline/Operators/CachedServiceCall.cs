@@ -111,6 +111,24 @@ internal sealed class CachedServiceCall
     /// </summary>
     public static async Task<ServiceStatus> RunAsync(IServiceCallScope scope, BoundService service, ServiceCache cache, ServiceCall call, ServiceResponse response)
     {
+        // The call reads its keys and its buffers after the service has answered (the record it writes back, the
+        // response it puts together), which may be after its request has returned: a call its operator did not wait
+        // for. Holding the memory for the whole call, not just while the client runs, keeps those reads off returned
+        // buffers, as a feature fetch's does.
+        var memory = scope.Memory;
+        memory.Hold();
+        try
+        {
+            return await HeldAsync(scope, service, cache, call, response).ConfigureAwait(false);
+        }
+        finally
+        {
+            memory.Release();
+        }
+    }
+
+    private static async Task<ServiceStatus> HeldAsync(IServiceCallScope scope, BoundService service, ServiceCache cache, ServiceCall call, ServiceResponse response)
+    {
         var recorder = scope.Recorder;
         var sequence = recorder?.BeginCall(scope.Caller, service.Target, call) ?? 0;
         var started = Stopwatch.GetTimestamp();

@@ -125,6 +125,7 @@ public class RequestReadsTests
         Assert.False(other || taken);
         Assert.Same(read, joined);
         Assert.Equal(new SharedAnswer(SharedEnd.Record, "record"), await kept.WaitAsync(bound, CallDeadline.None));
+        Assert.Equal(1, group.Count);
 
         first.End();
         first.End(); // ended once: again changes nothing
@@ -139,27 +140,72 @@ public class RequestReadsTests
     }
 
     /// <summary>
-    /// A read still under way when its request ends is given to no other request, as a result that comes after its
-    /// time is not used: those waiting for it ask the origin themselves, and what the reader gets later is nobody's.
+    /// A read still under way when its request ends (of a call its operator did not wait for) goes on as that call
+    /// does: its reader ends it, and those already waiting for it get what it gets. No later read finds it, and its end
+    /// leaves the read that took its place alone: the group keeps nothing of a request that ended.
     /// </summary>
-    [Fact]
-    public async Task AReadStillUnderWayWhenItsRequestEnds_IsGivenToNoOther()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AReadStillUnderWayWhenItsRequestEnds_GoesOnForThoseWaiting_AndNoLaterReadFindsIt(bool getsARecord)
     {
         var group = new RequestReads.Group();
         var first = new RequestReads(group);
         var second = new RequestReads(group);
         using var bound = Bound();
         var read = first.Join(Table, 7, 0, out _);
-        var waiting = second.Join(Table, 7, 0, out _).WaitAsync(bound, CallDeadline.None);
+        var waiting = second.Join(Table, 7, 0, out _).WaitAsync(bound, CallDeadline.None).AsTask();
 
         first.End();
-        read.Complete("late");
 
-        Assert.Equal(new SharedAnswer(SharedEnd.Withdrawn, null), await waiting);
         Assert.Equal(0, group.Count);
-        var own = second.Join(Table, 7, 0, out var reader);
+        Assert.False(waiting.IsCompleted);
+        var own = second.Join(Table, 7, 0, out var reader); // a later read of the record
         Assert.True(reader);
         Assert.NotSame(read, own);
+
+        if (getsARecord)
+        {
+            read.Complete("late");
+        }
+        else
+        {
+            read.Withdraw();
+        }
+
+        Assert.Equal(getsARecord ? new SharedAnswer(SharedEnd.Record, "late") : new SharedAnswer(SharedEnd.Withdrawn, null), await waiting);
+        Assert.Same(own, second.Join(Table, 7, 0, out var again)); // the place is the later read's still
+        Assert.False(again);
+    }
+
+    /// <summary>
+    /// A request that ended holds none of what it read: a call it did not wait for may keep the request's reads long
+    /// after, and would keep every record with them.
+    /// </summary>
+    [Fact]
+    public void ARequestThatEnded_HoldsNoneOfWhatItRead()
+    {
+        var group = new RequestReads.Group();
+        var reads = new RequestReads(group);
+        var record = ReadARecord(reads);
+
+        reads.End();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Assert.False(record.IsAlive);
+        GC.KeepAlive(reads);
+        GC.KeepAlive(group);
+    }
+
+    /// <summary>Reads a record as <paramref name="reads"/>' request; a weak reference to it. Not inlined, so no local here keeps it alive.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference ReadARecord(RequestReads reads)
+    {
+        var record = new object();
+        reads.Join(Table, 7, 0, out _).Complete(record);
+        return new WeakReference(record);
     }
 
     /// <summary>

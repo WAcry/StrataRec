@@ -942,7 +942,7 @@ public sealed partial class RecEngine : IRecEngine, IAsyncDisposable, IDisposabl
         }
         finally
         {
-            reads.End(); // what it read was its group's while it ran, and what it is still reading is nobody else's
+            reads.End(); // what it read was its group's while it ran
             pipeline?.Bindings.RequestEnded();
             fallback?.Bindings.RequestEnded();
             EndOverride(overridden);

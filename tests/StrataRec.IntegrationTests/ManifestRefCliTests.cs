@@ -73,20 +73,22 @@ public sealed class ManifestRefCliTests
     /// <summary>
     /// A plan without experiments has one combination, and explain-plan shows it without being asked: each node's
     /// definition and the columns it reads and writes, as <c>--arms</c> shows them for a plan with experiments, whose
-    /// default stays the survey of its variants and sites.
+    /// default stays the survey of its variants and sites. Of a manifest as of a workspace.
     /// </summary>
     [Theory]
-    [InlineData("text")]
-    [InlineData("json")]
-    public async Task ExplainPlan_OfAPlanWithoutExperiments_ShowsWhatEachNodeReadsAndWrites(string format)
+    [InlineData("text", false)]
+    [InlineData("json", false)]
+    [InlineData("text", true)]
+    [InlineData("json", true)]
+    public async Task ExplainPlan_OfAPlanWithoutExperiments_ShowsWhatEachNodeReadsAndWrites(string format, bool ofAManifest)
     {
-        var plain = await Explain(HomeFeedTestHost.LoadModified(root =>
+        var plain = await Explain(ManifestStores.Workspace(root =>
         {
             // The release places no experiment; their files stay, as those of experiments not in flight do.
             var release = Path.Combine(root, "releases", "home_feed.local.jsonc");
             File.WriteAllLines(release, File.ReadAllLines(release).Where(line => !line.Contains("\"layer\"", StringComparison.Ordinal)));
-        }).Root);
-        var surveyed = await Explain(HomeFeedTestHost.SampleRoot());
+        }));
+        var surveyed = await Explain(ManifestStores.Workspace());
 
         if (format == "json")
         {
@@ -110,7 +112,11 @@ public sealed class ManifestRefCliTests
         {
             var output = new StringWriter();
             var errors = new StringWriter();
-            Assert.True(0 == await ExplainPlanCommand.RunAsync(Tool.Environment, root, "local", null, format, [], output, CancellationToken.None, null, null, errors), errors.ToString());
+            var store = ofAManifest ? ManifestStores.NewStore() : null;
+            var manifest = store is null ? null : (await ManifestStores.BuildAsync(root, store)).Id;
+            Assert.True(
+                0 == await ExplainPlanCommand.RunAsync(Tool.Environment, manifest is null ? root : null, "local", null, format, [], output, CancellationToken.None, manifest, store, errors),
+                errors.ToString());
             return output.ToString();
         }
     }

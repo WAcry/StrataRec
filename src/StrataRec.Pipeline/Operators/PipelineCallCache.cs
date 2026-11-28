@@ -28,8 +28,9 @@ public sealed class PipelineCallCacheConfig
     /// <summary>
     /// How long a result is served, in milliseconds, e.g. <c>3600000</c>. Each result's lifetime varies by ±10% with its
     /// key, so results computed together do not all expire together. Leave out every setting (<c>"cache": {}</c>) to keep
-    /// nothing: the calls for one result within a request, or within the requests its host sends as one group, then run
-    /// the pipeline once; the result lasts as long as the request that computed it, and a later request runs it again.
+    /// nothing: the calls for one result made while the request that computes it is under way (its own, and those of
+    /// the requests its host sends with it as one group) share that one run, and a call made after that request has
+    /// ended runs the pipeline again.
     /// </summary>
     public long? TtlMs { get; init; }
 

@@ -487,7 +487,7 @@ internal sealed class RunReplay : IFeatureCallHook
                 AddStats(source, field.Field, rows, rows);
             }
 
-            return FetchStatus.Failed(entry.Error ?? $"source '{source}' failed");
+            return FetchStatus.Failed(entry.Error ?? FeatureFetcher.FailedWithoutWords(source));
         }
 
         for (var f = 0; f < fields.Length; f++)

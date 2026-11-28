@@ -821,10 +821,12 @@ public sealed partial class FeatureFetcher : IIoTracker
     /// <summary>
     /// What a connector call's result is to the fetch: the connector's status when it answered in time; otherwise a failure
     /// naming the source: timed out after <paramref name="budgetMs"/> (the fetch's bound, the call's own or a connector's
-    /// <see cref="TimeoutException"/>), cancelled by the caller, or what the connector threw.
+    /// <see cref="TimeoutException"/>), cancelled by the caller, or what the connector threw. A failure the connector gave
+    /// no words for gets the words a replay of its recording gives it, so the request fails with the same words in both.
     /// </summary>
     private static FetchStatus StatusOf(FetchGroup group, int budgetMs, in CallResult<FetchStatus> result) => result.End switch
     {
+        CallEnd.Answered when result.Value is { Outcome: FetchOutcome.Failed, Error: null } silent => silent with { Error = FailedWithoutWords(group.SourceName) },
         CallEnd.Answered => result.Value,
         CallEnd.Cancelled => Cancelled(group),
         CallEnd.TimedOut or CallEnd.BudgetRanOut => TimedOut(group, budgetMs),
@@ -834,6 +836,9 @@ public sealed partial class FeatureFetcher : IIoTracker
 
     /// <summary>Whether a connector call's staging must not be read: it did not answer in time, or answered a failure.</summary>
     private static bool Failed(in CallResult<FetchStatus> result) => result.End != CallEnd.Answered || result.Value.Outcome == FetchOutcome.Failed;
+
+    /// <summary>What a source's failure says when its connector said nothing: live, and in a replay of its recording.</summary>
+    internal static string FailedWithoutWords(string source) => $"source '{source}' failed";
 
     private static FetchStatus TimedOut(FetchGroup group, int budgetMs) => FetchStatus.Failed($"source '{group.SourceName}' timed out after {budgetMs} ms");
 

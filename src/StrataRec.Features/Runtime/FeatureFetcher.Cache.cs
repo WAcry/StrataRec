@@ -888,8 +888,7 @@ public sealed partial class FeatureFetcher
         var tableFields = TableFields(read.Group, read.Features);
         var fields = ImmutableCollectionsMarshal.AsImmutableArray(read.Fields!);
         recorder.Record(
-            new FeatureCallInfo(read.Group, read.Batch, fields, read.Sequence, status.Outcome != FetchOutcome.Failed || read.Sent, status, outcome,
-                Stopwatch.GetElapsedTime(read.Started)),
+            new FeatureCallInfo(read.Group, read.Batch, fields, read.Sequence, read.Sent, status, outcome, Stopwatch.GetElapsedTime(read.Started)),
             status.Outcome == FetchOutcome.Failed ? null : new CacheReadValues(read, tableFields));
     }
 
@@ -1131,7 +1130,10 @@ public sealed partial class FeatureFetcher
         /// <summary>How the read's first call to fail ended, for the read's recording when no key got a value.</summary>
         public IoOutcome Failure { get; private set; } = IoOutcome.Error;
 
-        /// <summary>Whether that call was sent: false when the read had no time left, or its caller had cancelled, before it.</summary>
+        /// <summary>
+        /// Whether that call was sent: false when the read had no time left, or its caller had cancelled, before it,
+        /// whatever the read could still give (a stale value). True for a read with no failure.
+        /// </summary>
         public bool Sent { get; private set; } = true;
 
         private bool _failed;

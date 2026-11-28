@@ -5,6 +5,7 @@ using StrataRec.Core.Diagnostics;
 using StrataRec.Core.Keys;
 using StrataRec.Core.Memory;
 using StrataRec.Core.Services;
+using StrataRec.Core.Threading;
 using StrataRec.Core.Values;
 using StrataRec.Features.Cache;
 using StrataRec.Features.Local;
@@ -720,7 +721,9 @@ public sealed class ServiceCacheRecordTests
             var memory = new RequestMemory(pool);
             var response = new ServiceResponse(memory);
 
-            var status = await Context(memory, TestContext.Current.CancellationToken, long.MaxValue).CallAsync(bound, ServiceCacheRig.Items([11, 22, 33], [1f, 2f, 3f]), response);
+            // With reads to share through, as every request an engine runs has: what makes a call about no items take the cache's path.
+            var context = Context(memory, TestContext.Current.CancellationToken, long.MaxValue, new RequestReads());
+            var status = await context.CallAsync(bound, ServiceCacheRig.Items([11, 22, 33], [1f, 2f, 3f]), response);
 
             Assert.True(status.Succeeded, status.Error);
             Assert.Equal(3, ServiceCacheRig.Floats(response, "p").Length);
@@ -748,8 +751,51 @@ public sealed class ServiceCacheRecordTests
         public void Return<T>(T[] array, bool clearArray) => SharedArrayBufferPool.Instance.Return(array, clearArray);
     }
 
-    private static OperatorContext Context(RequestMemory memory, CancellationToken token, long deadline) => new(new RequestState
+    /// <summary>
+    /// A call its operator did not wait for ends after its request has returned. It still reads what it rented (its
+    /// keys, the service's answer) when the service answers, so it holds the request's memory until it has ended: its
+    /// record is written under the key it was read by, and the next call for it is answered from the cache. (The call
+    /// held the memory only while the client ran: the record went under whatever the returned buffer then held.)
+    /// </summary>
+    [Fact]
+    public async Task ACallThatOutlivesItsRequest_WritesItsRecordUnderTheKeyItReadBy()
     {
+        var rig = new ServiceCacheRig();
+        var held = new HeldClient(rig.Service);
+        var memory = new RequestMemory();
+        var call = Context(memory, TestContext.Current.CancellationToken, long.MaxValue)
+            .CallAsync(rig.With(held), ServiceCacheRig.Items([1, 2], [0.1f, 0.2f]), new ServiceResponse(memory));
+        await held.Entered.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        memory.Release(); // the request returned: what it rented is its calls' alone
+        held.Release.SetResult();
+        var first = await call.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        rig.Apply();
+        var (again, answer) = await rig.CallAsync(ServiceCacheRig.Items([1, 2], [0.1f, 0.2f]));
+
+        Assert.True(first.Succeeded && again.Succeeded, first.Error ?? again.Error);
+        Assert.Equal([1f, 2f], Floats(answer, "p"));
+        Assert.Single(rig.Service.Calls);
+    }
+
+    /// <summary>Answers as <paramref name="inner"/> does, once it is let go.</summary>
+    private sealed class HeldClient(IServiceClient inner) : IServiceClient
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<ServiceStatus> CallAsync(ServiceCall call, IServiceResponse response, CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            await Release.Task.ConfigureAwait(false);
+            return await inner.CallAsync(call, response, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static OperatorContext Context(RequestMemory memory, CancellationToken token, long deadline, RequestReads? reads = null) => new(new RequestState
+    {
+        Reads = reads,
         Plan = null!,
         RequestId = "r",
         Inputs = new RequestInputs(),

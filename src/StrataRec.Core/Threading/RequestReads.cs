@@ -29,10 +29,11 @@ namespace StrataRec.Core.Threading;
 /// <para><b>Requests of one group</b>. The requests a host sends for one thing at the same time (a page's feed and its
 /// promoted row) read the same things as the runs of one request do, and share the same way: each has its own of this
 /// over the group's reads (<see cref="Group"/>). A read is the group's for as long as the request that made it is
-/// under way, and leaves with it (<see cref="End"/>): a record lives no longer than the request that read it, however
-/// many others took it and however long the host keeps the group, and one still being read when its request ends is
-/// not given to the others, as a result that comes after its time is not used. A request that comes later reads for
-/// itself (the tiers are what serve requests that follow one another).</para>
+/// under way, and leaves with it (<see cref="End"/>): no read that comes later finds it, so a record lives no longer
+/// than the request that read it, however many others took it and however long the host keeps the group. A request
+/// that comes later reads for itself (the tiers are what serve requests that follow one another). A read still under
+/// way when its request ends (of a call its operator did not wait for) goes on as that call does, to its own bound:
+/// those already waiting for it get what it gets, and the group keeps nothing of it.</para>
 /// </remarks>
 internal sealed class RequestReads
 {
@@ -94,9 +95,9 @@ internal sealed class RequestReads
     }
 
     /// <summary>
-    /// The request ended: its reads read for themselves from now on, and those it made leave the group. One still under
-    /// way is withdrawn, so the reads of other requests that wait for it ask the origin themselves and what it gets
-    /// later is given to none. Ending again changes nothing.
+    /// The request ended: the reads it made leave the group, so no later read finds them, and a read it starts from now
+    /// on reads for itself. A read still under way is not ended here: its reader ends it, as it ends every read, and
+    /// those already waiting for it get what it gets. Ending again changes nothing.
     /// </summary>
     public void End()
     {
@@ -112,12 +113,10 @@ internal sealed class RequestReads
             {
                 _group.Leave(read);
             }
-        }
 
-        // Nothing is added once the request has ended. Outside the gate, which a read takes to leave.
-        foreach (var read in _made)
-        {
-            read.Withdraw();
+            // The request no longer holds them, nor their records: a call it did not wait for may keep this object
+            // long after.
+            _made.Clear();
         }
     }
 
