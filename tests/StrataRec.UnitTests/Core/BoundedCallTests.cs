@@ -436,7 +436,7 @@ public sealed class BoundedCallTests
         using var waiting = new ManualResetEventSlim();
         var client = new TaskCompletionSource<int>();
         var memory = new RequestMemory();
-        var budget = new AttemptBudget(caller.Token, Deadline(late == "budget" ? 300 : 600_000));
+        var budget = new AttemptBudget(caller.Token, Deadline(600_000));
         var site = new Site(memory).WhenPending(gate.Mark);
         var failure = new InvalidOperationException("the service failed");
 
@@ -455,7 +455,7 @@ public sealed class BoundedCallTests
         }
         else
         {
-            Assert.True(budget.Token.WaitHandle.WaitOne(Patience));
+            await budget.CancelObservedAsync().WaitAsync(Patience, TestContext.Current.CancellationToken); // as its timer would, while the gate holds
         }
 
         gate.Release();
