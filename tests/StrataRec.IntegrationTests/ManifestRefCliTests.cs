@@ -70,6 +70,51 @@ public sealed class ManifestRefCliTests
         }
     }
 
+    /// <summary>
+    /// A plan without experiments has one combination, and explain-plan shows it without being asked: each node's
+    /// definition and the columns it reads and writes, as <c>--arms</c> shows them for a plan with experiments, whose
+    /// default stays the survey of its variants and sites.
+    /// </summary>
+    [Theory]
+    [InlineData("text")]
+    [InlineData("json")]
+    public async Task ExplainPlan_OfAPlanWithoutExperiments_ShowsWhatEachNodeReadsAndWrites(string format)
+    {
+        var plain = await Explain(HomeFeedTestHost.LoadModified(root =>
+        {
+            // The release places no experiment; their files stay, as those of experiments not in flight do.
+            var release = Path.Combine(root, "releases", "home_feed.local.jsonc");
+            File.WriteAllLines(release, File.ReadAllLines(release).Where(line => !line.Contains("\"layer\"", StringComparison.Ordinal)));
+        }).Root);
+        var surveyed = await Explain(HomeFeedTestHost.SampleRoot());
+
+        if (format == "json")
+        {
+            var plan = JsonNode.Parse(plain)!;
+            Assert.Equal("[]", plan["combination"]!.ToJsonString());
+            var nodes = plan["timeline"]!.AsArray().ToDictionary(n => n!["node"]!.GetValue<string>(), n => n!);
+            Assert.Equal("""["item.is_policy_safe","item.report_rate"]""", nodes["safety_filter"]["reads"]!.ToJsonString());
+            Assert.Equal("[]", nodes["safety_filter"]["writes"]!.ToJsonString());
+            Assert.Equal("[]", plan["arms"]!.ToJsonString());
+            Assert.Null(JsonNode.Parse(surveyed)!["combination"]);
+        }
+        else
+        {
+            Assert.Contains("timeline for baseline:", plain);
+            Assert.Matches(@"<- reads\s+item\.is_policy_safe, item\.report_rate", plain);
+            Assert.DoesNotContain("timeline for", surveyed);
+            Assert.DoesNotContain("<- reads", surveyed);
+        }
+
+        async Task<string> Explain(string root)
+        {
+            var output = new StringWriter();
+            var errors = new StringWriter();
+            Assert.True(0 == await ExplainPlanCommand.RunAsync(Tool.Environment, root, "local", null, format, [], output, CancellationToken.None, null, null, errors), errors.ToString());
+            return output.ToString();
+        }
+    }
+
     [Fact]
     public async Task ExplainPlan_WithArms_ShowsTheTapsAndTheOutputOfTheCombination()
     {

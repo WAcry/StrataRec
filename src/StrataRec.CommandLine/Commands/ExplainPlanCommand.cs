@@ -14,7 +14,9 @@ namespace StrataRec.CommandLine.Commands;
 /// <summary>
 /// <c>stratarec explain-plan</c>: the unified plan's timeline, node variants, experiment sites and
 /// parameter overrides; with <c>--arms</c>, exactly what a request with those arms executes (<see cref="EffectivePlan"/>,
-/// the view <c>diff</c> compares). Reads a workspace or a release manifest (<see cref="ConfigRef"/>).
+/// the view <c>diff</c> compares). A plan without experiments has one combination, which is what it shows: there are
+/// no variants or sites to survey, and what each node reads and writes is in that view. Reads a workspace or a release
+/// manifest (<see cref="ConfigRef"/>).
 /// </summary>
 internal static class ExplainPlanCommand
 {
@@ -29,10 +31,12 @@ internal static class ExplainPlanCommand
         var arms = new Option<string[]>("--arms", "-a")
         {
             Description = "Show the plan a request with these arms executes (experiment/arm, comma or space separated): " +
-                          "its nodes with their merged definitions, parameters, taps, funnel groups and output.",
+                          "its nodes with their merged definitions and the columns each reads and writes, parameters, taps, funnel groups and output. " +
+                          "A plan without experiments is shown this way without it.",
             AllowMultipleArgumentsPerToken = true,
         };
-        var command = new Command("explain-plan", "Explain the compiled plan of a workspace or a release manifest: timeline, variants, sites and parameters. " +
+        var command = new Command("explain-plan", "Explain the compiled plan of a workspace or a release manifest: timeline, variants, sites and parameters; " +
+            "for a plan without experiments, the one plan its requests execute (see --arms). " +
             "Exits with 1 when the configuration does not load or compile, and 2 on usage errors.")
         {
             config, manifest, store, environment, pipeline, format, arms,
@@ -74,7 +78,7 @@ internal static class ExplainPlanCommand
 
         var armIds = SplitArms(armArgs);
         EffectivePlan? selected = null;
-        if (armIds.Count > 0)
+        if (armIds.Count > 0 || plan.Experiments.Length == 0)
         {
             try
             {
